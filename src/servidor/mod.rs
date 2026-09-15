@@ -303,7 +303,17 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
 /// ya han cumplido su hora.
 async fn revisar_cola(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     loop {
-        tokio::time::sleep(difusion::RITMO_COLA).await;
+        // Un cambio de estado no espera al ritmo: se mira enseguida. El
+        // progreso, en cambio, sale como mucho cuatro veces por segundo.
+        let espera = {
+            let estado_bloqueado = estado.lock().await;
+            if estado_bloqueado.difusion_cola.inmediato {
+                difusion::ESPERA_INMEDIATA
+            } else {
+                difusion::RITMO_COLA
+            }
+        };
+        tokio::time::sleep(espera).await;
         let mut estado_bloqueado = estado.lock().await;
         estado_bloqueado
             .transferencias

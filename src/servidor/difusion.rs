@@ -11,6 +11,10 @@ use super::cliente_remoto::ClienteRemoto;
 /// Ritmo máximo de la difusión de progreso de la cola (4 veces por segundo).
 pub const RITMO_COLA: Duration = Duration::from_millis(250);
 
+/// Lo que se espera cuando hay un cambio de estado pendiente: la revisora mira
+/// casi enseguida en vez de agotar el ritmo del progreso.
+pub const ESPERA_INMEDIATA: Duration = Duration::from_millis(20);
+
 /// Envío de la lista de transferencias, coalescido: los cambios de estado
 /// salen de inmediato y el progreso, como mucho cada `RITMO_COLA`.
 #[derive(Default)]
