@@ -1004,7 +1004,7 @@ impl App {
             }
             Evento::Redimension(cols, filas) => {
                 self.sucio = true;
-                let filas_pty = filas.saturating_sub(3).max(1);
+                let filas_pty = alto_pty(filas);
                 if self.vista == Vista::Sesion {
                     if let Some(sesion_id) = self.pestana_activa_id() {
                         self.servidor
@@ -1425,7 +1425,7 @@ impl App {
             .enviar(protocolo::MensajeCliente::AbrirSesion {
                 host_id,
                 cols,
-                filas: filas.saturating_sub(3).max(1),
+                filas: alto_pty(filas),
             });
         self.aperturas_pendientes.insert(host_id);
         let nombre = self
@@ -1658,7 +1658,7 @@ impl App {
             self.servidor.enviar(protocolo::MensajeCliente::Adjuntar {
                 sesion_id,
                 cols,
-                filas: filas.saturating_sub(3).max(1),
+                filas: alto_pty(filas),
             });
         }
     }
@@ -4782,6 +4782,14 @@ fn usuario_local() -> String {
         .unwrap_or_else(|_| "root".to_string())
 }
 
+/// Filas útiles para el PTY remoto: el alto de la ventana menos las cuatro
+/// filas fijas de la vista Sesión (marco con el título, barra de pestañas,
+/// barra de estado de la sesión y barra global inferior). Si se pide una fila
+/// de más, el prompt del remoto queda oculto bajo la barra de estado.
+pub fn alto_pty(filas: u16) -> u16 {
+    filas.saturating_sub(4).max(1)
+}
+
 /// Fecha de corte de la purga del registro (90 días atrás).
 fn corte_purga() -> String {
     (chrono::Local::now() - chrono::Duration::days(90))
@@ -4887,4 +4895,22 @@ pub fn ejecutar(
     let mut app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
     app.abrir_al_arrancar = abrir_al_arrancar;
     app.ejecutar()
+}
+
+#[cfg(test)]
+mod pruebas_alto_pty {
+    use super::alto_pty;
+
+    #[test]
+    fn el_pty_reserva_las_cuatro_filas_fijas_de_la_vista_sesion() {
+        // marco + pestañas + barra de sesión + barra global
+        assert_eq!(alto_pty(30), 26);
+        assert_eq!(alto_pty(24), 20);
+    }
+
+    #[test]
+    fn en_ventanas_minimas_el_pty_nunca_queda_a_cero() {
+        assert_eq!(alto_pty(4), 1);
+        assert_eq!(alto_pty(0), 1);
+    }
 }
