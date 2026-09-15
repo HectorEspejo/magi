@@ -13,6 +13,9 @@ pub struct Rutas {
     pub config: PathBuf,
     pub estado: PathBuf,
     pub hogar: PathBuf,
+    /// Directorio de ejecución del servidor (`$XDG_RUNTIME_DIR/magi/` en
+    /// Linux, `~/Library/Caches/magi/` en macOS); inyectable para pruebas.
+    pub runtime: PathBuf,
 }
 
 impl Rutas {
@@ -31,6 +34,7 @@ impl Rutas {
                 .unwrap_or_else(|| dirs.data_dir())
                 .to_path_buf(),
             hogar,
+            runtime: runtime_del_usuario(),
         })
     }
 
@@ -61,6 +65,31 @@ impl Rutas {
     pub fn fichero_known_hosts(&self) -> PathBuf {
         self.dir_ssh().join("known_hosts")
     }
+
+    /// Directorio de ejecución del servidor: `$XDG_RUNTIME_DIR/magi/`
+    /// (fallback `/tmp/magi-<uid>/` en Linux) o `~/Library/Caches/magi/`
+    /// en macOS. Debe crearse con permisos 700.
+    pub fn dir_runtime(&self) -> PathBuf {
+        self.runtime.clone()
+    }
+}
+
+/// Directorio de ejecución para el proceso real, según el sistema.
+fn runtime_del_usuario() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        let dirs = directories::ProjectDirs::from("org", "4d3", "magi");
+        if let Some(dirs) = dirs {
+            return dirs.cache_dir().join("magi");
+        }
+        return std::env::temp_dir().join("magi");
+    }
+    if let Ok(ruta) = std::env::var("XDG_RUNTIME_DIR") {
+        if !ruta.is_empty() {
+            return PathBuf::from(ruta).join("magi");
+        }
+    }
+    let uid = nix::unistd::Uid::current().as_raw();
+    PathBuf::from("/tmp").join(format!("magi-{uid}"))
 }
 
 pub const PREFIJO_POR_DEFECTO: &str = "Ctrl+]";
@@ -72,6 +101,47 @@ pub struct SeccionFlota {
     /// Segundos entre auto-refrescos; 0 = desactivado y mínimo 15.
     pub auto_refresco_seg: u64,
     pub umbrales: crate::flota::estado::Umbrales,
+}
+
+/// Sección `[terminal]` de `config.toml`: comando para lanzar una ventana
+/// nueva con MAGI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionTerminal {
+    /// Ejemplo: «alacritty -e magi» (Linux) o «open -a Terminal magi» (macOS).
+    pub comando: String,
+}
+
+impl Default for SeccionTerminal {
+    fn default() -> Self {
+        Self {
+            comando: comando_terminal_por_defecto().to_string(),
+        }
+    }
+}
+
+fn comando_terminal_por_defecto() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open -a Terminal magi"
+    } else {
+        "alacritty -e magi"
+    }
+}
+
+/// Sección `[servidor]` de `config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionServidor {
+    /// Segundos sin clientes ni sesiones antes de que el servidor se apague.
+    pub gracia_apagado_seg: u64,
+}
+
+impl Default for SeccionServidor {
+    fn default() -> Self {
+        Self {
+            gracia_apagado_seg: 10,
+        }
+    }
 }
 
 /// Contenido de `~/.config/magi/config.toml`.
@@ -88,6 +158,10 @@ pub struct Config {
     pub terminal_ascii: bool,
     /// Sondeo de flota: auto-refresco y umbrales.
     pub flota: SeccionFlota,
+    /// Ventana nueva de terminal: `[terminal] comando`.
+    pub terminal: SeccionTerminal,
+    /// Servidor de sesiones: `[servidor] gracia_apagado_seg`.
+    pub servidor: SeccionServidor,
 }
 
 impl Default for Config {
@@ -98,6 +172,8 @@ impl Default for Config {
             tema: "auto".to_string(),
             terminal_ascii: false,
             flota: SeccionFlota::default(),
+            terminal: SeccionTerminal::default(),
+            servidor: SeccionServidor::default(),
         }
     }
 }

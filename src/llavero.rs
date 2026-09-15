@@ -1,4 +1,7 @@
-use std::io::Write;
+//! Llavero del sistema: el único lugar donde vive una contraseña de host.
+//! En macOS el Keychain se usa por API (`security-framework`, sin subproceso
+//! y sin argv visible); en Linux con `secret-tool` por stdin.
+
 use std::process::{Command, Stdio};
 
 use zeroize::Zeroizing;
@@ -6,249 +9,221 @@ use zeroize::Zeroizing;
 /// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
 pub const SERVICIO: &str = "magi";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Herramienta {
-    SecretTool,
-    Security,
-}
+// ------------------------------------------------------------- macOS: Keychain por API
 
-fn candidatas() -> &'static [Herramienta] {
-    if cfg!(target_os = "macos") {
-        &[Herramienta::Security, Herramienta::SecretTool]
-    } else {
-        &[Herramienta::SecretTool]
+#[cfg(target_os = "macos")]
+mod backend {
+    use super::SERVICIO;
+
+    /// Cuenta de la entrada: usuario@host para distinguir hosts y usuarios.
+    fn cuenta(host: &str, usuario: &str) -> String {
+        format!("{usuario}@{host}")
     }
-}
 
-/// Guarda la contraseña de un host en el llavero del sistema (libsecret en
-/// Linux, Keychain en macOS). Nunca toca `magi.db`.
-pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
-    let mut fallos = Vec::new();
-    for herramienta in candidatas() {
-        match intentar_guardar(*herramienta, host, usuario, contrasena) {
-            Ok(()) => return Ok(()),
-            Err(Fallo::NoExiste) => continue,
-            Err(Fallo::Fallo(motivo)) => fallos.push(format!("{}: {motivo}", nombre(*herramienta))),
+    use security_framework::passwords as keychain;
+    use zeroize::{Zeroize as _, Zeroizing};
+
+    /// `errSecItemNotFound` del Security framework.
+    const ITEM_NO_ENCONTRADO: i32 = -25300;
+
+    pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
+        keychain::set_generic_password(
+            SERVICIO,
+            cuenta(host, usuario).as_bytes(),
+            contrasena.as_bytes(),
+        )
+        .map_err(|error| format!("Keychain: {error}"))
+    }
+
+    pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
+        match keychain::get_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+            Ok(bytes) => {
+                let texto = String::from_utf8_lossy(&bytes).to_string();
+                // La copia devuelta por la API se descarta con zeroize.
+                let mut bytes = bytes;
+                bytes.zeroize();
+                if texto.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(Zeroizing::new(texto)))
+                }
+            }
+            Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(None),
+            Err(error) => Err(format!("Keychain: {error}")),
         }
     }
-    Err(error_global(&fallos))
-}
 
-/// Recupera la contraseña guardada de un host, si existe.
-pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
-    let mut fallos = Vec::new();
-    for herramienta in candidatas() {
-        match intentar_recuperar(*herramienta, host, usuario) {
-            Ok(contrasena) => return Ok(contrasena),
-            Err(Fallo::NoExiste) => continue,
-            Err(Fallo::Fallo(motivo)) => fallos.push(format!("{}: {motivo}", nombre(*herramienta))),
+    pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
+        match keychain::delete_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+            Ok(()) => Ok(true),
+            Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(false),
+            Err(error) => Err(format!("Keychain: {error}")),
         }
     }
-    Err(error_global(&fallos))
+
+    /// El Keychain del usuario está siempre disponible por API en macOS.
+    pub fn disponible() -> bool {
+        true
+    }
 }
 
-/// Borra la contraseña guardada de un host. Devuelve si existía.
-pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
-    let mut fallos = Vec::new();
-    for herramienta in candidatas() {
-        match intentar_olvidar(*herramienta, host, usuario) {
-            Ok(existia) => return Ok(existia),
-            Err(Fallo::NoExiste) => continue,
-            Err(Fallo::Fallo(motivo)) => fallos.push(format!("{}: {motivo}", nombre(*herramienta))),
+// ------------------------------------------------------------- Linux: secret-tool por stdin
+
+#[cfg(not(target_os = "macos"))]
+mod backend {
+    use super::{Command, Stdio, Zeroizing, SERVICIO};
+    use std::io::Write as _;
+
+    enum Fallo {
+        NoExiste,
+        Fallo(String),
+    }
+
+    pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
+        let mut errores: Vec<String> = Vec::new();
+        let resultado = lanzar(
+            "secret-tool",
+            &[
+                "store",
+                "--label",
+                &format!("{SERVICIO} · {host}"),
+                "magi-host",
+                host,
+                "magi-user",
+                usuario,
+            ],
+            true,
+        );
+        match resultado {
+            Err(Fallo::NoExiste) => {
+                return Err("no se encontró secret-tool (llavero del sistema)".to_string())
+            }
+            Err(Fallo::Fallo(motivo)) => errores.push(motivo),
+            Ok(mut proceso) => {
+                if let Some(mut entrada) = proceso.stdin.take() {
+                    if let Err(error) = entrada.write_all(contrasena.as_bytes()) {
+                        errores.push(error.to_string());
+                    }
+                }
+                if let Err(Fallo::Fallo(motivo)) = comprobar(&mut proceso) {
+                    errores.push(motivo);
+                }
+                if errores.is_empty() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(errores.join(" · "))
+    }
+
+    pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
+        let args = ["lookup", "magi-host", host, "magi-user", usuario];
+        let mut comando = Command::new("secret-tool");
+        comando.args(args);
+        comando.stdout(Stdio::piped()).stderr(Stdio::null());
+        let proceso = match comando.spawn() {
+            Ok(proceso) => proceso,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err("no se encontró secret-tool (llavero del sistema)".to_string());
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let salida = proceso
+            .wait_with_output()
+            .map_err(|error| error.to_string())?;
+        if !salida.status.success() {
+            return Ok(None);
+        }
+        let texto = String::from_utf8_lossy(&salida.stdout)
+            .trim_end_matches(['\n', '\r'])
+            .to_string();
+        Ok((!texto.is_empty()).then_some(Zeroizing::new(texto)))
+    }
+
+    pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
+        let args = ["clear", "magi-host", host, "magi-user", usuario];
+        let mut comando = Command::new("secret-tool");
+        comando.args(args);
+        comando.stdout(Stdio::null()).stderr(Stdio::null());
+        match comando.spawn() {
+            Ok(mut proceso) => {
+                let salida = proceso.wait().map_err(|error| error.to_string())?;
+                Ok(salida.success())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err("no se encontró secret-tool (llavero del sistema)".to_string())
+            }
+            Err(error) => Err(error.to_string()),
         }
     }
-    Err(error_global(&fallos))
-}
 
-/// ¿Hay algún llavero disponible en este sistema?
-pub fn disponible() -> bool {
-    candidatas().iter().any(|herramienta| {
-        Command::new(nombre(*herramienta))
+    /// ¿Hay algún llavero disponible (secret-tool presente)?
+    pub fn disponible() -> bool {
+        Command::new("secret-tool")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok()
-    })
-}
-
-fn nombre(herramienta: Herramienta) -> &'static str {
-    match herramienta {
-        Herramienta::SecretTool => "secret-tool",
-        Herramienta::Security => "security",
     }
-}
 
-enum Fallo {
-    NoExiste,
-    Fallo(String),
-}
-
-fn error_global(fallos: &[String]) -> String {
-    if fallos.is_empty() {
-        "no se encontró un llavero del sistema (secret-tool o security)".to_string()
-    } else {
-        fallos.join(" · ")
-    }
-}
-
-fn etiqueta(host: &str) -> String {
-    format!("MAGI · {host}")
-}
-
-fn servicio(host: &str) -> String {
-    format!("{SERVICIO}:{host}")
-}
-
-fn intentar_guardar(
-    herramienta: Herramienta,
-    host: &str,
-    usuario: &str,
-    contrasena: &str,
-) -> Result<(), Fallo> {
-    let mut proceso = match herramienta {
-        Herramienta::SecretTool => {
-            let etiqueta = etiqueta(host);
-            lanzar(
-                "secret-tool",
-                &[
-                    "store",
-                    "--label",
-                    &etiqueta,
-                    "magi-host",
-                    host,
-                    "magi-user",
-                    usuario,
-                ],
-                true,
-            )?
+    fn lanzar(
+        programa: &str,
+        args: &[&str],
+        con_entrada: bool,
+    ) -> Result<std::process::Child, Fallo> {
+        let mut comando = Command::new(programa);
+        comando.args(args);
+        if con_entrada {
+            comando.stdin(Stdio::piped());
         }
-        Herramienta::Security => lanzar(
-            "security",
-            &[
-                "add-generic-password",
-                "-U",
-                "-a",
-                usuario,
-                "-s",
-                &servicio(host),
-                "-w",
-                contrasena,
-            ],
-            false,
-        )?,
-    };
-    if let Some(mut entrada) = proceso.stdin.take() {
-        if let Err(error) = entrada.write_all(contrasena.as_bytes()) {
-            return Err(Fallo::Fallo(error.to_string()));
+        comando.stdout(Stdio::piped()).stderr(Stdio::null());
+        match comando.spawn() {
+            Ok(proceso) => Ok(proceso),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Fallo::NoExiste),
+            Err(error) => Err(Fallo::Fallo(error.to_string())),
         }
     }
-    comprobar(proceso)
-}
 
-fn intentar_recuperar(
-    herramienta: Herramienta,
-    host: &str,
-    usuario: &str,
-) -> Result<Option<Zeroizing<String>>, Fallo> {
-    let args: Vec<String> = match herramienta {
-        Herramienta::SecretTool => vec![
-            "lookup".to_string(),
-            "magi-host".to_string(),
-            host.to_string(),
-            "magi-user".to_string(),
-            usuario.to_string(),
-        ],
-        Herramienta::Security => vec![
-            "find-generic-password".to_string(),
-            "-a".to_string(),
-            usuario.to_string(),
-            "-s".to_string(),
-            servicio(host),
-            "-w".to_string(),
-        ],
-    };
-    let referencias: Vec<&str> = args.iter().map(String::as_str).collect();
-    let proceso = lanzar(nombre(herramienta), &referencias, false)?;
-    let salida = match proceso.wait_with_output() {
-        Ok(salida) => salida,
-        Err(error) => return Err(Fallo::Fallo(error.to_string())),
-    };
-    if !salida.status.success() {
-        return Ok(None);
-    }
-    let texto = String::from_utf8_lossy(&salida.stdout)
-        .trim_end_matches(['\n', '\r'])
-        .to_string();
-    if texto.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Zeroizing::new(texto)))
+    fn comprobar(proceso: &mut std::process::Child) -> Result<(), Fallo> {
+        match proceso.wait() {
+            Ok(estado) if estado.success() => Ok(()),
+            Ok(estado) => Err(Fallo::Fallo(format!("el llavero devolvió {estado}"))),
+            Err(error) => Err(Fallo::Fallo(error.to_string())),
+        }
     }
 }
 
-fn intentar_olvidar(herramienta: Herramienta, host: &str, usuario: &str) -> Result<bool, Fallo> {
-    let args: Vec<String> = match herramienta {
-        Herramienta::SecretTool => vec![
-            "clear".to_string(),
-            "magi-host".to_string(),
-            host.to_string(),
-            "magi-user".to_string(),
-            usuario.to_string(),
-        ],
-        Herramienta::Security => vec![
-            "delete-generic-password".to_string(),
-            "-a".to_string(),
-            usuario.to_string(),
-            "-s".to_string(),
-            servicio(host),
-        ],
-    };
-    let referencias: Vec<&str> = args.iter().map(String::as_str).collect();
-    let proceso = lanzar(nombre(herramienta), &referencias, false)?;
-    let salida = match proceso.wait_with_output() {
-        Ok(salida) => salida,
-        Err(error) => return Err(Fallo::Fallo(error.to_string())),
-    };
-    Ok(salida.status.success())
+// ------------------------------------------------------------- API pública
+
+/// Guarda la contraseña de un host en el llavero del sistema. Nunca toca
+/// `magi.db`.
+pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
+    backend::guardar(host, usuario, contrasena)
 }
 
-fn lanzar(programa: &str, args: &[&str], con_entrada: bool) -> Result<std::process::Child, Fallo> {
-    let mut comando = Command::new(programa);
-    comando.args(args);
-    if con_entrada {
-        comando.stdin(Stdio::piped());
-    }
-    comando.stdout(Stdio::piped()).stderr(Stdio::null());
-    match comando.spawn() {
-        Ok(proceso) => Ok(proceso),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Fallo::NoExiste),
-        Err(error) => Err(Fallo::Fallo(error.to_string())),
-    }
+/// Recupera la contraseña guardada de un host, si existe.
+pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
+    backend::recuperar(host, usuario)
 }
 
-fn comprobar(mut proceso: std::process::Child) -> Result<(), Fallo> {
-    match proceso.wait() {
-        Ok(estado) if estado.success() => Ok(()),
-        Ok(estado) => Err(Fallo::Fallo(format!("el llavero devolvió {estado}"))),
-        Err(error) => Err(Fallo::Fallo(error.to_string())),
-    }
+/// Borra la contraseña guardada de un host. Devuelve si existía.
+pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
+    backend::olvidar(host, usuario)
+}
+
+/// ¿Hay algún llavero disponible en este sistema?
+pub fn disponible() -> bool {
+    backend::disponible()
 }
 
 #[cfg(test)]
 mod pruebas {
     use super::*;
 
+    /// Requiere llavero del escritorio (Keychain o secret-tool desbloqueado).
     #[test]
-    fn las_claves_del_llavero_no_contienen_la_contrasena() {
-        let etiqueta = etiqueta("hetzner-01");
-        assert!(etiqueta.contains("hetzner-01"));
-        assert_eq!(servicio("hetzner-01"), "magi:hetzner-01");
-    }
-
-    /// Requiere sesión de escritorio con llavero desbloqueado.
-    #[test]
-    #[ignore = "requiere llavero del escritorio (secret-tool/gnome-keyring)"]
+    #[ignore = "requiere llavero del escritorio desbloqueado"]
     fn guarda_recupera_y_olvida_si_hay_llavero() {
         let host = format!("magi-prueba-{}", std::process::id());
         guardar(&host, "tester", "secreta").unwrap();

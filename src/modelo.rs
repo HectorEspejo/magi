@@ -571,6 +571,11 @@ pub fn fecha_ahora() -> String {
         .to_string()
 }
 
+/// Fecha local del día (AAAA-MM-DD), como la del nombre de los logs.
+pub fn fecha_hoy() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;

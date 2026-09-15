@@ -117,11 +117,44 @@ pub enum EventoConexion {
     },
 }
 
-/// Lanza la tarea tokio de la sesión.
+/// Nombre del usuario local, para las conexiones sin usuario en la ficha.
+pub fn usuario_local() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "root".to_string())
+}
+
+/// De dónde sale una contraseña cuando el host autentica con una.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuenteContrasena {
+    /// El propio proceso la lee del llavero del sistema (conexiones efímeras
+    /// del cliente: prueba de ficha y sondeo).
+    Llavero,
+    /// La aporta el cliente solicitante por el protocolo (sesiones del
+    /// servidor); el servidor jamás toca el llavero.
+    Solicitante,
+}
+
+/// Lanza la tarea tokio de la sesión y devuelve el canal de comandos.
+/// La tarea emite `EventoConexion`; aquí se envuelven en `app::Evento::Conexion`
+/// para el bucle de la UI.
 pub fn lanzar(
     runtime: &tokio::runtime::Runtime,
     plan: PlanConexion,
     tx: mpsc::UnboundedSender<Evento>,
 ) -> mpsc::UnboundedSender<ComandoConexion> {
-    cliente::lanzar(runtime, plan, tx)
+    let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
+    runtime.spawn(async move {
+        let (tx_eventos, mut rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
+        let puente = tokio::spawn(async move {
+            while let Some(evento) = rx_eventos.recv().await {
+                if tx.send(Evento::Conexion(evento)).is_err() {
+                    break;
+                }
+            }
+        });
+        cliente::sesion_completa(plan, rx_comandos, tx_eventos).await;
+        let _ = puente.await;
+    });
+    tx_comandos
 }

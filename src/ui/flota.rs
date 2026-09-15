@@ -99,10 +99,17 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App) {
         let host = &app.hosts[*indice];
         let seleccionado = posicion == app.seleccion_flota;
         let (glifo, color, palabra) = if app.sondeando.contains(&host.id) {
-            (tema.glifos.conectando, tema.paleta.acento, "…")
+            (tema.glifos.conectando.to_string(), tema.paleta.acento, "…")
         } else {
             let (estado, _) = estado_de(app, host.id);
-            glifo_estado(estado, tema)
+            let (glifo, color, palabra) = glifo_estado(estado, tema);
+            // ●N cuando hay más de una sesión viva al host.
+            let sesiones = super::hosts::sesiones_del_host(app, host.id);
+            if sesiones >= 2 {
+                (format!("{glifo}{sesiones}"), color, palabra)
+            } else {
+                (glifo.to_string(), color, palabra)
+            }
         };
         let nombre_max = (area.width as usize).saturating_sub(12);
         let nombre = recortar(&host.nombre, nombre_max.max(4));

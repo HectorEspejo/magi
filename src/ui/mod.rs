@@ -9,6 +9,7 @@ pub mod identidades;
 pub mod paleta;
 pub mod registro;
 pub mod sesion;
+pub mod sesiones;
 
 use std::io::{self, Stdout};
 
@@ -34,6 +35,8 @@ pub enum Vista {
     Hosts,
     Ficha,
     Sesion,
+    /// Lista de sesiones del servidor (F3 sin pestaña activa).
+    Sesiones,
     Identidades,
     Registro,
 }
@@ -63,6 +66,7 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         Vista::Hosts => hosts::dibujar(marco, trozos[0], app),
         Vista::Ficha => ficha::dibujar(marco, trozos[0], app),
         Vista::Sesion => sesion::dibujar(marco, trozos[0], app),
+        Vista::Sesiones => sesiones::dibujar(marco, trozos[0], app),
         Vista::Identidades => identidades::dibujar(marco, trozos[0], app),
         Vista::Registro => registro::dibujar(marco, trozos[0], app),
     }

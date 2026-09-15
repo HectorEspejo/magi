@@ -1,5 +1,6 @@
 pub mod almacen;
 pub mod app;
+pub mod cliente;
 pub mod conexion;
 pub mod config;
 pub mod ficheros;
@@ -8,7 +9,9 @@ pub mod identidades;
 pub mod llavero;
 pub mod modelo;
 pub mod portapapeles;
+pub mod protocolo;
 pub mod registro;
+pub mod servidor;
 pub mod sshconfig;
 pub mod teclas;
 pub mod tema;

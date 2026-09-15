@@ -200,22 +200,37 @@ fn formato_columna(texto: &str, ancho: usize) -> String {
     format!("{texto:<ancho$} ")
 }
 
+/// Cuántas sesiones vivas hay al host (pestañas en el servidor).
+pub fn sesiones_del_host(app: &App, host_id: i64) -> usize {
+    app.pestanas
+        .iter()
+        .filter(|pestaña| pestaña.host_id == host_id && pestaña.viva())
+        .count()
+}
+
+/// Glifo de estado del host con contador de sesiones: `●`, `●N` (más de una
+/// sesión), `◐` (conectando), `✕` (último error) o `○`.
 pub fn glifo_y_color(
     app: &App,
     host_id: i64,
     estado: Option<UltimoEstado>,
-) -> (&'static str, ratatui::style::Color) {
+) -> (String, ratatui::style::Color) {
     let tema = &app.tema;
-    if let Some(sesion) = &app.sesion {
-        if sesion.host_id == host_id {
-            return (tema.glifos.conectado, tema.paleta.correcto);
-        }
+    let sesiones = sesiones_del_host(app, host_id);
+    if sesiones >= 2 {
+        return (
+            format!("{}{sesiones}", tema.glifos.conectado),
+            tema.paleta.correcto,
+        );
     }
-    if app.host_conectando == Some(host_id) {
-        return (tema.glifos.conectando, tema.paleta.acento);
+    if sesiones == 1 {
+        return (tema.glifos.conectado.to_string(), tema.paleta.correcto);
+    }
+    if app.aperturas_pendientes.contains(&host_id) {
+        return (tema.glifos.conectando.to_string(), tema.paleta.acento);
     }
     match estado {
-        Some(UltimoEstado::Error) => (tema.glifos.error, tema.paleta.critico),
-        _ => (tema.glifos.desconectado, tema.paleta.inactivo),
+        Some(UltimoEstado::Error) => (tema.glifos.error.to_string(), tema.paleta.critico),
+        _ => (tema.glifos.desconectado.to_string(), tema.paleta.inactivo),
     }
 }

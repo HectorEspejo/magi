@@ -3,7 +3,8 @@
 ## Contexto
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con app Android prevista. Cliente: 4d3 (producto propio).
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS).
+Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 
 ## Documentación del proyecto
 
@@ -67,6 +68,29 @@ coméntalo con el desarrollador.
 - Todo lo que se ejecuta en un host remoto va en scripts embebidos con
   `include_str!` y recibe los datos del inventario como argumentos validados,
   nunca interpolados en el texto del comando.
+- El bucle de UI es el único escritor de SQLite: las tareas de red emiten
+  eventos y nunca abren la base de datos.
+- Toda conexión viva está en `conexion::RegistroSesiones`; antes de abrir una
+  conexión efímera, pide la existente ahí.
+- Un secreto que no es una clave (contraseñas) solo vive en el llavero del
+  sistema a través de `src/llavero.rs`; en `magi.db` van referencias, nunca
+  secretos, tampoco cifrados.
+- Anota en el registro cuando el efecto se ha producido (fichero escrito,
+  comando ejecutado), no cuando se decide.
+- Servidor de sesiones (`src/servidor/`): custodia solo sesiones, pool de
+  conexiones y lo que deba sobrevivir a la ventana. No dialoga nunca: reenvía
+  huellas, frases y contraseñas al cliente solicitante. Escribe en SQLite solo
+  `REGISTRO` (eventos de sesión y servidor) y `HOSTS.ultimo_estado` /
+  `ultima_conexion_en`; el resto lo escribe el cliente. Ambos abren la BD con
+  `busy_timeout = 5000`.
+- Protocolo en `src/protocolo.rs`, `VERSION_PROTOCOLO` explícita: si cambias
+  la semántica de un mensaje existente, incrementa la versión. Un mensaje
+  desconocido produce `Error` y desconexión, nunca un panic. Nunca mates un
+  servidor con sesiones abiertas sin orden explícita del usuario.
+- Secretos por el socket (`Frase`, `Contrasena`) van en `Zeroizing` y no se
+  escriben en ningún log; `Datos`/`PantallaCompleta` solo a clientes adjuntos.
+- Depuración del servidor: `cargo run -- --servidor` en primer plano en una
+  terminal y `cargo run` en otra; log en `~/.local/state/magi/logs/servidor.log.<fecha>`.
 
 ## Al terminar una fase (o al pausar la sesión)
 

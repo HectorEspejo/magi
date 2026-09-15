@@ -13,14 +13,16 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::almacen::Almacen;
+use crate::cliente;
 use crate::conexion::{self, ComandoConexion, EventoConexion, PlanConexion};
 use crate::config::{Config, Rutas};
 use crate::flota::{self, PeticionSondeo};
 use crate::identidades::Identidades;
 use crate::modelo::{
-    self, fecha_ahora, DatosHost, EntradaRegistro, EstadoSesion, Grupo, Host, IdentidadRef, Origen,
-    ResultadoRegistro, ResultadoSondeo, Sondeo, UltimoEstado,
+    self, fecha_ahora, DatosHost, EntradaRegistro, Grupo, Host, IdentidadRef, Origen,
+    ResultadoRegistro, Sondeo, UltimoEstado,
 };
+use crate::protocolo::{self, EstadoSesionRemota};
 use crate::registro::FiltroRegistro;
 use crate::sshconfig;
 use crate::tema::Tema;
@@ -179,6 +181,14 @@ pub enum Evento {
     Redimension(u16, u16),
     Tick,
     Conexion(EventoConexion),
+    /// Mensaje del servidor de sesiones (sesiones, estados, diálogos…).
+    Servidor(crate::protocolo::MensajeServidor),
+    /// EOF del socket sin `Adios`: el servidor ha caído.
+    ServidorCaido,
+    /// La conexión con el servidor se ha restablecido (relanzado).
+    ServidorConectado(Result<cliente::Cliente, String>),
+    /// Pestañas con pantalla repintada (coalescido a ~30 fps por el cliente).
+    Pantallas(Vec<u32>),
     Identidades(Identidades),
     Sondeo(Sondeo),
     ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
@@ -524,6 +534,8 @@ pub enum AccionDialogo {
         grupo_id: Option<i64>,
     },
     CerrarSesion,
+    CerrarPestana(u32),
+    ApagarServidor,
     CerrarSesionYAbrir(i64),
     Salir,
     DescartarFicha,
@@ -551,6 +563,38 @@ pub enum Dialogo {
         lineas: Vec<String>,
         peligro: bool,
         accion: AccionDialogo,
+    },
+    /// Diálogo SERVIDOR CAÍDO: `s` relanza, `n` sigue sin sesiones.
+    ServidorCaido {
+        perdidas: usize,
+    },
+    HuellaServidor {
+        sesion_id: u32,
+        host: String,
+        tipo: String,
+        huella: String,
+    },
+    HuellaCambiadaServidor {
+        sesion_id: u32,
+        host: String,
+        tipo: String,
+        anterior: String,
+        nueva: String,
+        campo: CampoTexto,
+    },
+    FraseServidor {
+        sesion_id: u32,
+        host: String,
+        intento: u8,
+        campo: CampoTexto,
+    },
+    ContrasenaServidor {
+        sesion_id: u32,
+        host: String,
+        intento: u8,
+        campo: CampoTexto,
+        recordar: bool,
+        foco_casilla: bool,
     },
     HuellaDesconocida {
         host: String,
@@ -625,15 +669,40 @@ pub struct ImportacionPendiente {
     pub indice: usize,
 }
 
-pub struct SesionUI {
+/// Una pestaña de la vista Sesión: espejo local de una sesión del servidor.
+pub struct PestanaUI {
+    pub sesion_id: u32,
+    pub nombre: String,
     pub host_id: i64,
     pub host_nombre: String,
-    pub pantalla: conexion::Pantalla,
+    pub estado: EstadoSesionRemota,
+    pub motivo: Option<String>,
     pub identidad: String,
-    pub iniciada: Instant,
-    pub estado: EstadoSesion,
-    pub cols: u16,
-    pub filas: u16,
+    pub pantalla: conexion::Pantalla,
+    pub actividad_no_vista: bool,
+    pub abierta_en: i64,
+    pub ventanas: u32,
+    /// Tamaño remoto vigente (0 mientras no se sepa).
+    pub cols_remoto: u16,
+    pub filas_remoto: u16,
+    /// Cliente que impone el tamaño mínimo (aviso «mín. ventana N»).
+    pub ventana_minima: Option<u32>,
+}
+
+impl PestanaUI {
+    /// ¿Está viva (abierta o abriéndose)?
+    pub fn viva(&self) -> bool {
+        matches!(
+            self.estado,
+            EstadoSesionRemota::Abierta | EstadoSesionRemota::Abriendo
+        )
+    }
+
+    /// Tiempo conectado (segundos desde la apertura que reporta el servidor).
+    pub fn segundos(&self) -> u64 {
+        let ahora = chrono::Utc::now().timestamp();
+        (ahora - self.abierta_en).max(0) as u64
+    }
 }
 
 pub struct EntradaPaleta {
@@ -663,6 +732,10 @@ pub enum AccionPaleta {
     SondearTodos,
     IrAFlota,
     OlvidarContrasena(i64),
+    NuevaVentana,
+    CerrarPestana(u32),
+    ReconectarPestana(u32),
+    ApagarServidor,
 }
 
 pub struct PaletaCmd {
@@ -711,9 +784,14 @@ pub struct App {
     eventos_rx: mpsc::UnboundedReceiver<Evento>,
     salir_flag: Arc<AtomicBool>,
     pub salir: bool,
-    salir_pendiente: bool,
     abrir_al_cerrar: Option<i64>,
+    /// Mensaje sobre sesiones que siguen abiertas, mostrado al salir.
+    pub aviso_al_salir: Option<String>,
+    /// Host cuyo `AbrirSesion` se envía nada más conectar con el servidor.
+    pub abrir_al_arrancar: Option<i64>,
     pub vista: Vista,
+    /// Vista desde la que se entró en Sesión (para `prefijo q`).
+    pub vista_previa: Option<Vista>,
     pub filtro: String,
     pub filtro_activo: bool,
     pub hosts: Vec<Host>,
@@ -728,7 +806,29 @@ pub struct App {
     pub ayuda: bool,
     pub dialogo: Option<Dialogo>,
     importacion: Option<ImportacionPendiente>,
-    pub sesion: Option<SesionUI>,
+    /// Pestañas espejo de las sesiones del servidor, en orden de apertura.
+    pub pestanas: Vec<PestanaUI>,
+    /// Índice de la pestaña activa dentro de `pestanas`.
+    pub pestana_activa: Option<usize>,
+    /// Conexión con el servidor de sesiones.
+    pub servidor: cliente::Cliente,
+    /// El servidor habla otra versión de protocolo.
+    pub servidor_incompatible: bool,
+    /// El servidor ha caído (pendiente del diálogo de relanzado).
+    pub servidor_caido: bool,
+    /// Sesiones que el servidor perdió al caer (para el diálogo).
+    pub sesiones_perdidas: usize,
+    /// Pantallas por pestaña compartidas con la tarea de lectura.
+    pub pantallas: cliente::pantallas::Pantallas,
+    /// Hosts cuyo `AbrirSesion` está en vuelo (se activa al aparecer).
+    pub aperturas_pendientes: HashSet<i64>,
+    /// Contraseñas a guardar en el llavero cuando la sesión abra.
+    contrasenas_pendientes: HashMap<u32, (protocolo::Secreto, bool)>,
+    /// Datos de la bienvenida del servidor para la vista Sesiones.
+    pub servidor_pid: Option<u32>,
+    /// Id que el servidor dio a ESTA ventana (para «mín. ventana N»).
+    pub cliente_id: Option<u32>,
+    servidor_desde: Option<Instant>,
     comandos_sesion: Option<mpsc::UnboundedSender<ComandoConexion>>,
     pub host_conectando: Option<i64>,
     pub prefijo: (KeyCode, KeyModifiers),
@@ -738,13 +838,14 @@ pub struct App {
     pub identidades: Identidades,
     pub contador_ticks: u64,
     sucio: bool,
-    segundos_sesion: u64,
     pub registro_sesiones: conexion::RegistroSesiones,
     pub registro: EstadoRegistro,
     pub sondeos: HashMap<i64, Sondeo>,
     pub tasas_red: HashMap<i64, (f64, f64)>,
     pub sondeando: HashSet<i64>,
     pub sondeo_total: usize,
+    /// Selección en la vista Sesiones (lista).
+    pub seleccion_sesiones: usize,
     pub sondeo_hechos: usize,
     pub seleccion_flota: usize,
     pub auto_refresco: bool,
@@ -780,9 +881,11 @@ impl App {
             eventos_rx,
             salir_flag: salir_flag.clone(),
             salir: false,
-            salir_pendiente: false,
             abrir_al_cerrar: None,
+            aviso_al_salir: None,
+            abrir_al_arrancar: None,
             vista: Vista::Hosts,
+            vista_previa: None,
             filtro: String::new(),
             filtro_activo: false,
             hosts: Vec::new(),
@@ -797,7 +900,18 @@ impl App {
             ayuda: false,
             dialogo: None,
             importacion: None,
-            sesion: None,
+            pestanas: Vec::new(),
+            pestana_activa: None,
+            servidor: cliente::Cliente::sin_servidor(),
+            servidor_incompatible: false,
+            servidor_caido: false,
+            sesiones_perdidas: 0,
+            pantallas: cliente::pantallas::Pantallas::default(),
+            aperturas_pendientes: HashSet::new(),
+            contrasenas_pendientes: HashMap::new(),
+            servidor_pid: None,
+            cliente_id: None,
+            servidor_desde: None,
             comandos_sesion: None,
             host_conectando: None,
             prefijo,
@@ -807,12 +921,12 @@ impl App {
             identidades: Identidades::default(),
             contador_ticks: 0,
             sucio: true,
-            segundos_sesion: 0,
             registro_sesiones: conexion::registro_sesiones(),
             registro: EstadoRegistro::nuevo(),
             sondeos: HashMap::new(),
             tasas_red: HashMap::new(),
             sondeando: HashSet::new(),
+            seleccion_sesiones: 0,
             sondeo_total: 0,
             sondeo_hechos: 0,
             seleccion_flota: 0,
@@ -833,10 +947,33 @@ impl App {
         app.refrescar_identidades();
         app.cargar_sondeos();
         app.entrar_en_flota();
+
+        // Conexión con el servidor de sesiones (autolanzado si hace falta).
+        let tx_conexion = eventos_tx.clone();
+        let rutas_cliente = app.rutas.clone();
+        match app
+            .runtime
+            .block_on(cliente::conectar(&rutas_cliente, tx_conexion))
+        {
+            Ok(servidor) => {
+                app.pantallas = servidor.pantallas();
+                app.servidor = servidor;
+                app.servidor_desde = Some(Instant::now());
+            }
+            Err(cliente::FalloConexion::VersionIncompatible) => {
+                app.servidor_incompatible = true;
+            }
+            Err(cliente::FalloConexion::Inaccesible(motivo)) => {
+                app.mensaje(motivo, true);
+            }
+        }
         Ok(app)
     }
 
     pub fn ejecutar(mut self) -> Result<()> {
+        if let Some(host_id) = self.abrir_al_arrancar.take() {
+            self.conectar(host_id);
+        }
         let mut terminal = crate::ui::iniciar_terminal()?;
         while !self.salir {
             if self.sucio {
@@ -850,6 +987,12 @@ impl App {
         }
         crate::ui::restaurar_terminal();
         self.salir_flag.store(true, Ordering::Relaxed);
+        // Las sesiones sobreviven a la ventana; el servidor se entera del
+        // adiós antes de que termine el proceso.
+        self.servidor.enviar(protocolo::MensajeCliente::Adios);
+        if let Some(aviso) = self.aviso_al_salir.take() {
+            println!("{aviso}");
+        }
         self.almacen.cerrar()
     }
 
@@ -861,19 +1004,64 @@ impl App {
             }
             Evento::Redimension(cols, filas) => {
                 self.sucio = true;
-                let filas_pty = filas.saturating_sub(2).max(1);
-                if let Some(sesion) = &mut self.sesion {
-                    sesion.cols = cols;
-                    sesion.filas = filas_pty;
-                }
-                if let Some(comandos) = &self.comandos_sesion {
-                    let _ = comandos.send(ComandoConexion::Redimensionar(cols, filas_pty));
+                let filas_pty = alto_pty(filas);
+                if self.vista == Vista::Sesion {
+                    if let Some(sesion_id) = self.pestana_activa_id() {
+                        self.servidor
+                            .enviar(protocolo::MensajeCliente::Redimensionar {
+                                sesion_id,
+                                cols,
+                                filas: filas_pty,
+                            });
+                    }
                 }
             }
             Evento::Tick => self.tick(),
             Evento::Conexion(evento) => {
                 self.sucio = true;
                 self.evento_conexion(evento);
+            }
+            Evento::Servidor(mensaje) => {
+                self.sucio = true;
+                self.evento_servidor(mensaje);
+            }
+            Evento::ServidorCaido => {
+                self.sucio = true;
+                self.servidor_caido();
+            }
+            Evento::ServidorConectado(resultado) => {
+                self.sucio = true;
+                match resultado {
+                    Ok(servidor) => {
+                        self.pantallas = servidor.pantallas();
+                        self.servidor = servidor;
+                        self.servidor_desde = Some(Instant::now());
+                        self.mensaje("servidor relanzado", false);
+                    }
+                    Err(motivo) => self.mensaje(motivo, true),
+                }
+            }
+            Evento::Pantallas(ids) => {
+                // Las pantallas ya se alimentaron en la tarea de lectura
+                // (registro compartido); aquí solo se decide el repintado y el
+                // indicador ◐ de actividad sin ver.
+                let visible = if self.vista == Vista::Sesion {
+                    self.pestana_activa_id()
+                } else {
+                    None
+                };
+                for sesion_id in ids {
+                    if Some(sesion_id) == visible {
+                        self.sucio = true;
+                        self.limpiar_actividad(sesion_id);
+                    } else if let Some(pestaña) = self
+                        .pestanas
+                        .iter_mut()
+                        .find(|pestaña| pestaña.sesion_id == sesion_id)
+                    {
+                        pestaña.actividad_no_vista = true;
+                    }
+                }
             }
             Evento::Identidades(identidades) => {
                 self.sucio = true;
@@ -913,14 +1101,9 @@ impl App {
         if self.filtro_activo && self.contador_ticks.is_multiple_of(3) {
             self.sucio = true;
         }
-        if self.vista == Vista::Sesion {
-            if let Some(sesion) = &self.sesion {
-                let segundos = sesion.iniciada.elapsed().as_secs();
-                if segundos != self.segundos_sesion {
-                    self.segundos_sesion = segundos;
-                    self.sucio = true;
-                }
-            }
+        if matches!(self.vista, Vista::Sesion | Vista::Sesiones) {
+            // El tiempo conectado cambia cada segundo.
+            self.sucio = true;
         }
         if self.vista == Vista::Flota {
             if !self.sondeando.is_empty() {
@@ -1204,53 +1387,55 @@ impl App {
     }
 
     fn intentar_salir(&mut self) {
-        if self.sesion.is_some() {
-            self.dialogo = Some(Dialogo::Confirmar {
-                titulo: "SALIR".to_string(),
-                lineas: vec![
-                    "Hay una sesión abierta: se cerrará el canal remoto.".to_string(),
-                    "¿Salir de MAGI?".to_string(),
-                ],
-                peligro: true,
-                accion: AccionDialogo::Salir,
-            });
-        } else {
-            self.salir = true;
+        // Las sesiones sobreviven a la ventana: salir no cierra nada.
+        let vivas = self
+            .pestanas
+            .iter()
+            .filter(|pestaña| pestaña.viva())
+            .count();
+        if vivas > 0 {
+            self.aviso_al_salir =
+                Some(format!("{vivas} sesión(es) siguen abiertas en el servidor"));
         }
+        self.salir = true;
     }
 
     // ------------------------------------------------------------------ conexión
 
+    /// Pide al servidor una sesión nueva al host (↵ en Hosts y Flota,
+    /// paleta, `magi conectar`); siempre abre una nueva.
     fn conectar(&mut self, host_id: i64) {
-        if let Some(sesion) = &self.sesion {
-            if sesion.host_id == host_id {
-                self.vista = Vista::Sesion;
-                return;
-            }
-            let nombre = self
-                .sesion
-                .as_ref()
-                .map(|sesion| sesion.host_nombre.clone())
-                .unwrap_or_default();
-            self.dialogo = Some(Dialogo::Confirmar {
-                titulo: "CERRAR SESIÓN".to_string(),
-                lineas: vec![
-                    format!("Ya hay una sesión abierta con «{nombre}»."),
-                    "¿Cerrarla y abrir la nueva?".to_string(),
-                ],
-                peligro: true,
-                accion: AccionDialogo::CerrarSesionYAbrir(host_id),
+        if self.servidor_incompatible {
+            self.mensaje(
+                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
+                true,
+            );
+            return;
+        }
+        if self.servidor_caido {
+            self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
+            return;
+        }
+        if self.aperturas_pendientes.contains(&host_id) {
+            self.mensaje("ya hay una conexión en curso con ese host", true);
+            return;
+        }
+        let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+        self.servidor
+            .enviar(protocolo::MensajeCliente::AbrirSesion {
+                host_id,
+                cols,
+                filas: alto_pty(filas),
             });
-            return;
-        }
-        if self.comandos_sesion.is_some() {
-            self.mensaje("ya hay una conexión en curso", true);
-            return;
-        }
-        match self.almacen.obtener_host(host_id) {
-            Ok(host) => self.iniciar_conexion(host, false),
-            Err(error) => self.mensaje(error.to_string(), true),
-        }
+        self.aperturas_pendientes.insert(host_id);
+        let nombre = self
+            .hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .map(|host| host.nombre.clone())
+            .unwrap_or_default();
+        self.mensaje(format!("conectando con «{nombre}»…"), false);
+        self.sucio = true;
     }
 
     fn iniciar_conexion(&mut self, host: Host, solo_prueba: bool) {
@@ -1288,20 +1473,14 @@ impl App {
         self.sucio = true;
     }
 
+    /// Eventos de la conexión efímera del cliente (solo la prueba de la
+    /// ficha y el sondeo); las sesiones vivas van por el servidor.
     fn evento_conexion(&mut self, evento: EventoConexion) {
         match evento {
-            EventoConexion::Estado { host_id, estado } => {
-                self.host_conectando = Some(host_id);
-                match estado {
-                    EstadoSesion::Autenticando => {
-                        if self.ficha.is_some() {
-                            // La prueba de conexión no cambia de vista.
-                        }
-                    }
-                    EstadoSesion::VerificandoHuella => {}
-                    _ => {}
-                }
-            }
+            EventoConexion::Estado {
+                host_id: _,
+                estado: _,
+            } => {}
             EventoConexion::HuellaDesconocida {
                 host,
                 tipo,
@@ -1403,54 +1582,8 @@ impl App {
                     crate::modelo::ResultadoRegistro::Ok,
                 );
             }
-            EventoConexion::Abierta {
-                host_id,
-                pantalla,
-                identidad,
-                huella,
-                cols,
-                filas,
-            } => {
-                let nombre = self
-                    .hosts
-                    .iter()
-                    .find(|host| host.id == host_id)
-                    .map(|host| host.nombre.clone())
-                    .unwrap_or_default();
-                if let Err(error) = self.almacen.marcar_conexion(host_id) {
-                    warn!("no se pudo actualizar el estado del host: {error}");
-                }
-                self.anotar(
-                    crate::registro::CONEXION_ABIERTA,
-                    Some(host_id),
-                    None,
-                    &format!("sesión abierta con «{nombre}» · {identidad}"),
-                    crate::modelo::ResultadoRegistro::Ok,
-                );
-                self.marcar_ultimo_uso(huella.as_deref());
-                self.sesion = Some(SesionUI {
-                    host_id,
-                    host_nombre: nombre.clone(),
-                    pantalla,
-                    identidad,
-                    iniciada: Instant::now(),
-                    estado: EstadoSesion::Abierta,
-                    cols,
-                    filas,
-                });
-                self.host_conectando = None;
-                self.vista = Vista::Sesion;
-                self.destello = Some((host_id, Instant::now()));
-                if let Err(error) = self.recargar_inventario() {
-                    warn!("no se pudo recargar el inventario: {error}");
-                }
-                self.mensaje(format!("sesión abierta con «{nombre}»"), false);
-            }
-            EventoConexion::Pantalla => {
-                if self.vista == Vista::Sesion {
-                    self.sucio = true;
-                }
-            }
+            EventoConexion::Abierta { .. } => {}
+            EventoConexion::Pantalla => {}
             EventoConexion::PruebaOk {
                 host_id,
                 identidad,
@@ -1466,29 +1599,11 @@ impl App {
                 let _ = self.recargar_inventario();
                 self.mensaje(format!("conexión correcta · {identidad}"), false);
             }
-            EventoConexion::Cerrada { host_id, motivo } => {
-                self.sesion = None;
-                self.comandos_sesion = None;
+            EventoConexion::Cerrada { host_id, motivo: _ } => {
                 self.host_conectando = None;
-                if self.vista == Vista::Sesion {
-                    self.vista = Vista::Hosts;
-                }
-                let nombre = self
-                    .hosts
-                    .iter()
-                    .find(|host| host.id == host_id)
-                    .map(|host| host.nombre.clone())
-                    .unwrap_or_default();
-                match motivo {
-                    Some(motivo) => self.mensaje(format!("sesión cerrada: {motivo}"), false),
-                    None => self.mensaje(format!("sesión cerrada con «{nombre}»"), false),
-                }
+                self.comandos_sesion = None;
                 let _ = self.recargar_inventario();
-                if self.salir_pendiente {
-                    self.salir = true;
-                } else if let Some(host_id) = self.abrir_al_cerrar.take() {
-                    self.conectar(host_id);
-                }
+                let _ = host_id;
             }
             EventoConexion::Error { host_id, motivo } => {
                 if host_id != 0 {
@@ -1497,19 +1612,8 @@ impl App {
                         .marcar_estado(host_id, Some(UltimoEstado::Error));
                     self.destello = Some((host_id, Instant::now()));
                 }
-                if self
-                    .sesion
-                    .as_ref()
-                    .is_some_and(|sesion| sesion.host_id == host_id)
-                {
-                    self.sesion = None;
-                }
                 self.comandos_sesion = None;
                 self.host_conectando = None;
-                if self.vista == Vista::Sesion {
-                    self.vista = Vista::Hosts;
-                }
-                let _ = self.recargar_inventario();
                 self.anotar(
                     crate::registro::CONEXION_FALLIDA,
                     (host_id != 0).then_some(host_id),
@@ -1527,22 +1631,529 @@ impl App {
         }
     }
 
-    fn cerrar_sesion_actual(&mut self) {
-        if let Some(comandos) = &self.comandos_sesion {
-            let _ = comandos.send(ComandoConexion::Cerrar);
+    /// Id de la sesión de la pestaña activa, si la hay.
+    pub fn pestana_activa_id(&self) -> Option<u32> {
+        self.pestana_activa
+            .and_then(|indice| self.pestanas.get(indice))
+            .map(|pestaña| pestaña.sesion_id)
+    }
+
+    /// Los datos han llegado y la pestaña ya no está sin ver.
+    pub fn limpiar_actividad(&mut self, sesion_id: u32) {
+        if let Some(pestaña) = self
+            .pestanas
+            .iter_mut()
+            .find(|pestaña| pestaña.sesion_id == sesion_id)
+        {
+            if !pestaña.actividad_no_vista {
+                return;
+            }
+            pestaña.actividad_no_vista = false;
         }
     }
 
-    fn enviar_a_sesion(&mut self, bytes: Vec<u8>) {
-        if let Some(comandos) = &self.comandos_sesion {
-            let _ = comandos.send(ComandoConexion::Teclas(bytes));
+    fn adjuntar_pestaña_activa(&mut self) {
+        if let Some(sesion_id) = self.pestana_activa_id() {
+            let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+            self.servidor.enviar(protocolo::MensajeCliente::Adjuntar {
+                sesion_id,
+                cols,
+                filas: alto_pty(filas),
+            });
         }
+    }
+
+    fn desadjuntar_pestaña_activa(&mut self) {
+        if let Some(sesion_id) = self.pestana_activa_id() {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::Desadjuntar { sesion_id });
+        }
+    }
+
+    /// Activa la pestaña por posición de pestaña (1..=9) de la lista.
+    fn ir_a_pestaña(&mut self, numero: usize) {
+        if self.pestanas.is_empty() {
+            return;
+        }
+        let indice = numero.saturating_sub(1).min(self.pestanas.len() - 1);
+        self.activar_pestaña(indice);
+    }
+
+    fn activar_pestaña(&mut self, indice: usize) {
+        if indice >= self.pestanas.len() {
+            return;
+        }
+        if self.vista == Vista::Sesion {
+            self.desadjuntar_pestaña_activa();
+        }
+        self.pestana_activa = Some(indice);
+        if self.vista == Vista::Sesion {
+            self.adjuntar_pestaña_activa();
+            if let Some(sesion_id) = self.pestana_activa_id() {
+                self.limpiar_actividad(sesion_id);
+            }
+        } else if self.vista == Vista::Sesiones {
+            self.seleccion_sesiones = indice;
+        }
+        self.sucio = true;
+    }
+
+    /// Pestaña siguiente (1) o anterior (-1), con vuelta circular.
+    fn navegar_pestañas(&mut self, direccion: i32) {
+        if self.pestanas.is_empty() {
+            return;
+        }
+        let total = self.pestanas.len();
+        let actual = self.pestana_activa.unwrap_or(0) as i32;
+        let destino = (actual + direccion).rem_euclid(total as i32) as usize;
+        self.activar_pestaña(destino);
+    }
+
+    fn cerrar_pestaña_activa(&mut self) {
+        if let Some(sesion_id) = self.pestana_activa_id() {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+        }
+    }
+
+    fn reconectar_pestaña_activa(&mut self) {
+        if let Some(sesion_id) = self.pestana_activa_id() {
+            self.reconectar_sesion(sesion_id);
+        }
+    }
+
+    /// Reconecta una sesión caída (pestaña o lista).
+    fn reconectar_sesion(&mut self, sesion_id: u32) {
+        self.servidor
+            .enviar(protocolo::MensajeCliente::Reconectar { sesion_id });
+        self.mensaje("reconectando…", false);
+    }
+
+    fn enviar_a_sesion(&mut self, bytes: Vec<u8>) {
+        if let Some(sesion_id) = self.pestana_activa_id() {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::Teclas { sesion_id, bytes });
+        }
+    }
+
+    /// Mensajes del servidor de sesiones que no resuelve la tarea de lectura.
+    fn evento_servidor(&mut self, mensaje: protocolo::MensajeServidor) {
+        match mensaje {
+            protocolo::MensajeServidor::Sesiones { lista } => {
+                self.reconciliar_sesiones(lista);
+            }
+            protocolo::MensajeServidor::Estado {
+                sesion_id,
+                estado,
+                motivo,
+            } => self.estado_de_sesion(sesion_id, estado, motivo),
+            protocolo::MensajeServidor::Redimensionada {
+                sesion_id,
+                cols,
+                filas,
+                ventana_minima,
+            } => {
+                if let Some(pestaña) = self
+                    .pestanas
+                    .iter_mut()
+                    .find(|pestaña| pestaña.sesion_id == sesion_id)
+                {
+                    crate::conexion::terminal::redimensionar(&pestaña.pantalla, filas, cols);
+                    pestaña.cols_remoto = cols;
+                    pestaña.filas_remoto = filas;
+                    pestaña.ventana_minima = ventana_minima;
+                }
+            }
+            protocolo::MensajeServidor::HuellaDesconocida {
+                sesion_id,
+                host,
+                tipo_clave: tipo,
+                huella,
+            } => {
+                self.dialogo = Some(Dialogo::HuellaServidor {
+                    sesion_id,
+                    host,
+                    tipo,
+                    huella,
+                });
+            }
+            protocolo::MensajeServidor::HuellaCambiada {
+                sesion_id,
+                host,
+                tipo_clave: tipo,
+                anterior,
+                nueva,
+            } => {
+                self.dialogo = Some(Dialogo::HuellaCambiadaServidor {
+                    sesion_id,
+                    host,
+                    tipo,
+                    anterior,
+                    nueva,
+                    campo: CampoTexto::default(),
+                });
+            }
+            protocolo::MensajeServidor::PideFrase {
+                sesion_id,
+                host,
+                intento,
+            } => {
+                self.dialogo = Some(Dialogo::FraseServidor {
+                    sesion_id,
+                    host,
+                    intento,
+                    campo: CampoTexto::default(),
+                });
+            }
+            protocolo::MensajeServidor::PideContrasena {
+                sesion_id,
+                host,
+                intento,
+                recordar_por_defecto,
+            } => {
+                // El llavero lo resuelve este cliente: si el host usa
+                // contraseña guardada, se intenta primero sin diálogo.
+                if intento == 1 && self.intentar_llavero(sesion_id, &host) {
+                    return;
+                }
+                self.dialogo = Some(Dialogo::ContrasenaServidor {
+                    sesion_id,
+                    host,
+                    intento,
+                    campo: CampoTexto::default(),
+                    recordar: recordar_por_defecto && crate::llavero::disponible(),
+                    foco_casilla: false,
+                });
+            }
+            protocolo::MensajeServidor::Bienvenida {
+                pid,
+                cliente_id,
+                sesiones,
+                ..
+            } => {
+                self.servidor_pid = Some(pid);
+                self.cliente_id = Some(cliente_id);
+                self.servidor_desde = Some(Instant::now());
+                if self.servidor_incompatible {
+                    self.servidor_incompatible = false;
+                }
+                // Al abrir una ventana nueva, las sesiones que ya custodia el
+                // servidor aparecen como pestañas; pero ninguna debe robar la
+                // activación de una apertura en curso.
+                let pendientes = std::mem::take(&mut self.aperturas_pendientes);
+                self.reconciliar_sesiones(sesiones);
+                self.aperturas_pendientes = pendientes;
+            }
+            protocolo::MensajeServidor::Error { mensaje } => {
+                self.mensaje(mensaje, true);
+            }
+            protocolo::MensajeServidor::VersionIncompatible { .. } => {}
+            protocolo::MensajeServidor::Ejecutado { .. }
+            | protocolo::MensajeServidor::SinSesion { .. }
+            | protocolo::MensajeServidor::PantallaCompleta { .. }
+            | protocolo::MensajeServidor::Datos { .. } => {}
+        }
+    }
+
+    /// Contraseña del llavero para una sesión que la pide; devuelve si se ha
+    /// enviado (sin diálogo).
+    fn intentar_llavero(&mut self, sesion_id: u32, host: &str) -> bool {
+        let Some(ficha) = self.hosts.iter().find(|ficha| ficha.nombre == *host) else {
+            return false;
+        };
+        if ficha.identidad_ref != IdentidadRef::ContrasenaLlavero {
+            return false;
+        }
+        let usuario = ficha.usuario.clone().unwrap_or_default();
+        let Ok(Some(contrasena)) = crate::llavero::recuperar(host, &usuario) else {
+            return false;
+        };
+        self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
+            sesion_id,
+            contrasena: protocolo::Secreto::nuevo(contrasena.as_str()),
+            recordar: false,
+        });
+        true
+    }
+
+    /// Reconstruye las pestañas a partir de la lista difundida por el
+    /// servidor, conservando pantallas, orden y la activa.
+    fn reconciliar_sesiones(&mut self, lista: Vec<protocolo::InfoSesion>) {
+        let vivos: HashSet<u32> = lista.iter().map(|info| info.id).collect();
+        let desaparecidas: Vec<u32> = self
+            .pestanas
+            .iter()
+            .filter(|pestaña| !vivos.contains(&pestaña.sesion_id))
+            .map(|pestaña| pestaña.sesion_id)
+            .collect();
+        for sesion_id in desaparecidas {
+            self.quitar_pestaña(sesion_id);
+        }
+        for info in lista {
+            if let Some(pestaña) = self
+                .pestanas
+                .iter_mut()
+                .find(|pestaña| pestaña.sesion_id == info.id)
+            {
+                pestaña.estado = info.estado;
+                pestaña.motivo = info.motivo;
+                pestaña.identidad = info.identidad;
+                pestaña.ventanas = info.ventanas;
+                // El indicador local (◐ de esta ventana) no se borra con la
+                // difusión: se limpia al entrar en la pestaña.
+                pestaña.actividad_no_vista = pestaña.actividad_no_vista || info.actividad_no_vista;
+                pestaña.abierta_en = info.abierta_en;
+            } else {
+                let pantalla = self.pantallas.crear(info.id, 24, 80);
+                let activar = self.aperturas_pendientes.contains(&info.host_id);
+                self.pestanas.push(PestanaUI {
+                    sesion_id: info.id,
+                    nombre: info.nombre,
+                    host_id: info.host_id,
+                    host_nombre: info.host_nombre,
+                    estado: info.estado,
+                    motivo: info.motivo,
+                    identidad: info.identidad,
+                    pantalla,
+                    actividad_no_vista: info.actividad_no_vista,
+                    abierta_en: info.abierta_en,
+                    ventanas: info.ventanas,
+                    cols_remoto: 0,
+                    filas_remoto: 0,
+                    ventana_minima: None,
+                });
+                self.aperturas_pendientes.remove(&info.host_id);
+                if activar {
+                    // La sesión nueva pasa a ser la visible: la anterior deja
+                    // de recibir datos.
+                    if self.vista == Vista::Sesion {
+                        self.desadjuntar_pestaña_activa();
+                    }
+                    self.pestana_activa = Some(self.pestanas.len() - 1);
+                    self.vista_previa = Some(self.vista);
+                    self.vista = Vista::Sesion;
+                    self.adjuntar_pestaña_activa();
+                    if let Some(sesion_id) = self.pestana_activa_id() {
+                        self.limpiar_actividad(sesion_id);
+                    }
+                    let nombre = self
+                        .pestanas
+                        .last()
+                        .map(|pestaña| pestaña.host_nombre.clone())
+                        .unwrap_or_default();
+                    self.mensaje(format!("sesión abierta con «{nombre}»"), false);
+                }
+            }
+        }
+        if self.pestanas.is_empty() {
+            self.pestana_activa = None;
+        } else if self
+            .pestana_activa
+            .is_some_and(|indice| indice >= self.pestanas.len())
+        {
+            self.pestana_activa = Some(self.pestanas.len() - 1);
+        }
+        // Contraseñas a guardar cuando la sesión quedó abierta.
+        let abiertas: Vec<u32> = self
+            .pestanas
+            .iter()
+            .filter(|pestaña| pestaña.estado == EstadoSesionRemota::Abierta)
+            .map(|pestaña| pestaña.sesion_id)
+            .collect();
+        for sesion_id in abiertas {
+            if let Some((contrasena, recordar)) = self.contrasenas_pendientes.remove(&sesion_id) {
+                if recordar {
+                    self.guardar_contrasena_pendiente(sesion_id, contrasena);
+                }
+            }
+        }
+        self.sucio = true;
+    }
+
+    /// Tras abrir con «recordar»: guarda en el llavero y marca la identidad.
+    fn guardar_contrasena_pendiente(&mut self, sesion_id: u32, contrasena: protocolo::Secreto) {
+        let Some((host_id, host)) = self
+            .pestanas
+            .iter()
+            .find(|pestaña| pestaña.sesion_id == sesion_id)
+            .map(|pestaña| (pestaña.host_id, pestaña.host_nombre.clone()))
+        else {
+            return;
+        };
+        let usuario = self
+            .hosts
+            .iter()
+            .find(|ficha| ficha.id == host_id)
+            .and_then(|ficha| ficha.usuario.clone())
+            .unwrap_or_else(usuario_local);
+        match crate::llavero::guardar(&host, &usuario, contrasena.como_str()) {
+            Ok(()) => {
+                if let Err(error) = self
+                    .almacen
+                    .marcar_identidad_ref(host_id, &IdentidadRef::ContrasenaLlavero)
+                {
+                    warn!("no se pudo marcar la identidad de llavero: {error}");
+                }
+                self.mensaje("contraseña guardada en el llavero del sistema", false);
+            }
+            Err(error) => self.mensaje(format!("no se pudo guardar la contraseña: {error}"), true),
+        }
+    }
+
+    /// Quita la pestaña de una sesión que ya no existe, deja el foco en la
+    /// anterior (re-adjuntándola al servidor) y, si era la última, sale de la
+    /// vista Sesión: nunca se queda una vista Sesión sin pestaña que pintar.
+    fn quitar_pestaña(&mut self, sesion_id: u32) {
+        self.pantallas.quitar(sesion_id);
+        let Some(indice) = self
+            .pestanas
+            .iter()
+            .position(|pestaña| pestaña.sesion_id == sesion_id)
+        else {
+            return;
+        };
+        let activa = self.pestana_activa_id();
+        self.pestanas.remove(indice);
+        if self.seleccion_sesiones >= self.pestanas.len() {
+            self.seleccion_sesiones = self.pestanas.len().saturating_sub(1);
+        }
+        if self.pestanas.is_empty() {
+            self.pestana_activa = None;
+            if self.vista == Vista::Sesion {
+                self.volver_tras_cierre();
+                self.mensaje("sesión cerrada", false);
+            }
+            return;
+        }
+        if activa == Some(sesion_id) {
+            // El foco pasa a la anterior (o al principio si era la primera).
+            self.pestana_activa = Some(indice.saturating_sub(1).min(self.pestanas.len() - 1));
+            if self.vista == Vista::Sesion {
+                self.adjuntar_pestaña_activa();
+            }
+        } else if let Some(activa) = activa {
+            // La activa sigue viva: su índice pudo desplazarse.
+            self.pestana_activa = self
+                .pestanas
+                .iter()
+                .position(|pestaña| pestaña.sesion_id == activa);
+        }
+    }
+
+    /// Vuelve a la vista desde la que se entró en Sesión (o a la lista) cuando
+    /// la última pestaña desaparece.
+    fn volver_tras_cierre(&mut self) {
+        let destino = self.vista_previa.unwrap_or(Vista::Sesiones);
+        self.vista = if destino == Vista::Sesion {
+            Vista::Sesiones
+        } else {
+            destino
+        };
+    }
+
+    /// Estado difundido de una sesión (abriendo, caída, cierre).
+    fn estado_de_sesion(
+        &mut self,
+        sesion_id: u32,
+        estado: EstadoSesionRemota,
+        motivo: Option<String>,
+    ) {
+        match estado {
+            EstadoSesionRemota::Cerrada => {
+                if let Some(motivo) = motivo.filter(|motivo| !motivo.is_empty()) {
+                    self.mensaje(motivo, true);
+                }
+                self.quitar_pestaña(sesion_id);
+            }
+            EstadoSesionRemota::Caida => {
+                if let Some(pestaña) = self
+                    .pestanas
+                    .iter_mut()
+                    .find(|pestaña| pestaña.sesion_id == sesion_id)
+                {
+                    pestaña.estado = EstadoSesionRemota::Caida;
+                    pestaña.motivo = motivo;
+                }
+            }
+            EstadoSesionRemota::Abierta => {
+                if let Some(pestaña) = self
+                    .pestanas
+                    .iter_mut()
+                    .find(|pestaña| pestaña.sesion_id == sesion_id)
+                {
+                    pestaña.estado = EstadoSesionRemota::Abierta;
+                    pestaña.motivo = None;
+                }
+            }
+            EstadoSesionRemota::Abriendo => {
+                if let Some(pestaña) = self
+                    .pestanas
+                    .iter_mut()
+                    .find(|pestaña| pestaña.sesion_id == sesion_id)
+                {
+                    pestaña.estado = EstadoSesionRemota::Abriendo;
+                    pestaña.motivo = motivo;
+                }
+            }
+        }
+        self.sucio = true;
+    }
+
+    /// EOF del socket sin `Adios`: el servidor ha caído.
+    fn servidor_caido(&mut self) {
+        self.servidor = cliente::Cliente::sin_servidor();
+        self.servidor_caido = true;
+        self.sesiones_perdidas = self.pestanas.len();
+        self.anotar(
+            crate::registro::SERVIDOR_CAIDO,
+            None,
+            None,
+            "el servidor de sesiones ha caído",
+            crate::modelo::ResultadoRegistro::Error,
+        );
+        self.dialogo = Some(Dialogo::ServidorCaido {
+            perdidas: self.sesiones_perdidas,
+        });
+        self.sucio = true;
+    }
+
+    /// Respuesta al diálogo SERVIDOR CAÍDO: `s` relanza, `n` sigue sin sesiones.
+    fn resolver_servidor_caido(&mut self, relanzar: bool) {
+        self.pestanas.clear();
+        self.pestana_activa = None;
+        self.servidor_caido = false;
+        if self.vista == Vista::Sesion {
+            self.volver_tras_cierre();
+        }
+        if relanzar {
+            let rutas = self.rutas.clone();
+            let tx = self.eventos_tx.clone();
+            self.runtime.spawn(async move {
+                match cliente::conectar(&rutas, tx.clone()).await {
+                    Ok(cliente) => {
+                        let _ = tx.send(Evento::ServidorConectado(Ok(cliente)));
+                    }
+                    Err(fallo) => {
+                        let _ = tx.send(Evento::ServidorConectado(Err(cliente::describe_fallo(
+                            &fallo,
+                        ))));
+                    }
+                }
+            });
+        }
+        self.sucio = true;
+    }
+
+    /// Datos de la bienvenida y reconexión, para la barra y la vista Sesiones.
+    pub fn servidor_desde(&self) -> Option<Instant> {
+        self.servidor_desde
     }
 
     fn tecla_sesion(&mut self, tecla: KeyEvent) {
         if self.modo_prefijo {
             self.modo_prefijo = false;
             if crate::teclas::es_prefijo(&tecla, self.prefijo) {
+                // prefijo + prefijo: el prefijo literal hacia el remoto.
                 if let Some(bytes) = crate::teclas::bytes_de_tecla(tecla) {
                     self.enviar_a_sesion(bytes);
                 }
@@ -1550,19 +2161,40 @@ impl App {
             }
             match tecla.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
-                    if let Some(sesion) = &mut self.sesion {
-                        sesion.estado = EstadoSesion::EnSegundoPlano;
-                    }
-                    self.vista = Vista::Hosts;
-                    self.mensaje("sesión en segundo plano", false);
+                    self.desadjuntar_pestaña_activa();
+                    let destino = self.vista_previa.unwrap_or(Vista::Hosts);
+                    // Si se entró desde la lista, se vuelve a ella.
+                    self.vista = if destino == Vista::Sesion {
+                        Vista::Sesiones
+                    } else {
+                        destino
+                    };
+                    self.mensaje("sesiones en el servidor", false);
                 }
+                KeyCode::Char('n') => self.navegar_pestañas(1),
+                KeyCode::Char('p') => self.navegar_pestañas(-1),
+                KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                    self.ir_a_pestaña(c.to_digit(10).unwrap() as usize);
+                }
+                KeyCode::Char('l') => {
+                    self.desadjuntar_pestaña_activa();
+                    self.vista_previa = Some(self.vista);
+                    self.vista = Vista::Sesiones;
+                }
+                KeyCode::Char('c') => self.abrir_paleta_conectar(),
                 KeyCode::Char('x') => {
                     self.dialogo = Some(Dialogo::Confirmar {
-                        titulo: "CERRAR SESIÓN".to_string(),
+                        titulo: "CERRAR PESTAÑA".to_string(),
                         lineas: vec!["¿Cerrar la sesión remota?".to_string()],
                         peligro: true,
                         accion: AccionDialogo::CerrarSesion,
                     });
+                }
+                KeyCode::Char('r') => self.reconectar_pestaña_activa(),
+                KeyCode::Char('w') => {
+                    if let Err(error) = cliente::ventana::abrir(&self.config) {
+                        self.mensaje(error, true);
+                    }
                 }
                 _ => {}
             }
@@ -1851,10 +2483,6 @@ impl App {
     }
 
     fn probar_ficha(&mut self) {
-        if self.sesion.is_some() {
-            self.mensaje("cierra la sesión activa antes de probar la conexión", true);
-            return;
-        }
         if self.comandos_sesion.is_some() {
             self.mensaje("ya hay una conexión en curso", true);
             return;
@@ -2210,6 +2838,52 @@ impl App {
             categoria: "acción",
             accion: AccionPaleta::GenerarClave,
         });
+        // Acciones de sesión y servidor (Fase 3).
+        entradas.push(EntradaPaleta {
+            etiqueta: "nueva ventana".to_string(),
+            categoria: "pestañas",
+            accion: AccionPaleta::NuevaVentana,
+        });
+        for pestaña in &self.pestanas {
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("cerrar sesión · {}", pestaña.nombre),
+                categoria: "pestañas",
+                accion: AccionPaleta::CerrarPestana(pestaña.sesion_id),
+            });
+            if pestaña.estado == EstadoSesionRemota::Caida {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("reconectar · {}", pestaña.nombre),
+                    categoria: "pestañas",
+                    accion: AccionPaleta::ReconectarPestana(pestaña.sesion_id),
+                });
+            }
+        }
+        entradas.push(EntradaPaleta {
+            etiqueta: "apagar servidor".to_string(),
+            categoria: "servidor",
+            accion: AccionPaleta::ApagarServidor,
+        });
+        let mut paleta = PaletaCmd {
+            consulta: CampoTexto::default(),
+            entradas,
+            filtradas: Vec::new(),
+            seleccion: 0,
+            matcher: Matcher::new(ConfigNucleo::DEFAULT),
+        };
+        paleta.recalcular();
+        self.paleta = Some(paleta);
+    }
+
+    /// Paleta filtrada a «conectar · <host>»: prefijo c y `n` en Sesiones.
+    fn abrir_paleta_conectar(&mut self) {
+        let mut entradas = Vec::new();
+        for host in &self.hosts {
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("conectar · {}", host.nombre),
+                categoria: "host",
+                accion: AccionPaleta::Conectar(host.id),
+            });
+        }
         let mut paleta = PaletaCmd {
             consulta: CampoTexto::default(),
             entradas,
@@ -2293,6 +2967,39 @@ impl App {
                         self.paleta = None;
                         self.abrir_olvido_contrasena(id);
                     }
+                    Some(AccionPaleta::NuevaVentana) => {
+                        self.paleta = None;
+                        if let Err(error) = cliente::ventana::abrir(&self.config) {
+                            self.mensaje(error, true);
+                        }
+                    }
+                    Some(AccionPaleta::CerrarPestana(sesion_id)) => {
+                        let sesion_id = *sesion_id;
+                        self.paleta = None;
+                        self.dialogo = Some(Dialogo::Confirmar {
+                            titulo: "CERRAR PESTAÑA".to_string(),
+                            lineas: vec!["¿Cerrar la sesión remota?".to_string()],
+                            peligro: true,
+                            accion: AccionDialogo::CerrarPestana(sesion_id),
+                        });
+                    }
+                    Some(AccionPaleta::ReconectarPestana(sesion_id)) => {
+                        let sesion_id = *sesion_id;
+                        self.paleta = None;
+                        self.reconectar_sesion(sesion_id);
+                    }
+                    Some(AccionPaleta::ApagarServidor) => {
+                        self.paleta = None;
+                        let sesiones = self.pestanas.len();
+                        self.dialogo = Some(Dialogo::Confirmar {
+                            titulo: "APAGAR SERVIDOR".to_string(),
+                            lineas: vec![format!(
+                                "Se cerrarán {sesiones} sesión(es) y el servidor se apagará."
+                            )],
+                            peligro: true,
+                            accion: AccionDialogo::ApagarServidor,
+                        });
+                    }
                     None => {}
                 }
             }
@@ -2313,16 +3020,43 @@ impl App {
     }
 
     fn ir_a_hosts(&mut self) {
+        self.salir_de_sesion_si_hace_falta();
         self.vista = Vista::Hosts;
         self.ficha = None;
         self.paleta = None;
     }
 
+    /// F3: con pestaña activa va a la última usada; sin ella, a la lista de
+    /// sesiones del servidor para retomar la que se quiera.
     fn ir_a_sesion(&mut self) {
-        if self.sesion.is_some() {
-            self.vista = Vista::Sesion;
-        } else {
-            self.mensaje("no hay sesión activa", true);
+        if self.servidor_caido || self.servidor_incompatible {
+            self.vista_previa = Some(self.vista);
+            self.vista = Vista::Sesiones;
+            return;
+        }
+        match self.pestana_activa {
+            Some(_) if !self.pestanas.is_empty() => {
+                self.vista_previa = Some(self.vista);
+                self.vista = Vista::Sesion;
+                if let Some(sesion_id) = self.pestana_activa_id() {
+                    self.limpiar_actividad(sesion_id);
+                }
+                self.adjuntar_pestaña_activa();
+            }
+            _ => {
+                self.vista_previa = Some(self.vista);
+                self.vista = Vista::Sesiones;
+                if self.seleccion_sesiones >= self.pestanas.len() {
+                    self.seleccion_sesiones = self.pestanas.len().saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// Salir de la vista Sesión deja la pestaña en el servidor.
+    fn salir_de_sesion_si_hace_falta(&mut self) {
+        if self.vista == Vista::Sesion {
+            self.desadjuntar_pestaña_activa();
         }
     }
 
@@ -2337,10 +3071,12 @@ impl App {
             });
             return;
         }
+        self.salir_de_sesion_si_hace_falta();
         match vista {
             Vista::Flota => self.entrar_en_flota(),
             Vista::Hosts => self.ir_a_hosts(),
             Vista::Sesion => self.ir_a_sesion(),
+            Vista::Sesiones => self.vista = Vista::Sesiones,
             Vista::Identidades => self.ir_a_identidades(),
             Vista::Registro => self.ir_a_registro(),
             Vista::Ficha => self.vista = vista,
@@ -2807,11 +3543,19 @@ impl App {
                 }
             }
         });
+        // Los hosts con sesión viva van por el servidor; el resto, efímeros.
+        let con_sesion: HashSet<i64> = self
+            .pestanas
+            .iter()
+            .filter(|pestaña| pestaña.estado == EstadoSesionRemota::Abierta)
+            .map(|pestaña| pestaña.host_id)
+            .collect();
         flota::lanzar_lote(
             &self.runtime,
             peticiones,
             tx,
-            self.registro_sesiones.clone(),
+            con_sesion,
+            self.servidor.clone(),
         );
     }
 
@@ -2823,7 +3567,16 @@ impl App {
                 self.tasas_red.insert(sondeo.host_id, tasa);
             }
         }
-        if sondeo.resultado == ResultadoSondeo::Error {
+        // R12: el registro solo anota las transiciones de caída, no cada
+        // refresco de un host caído.
+        let (estado_previo, _) = flota::estado::evaluar(
+            self.sondeos.get(&sondeo.host_id),
+            &self.config.flota.umbrales,
+        );
+        let (estado_nuevo, _) = flota::estado::evaluar(Some(&sondeo), &self.config.flota.umbrales);
+        if estado_nuevo == flota::estado::EstadoFlota::Caida
+            && estado_previo != flota::estado::EstadoFlota::Caida
+        {
             let motivo = sondeo
                 .error
                 .clone()
@@ -2834,6 +3587,16 @@ impl App {
                 None,
                 &motivo,
                 ResultadoRegistro::Error,
+            );
+        } else if estado_previo == flota::estado::EstadoFlota::Caida
+            && estado_nuevo != flota::estado::EstadoFlota::Caida
+        {
+            self.anotar(
+                crate::registro::SONDEO_RECUPERADO,
+                Some(sondeo.host_id),
+                None,
+                "el host responde de nuevo",
+                ResultadoRegistro::Ok,
             );
         }
         if let Err(error) = self.almacen.guardar_sondeo(&sondeo) {
@@ -3250,9 +4013,87 @@ impl App {
             Vista::Hosts => self.tecla_hosts(tecla),
             Vista::Ficha => self.tecla_ficha(tecla),
             Vista::Sesion => {}
+            Vista::Sesiones => self.tecla_sesiones(tecla),
             Vista::Identidades => self.tecla_identidades(tecla),
             Vista::Registro => self.tecla_registro(tecla),
         }
+    }
+
+    /// Vista Sesiones: lista de sesiones del servidor (F3 sin pestaña activa).
+    fn tecla_sesiones(&mut self, tecla: KeyEvent) {
+        match tecla.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.seleccion_sesiones = self.seleccion_sesiones.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.seleccion_sesiones + 1 < self.pestanas.len() {
+                    self.seleccion_sesiones += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Adjuntar y entrar en la pestaña.
+                if self.seleccion_sesiones < self.pestanas.len() {
+                    self.pestana_activa = Some(self.seleccion_sesiones);
+                    self.vista_previa = Some(Vista::Sesiones);
+                    self.vista = Vista::Sesion;
+                    self.adjuntar_pestaña_activa();
+                    if let Some(sesion_id) = self.pestana_activa_id() {
+                        self.limpiar_actividad(sesion_id);
+                    }
+                }
+            }
+            KeyCode::Char('n') => self.abrir_paleta_conectar(),
+            KeyCode::Char('r') => {
+                if let Some(sesion_id) = self.sesion_seleccionada_id() {
+                    self.reconectar_sesion(sesion_id);
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(sesion_id) = self.sesion_seleccionada_id() {
+                    self.dialogo = Some(Dialogo::Confirmar {
+                        titulo: "CERRAR PESTAÑA".to_string(),
+                        lineas: vec!["¿Cerrar la sesión remota?".to_string()],
+                        peligro: true,
+                        accion: AccionDialogo::CerrarPestana(sesion_id),
+                    });
+                }
+            }
+            KeyCode::Char('S') => {
+                let sesiones = self.pestanas.len();
+                self.dialogo = Some(Dialogo::Confirmar {
+                    titulo: "APAGAR SERVIDOR".to_string(),
+                    lineas: vec![format!(
+                        "Se cerrarán {sesiones} sesión(es) y el servidor se apagará."
+                    )],
+                    peligro: true,
+                    accion: AccionDialogo::ApagarServidor,
+                });
+            }
+            KeyCode::Char('q') | KeyCode::Esc => {
+                // Vuelta a la vista previa: si se abrió la lista desde una
+                // pestaña, vuelve a ella (re-adjuntándola); si no, a Flota.
+                let destino = self.vista_previa.unwrap_or(Vista::Flota);
+                self.vista = match destino {
+                    Vista::Sesion if !self.pestanas.is_empty() => {
+                        if self.pestana_activa.is_none() {
+                            self.pestana_activa = Some(self.pestanas.len() - 1);
+                        }
+                        self.adjuntar_pestaña_activa();
+                        Vista::Sesion
+                    }
+                    Vista::Sesiones => Vista::Flota,
+                    otro => otro,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    /// Id de la sesión seleccionada en la vista Sesiones.
+    fn sesion_seleccionada_id(&self) -> Option<u32> {
+        self.pestanas
+            .get(self.seleccion_sesiones)
+            .map(|pestaña| pestaña.sesion_id)
     }
 
     fn tecla_dialogo(&mut self, tecla: KeyEvent) {
@@ -3276,6 +4117,173 @@ impl App {
                         lineas,
                         peligro,
                         accion,
+                    });
+                }
+            },
+            Dialogo::ServidorCaido { perdidas } => match tecla.code {
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    self.resolver_servidor_caido(true);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    let _ = perdidas;
+                    self.resolver_servidor_caido(false);
+                }
+                _ => {
+                    self.dialogo = Some(Dialogo::ServidorCaido { perdidas });
+                }
+            },
+            Dialogo::HuellaServidor {
+                sesion_id,
+                host,
+                tipo,
+                huella,
+            } => match tecla.code {
+                KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Enter => {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::DecisionHuella {
+                            sesion_id,
+                            decision: true,
+                        });
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::DecisionHuella {
+                            sesion_id,
+                            decision: false,
+                        });
+                }
+                KeyCode::Char('x') => {
+                    // Cancelar la apertura por completo.
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+                }
+                _ => {
+                    self.dialogo = Some(Dialogo::HuellaServidor {
+                        sesion_id,
+                        host,
+                        tipo,
+                        huella,
+                    });
+                }
+            },
+            Dialogo::HuellaCambiadaServidor {
+                sesion_id,
+                host,
+                tipo,
+                anterior,
+                nueva,
+                mut campo,
+            } => match tecla.code {
+                KeyCode::Char('r') | KeyCode::Char('R') if campo.texto.trim() == host => {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::DecisionHuella {
+                            sesion_id,
+                            decision: true,
+                        });
+                }
+                KeyCode::Esc => {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::DecisionHuella {
+                            sesion_id,
+                            decision: false,
+                        });
+                }
+                _ => {
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::HuellaCambiadaServidor {
+                        sesion_id,
+                        host,
+                        tipo,
+                        anterior,
+                        nueva,
+                        campo,
+                    });
+                }
+            },
+            Dialogo::FraseServidor {
+                sesion_id,
+                host,
+                intento,
+                mut campo,
+            } => match tecla.code {
+                KeyCode::Enter => {
+                    let frase = protocolo::Secreto::nuevo(campo.texto.clone());
+                    campo.limpiar();
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::Frase { sesion_id, frase });
+                }
+                KeyCode::Esc => {
+                    // Sin frase: la apertura se cancela cerrando la pestaña.
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+                }
+                _ => {
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::FraseServidor {
+                        sesion_id,
+                        host,
+                        intento,
+                        campo,
+                    });
+                }
+            },
+            Dialogo::ContrasenaServidor {
+                sesion_id,
+                host,
+                intento,
+                mut campo,
+                mut recordar,
+                mut foco_casilla,
+            } => match tecla.code {
+                KeyCode::Enter => {
+                    let contrasena = protocolo::Secreto::nuevo(campo.texto.clone());
+                    campo.limpiar();
+                    if recordar {
+                        self.contrasenas_pendientes
+                            .insert(sesion_id, (contrasena.clone(), true));
+                    }
+                    self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
+                        sesion_id,
+                        contrasena,
+                        recordar,
+                    });
+                }
+                KeyCode::Esc => {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+                }
+                KeyCode::Tab | KeyCode::BackTab => {
+                    foco_casilla = !foco_casilla;
+                    self.dialogo = Some(Dialogo::ContrasenaServidor {
+                        sesion_id,
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
+                    });
+                }
+                KeyCode::Char(' ') if foco_casilla => {
+                    recordar = !recordar;
+                    self.dialogo = Some(Dialogo::ContrasenaServidor {
+                        sesion_id,
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
+                    });
+                }
+                _ => {
+                    foco_casilla = false;
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::ContrasenaServidor {
+                        sesion_id,
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
                     });
                 }
             },
@@ -3628,18 +4636,33 @@ impl App {
                     let _ = self.recargar_inventario();
                 }
             }
-            AccionDialogo::CerrarSesion => self.cerrar_sesion_actual(),
+            AccionDialogo::CerrarSesion => self.cerrar_pestaña_activa(),
+            AccionDialogo::CerrarPestana(sesion_id) => {
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+            }
+            AccionDialogo::ApagarServidor => {
+                // El servidor cierra las sesiones (anotándolas) y se apaga.
+                self.servidor.enviar(protocolo::MensajeCliente::Parar);
+                self.pestanas.clear();
+                self.pestana_activa = None;
+                self.servidor = cliente::Cliente::sin_servidor();
+                self.servidor_pid = None;
+                self.servidor_desde = None;
+                if self.vista == Vista::Sesion {
+                    self.volver_tras_cierre();
+                }
+                if self.vista == Vista::Sesiones {
+                    self.mensaje("servidor apagado", false);
+                }
+            }
             AccionDialogo::CerrarSesionYAbrir(host_id) => {
                 self.abrir_al_cerrar = Some(host_id);
-                self.cerrar_sesion_actual();
+                self.cerrar_pestaña_activa();
             }
             AccionDialogo::Salir => {
-                if self.sesion.is_some() {
-                    self.salir_pendiente = true;
-                    self.cerrar_sesion_actual();
-                } else {
-                    self.salir = true;
-                }
+                // Ya no se usa: salir no cierra sesiones (D36).
+                self.salir = true;
             }
             AccionDialogo::DescartarFicha => {
                 self.ficha = None;
@@ -3759,6 +4782,14 @@ fn usuario_local() -> String {
         .unwrap_or_else(|_| "root".to_string())
 }
 
+/// Filas útiles para el PTY remoto: el alto de la ventana menos las cuatro
+/// filas fijas de la vista Sesión (marco con el título, barra de pestañas,
+/// barra de estado de la sesión y barra global inferior). Si se pide una fila
+/// de más, el prompt del remoto queda oculto bajo la barra de estado.
+pub fn alto_pty(filas: u16) -> u16 {
+    filas.saturating_sub(4).max(1)
+}
+
 /// Fecha de corte de la purga del registro (90 días atrás).
 fn corte_purga() -> String {
     (chrono::Local::now() - chrono::Duration::days(90))
@@ -3848,17 +4879,38 @@ pub fn instalar_hook_panico() {
 }
 
 /// Arranca el runtime de tokio, construye la app y ejecuta el bucle de la UI.
+/// Con `abrir_al_arrancar`, se abre una sesión nueva a ese host al empezar.
 pub fn ejecutar(
     rutas: Rutas,
     config: Config,
     tema: Tema,
     almacen: Almacen,
     aviso: Option<String>,
+    abrir_al_arrancar: Option<i64>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("creando el runtime de tokio")?;
-    let app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
+    let mut app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
+    app.abrir_al_arrancar = abrir_al_arrancar;
     app.ejecutar()
+}
+
+#[cfg(test)]
+mod pruebas_alto_pty {
+    use super::alto_pty;
+
+    #[test]
+    fn el_pty_reserva_las_cuatro_filas_fijas_de_la_vista_sesion() {
+        // marco + pestañas + barra de sesión + barra global
+        assert_eq!(alto_pty(30), 26);
+        assert_eq!(alto_pty(24), 20);
+    }
+
+    #[test]
+    fn en_ventanas_minimas_el_pty_nunca_queda_a_cero() {
+        assert_eq!(alto_pty(4), 1);
+        assert_eq!(alto_pty(0), 1);
+    }
 }
