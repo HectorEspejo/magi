@@ -1,0 +1,11 @@
+pub mod almacen;
+pub mod app;
+pub mod conexion;
+pub mod config;
+pub mod ficheros;
+pub mod identidades;
+pub mod modelo;
+pub mod sshconfig;
+pub mod teclas;
+pub mod tema;
+pub mod ui;
