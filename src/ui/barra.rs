@@ -8,7 +8,15 @@ use crate::app::App;
 use crate::ui::Vista;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
-    let linea = if let Some(mensaje) = &app.mensaje {
+    let linea = if app.servidor_incompatible {
+        Line::from(Span::styled(
+            format!(
+                " {} el servidor es de otra versión de protocolo: «magi servidor parar» y volver a abrir",
+                app.tema.glifos.error
+            ),
+            Style::default().fg(app.tema.paleta.critico),
+        ))
+    } else if let Some(mensaje) = &app.mensaje {
         let glifo = if mensaje.error {
             format!("{} ", app.tema.glifos.error)
         } else {

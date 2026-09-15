@@ -20,7 +20,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt as _;
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::almacen::Almacen;
 use crate::config::{Config, Rutas};
@@ -83,12 +83,22 @@ pub fn ruta_lock(rutas: &Rutas) -> PathBuf {
     rutas.dir_runtime().join("servidor.lock")
 }
 
+/// Un pánico del servidor se anota en el log y el proceso sale con código 2:
+/// el servidor no restaura terminales porque no las tiene.
+fn instalar_hook_panico() {
+    std::panic::set_hook(Box::new(|informacion| {
+        error!("pánico del servidor: {informacion}");
+        std::process::exit(2);
+    }));
+}
+
 // ---------------------------------------------------------------- arranque
 
 /// Punto de entrada de `magi --servidor`: prepara directorio, lock y socket,
 /// sirve a los clientes y se apaga cuando no quedan sesiones ni clientes
 /// durante la gracia.
 pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
+    instalar_hook_panico();
     let directorio = rutas.dir_runtime();
     std::fs::create_dir_all(&directorio)
         .with_context(|| format!("creando {}", directorio.display()))?;

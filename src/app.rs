@@ -19,7 +19,7 @@ use crate::config::{Config, Rutas};
 use crate::flota::{self, PeticionSondeo};
 use crate::identidades::Identidades;
 use crate::modelo::{
-    self, fecha_ahora, DatosHost, EntradaRegistro, EstadoSesion, Grupo, Host, IdentidadRef, Origen,
+    self, fecha_ahora, DatosHost, EntradaRegistro, Grupo, Host, IdentidadRef, Origen,
     ResultadoRegistro, Sondeo, UltimoEstado,
 };
 use crate::protocolo::{self, EstadoSesionRemota};
@@ -669,17 +669,6 @@ pub struct ImportacionPendiente {
     pub indice: usize,
 }
 
-pub struct SesionUI {
-    pub host_id: i64,
-    pub host_nombre: String,
-    pub pantalla: conexion::Pantalla,
-    pub identidad: String,
-    pub iniciada: Instant,
-    pub estado: EstadoSesion,
-    pub cols: u16,
-    pub filas: u16,
-}
-
 /// Una pestaña de la vista Sesión: espejo local de una sesión del servidor.
 pub struct PestanaUI {
     pub sesion_id: u32,
@@ -815,7 +804,6 @@ pub struct App {
     pub ayuda: bool,
     pub dialogo: Option<Dialogo>,
     importacion: Option<ImportacionPendiente>,
-    pub sesion: Option<SesionUI>,
     /// Pestañas espejo de las sesiones del servidor, en orden de apertura.
     pub pestanas: Vec<PestanaUI>,
     /// Índice de la pestaña activa dentro de `pestanas`.
@@ -846,7 +834,6 @@ pub struct App {
     pub identidades: Identidades,
     pub contador_ticks: u64,
     sucio: bool,
-    segundos_sesion: u64,
     pub registro_sesiones: conexion::RegistroSesiones,
     pub registro: EstadoRegistro,
     pub sondeos: HashMap<i64, Sondeo>,
@@ -909,7 +896,6 @@ impl App {
             ayuda: false,
             dialogo: None,
             importacion: None,
-            sesion: None,
             pestanas: Vec::new(),
             pestana_activa: None,
             servidor: cliente::Cliente::sin_servidor(),
@@ -930,7 +916,6 @@ impl App {
             identidades: Identidades::default(),
             contador_ticks: 0,
             sucio: true,
-            segundos_sesion: 0,
             registro_sesiones: conexion::registro_sesiones(),
             registro: EstadoRegistro::nuevo(),
             sondeos: HashMap::new(),
@@ -1097,14 +1082,9 @@ impl App {
         if self.filtro_activo && self.contador_ticks.is_multiple_of(3) {
             self.sucio = true;
         }
-        if self.vista == Vista::Sesion {
-            if let Some(sesion) = &self.sesion {
-                let segundos = sesion.iniciada.elapsed().as_secs();
-                if segundos != self.segundos_sesion {
-                    self.segundos_sesion = segundos;
-                    self.sucio = true;
-                }
-            }
+        if matches!(self.vista, Vista::Sesion | Vista::Sesiones) {
+            // El tiempo conectado cambia cada segundo.
+            self.sucio = true;
         }
         if self.vista == Vista::Flota {
             if !self.sondeando.is_empty() {
@@ -2430,10 +2410,6 @@ impl App {
     }
 
     fn probar_ficha(&mut self) {
-        if self.sesion.is_some() {
-            self.mensaje("cierra la sesión activa antes de probar la conexión", true);
-            return;
-        }
         if self.comandos_sesion.is_some() {
             self.mensaje("ya hay una conexión en curso", true);
             return;

@@ -311,8 +311,7 @@ pub fn lanzar_servidor(rutas: &Rutas) {
     comando
         .arg("--servidor")
         .stdin(Stdio::null())
-        .stdout(Stdio::from(salida_log))
-        .process_group(0);
+        .stdout(Stdio::from(salida_log));
     if let Ok(errores) = log_errores {
         comando.stderr(Stdio::from(errores));
     } else {
