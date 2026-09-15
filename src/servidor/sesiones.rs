@@ -185,7 +185,7 @@ async fn abrir_y_servir(
     let host_id = datos.host.id;
     let reconexion = datos.reconexion;
     let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
-    let puente = tokio::spawn(puente_eventos(
+    tokio::spawn(puente_eventos(
         estado.clone(),
         sesion_id,
         datos.solicitante,
@@ -194,7 +194,10 @@ async fn abrir_y_servir(
 
     let apertura = abrir_conexion(&datos, &tx_eventos).await;
     drop(tx_eventos);
-    let _ = puente.await;
+    // El puente NO se espera: el handler russh conserva un clon del canal de
+    // eventos mientras la conexión viva, de modo que sigue traduciendo
+    // diálogos y avisos y muere solo cuando la conexión cae. Esperarlo aquí
+    // colgaría la apertura para siempre.
 
     match apertura {
         Ok((transporte, mut canal, pantalla, identidad)) => {

@@ -9,16 +9,17 @@ use zeroize::Zeroizing;
 /// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
 pub const SERVICIO: &str = "magi";
 
-/// Cuenta de la entrada: usuario@host para distinguir hosts y usuarios.
-fn cuenta(host: &str, usuario: &str) -> String {
-    format!("{usuario}@{host}")
-}
-
 // ------------------------------------------------------------- macOS: Keychain por API
 
 #[cfg(target_os = "macos")]
 mod backend {
-    use super::{cuenta, SERVICIO};
+    use super::SERVICIO;
+
+    /// Cuenta de la entrada: usuario@host para distinguir hosts y usuarios.
+    fn cuenta(host: &str, usuario: &str) -> String {
+        format!("{usuario}@{host}")
+    }
+
     use security_framework::passwords as keychain;
     use zeroize::{Zeroize as _, Zeroizing};
 
@@ -70,7 +71,7 @@ mod backend {
 
 #[cfg(not(target_os = "macos"))]
 mod backend {
-    use super::{cuenta, Command, Stdio, Zeroizing, SERVICIO};
+    use super::{Command, Stdio, Zeroizing, SERVICIO};
     use std::io::Write as _;
 
     enum Fallo {
@@ -90,8 +91,6 @@ mod backend {
                 host,
                 "magi-user",
                 usuario,
-                "magi-cuenta",
-                &cuenta(host, usuario),
             ],
             true,
         );
@@ -118,15 +117,7 @@ mod backend {
     }
 
     pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
-        let args = [
-            "lookup",
-            "magi-host",
-            host,
-            "magi-user",
-            usuario,
-            "magi-cuenta",
-            &cuenta(host, usuario),
-        ];
+        let args = ["lookup", "magi-host", host, "magi-user", usuario];
         let mut comando = Command::new("secret-tool");
         comando.args(args);
         comando.stdout(Stdio::piped()).stderr(Stdio::null());
@@ -150,15 +141,7 @@ mod backend {
     }
 
     pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
-        let args = [
-            "clear",
-            "magi-host",
-            host,
-            "magi-user",
-            usuario,
-            "magi-cuenta",
-            &cuenta(host, usuario),
-        ];
+        let args = ["clear", "magi-host", host, "magi-user", usuario];
         let mut comando = Command::new("secret-tool");
         comando.args(args);
         comando.stdout(Stdio::null()).stderr(Stdio::null());
@@ -237,11 +220,6 @@ pub fn disponible() -> bool {
 #[cfg(test)]
 mod pruebas {
     use super::*;
-
-    #[test]
-    fn la_cuenta_distingue_host_y_usuario() {
-        assert_eq!(cuenta("hetzner-01", "root"), "root@hetzner-01");
-    }
 
     /// Requiere llavero del escritorio (Keychain o secret-tool desbloqueado).
     #[test]

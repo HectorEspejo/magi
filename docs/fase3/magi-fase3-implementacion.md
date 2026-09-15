@@ -2,7 +2,7 @@
 
 ## Informe de Implementación
 
-**Última actualización:** 15 de septiembre de 2026 (sesión 1: fase completa)
+**Última actualización:** 15 de septiembre de 2026 (sesión 1: fase completa + primer arreglo por la validación de Hector)
 
 ---
 
@@ -80,6 +80,25 @@ encuentra la sesión; `conectar <inexistente>` con código 1; 71 tests verdes
 con `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` limpios.
 
 ---
+
+## Correcciones tras la validación (Hector, misma sesión)
+
+1. **CRÍTICO — la apertura se quedaba colgada tras la autenticación.**
+   `abrir_y_servir` esperaba la terminación del puente de eventos
+   (`puente.await`), pero el handler russh conserva un clon del canal de
+   eventos mientras la conexión vive, así que el puente nunca termina y la
+   tarea no difundía `Sesiones` ni entraba en el bucle: la pestaña quedaba
+   clavada en «autenticando» (20–40 s de silencio y `conexion_fallida
+   «ventana cerrada»` al cerrarla). Arreglo: el puente vive desacoplado y
+   muere solo cuando la conexión cae. Cubierto ahora por un test de
+   integración completo (apertura → `PideContrasena` → respuesta → sesión
+   `Abierta` difundida) contra un servidor russh de pruebas con
+   `channel_open_session`/`pty`/`shell` aceptados.
+2. **El llavero de Linux no encontraba las contraseñas de la Fase 2.** El
+   lookup/store/clear añadía el atributo `magi-cuenta`, que las entradas
+   guardadas por la Fase 2 no tienen: `recuperar` devolvía vacío y la
+   conexión pedía la contraseña en un diálogo que debía ser automático.
+   Arreglo: se volvió a los atributos de la Fase 2 (`magi-host` + `magi-user`).
 
 ## Desviaciones respecto a la especificación
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
+use tokio_stream::StreamExt as _;
 
 use magi::config::{Config, Rutas};
 use magi::protocolo::{decodificar, MensajeCliente, MensajeServidor, VERSION_PROTOCOLO};
@@ -211,4 +212,257 @@ async fn el_apagado_por_orden_borra_socket_y_lock() {
 #[tokio::test]
 async fn la_gracia_de_apagado_es_de_diez_segundos_por_defecto() {
     assert_eq!(Config::default().servidor.gracia_apagado_seg, 10);
+}
+
+// -------------------------------------------------------------- flujo completo
+
+/// Envía un mensaje por la mitad de escritura del socket.
+async fn enviar_a(escritura: &mut tokio::net::unix::OwnedWriteHalf, mensaje: &MensajeCliente) {
+    let linea = magi::protocolo::codificar(mensaje).unwrap();
+    escritura
+        .write_all(linea.as_bytes())
+        .await
+        .expect("escribiendo");
+    escritura
+        .write_all(b"\n")
+        .await
+        .expect("escribiendo el salto");
+    escritura.flush().await.expect("vaciando");
+}
+
+/// Lee el siguiente mensaje del servidor con el codec del protocolo.
+async fn siguiente_framed<M: serde::de::DeserializeOwned, R: tokio::io::AsyncRead + Unpin>(
+    lector: &mut tokio_util::codec::FramedRead<R, magi::protocolo::LinesCodec>,
+) -> M {
+    match lector.next().await {
+        Some(Ok(linea)) => decodificar::<M>(linea.trim_end()).expect("mensaje decodificable"),
+        otro => panic!("el servidor cerró la conexión: {otro:?}"),
+    }
+}
+
+/// Servidor russh de pruebas que autentica por contraseña y acepta pty+shell.
+struct ServidorSesion;
+
+impl russh::server::Server for ServidorSesion {
+    type Handler = HandlerSesion;
+    fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> HandlerSesion {
+        HandlerSesion
+    }
+}
+
+struct HandlerSesion;
+
+impl russh::server::Handler for HandlerSesion {
+    type Error = russh::Error;
+
+    async fn auth_password(
+        &mut self,
+        _usuario: &str,
+        contrasena: &str,
+    ) -> Result<russh::server::Auth, Self::Error> {
+        if contrasena == "secreta" {
+            Ok(russh::server::Auth::Accept)
+        } else {
+            Ok(russh::server::Auth::reject())
+        }
+    }
+
+    async fn channel_open_session(
+        &mut self,
+        _canal: russh::Channel<russh::server::Msg>,
+        respuesta: russh::server::ChannelOpenHandle,
+        _sesion: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        respuesta.accept().await;
+        Ok(())
+    }
+
+    async fn pty_request(
+        &mut self,
+        canal: russh::ChannelId,
+        _: &str,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: &[(russh::Pty, u32)],
+        sesion: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        let _ = sesion.channel_success(canal);
+        Ok(())
+    }
+
+    async fn shell_request(
+        &mut self,
+        canal: russh::ChannelId,
+        sesion: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        let _ = sesion.channel_success(canal);
+        Ok(())
+    }
+}
+
+/// El solicitante recibe el diálogo de contraseña por el protocolo y su
+/// respuesta abre la sesión (la pieza que fallaba con el llavero).
+#[tokio::test]
+async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
+    use std::sync::Arc;
+
+    use magi::almacen::{hosts, Almacen};
+    use magi::modelo::{DatosHost, IdentidadRef, Origen};
+    use russh::server::Server as _;
+
+    // 1. Servidor SSH de pruebas con huella conocida de antemano.
+    let _dir_ssh = tempfile::tempdir().unwrap();
+    let clave = ssh_key::PrivateKey::random(
+        &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+        ssh_key::Algorithm::Ed25519,
+    )
+    .unwrap();
+    let config = Arc::new(russh::server::Config {
+        auth_rejection_time: Duration::from_millis(1),
+        keys: vec![clave.clone()],
+        ..Default::default()
+    });
+    let escucha = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let puerto_ssh = escucha.local_addr().unwrap().port();
+    let tarea_ssh = tokio::spawn(async move {
+        let mut servidor = ServidorSesion;
+        let _ = servidor.run_on_socket(config, &escucha).await;
+    });
+
+    // 2. Entorno MAGI con el host apuntando al servidor de pruebas.
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    std::fs::create_dir_all(rutas.dir_ssh()).unwrap();
+    let known_hosts = rutas.fichero_known_hosts();
+    std::fs::write(
+        &known_hosts,
+        format!(
+            "[127.0.0.1]:{puerto_ssh} {}\n",
+            clave.public_key().to_openssh().unwrap()
+        ),
+    )
+    .unwrap();
+    {
+        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let host_id = hosts::crear(
+            almacen.conexion(),
+            &DatosHost {
+                nombre: "prueba".to_string(),
+                direccion: "127.0.0.1".to_string(),
+                puerto: puerto_ssh,
+                usuario: Some("hector".to_string()),
+                identidad_ref: IdentidadRef::Contrasena,
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+        almacen.cerrar().unwrap();
+        let _ = host_id;
+    }
+
+    // 3. Servidor de sesiones y cliente del protocolo.
+    let tarea_magi = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    let mut stream = UnixStream::connect(servidor::ruta_socket(&rutas))
+        .await
+        .expect("conectando al servidor de sesiones");
+    enviar(
+        &mut stream,
+        &MensajeCliente::Hola {
+            version: VERSION_PROTOCOLO,
+            pid: 42,
+        },
+    )
+    .await;
+    let (lectura, mut escritura) = stream.into_split();
+    let mut lector = tokio_util::codec::FramedRead::new(lectura, magi::protocolo::codec());
+    let bienvenida: MensajeServidor = siguiente_framed(&mut lector).await;
+    assert!(matches!(bienvenida, MensajeServidor::Bienvenida { .. }));
+
+    // El id del host lo da la BD: «prueba» es el primero.
+    let host_id = {
+        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let host = magi::almacen::hosts::por_nombre(almacen.conexion(), "prueba")
+            .unwrap()
+            .expect("el host de prueba existe");
+        host.id
+    };
+    enviar_a(
+        &mut escritura,
+        &MensajeCliente::AbrirSesion {
+            host_id,
+            cols: 80,
+            filas: 24,
+        },
+    )
+    .await;
+
+    // 4. El diálogo llega al solicitante y la respuesta abre la sesión.
+    let abierta;
+    let plazo = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            tokio::time::Instant::now() < plazo,
+            "el diálogo o la apertura no llegaron"
+        );
+        let mensaje: MensajeServidor =
+            match tokio::time::timeout(Duration::from_secs(3), siguiente_framed(&mut lector)).await
+            {
+                Ok(mensaje) => {
+                    eprintln!("[TRAZA-TEST] recibido: {mensaje:?}");
+                    mensaje
+                }
+                Err(_) => panic!("el servidor no manda nada en 3 s"),
+            };
+        match mensaje {
+            MensajeServidor::PideContrasena { sesion_id, .. } => {
+                enviar_a(
+                    &mut escritura,
+                    &MensajeCliente::Contrasena {
+                        sesion_id,
+                        contrasena: magi::protocolo::Secreto::nuevo("secreta"),
+                        recordar: false,
+                    },
+                )
+                .await;
+            }
+            MensajeServidor::PideFrase { .. } | MensajeServidor::HuellaDesconocida { .. } => {
+                panic!("se pidió lo que no toca: huella o frase")
+            }
+            MensajeServidor::Sesiones { lista } => {
+                if let Some(sesion) = lista.first() {
+                    match sesion.estado {
+                        magi::protocolo::EstadoSesionRemota::Abierta => {
+                            abierta = true;
+                            break;
+                        }
+                        magi::protocolo::EstadoSesionRemota::Caida => {
+                            panic!("la sesión quedó caída: {:?}", sesion.motivo);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            MensajeServidor::Estado {
+                estado: magi::protocolo::EstadoSesionRemota::Cerrada,
+                motivo,
+                ..
+            } => {
+                panic!("apertura fallida: {:?}", motivo);
+            }
+            _ => {}
+        }
+    }
+    assert!(abierta);
+
+    // 5. Limpieza: cerrar la sesión y parar el servidor.
+    drop(tarea_ssh);
+    let _ = escritura.shutdown().await;
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea_magi).await;
 }

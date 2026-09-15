@@ -101,6 +101,13 @@ fn main() -> anyhow::Result<()> {
     let (tema, aviso_tema) = tema::cargar(&config, &ruta_omarchy);
 
     if cli.servidor {
+        // Un pánico se anota en el log y el proceso sale con código 2: el
+        // servidor no restaura terminales porque no las tiene.
+        std::panic::set_hook(Box::new(|informacion| {
+            tracing::error!("pánico del servidor: {informacion}");
+            eprintln!("PÁNICO DEL SERVIDOR: {informacion}");
+            std::process::exit(2);
+        }));
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
