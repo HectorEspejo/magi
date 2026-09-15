@@ -548,9 +548,31 @@ pub enum AccionDialogo {
         nombre: String,
         usuario: String,
     },
+    /// Borrar lo marcado en un panel de Archivos (local o remoto).
+    BorrarArchivos {
+        lado: crate::archivos::Lado,
+        rutas: Vec<String>,
+        nombres: Vec<String>,
+    },
+    /// Ver un fichero remoto que pasa del tamaño de aviso.
+    VerRemotoGrande {
+        host_id: i64,
+        ruta: String,
+        bytes: u64,
+    },
+    /// Cancelar una transferencia que está en curso.
+    CancelarTransferencia(u32),
+    /// Cerrar la vista Archivos volviendo a la anterior.
+    VolverDeArchivos,
 }
 
 pub enum EntradaTextoAccion {
+    /// `g` en Archivos: ir a una ruta del panel activo.
+    IrARuta,
+    /// `r` en Archivos: renombrar lo marcado (o la fila actual).
+    RenombrarArchivo,
+    /// `d` en Archivos: crear un directorio en el panel activo.
+    CrearDirectorio,
     CrearGrupo,
     RenombrarGrupo(i64),
     ImportarClave,
@@ -646,6 +668,16 @@ pub enum Dialogo {
         nombre: String,
         restantes: usize,
     },
+    /// Ya existe algo con ese nombre en el destino.
+    Conflicto {
+        nombre: String,
+        es_dir: bool,
+        lado_origen: crate::archivos::Lado,
+        tamano_origen: u64,
+        fecha_origen: i64,
+        tamano_destino: u64,
+        fecha_destino: i64,
+    },
     Detalle {
         titulo: String,
         lineas: Vec<String>,
@@ -736,6 +768,12 @@ pub enum AccionPaleta {
     CerrarPestana(u32),
     ReconectarPestana(u32),
     ApagarServidor,
+    /// `sftp · <host>`: abrir la vista Archivos con ese host.
+    AbrirSftp(i64),
+    /// Ver la cola de transferencias.
+    IrATransferencias,
+    /// Cancelar todas las transferencias que no hayan terminado.
+    CancelarTransferencias,
 }
 
 pub struct PaletaCmd {
@@ -856,6 +894,24 @@ pub struct App {
     pub huellas_escaneadas: HashSet<String>,
     pub seleccion_identidad: usize,
     pub ver_revocadas: bool,
+    /// Vista Archivos: dos paneles, cola y peticiones en vuelo.
+    pub archivos: Option<crate::archivos::EstadoArchivos>,
+    /// Selección en la vista Transferencias (cola ampliada).
+    pub seleccion_cola: usize,
+    /// Desplazamiento de la vista Transferencias.
+    pub desplazamiento_cola: usize,
+    /// Fichero que hay que abrir con el paginador en cuanto el bucle pueda
+    /// suspender la TUI (la UI nunca bloquea mientras despacha una tecla).
+    pub peticion_pager: Option<crate::visor::Peticion>,
+    /// Mientras el paginador tiene el terminal, el hilo de teclas calla.
+    pausa_teclas: Arc<AtomicBool>,
+    /// Alto de la terminal, para mover el cursor dentro de la ventana visible.
+    pub terminal_alto: u16,
+    /// Orígenes locales de los «mover» que aún no se han asociado a su
+    /// transferencia (el id lo da el servidor en la difusión).
+    pub borrados_locales_pendientes: Vec<Vec<String>>,
+    /// Transferencias ya vistas, para no refrescar dos veces por lo mismo.
+    pub transferencias_refrescadas: HashSet<u32>,
 }
 
 impl App {
@@ -938,12 +994,24 @@ impl App {
             huellas_escaneadas: HashSet::new(),
             seleccion_identidad: 0,
             ver_revocadas: false,
+            archivos: None,
+            seleccion_cola: 0,
+            desplazamiento_cola: 0,
+            peticion_pager: None,
+            pausa_teclas: Arc::new(AtomicBool::new(false)),
+            terminal_alto: 24,
+            borrados_locales_pendientes: Vec::new(),
+            transferencias_refrescadas: HashSet::new(),
         };
         app.recargar_inventario()?;
         if let Some(aviso) = aviso_inicial {
             app.mensaje(aviso, true);
         }
-        lanzar_hilo_teclas(eventos_tx.clone(), salir_flag.clone());
+        lanzar_hilo_teclas(
+            eventos_tx.clone(),
+            salir_flag.clone(),
+            app.pausa_teclas.clone(),
+        );
         lanzar_tick(&app.runtime, eventos_tx.clone());
         app.refrescar_identidades();
         app.cargar_sondeos();
@@ -976,6 +1044,7 @@ impl App {
             self.conectar(host_id);
         }
         let mut terminal = crate::ui::iniciar_terminal()?;
+        self.terminal_alto = terminal.size().map(|area| area.height).unwrap_or(24);
         while !self.salir {
             if self.sucio {
                 terminal.draw(|marco| crate::ui::dibujar(marco, &self))?;
@@ -984,6 +1053,28 @@ impl App {
             match self.eventos_rx.blocking_recv() {
                 Some(evento) => self.procesar(evento),
                 None => break,
+            }
+            // El visor suspende la TUI: se hace aquí, con el terminal a mano,
+            // y no dentro del despacho de la tecla.
+            if let Some(peticion) = self.peticion_pager.take() {
+                self.pausa_teclas.store(true, Ordering::Relaxed);
+                let aviso = crate::ui::pager::suspender_y_ver(
+                    &mut terminal,
+                    &self.tema,
+                    &self.config,
+                    &peticion,
+                );
+                self.pausa_teclas.store(false, Ordering::Relaxed);
+                if peticion.temporal {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::BorrarTemporal {
+                            ruta: peticion.ruta.clone(),
+                        });
+                }
+                if let Some(aviso) = aviso {
+                    self.mensaje(aviso, true);
+                }
+                self.sucio = true;
             }
         }
         crate::ui::restaurar_terminal();
@@ -1005,6 +1096,7 @@ impl App {
             }
             Evento::Redimension(cols, filas) => {
                 self.sucio = true;
+                self.terminal_alto = filas;
                 let filas_pty = alto_pty(filas);
                 if self.vista == Vista::Sesion {
                     if let Some(sesion_id) = self.pestana_activa_id() {
@@ -1086,6 +1178,9 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if let Some(estado) = &mut self.archivos {
+            estado.muestrear(Instant::now());
+        }
         self.contador_ticks += 1;
         if let Some(mensaje) = &self.mensaje {
             if mensaje.creado.elapsed() > Duration::from_secs(4) {
@@ -1292,6 +1387,12 @@ impl App {
     // ------------------------------------------------------------- inventario
 
     fn tecla_hosts(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
+            if let Some(host_id) = self.host_seleccionado().map(|host| host.id) {
+                self.abrir_archivos(Some(host_id));
+            }
+            return;
+        }
         if self.filtro_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -1845,17 +1946,50 @@ impl App {
                 self.reconciliar_sesiones(sesiones);
                 self.aperturas_pendientes = pendientes;
             }
-            protocolo::MensajeServidor::Error { mensaje, .. } => {
-                self.mensaje(mensaje, true);
+            protocolo::MensajeServidor::Error {
+                mensaje,
+                peticion_id,
+            } => {
+                self.error_de_archivos(mensaje, peticion_id);
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
-            protocolo::MensajeServidor::SftpAbierto { .. }
-            | protocolo::MensajeServidor::DirListado { .. }
-            | protocolo::MensajeServidor::Transferencias { .. }
-            | protocolo::MensajeServidor::Hecho { .. }
-            | protocolo::MensajeServidor::RutaTemporal { .. } => {
-                // La vista Archivos los atiende en la Fase 4; aquí no hay
-                // ninguna petición en vuelo todavía.
+            protocolo::MensajeServidor::SftpAbierto {
+                host_id,
+                dir_inicio,
+            } => {
+                self.sftp_abierto(host_id, dir_inicio);
+            }
+            protocolo::MensajeServidor::DirListado {
+                host_id,
+                ruta,
+                entradas,
+                peticion_id,
+            } => {
+                self.dir_listado(host_id, ruta, entradas, peticion_id);
+            }
+            protocolo::MensajeServidor::Transferencias { lista } => {
+                self.actualizar_cola(lista);
+            }
+            protocolo::MensajeServidor::Hecho { peticion_id } => {
+                self.hecho_de_archivos(peticion_id);
+            }
+            protocolo::MensajeServidor::RutaTemporal { ruta, peticion_id } => {
+                let es_lo_que_esperaba = self
+                    .archivos
+                    .as_mut()
+                    .map(|estado| {
+                        matches!(
+                            estado.resolver_peticion(peticion_id),
+                            Some(crate::archivos::Peticion::VerRemoto(_))
+                        )
+                    })
+                    .unwrap_or(false);
+                if es_lo_que_esperaba {
+                    if let Some(estado) = &mut self.archivos {
+                        estado.viendo = None;
+                    }
+                    self.peticion_pager = Some(crate::visor::Peticion::temporal(&ruta));
+                }
             }
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
@@ -2184,6 +2318,15 @@ impl App {
                 KeyCode::Char('p') => self.navegar_pestañas(-1),
                 KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
                     self.ir_a_pestaña(c.to_digit(10).unwrap() as usize);
+                }
+                KeyCode::Char('f') => {
+                    if let Some(indice) = self.pestana_activa {
+                        if let Some(pestana) = self.pestanas.get(indice) {
+                            let host_id = pestana.host_id;
+                            self.salir_de_sesion_si_hace_falta();
+                            self.abrir_archivos(Some(host_id));
+                        }
+                    }
                 }
                 KeyCode::Char('l') => {
                     self.desadjuntar_pestaña_activa();
@@ -2784,6 +2927,11 @@ impl App {
                 categoria: "acción",
                 accion: AccionPaleta::Editar(host.id),
             });
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("sftp · {}", host.nombre),
+                categoria: "archivos",
+                accion: AccionPaleta::AbrirSftp(host.id),
+            });
         }
         entradas.push(EntradaPaleta {
             etiqueta: "nuevo host".to_string(),
@@ -2804,6 +2952,16 @@ impl App {
             etiqueta: "ir a sesión".to_string(),
             categoria: "acción",
             accion: AccionPaleta::IrASesion,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "transferencias".to_string(),
+            categoria: "archivos",
+            accion: AccionPaleta::IrATransferencias,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "cancelar transferencias".to_string(),
+            categoria: "archivos",
+            accion: AccionPaleta::CancelarTransferencias,
         });
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
@@ -2895,8 +3053,13 @@ impl App {
                 accion: AccionPaleta::Conectar(host.id),
             });
         }
+        self.abrir_paleta_con(entradas, "");
+    }
+
+    /// Abre la paleta con una lista de entradas y una consulta ya puesta.
+    fn abrir_paleta_con(&mut self, entradas: Vec<EntradaPaleta>, consulta: &str) {
         let mut paleta = PaletaCmd {
-            consulta: CampoTexto::default(),
+            consulta: CampoTexto::nuevo(consulta.to_string()),
             entradas,
             filtradas: Vec::new(),
             seleccion: 0,
@@ -2904,6 +3067,19 @@ impl App {
         };
         paleta.recalcular();
         self.paleta = Some(paleta);
+    }
+
+    /// Paleta filtrada a los hosts para la vista Archivos (`h`).
+    fn abrir_paleta_con_consulta(&mut self, consulta: &str) {
+        let mut entradas = Vec::new();
+        for host in &self.hosts {
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("sftp · {}", host.nombre),
+                categoria: "sftp",
+                accion: AccionPaleta::AbrirSftp(host.id),
+            });
+        }
+        self.abrir_paleta_con(entradas, consulta);
     }
 
     fn tecla_paleta(&mut self, tecla: KeyEvent) {
@@ -2999,6 +3175,25 @@ impl App {
                         self.paleta = None;
                         self.reconectar_sesion(sesion_id);
                     }
+                    Some(AccionPaleta::AbrirSftp(host_id)) => {
+                        let host_id = *host_id;
+                        self.paleta = None;
+                        self.abrir_archivos(Some(host_id));
+                    }
+                    Some(AccionPaleta::IrATransferencias) => {
+                        self.paleta = None;
+                        if self.archivos.is_some() {
+                            self.seleccion_cola = 0;
+                            self.desplazamiento_cola = 0;
+                            self.vista = Vista::Transferencias;
+                        } else {
+                            self.mensaje("abre Archivos con un host para ver la cola", true);
+                        }
+                    }
+                    Some(AccionPaleta::CancelarTransferencias) => {
+                        self.paleta = None;
+                        self.cancelar_todas_las_transferencias();
+                    }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
                         let sesiones = self.pestanas.len();
@@ -3091,6 +3286,9 @@ impl App {
             Vista::Identidades => self.ir_a_identidades(),
             Vista::Registro => self.ir_a_registro(),
             Vista::Ficha => self.vista = vista,
+            // Archivos y Transferencias se abren con `abrir_archivos`, que
+            // necesita saber con qué host.
+            Vista::Archivos | Vista::Transferencias => self.abrir_archivos(None),
         }
     }
 
@@ -3636,6 +3834,12 @@ impl App {
     }
 
     fn tecla_flota(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
+            if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
+                self.abrir_archivos(Some(host_id));
+            }
+            return;
+        }
         if self.filtro_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -4009,7 +4213,11 @@ impl App {
                 self.ir_a_vista(Vista::Registro);
                 return;
             }
-            KeyCode::F(4) | KeyCode::F(6) => {
+            KeyCode::F(4) => {
+                self.abrir_archivos(None);
+                return;
+            }
+            KeyCode::F(6) => {
                 self.mensaje("vista no disponible en esta fase", true);
                 return;
             }
@@ -4020,6 +4228,8 @@ impl App {
             _ => {}
         }
         match self.vista {
+            Vista::Archivos => self.tecla_archivos(tecla),
+            Vista::Transferencias => self.tecla_transferencias(tecla),
             Vista::Flota => self.tecla_flota(tecla),
             Vista::Hosts => self.tecla_hosts(tecla),
             Vista::Ficha => self.tecla_ficha(tecla),
@@ -4112,6 +4322,63 @@ impl App {
             return;
         };
         match dialogo {
+            Dialogo::Conflicto {
+                nombre,
+                es_dir,
+                lado_origen,
+                tamano_origen,
+                fecha_origen,
+                tamano_destino,
+                fecha_destino,
+            } => {
+                let decision = match tecla.code {
+                    KeyCode::Char('s') => Some((protocolo::Politica::Sobrescribir, false)),
+                    KeyCode::Char('o') => Some((protocolo::Politica::Omitir, false)),
+                    KeyCode::Char('S') => Some((protocolo::Politica::Sobrescribir, true)),
+                    KeyCode::Char('O') => Some((protocolo::Politica::Omitir, true)),
+                    KeyCode::Esc => {
+                        // Cancelar cancela toda la operación, no solo el
+                        // elemento: no se encola nada.
+                        if let Some(estado) = &mut self.archivos {
+                            estado.operacion = None;
+                        }
+                        self.mensaje("operación cancelada", false);
+                        self.dialogo = None;
+                        return;
+                    }
+                    _ => {
+                        self.dialogo = Some(Dialogo::Conflicto {
+                            nombre,
+                            es_dir,
+                            lado_origen,
+                            tamano_origen,
+                            fecha_origen,
+                            tamano_destino,
+                            fecha_destino,
+                        });
+                        return;
+                    }
+                };
+                self.dialogo = None;
+                if let Some((politica, todos)) = decision {
+                    let mut operacion = self
+                        .archivos
+                        .as_mut()
+                        .and_then(|estado| estado.operacion.take());
+                    if let Some(operacion) = &mut operacion {
+                        if let Some(elemento) = operacion.elementos.get_mut(operacion.indice) {
+                            elemento.politica = Some(politica);
+                        }
+                        if todos {
+                            operacion.politica_global = Some(politica);
+                        }
+                        operacion.indice += 1;
+                    }
+                    if let Some(operacion) = operacion {
+                        self.continuar_operacion(operacion);
+                    }
+                }
+            }
             Dialogo::Confirmar {
                 titulo,
                 lineas,
@@ -4459,6 +4726,15 @@ impl App {
                                     conexion::cliente::expandir_home(&nombre, &self.rutas.hogar);
                                 self.importar_clave(ruta, None);
                             }
+                            EntradaTextoAccion::IrARuta => {
+                                self.ir_a_ruta(&nombre);
+                            }
+                            EntradaTextoAccion::RenombrarArchivo => {
+                                self.renombrar_archivo(&nombre);
+                            }
+                            EntradaTextoAccion::CrearDirectorio => {
+                                self.crear_directorio(&nombre);
+                            }
                             EntradaTextoAccion::EditarAliasIdentidad(id) => {
                                 match self.almacen.renombrar_identidad(id, &nombre) {
                                     Ok(()) => {
@@ -4675,6 +4951,21 @@ impl App {
                 // Ya no se usa: salir no cierra sesiones (D36).
                 self.salir = true;
             }
+            AccionDialogo::BorrarArchivos {
+                lado,
+                rutas,
+                nombres,
+            } => {
+                self.borrar_archivos(lado, rutas, nombres);
+            }
+            AccionDialogo::VerRemotoGrande { ruta, .. } => {
+                self.ver_remoto(&ruta);
+            }
+            AccionDialogo::CancelarTransferencia(id) => {
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::CancelarTransferencia { id });
+            }
+            AccionDialogo::VolverDeArchivos => self.volver_de_archivos(),
             AccionDialogo::DescartarFicha => {
                 self.ficha = None;
                 self.vista = Vista::Hosts;
@@ -4750,9 +5041,21 @@ impl App {
     }
 }
 
-fn lanzar_hilo_teclas(tx: mpsc::UnboundedSender<Evento>, salir: Arc<AtomicBool>) {
+fn lanzar_hilo_teclas(
+    tx: mpsc::UnboundedSender<Evento>,
+    salir: Arc<AtomicBool>,
+    pausa: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
         while !salir.load(Ordering::Relaxed) {
+            // Con el paginador en primer plano las teclas son suyas: se
+            // drenan y se tiran, para que no revienten al volver.
+            if pausa.load(Ordering::Relaxed) {
+                let _ = crossterm::event::poll(Duration::ZERO);
+                let _ = crossterm::event::read();
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             match crossterm::event::poll(Duration::from_millis(100)) {
                 Ok(true) => match crossterm::event::read() {
                     Ok(crossterm::event::Event::Key(tecla)) => {
@@ -4906,6 +5209,1496 @@ pub fn ejecutar(
     let mut app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
     app.abrir_al_arrancar = abrir_al_arrancar;
     app.ejecutar()
+}
+
+// ------------------------------------------------------------------ archivos
+//
+// Vista Archivos (F4): dos paneles —local y remoto—, marcas de diferencia y
+// cola de transferencias. Todo lo remoto lo ejecuta el servidor; aquí solo se
+// decide, se pinta y se escribe lo local.
+
+impl App {
+    /// Época en segundos, para las fechas relativas del panel.
+    pub fn ahora_epoca(&self) -> i64 {
+        chrono::Local::now().timestamp()
+    }
+
+    /// Altura útil de un panel, para mover el cursor dentro de la ventana.
+    fn alto_panel(&self) -> usize {
+        self.terminal_alto
+            .saturating_sub(crate::ui::archivos::ALTO_COLA + 2)
+            .max(1) as usize
+    }
+
+    /// Host con el que abrir Archivos: el de la pestaña activa de Sesión o el
+    /// seleccionado en la vista de la que se viene.
+    fn host_para_archivos(&self) -> Option<i64> {
+        if self.vista == Vista::Sesion {
+            if let Some(indice) = self.pestana_activa {
+                if let Some(pestana) = self.pestanas.get(indice) {
+                    return Some(pestana.host_id);
+                }
+            }
+        }
+        if self.vista == Vista::Flota {
+            return self.host_flota_seleccionado().map(|host| host.id);
+        }
+        self.host_seleccionado().map(|host| host.id)
+    }
+
+    /// Abre la vista Archivos con un host (o con el de la vista actual). Si ya
+    /// estaba abierta con otro host, se conserva el panel local.
+    pub fn abrir_archivos(&mut self, host_id: Option<i64>) {
+        let Some(host_id) = host_id.or_else(|| self.host_para_archivos()) else {
+            self.mensaje("selecciona un host para abrir sus archivos", true);
+            return;
+        };
+        let Some(host) = self.hosts.iter().find(|host| host.id == host_id).cloned() else {
+            self.mensaje("ese host ya no existe", true);
+            return;
+        };
+        if self
+            .archivos
+            .as_ref()
+            .is_some_and(|estado| estado.host_id == host_id)
+        {
+            // Ya está abierto con ese host: solo se vuelve a la vista.
+            self.vista = Vista::Archivos;
+            return;
+        }
+        let ocultos = self.config.archivos.mostrar_ocultos;
+        // Cambiar de host con `h` conserva el panel local: el usuario estaba
+        // mirando un directorio de su máquina y no tiene por qué perderlo.
+        let anterior = self
+            .archivos
+            .take()
+            .filter(|estado| estado.host_id != host_id);
+        let dir_local = match &anterior {
+            Some(estado) => estado.local.ruta.clone(),
+            None => host
+                .sftp_dir_local
+                .clone()
+                .filter(|ruta| std::path::Path::new(ruta).is_dir())
+                .unwrap_or_else(|| self.rutas.hogar.display().to_string()),
+        };
+        let sensibles = crate::archivos::sensibles::Sensibles::nuevo(&self.config.archivos.avisar);
+        let mut estado = crate::archivos::EstadoArchivos {
+            host_id,
+            host_nombre: host.nombre.clone(),
+            activo: crate::archivos::Lado::Local,
+            local: match &anterior {
+                Some(estado) => estado.local.clone(),
+                None => crate::archivos::Panel::nuevo(dir_local, ocultos),
+            },
+            remoto: crate::archivos::Panel::nuevo(String::new(), ocultos),
+            solo_local: false,
+            motivo_solo_local: None,
+            dir_inicio: String::new(),
+            sensibles,
+            peticiones: HashMap::new(),
+            siguiente_peticion: 0,
+            cola: Vec::new(),
+            operacion: None,
+            aviso: None,
+            muestras: HashMap::new(),
+            viendo: None,
+            borrar_local: HashMap::new(),
+        };
+        if estado.sensibles.vacia() {
+            self.mensaje(
+                "el aviso de ficheros sensibles está desactivado ([archivos] avisar)",
+                false,
+            );
+        }
+        listar_local(&mut estado);
+        estado.nueva_peticion(crate::archivos::Peticion::AbrirSftp);
+        self.servidor
+            .enviar(protocolo::MensajeCliente::AbrirSftp { host_id });
+        self.archivos = Some(estado);
+        if self.vista != Vista::Archivos {
+            self.vista_previa = Some(self.vista);
+        }
+        self.vista = Vista::Archivos;
+        self.salir_de_sesion_si_hace_falta();
+    }
+
+    /// Pide el listado de un directorio remoto.
+    fn pedir_listado_remoto(
+        &mut self,
+        ruta: String,
+        motivo: crate::archivos::panel::MotivoListado,
+    ) {
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        if estado.solo_local {
+            return;
+        }
+        let peticion = estado.nueva_peticion(crate::archivos::Peticion::ListarRemoto(motivo));
+        let host_id = estado.host_id;
+        self.servidor.enviar(protocolo::MensajeCliente::ListarDir {
+            host_id,
+            ruta,
+            peticion_id: peticion,
+        });
+    }
+
+    /// Refresca los dos paneles y recalcula las marcas.
+    fn refrescar_archivos(&mut self, motivo: crate::archivos::panel::MotivoListado) {
+        let Some(mut estado) = self.archivos.take() else {
+            return;
+        };
+        listar_local(&mut estado);
+        let ruta = estado.remoto.ruta.clone();
+        self.archivos = Some(estado);
+        if !ruta.is_empty() {
+            self.pedir_listado_remoto(ruta, motivo);
+        }
+    }
+
+    /// Guarda los últimos directorios del host (los escribe el bucle de UI,
+    /// que es el único escritor de SQLite).
+    fn guardar_dirs_sftp(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let local = estado.local.ruta.clone();
+        let remoto = match estado.remoto.ruta.is_empty() {
+            true => None,
+            false => Some(estado.remoto.ruta.clone()),
+        };
+        let host_id = estado.host_id;
+        if let Err(error) = self
+            .almacen
+            .fijar_dirs_sftp(host_id, Some(&local), remoto.as_deref())
+        {
+            tracing::warn!("no se pudieron guardar los directorios de archivos: {error}");
+        }
+    }
+
+    /// Cambia el directorio del panel activo.
+    fn cambiar_dir_activo(&mut self, ruta: String, al_padre: bool) {
+        let remoto = self
+            .archivos
+            .as_ref()
+            .is_some_and(|estado| estado.activo == crate::archivos::Lado::Remoto);
+        if remoto {
+            let ruta = if al_padre {
+                crate::servidor::sftp::padre(&ruta)
+            } else {
+                ruta
+            };
+            self.pedir_listado_remoto(ruta, crate::archivos::panel::MotivoListado::Operacion);
+        } else {
+            let Some(estado) = &mut self.archivos else {
+                return;
+            };
+            let camino = std::path::Path::new(&ruta);
+            if !camino.is_dir() {
+                self.mensaje(format!("«{ruta}» no es un directorio"), true);
+                return;
+            }
+            let ruta = ruta.clone();
+            estado.local.cambiar_ruta(ruta);
+            listar_local(estado);
+            let ruta = estado.local.ruta.clone();
+            let remoto = estado.remoto.entradas.clone();
+            if let Some(estado) = &mut self.archivos {
+                let _ = ruta;
+                let _ = remoto;
+                estado.recalcular_marcas();
+            }
+            self.guardar_dirs_sftp();
+        }
+    }
+
+    /// Teclas de la vista Archivos.
+    fn tecla_archivos(&mut self, tecla: KeyEvent) {
+        if self.dialogo.is_some() {
+            return;
+        }
+        // El aviso de ficheros sensibles manda: hasta que se conteste, nada
+        // más se atiende.
+        if self
+            .archivos
+            .as_ref()
+            .is_some_and(|estado| estado.aviso.is_some())
+        {
+            match tecla.code {
+                KeyCode::Char('s') => {
+                    let aviso = self
+                        .archivos
+                        .as_mut()
+                        .and_then(|estado| estado.aviso.take());
+                    if let Some(aviso) = aviso {
+                        self.continuar_operacion(aviso.operacion);
+                    }
+                }
+                KeyCode::Esc => {
+                    if let Some(estado) = &mut self.archivos {
+                        estado.aviso = None;
+                        estado.operacion = None;
+                    }
+                    self.mensaje("no se ha subido nada", false);
+                }
+                _ => {}
+            }
+            return;
+        }
+        // Con el filtro activo, las teclas son del campo de texto.
+        let filtrando = self
+            .archivos
+            .as_ref()
+            .is_some_and(|estado| panel_activo(estado).filtro_activo);
+        if filtrando {
+            let Some(estado) = &mut self.archivos else {
+                return;
+            };
+            let panel = panel_activo_mut(estado);
+            match tecla.code {
+                KeyCode::Esc => {
+                    panel.filtro.clear();
+                    panel.filtro_activo = false;
+                    panel.seleccion = 0;
+                }
+                KeyCode::Enter => panel.filtro_activo = false,
+                _ => {
+                    if !panel_campo(panel, &tecla) {
+                        return;
+                    }
+                }
+            }
+            if let Some(estado) = &mut self.archivos {
+                panel_activo_mut(estado).seleccion = 0;
+                panel_activo_mut(estado).desplazamiento = 0;
+            }
+            return;
+        }
+
+        let altura = self.alto_panel();
+        match tecla.code {
+            KeyCode::Esc => {
+                let limpiado = self
+                    .archivos
+                    .as_mut()
+                    .map(|estado| {
+                        let panel = panel_activo_mut(estado);
+                        if !panel.marcados.is_empty() {
+                            panel.desmarcar_todo();
+                            true
+                        } else if !panel.filtro.is_empty() {
+                            panel.filtro.clear();
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+                if !limpiado {
+                    self.volver_de_archivos();
+                }
+            }
+            KeyCode::Char('q') => self.volver_de_archivos(),
+            KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(estado) = &mut self.archivos {
+                    estado.activo = estado.activo.contrario();
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.mover_panel(-1, altura),
+            KeyCode::Down | KeyCode::Char('j') => self.mover_panel(1, altura),
+            KeyCode::PageUp => self.mover_panel(-(altura as i32), altura),
+            KeyCode::PageDown => self.mover_panel(altura as i32, altura),
+            KeyCode::Home => self.ir_a_fila(0, altura),
+            KeyCode::End => self.ir_a_fila(usize::MAX, altura),
+            KeyCode::Backspace | KeyCode::Char('-') => self.subir_de_dir(),
+            KeyCode::Enter => self.abrir_entrada(),
+            KeyCode::Char(' ') => self.alternar_marca(altura),
+            KeyCode::Char('a') => {
+                if let Some(estado) = &mut self.archivos {
+                    panel_activo_mut(estado).marcar_todo();
+                }
+            }
+            KeyCode::Char('A') => {
+                if let Some(estado) = &mut self.archivos {
+                    panel_activo_mut(estado).desmarcar_todo();
+                }
+            }
+            KeyCode::Char('.') => {
+                if let Some(estado) = &mut self.archivos {
+                    let panel = panel_activo_mut(estado);
+                    panel.ocultos = !panel.ocultos;
+                    panel.seleccion = 0;
+                    panel.desplazamiento = 0;
+                }
+            }
+            KeyCode::Char('/') => {
+                if let Some(estado) = &mut self.archivos {
+                    let panel = panel_activo_mut(estado);
+                    panel.filtro_activo = true;
+                    panel.filtro.clear();
+                }
+            }
+            KeyCode::Char('R') => {
+                self.refrescar_archivos(crate::archivos::panel::MotivoListado::Refresco)
+            }
+            KeyCode::Char('g') => {
+                let ruta = self
+                    .archivos
+                    .as_ref()
+                    .map(|estado| panel_activo(estado).ruta.clone())
+                    .unwrap_or_default();
+                let visible = acortar_hogar(&ruta, &self.rutas.hogar);
+                self.dialogo = Some(Dialogo::EntradaTexto {
+                    titulo: "IR A RUTA".to_string(),
+                    etiqueta: "Ruta".to_string(),
+                    campo: CampoTexto::nuevo(visible),
+                    accion: EntradaTextoAccion::IrARuta,
+                });
+            }
+            KeyCode::Char('i') => self.detalle_de_archivo(),
+            KeyCode::Char('h') => self.abrir_paleta_sftp(),
+            KeyCode::Char('t') => {
+                self.seleccion_cola = 0;
+                self.desplazamiento_cola = 0;
+                self.vista = Vista::Transferencias;
+            }
+            KeyCode::Char('r') => self.abrir_renombrar(),
+            KeyCode::Char('d') => {
+                self.dialogo = Some(Dialogo::EntradaTexto {
+                    titulo: "NUEVO DIRECTORIO".to_string(),
+                    etiqueta: "Nombre".to_string(),
+                    campo: CampoTexto::default(),
+                    accion: EntradaTextoAccion::CrearDirectorio,
+                });
+            }
+            KeyCode::Char('x') => self.pedir_borrado(),
+            KeyCode::Char('c') => self.copiar_al_otro_panel(false),
+            KeyCode::Char('m') => self.copiar_al_otro_panel(true),
+            _ => {}
+        }
+    }
+
+    /// Teclas de la vista Transferencias (cola ampliada).
+    fn tecla_transferencias(&mut self, tecla: KeyEvent) {
+        if self.dialogo.is_some() {
+            return;
+        }
+        let total = self
+            .archivos
+            .as_ref()
+            .map(|estado| estado.cola.len())
+            .unwrap_or(0);
+        let altura = self.terminal_alto.saturating_sub(8).max(1) as usize;
+        match tecla.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.vista = Vista::Archivos,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.seleccion_cola = self.seleccion_cola.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if total > 0 {
+                    self.seleccion_cola = (self.seleccion_cola + 1).min(total - 1);
+                }
+            }
+            KeyCode::Home => self.seleccion_cola = 0,
+            KeyCode::End => self.seleccion_cola = total.saturating_sub(1),
+            KeyCode::Char('C') => {
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::LimpiarTransferencias);
+                self.seleccion_cola = 0;
+            }
+            KeyCode::Char('x') => {
+                let Some(fila) = self
+                    .archivos
+                    .as_ref()
+                    .and_then(|estado| estado.cola.get(self.seleccion_cola))
+                    .cloned()
+                else {
+                    return;
+                };
+                if fila.estado.terminada() {
+                    self.mensaje("esa transferencia ya ha terminado", true);
+                    return;
+                }
+                if fila.estado == protocolo::EstadoTransferencia::EnCurso {
+                    self.dialogo = Some(Dialogo::Confirmar {
+                        titulo: "CANCELAR TRANSFERENCIA".to_string(),
+                        lineas: vec![
+                            format!("  {} → {}", fila.origen, fila.destino),
+                            String::new(),
+                            "  Está en curso: se parará en el siguiente bloque".to_string(),
+                            "  y se borrará lo que llevara a medias.".to_string(),
+                        ],
+                        peligro: true,
+                        accion: AccionDialogo::CancelarTransferencia(fila.id),
+                    });
+                } else {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::CancelarTransferencia { id: fila.id });
+                }
+            }
+            KeyCode::Enter => {
+                let Some(fila) = self
+                    .archivos
+                    .as_ref()
+                    .and_then(|estado| estado.cola.get(self.seleccion_cola))
+                else {
+                    return;
+                };
+                let mut lineas = vec![
+                    format!("Origen      {}", fila.origen),
+                    format!("Destino     {}:{}", fila.host_nombre, fila.destino),
+                    format!(
+                        "Dirección   {} · {}",
+                        fila.direccion.texto(),
+                        fila.estado.texto()
+                    ),
+                    format!("Bytes       {} de {}", fila.bytes_hechos, fila.bytes_total),
+                    format!(
+                        "Ficheros    {} de {}",
+                        fila.ficheros_hechos, fila.ficheros_total
+                    ),
+                ];
+                if fila.omitidos > 0 {
+                    lineas.push(format!("Omitidos    {}", fila.omitidos));
+                }
+                if let Some(error) = &fila.error {
+                    lineas.push(format!("Error       {error}"));
+                }
+                self.dialogo = Some(Dialogo::Detalle {
+                    titulo: format!("TRANSFERENCIA {}", fila.id),
+                    lineas,
+                });
+            }
+            _ => {}
+        }
+        let _ = altura;
+    }
+
+    fn mover_panel(&mut self, delta: i32, altura: usize) {
+        if let Some(estado) = &mut self.archivos {
+            let panel = panel_activo_mut(estado);
+            panel.mover(delta, altura);
+        }
+    }
+
+    fn ir_a_fila(&mut self, indice: usize, altura: usize) {
+        if let Some(estado) = &mut self.archivos {
+            let panel = panel_activo_mut(estado);
+            panel.ir_a(indice, altura);
+        }
+    }
+
+    fn alternar_marca(&mut self, altura: usize) {
+        if let Some(estado) = &mut self.archivos {
+            let panel = panel_activo_mut(estado);
+            panel.alternar_marca(altura);
+        }
+    }
+
+    /// Sube al directorio padre del panel activo.
+    fn subir_de_dir(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let remoto = estado.activo == crate::archivos::Lado::Remoto;
+        let ruta = panel_activo(estado).ruta.clone();
+        if remoto {
+            let padre = crate::servidor::sftp::padre(&ruta);
+            if padre != ruta {
+                self.cambiar_dir_activo(padre, false);
+            }
+        } else {
+            let padre = crate::archivos::local::ruta_padre(std::path::Path::new(&ruta));
+            self.cambiar_dir_activo(padre.display().to_string(), false);
+        }
+    }
+
+    /// `↵`: entra en un directorio o abre un fichero con el paginador.
+    fn abrir_entrada(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let remoto = estado.activo == crate::archivos::Lado::Remoto;
+        let Some(entrada) = panel_activo(estado).entrada_actual().cloned() else {
+            return;
+        };
+        let ruta = panel_activo(estado).ruta.clone();
+        if entrada.es_dir() {
+            let destino = if remoto {
+                crate::servidor::sftp::join(&ruta, &entrada.nombre)
+            } else {
+                std::path::Path::new(&ruta)
+                    .join(&entrada.nombre)
+                    .display()
+                    .to_string()
+            };
+            self.cambiar_dir_activo(destino, false);
+            return;
+        }
+        let camino = if remoto {
+            crate::servidor::sftp::join(&ruta, &entrada.nombre)
+        } else {
+            std::path::Path::new(&ruta)
+                .join(&entrada.nombre)
+                .display()
+                .to_string()
+        };
+        if remoto {
+            if entrada.tamano > crate::archivos::panel::TAMANO_AVISO_VISOR {
+                let host_id = estado.host_id;
+                let bytes = entrada.tamano;
+                self.dialogo = Some(Dialogo::Confirmar {
+                    titulo: "FICHERO GRANDE".to_string(),
+                    lineas: vec![
+                        format!(
+                            "  {} ocupa {}",
+                            entrada.nombre,
+                            crate::archivos::tamano_legible(bytes)
+                        ),
+                        String::new(),
+                        "  Se traerá entero a un temporal para verlo.".to_string(),
+                        "  ¿Seguro?".to_string(),
+                    ],
+                    peligro: false,
+                    accion: AccionDialogo::VerRemotoGrande {
+                        host_id,
+                        ruta: camino,
+                        bytes,
+                    },
+                });
+            } else {
+                self.ver_remoto(&camino);
+            }
+        } else {
+            self.peticion_pager = Some(crate::visor::Peticion::local(&camino));
+        }
+    }
+
+    /// Pide al servidor un temporal del fichero remoto para verlo.
+    fn ver_remoto(&mut self, ruta: &str) {
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let peticion =
+            estado.nueva_peticion(crate::archivos::Peticion::VerRemoto(ruta.to_string()));
+        let host_id = estado.host_id;
+        estado.viendo = Some(ruta.to_string());
+        self.servidor
+            .enviar(protocolo::MensajeCliente::DescargarTemporal {
+                host_id,
+                ruta: ruta.to_string(),
+                peticion_id: peticion,
+            });
+    }
+
+    /// Detalle de la entrada bajo el cursor (`i`).
+    fn detalle_de_archivo(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let lado = estado.activo;
+        let otro = match lado {
+            crate::archivos::Lado::Local => &estado.remoto,
+            crate::archivos::Lado::Remoto => &estado.local,
+        };
+        let panel = match lado {
+            crate::archivos::Lado::Local => &estado.local,
+            crate::archivos::Lado::Remoto => &estado.remoto,
+        };
+        let Some(entrada) = panel.entrada_actual().cloned() else {
+            return;
+        };
+        let ruta = if lado == crate::archivos::Lado::Local {
+            std::path::Path::new(&panel.ruta)
+                .join(&entrada.nombre)
+                .display()
+                .to_string()
+        } else {
+            crate::servidor::sftp::join(&panel.ruta, &entrada.nombre)
+        };
+        let mut lineas = vec![
+            format!("Tipo        {}", entrada.tipo.texto()),
+            format!(
+                "Tamaño      {} ({} bytes)",
+                crate::archivos::tamano_legible(entrada.tamano),
+                entrada.tamano
+            ),
+            format!(
+                "Modificado  {}",
+                crate::archivos::fecha_completa(entrada.mtime)
+            ),
+            format!(
+                "Permisos    {}",
+                entrada
+                    .permisos
+                    .map(|modo| crate::archivos::permisos_legibles(modo, entrada.es_dir()))
+                    .unwrap_or_else(|| "—".to_string())
+            ),
+            format!(
+                "Propietario {}",
+                entrada
+                    .propietario
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string())
+            ),
+            format!("Ruta        {ruta}"),
+        ];
+        if let Some(enlace) = &entrada.enlace {
+            lineas.push(format!("Enlace a    {enlace}"));
+        }
+        // Comparación con el otro lado: es lo que convierte el detalle en una
+        // herramienta de despliegue.
+        let comparacion = match otro
+            .entradas
+            .iter()
+            .find(|otra| otra.nombre == entrada.nombre)
+        {
+            None => "no está al otro lado".to_string(),
+            Some(otra) => match entrada.motivo_diferencia(otra) {
+                Some(motivo) => format!(
+                    "{motivo} ({} allí)",
+                    crate::archivos::tamano_legible(otra.tamano)
+                ),
+                None => "igual".to_string(),
+            },
+        };
+        lineas.push(format!(
+            "Otro lado   {} · {comparacion}",
+            match lado {
+                crate::archivos::Lado::Local => &estado.remoto.ruta,
+                crate::archivos::Lado::Remoto => &estado.local.ruta,
+            }
+        ));
+        self.dialogo = Some(Dialogo::Detalle {
+            titulo: entrada.nombre.clone(),
+            lineas,
+        });
+    }
+
+    /// Borrado de lo marcado, con confirmación explícita y sin papelera.
+    fn pedir_borrado(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let lado = estado.activo;
+        let panel = match lado {
+            crate::archivos::Lado::Local => &estado.local,
+            crate::archivos::Lado::Remoto => &estado.remoto,
+        };
+        if panel.ruta.is_empty() {
+            return;
+        }
+        let seleccionados: Vec<(String, bool)> = panel
+            .seleccionados()
+            .iter()
+            .filter(|entrada| entrada.nombre != "..")
+            .map(|entrada| (entrada.nombre.clone(), entrada.es_dir()))
+            .collect();
+        if seleccionados.is_empty() {
+            self.mensaje("no hay nada seleccionado", true);
+            return;
+        }
+        let directorios = seleccionados.iter().filter(|(_, es_dir)| *es_dir).count();
+        let rutas: Vec<String> = seleccionados
+            .iter()
+            .map(|(nombre, _)| nombre.clone())
+            .collect();
+        let nombres: Vec<String> = rutas.clone();
+        let mut lineas = vec![format!(
+            "  {} elemento(s) de «{}»{}",
+            seleccionados.len(),
+            acortar_humano(&panel.ruta, 40),
+            match directorios {
+                0 => String::new(),
+                otros => format!(", {otros} directorio(s)"),
+            }
+        )];
+        lineas.push(String::new());
+        lineas.push("  Se borran sin pasar por la papelera.".to_string());
+        lineas.push("  ¿Seguro?".to_string());
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "BORRAR".to_string(),
+            lineas,
+            peligro: true,
+            accion: AccionDialogo::BorrarArchivos {
+                lado,
+                rutas,
+                nombres,
+            },
+        });
+    }
+
+    /// Borra de verdad lo confirmado, en el lado que toque.
+    fn borrar_archivos(
+        &mut self,
+        lado: crate::archivos::Lado,
+        rutas: Vec<String>,
+        nombres: Vec<String>,
+    ) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let dir = match lado {
+            crate::archivos::Lado::Local => estado.local.ruta.clone(),
+            crate::archivos::Lado::Remoto => estado.remoto.ruta.clone(),
+        };
+        if lado == crate::archivos::Lado::Local {
+            let mut fallos = Vec::new();
+            for nombre in &nombres {
+                let camino = std::path::Path::new(&dir).join(nombre);
+                let es_dir = camino.is_dir();
+                if let Err(motivo) = crate::archivos::local::borrar(&camino, es_dir) {
+                    fallos.push(motivo);
+                }
+            }
+            if fallos.is_empty() {
+                self.mensaje(format!("{} elemento(s) borrados", nombres.len()), false);
+            } else {
+                self.mensaje(fallos.join(" · "), true);
+            }
+            self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+            return;
+        }
+        let remoto: Vec<String> = rutas
+            .iter()
+            .map(|nombre| crate::servidor::sftp::join(&dir, nombre))
+            .collect();
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let peticion = estado.nueva_peticion(crate::archivos::Peticion::ListarRemoto(
+            crate::archivos::panel::MotivoListado::Operacion,
+        ));
+        let host_id = estado.host_id;
+        self.servidor
+            .enviar(protocolo::MensajeCliente::BorrarRemoto {
+                host_id,
+                rutas: remoto,
+                peticion_id: peticion,
+            });
+    }
+
+    /// Renombrar lo seleccionado (en el mismo panel; `m` entre paneles mueve).
+    fn abrir_renombrar(&mut self) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let Some(entrada) = panel_activo(estado).entrada_actual() else {
+            return;
+        };
+        if entrada.nombre == ".." {
+            return;
+        }
+        self.dialogo = Some(Dialogo::EntradaTexto {
+            titulo: "RENOMBRAR".to_string(),
+            etiqueta: "Nombre nuevo".to_string(),
+            campo: CampoTexto::nuevo(entrada.nombre.clone()),
+            accion: EntradaTextoAccion::RenombrarArchivo,
+        });
+    }
+
+    /// Ejecuta el renombrado con el nombre que escribió el usuario.
+    fn renombrar_archivo(&mut self, nombre: &str) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let lado = estado.activo;
+        let panel = match lado {
+            crate::archivos::Lado::Local => &estado.local,
+            crate::archivos::Lado::Remoto => &estado.remoto,
+        };
+        let Some(entrada) = panel.entrada_actual() else {
+            return;
+        };
+        if entrada.nombre == nombre {
+            return;
+        }
+        if lado == crate::archivos::Lado::Local {
+            let de = std::path::Path::new(&panel.ruta).join(&entrada.nombre);
+            let a = std::path::Path::new(&panel.ruta).join(nombre);
+            match crate::archivos::local::renombrar(&de, &a) {
+                Ok(()) => {
+                    self.mensaje(format!("«{}» ahora es «{nombre}»", entrada.nombre), false);
+                }
+                Err(motivo) => self.mensaje(motivo, true),
+            }
+            self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+            return;
+        }
+        let de = crate::servidor::sftp::join(&panel.ruta, &entrada.nombre);
+        let a = crate::servidor::sftp::join(&panel.ruta, nombre);
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let peticion = estado.nueva_peticion(crate::archivos::Peticion::ListarRemoto(
+            crate::archivos::panel::MotivoListado::Operacion,
+        ));
+        let host_id = estado.host_id;
+        self.servidor
+            .enviar(protocolo::MensajeCliente::RenombrarRemoto {
+                host_id,
+                de,
+                a,
+                peticion_id: peticion,
+            });
+    }
+
+    /// Crea un directorio en el panel activo.
+    fn crear_directorio(&mut self, nombre: &str) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let lado = estado.activo;
+        let panel = match lado {
+            crate::archivos::Lado::Local => &estado.local,
+            crate::archivos::Lado::Remoto => &estado.remoto,
+        };
+        if lado == crate::archivos::Lado::Local {
+            let camino = std::path::Path::new(&panel.ruta).join(nombre);
+            match crate::archivos::local::crear_dir(&camino) {
+                Ok(()) => self.mensaje(format!("directorio «{nombre}» creado"), false),
+                Err(motivo) => self.mensaje(motivo, true),
+            }
+            self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+            return;
+        }
+        let ruta = crate::servidor::sftp::join(&panel.ruta, nombre);
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let peticion = estado.nueva_peticion(crate::archivos::Peticion::ListarRemoto(
+            crate::archivos::panel::MotivoListado::Operacion,
+        ));
+        let host_id = estado.host_id;
+        self.servidor
+            .enviar(protocolo::MensajeCliente::CrearDirRemoto {
+                host_id,
+                ruta,
+                peticion_id: peticion,
+            });
+    }
+
+    /// `g`: cambia el directorio del panel activo.
+    fn ir_a_ruta(&mut self, ruta: &str) {
+        let camino = conexion::cliente::expandir_home(ruta, &self.rutas.hogar);
+        self.cambiar_dir_activo(camino.display().to_string(), false);
+    }
+
+    /// `h`: paleta filtrada a los hosts, para cambiar el remoto sin perder el
+    /// panel local.
+    fn abrir_paleta_sftp(&mut self) {
+        self.abrir_paleta_con_consulta("sftp · ");
+    }
+
+    /// Vuelve de Archivos a la vista anterior sin preguntar nada: las
+    /// transferencias siguen en el servidor.
+    fn volver_de_archivos(&mut self) {
+        self.guardar_dirs_sftp();
+        let destino = match self.vista_previa {
+            Some(vista) if !matches!(vista, Vista::Archivos | Vista::Transferencias) => vista,
+            _ => Vista::Hosts,
+        };
+        self.vista = destino;
+        if destino == Vista::Hosts {
+            self.ir_a_hosts();
+        }
+    }
+}
+
+/// Lista el panel local (o deja el error en el panel).
+fn listar_local(estado: &mut crate::archivos::EstadoArchivos) {
+    match crate::archivos::local::listar(std::path::Path::new(&estado.local.ruta)) {
+        Ok(entradas) => estado.local.fijar_entradas(entradas),
+        Err(motivo) => estado.local.error = Some(motivo),
+    }
+    estado.recalcular_marcas();
+}
+
+/// Panel que tiene el foco.
+pub fn panel_activo(estado: &crate::archivos::EstadoArchivos) -> &crate::archivos::Panel {
+    match estado.activo {
+        crate::archivos::Lado::Local => &estado.local,
+        crate::archivos::Lado::Remoto => &estado.remoto,
+    }
+}
+
+/// Panel que tiene el foco, para modificarlo.
+pub fn panel_activo_mut(
+    estado: &mut crate::archivos::EstadoArchivos,
+) -> &mut crate::archivos::Panel {
+    match estado.activo {
+        crate::archivos::Lado::Local => &mut estado.local,
+        crate::archivos::Lado::Remoto => &mut estado.remoto,
+    }
+}
+
+/// Aplica una tecla al filtro del panel, como un campo de texto.
+fn panel_campo(panel: &mut crate::archivos::Panel, tecla: &KeyEvent) -> bool {
+    match tecla.code {
+        KeyCode::Char(caracter) => panel.filtro.push(caracter),
+        KeyCode::Backspace => {
+            panel.filtro.pop();
+        }
+        _ => return false,
+    }
+    panel.seleccion = 0;
+    panel.desplazamiento = 0;
+    true
+}
+
+/// Acorta una ruta mostrando `~` para el hogar.
+fn acortar_hogar(ruta: &str, hogar: &std::path::Path) -> String {
+    match ruta.strip_prefix(&hogar.display().to_string()) {
+        Some(resto) => format!("~{resto}"),
+        None => ruta.to_string(),
+    }
+}
+
+/// Recorta un texto largo para los diálogos.
+fn acortar_humano(texto: &str, ancho: usize) -> String {
+    if texto.chars().count() <= ancho {
+        return texto.to_string();
+    }
+    let recortado: String = texto.chars().take(ancho.saturating_sub(1)).collect();
+    format!("{recortado}…")
+}
+
+// ------------------------------------------------- copiar, mover y conflictos
+
+impl App {
+    /// `c` (copiar) y `m` (mover): transfiere lo marcado al otro panel.
+    fn copiar_al_otro_panel(&mut self, borrar_origen: bool) {
+        let Some(estado) = &self.archivos else {
+            return;
+        };
+        let lado_origen = estado.activo;
+        let direccion = match lado_origen {
+            crate::archivos::Lado::Local => protocolo::Direccion::Subida,
+            crate::archivos::Lado::Remoto => protocolo::Direccion::Bajada,
+        };
+        let panel_origen = panel_activo(estado);
+        let panel_destino = match lado_origen {
+            crate::archivos::Lado::Local => &estado.remoto,
+            crate::archivos::Lado::Remoto => &estado.local,
+        };
+        if panel_destino.ruta.is_empty() {
+            self.mensaje("el panel de destino todavía no tiene directorio", true);
+            return;
+        }
+        let seleccionados: Vec<crate::archivos::Entrada> = panel_origen
+            .seleccionados()
+            .into_iter()
+            .filter(|entrada| entrada.nombre != "..")
+            .cloned()
+            .collect();
+        if seleccionados.is_empty() {
+            self.mensaje("no hay nada seleccionado", true);
+            return;
+        }
+        let origen_dir = panel_origen.ruta.clone();
+        let destino_dir = panel_destino.ruta.clone();
+        let unir = |base: &str, nombre: &str| match lado_origen {
+            crate::archivos::Lado::Local => std::path::Path::new(base)
+                .join(nombre)
+                .display()
+                .to_string(),
+            crate::archivos::Lado::Remoto => crate::servidor::sftp::join(base, nombre),
+        };
+        let elementos: Vec<crate::archivos::panel::ElementoOperacion> = seleccionados
+            .iter()
+            .map(|entrada| crate::archivos::panel::ElementoOperacion {
+                origen: unir(&origen_dir, &entrada.nombre),
+                destino: unir(&destino_dir, &entrada.nombre),
+                bytes: entrada.tamano,
+                es_dir: entrada.es_dir(),
+                politica: None,
+            })
+            .collect();
+
+        let operacion = crate::archivos::panel::OperacionPendiente {
+            direccion,
+            lado_origen,
+            elementos,
+            borrar_origen,
+            indice: 0,
+            politica_global: None,
+        };
+
+        // El aviso de sensibles va antes que el conflicto (§4.2) y solo en las
+        // subidas: se recorren los directorios locales para mirar cada fichero.
+        if direccion == protocolo::Direccion::Subida {
+            let mut ficheros: Vec<(String, u64)> = Vec::new();
+            for elemento in &operacion.elementos {
+                if elemento.es_dir {
+                    match crate::archivos::local::recorrer(std::path::Path::new(&elemento.origen)) {
+                        Ok((planos, _)) => {
+                            for plano in planos.iter().filter(|plano| !plano.es_dir) {
+                                let nombre = plano
+                                    .relativo
+                                    .file_name()
+                                    .map(|nombre| nombre.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                ficheros.push((nombre, plano.bytes));
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                } else {
+                    let nombre = std::path::Path::new(&elemento.origen)
+                        .file_name()
+                        .map(|nombre| nombre.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    ficheros.push((nombre, elemento.bytes));
+                }
+            }
+            let (coincidencias, restantes) = self
+                .archivos
+                .as_ref()
+                .map(|estado| {
+                    estado
+                        .sensibles
+                        .coincidencias(ficheros.iter().map(|(n, b)| (n.as_str(), *b)))
+                })
+                .unwrap_or_default();
+            if !coincidencias.is_empty() {
+                let destino = match lado_origen {
+                    crate::archivos::Lado::Local => {
+                        format!("{}:{}", self.archivos_host(), destino_dir)
+                    }
+                    crate::archivos::Lado::Remoto => destino_dir,
+                };
+                if let Some(estado) = &mut self.archivos {
+                    estado.aviso = Some(crate::archivos::panel::AvisoPendiente {
+                        coincidencias,
+                        restantes,
+                        destino,
+                        operacion,
+                    });
+                }
+                return;
+            }
+        }
+        self.continuar_operacion(operacion);
+    }
+
+    fn archivos_host(&self) -> String {
+        self.archivos
+            .as_ref()
+            .map(|estado| estado.host_nombre.clone())
+            .unwrap_or_default()
+    }
+
+    /// Sigue con la operación: pregunta por el primer conflicto que quede y,
+    /// cuando no queda ninguno, la encola.
+    fn continuar_operacion(&mut self, mut operacion: crate::archivos::panel::OperacionPendiente) {
+        while operacion.indice < operacion.elementos.len() {
+            let elemento = &operacion.elementos[operacion.indice];
+            let ya_decidido = operacion.politica_global.is_some() || elemento.politica.is_some();
+            let choca =
+                ya_decidido || self.existe_en_destino(operacion.lado_origen, &elemento.destino);
+            if !choca {
+                operacion.indice += 1;
+                continue;
+            }
+            if !ya_decidido {
+                // Conflicto de primer nivel: se pregunta, con el tamaño y la
+                // fecha de los dos lados.
+                let nombre = crate::ui::archivos::acortar(&nombre_de_ruta(&elemento.destino), 48);
+                let destino = elemento.destino.clone();
+                let origen = elemento.origen.clone();
+                let es_dir = elemento.es_dir;
+                let tamano_origen = elemento.bytes;
+                let lado_origen = operacion.lado_origen;
+                let (tamano_destino, fecha_destino) = self
+                    .entrada_en_destino(lado_origen, &destino)
+                    .map(|entrada| (entrada.tamano, entrada.mtime))
+                    .unwrap_or((0, 0));
+                let fecha_origen = self.entrada_origen(lado_origen, &origen);
+                if let Some(estado) = &mut self.archivos {
+                    estado.operacion = Some(operacion);
+                }
+                self.dialogo = Some(Dialogo::Conflicto {
+                    nombre,
+                    es_dir,
+                    lado_origen,
+                    tamano_origen,
+                    fecha_origen,
+                    tamano_destino,
+                    fecha_destino,
+                });
+                return;
+            }
+            operacion.indice += 1;
+        }
+        self.enviar_transferir(operacion);
+    }
+
+    /// ¿Existe ya ese destino? Se mira con el listado del otro panel, que es
+    /// lo que el usuario está viendo.
+    fn existe_en_destino(&self, lado_origen: crate::archivos::Lado, destino: &str) -> bool {
+        self.entrada_en_destino(lado_origen, destino).is_some()
+    }
+
+    fn entrada_en_destino(
+        &self,
+        lado_origen: crate::archivos::Lado,
+        destino: &str,
+    ) -> Option<&crate::archivos::Entrada> {
+        let estado = self.archivos.as_ref()?;
+        let panel = match lado_origen {
+            crate::archivos::Lado::Local => &estado.remoto,
+            crate::archivos::Lado::Remoto => &estado.local,
+        };
+        let nombre = nombre_de_ruta(destino);
+        panel
+            .entradas
+            .iter()
+            .find(|entrada| entrada.nombre == nombre)
+    }
+
+    /// mtime del origen, para el diálogo de conflicto.
+    fn entrada_origen(&self, lado_origen: crate::archivos::Lado, origen: &str) -> i64 {
+        let Some(estado) = &self.archivos else {
+            return 0;
+        };
+        let panel = match lado_origen {
+            crate::archivos::Lado::Local => &estado.local,
+            crate::archivos::Lado::Remoto => &estado.remoto,
+        };
+        let nombre = nombre_de_ruta(origen);
+        panel
+            .entradas
+            .iter()
+            .find(|entrada| entrada.nombre == nombre)
+            .map(|entrada| entrada.mtime)
+            .unwrap_or(0)
+    }
+
+    /// Encola la operación ya decidida.
+    fn enviar_transferir(&mut self, operacion: crate::archivos::panel::OperacionPendiente) {
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let host_id = estado.host_id;
+        let politica = operacion
+            .politica_global
+            .unwrap_or(protocolo::Politica::Sobrescribir);
+
+        // La subida viaja expandida: el servidor no ve el disco local.
+        let mut elementos: Vec<protocolo::ElementoTransferencia> = Vec::new();
+        for elemento in &operacion.elementos {
+            let suya = elemento.politica.or(operacion.politica_global);
+            if operacion.direccion == protocolo::Direccion::Subida && elemento.es_dir {
+                match crate::archivos::local::recorrer(std::path::Path::new(&elemento.origen)) {
+                    Ok((planos, omitidos)) => {
+                        if omitidos > 0 {
+                            self.mensaje(
+                                format!("{omitidos} enlace(s) a directorio omitido(s)"),
+                                false,
+                            );
+                        }
+                        for plano in planos {
+                            let destino = std::path::Path::new(&elemento.destino)
+                                .join(&plano.relativo)
+                                .display()
+                                .to_string();
+                            elementos.push(protocolo::ElementoTransferencia {
+                                origen: plano.origen.display().to_string(),
+                                destino,
+                                bytes: plano.bytes,
+                                es_directorio: plano.es_dir,
+                                politica: Some(suya.unwrap_or(politica)),
+                            });
+                        }
+                    }
+                    Err(motivo) => {
+                        self.mensaje(motivo, true);
+                        return;
+                    }
+                }
+            } else {
+                elementos.push(protocolo::ElementoTransferencia {
+                    origen: elemento.origen.clone(),
+                    destino: elemento.destino.clone(),
+                    bytes: elemento.bytes,
+                    es_directorio: elemento.es_dir,
+                    politica: Some(suya.unwrap_or(politica)),
+                });
+            }
+        }
+        if elementos.is_empty() {
+            self.mensaje("no hay nada que transferir", true);
+            return;
+        }
+        let cuantos = elementos.len();
+        if operacion.borrar_origen && operacion.direccion == protocolo::Direccion::Subida {
+            // El origen local lo borra esta ventana cuando la transferencia
+            // llegue a `hecha`; nunca antes.
+            self.borrados_locales_pendientes.push(
+                operacion
+                    .elementos
+                    .iter()
+                    .map(|e| e.origen.clone())
+                    .collect(),
+            );
+        }
+        self.servidor.enviar(protocolo::MensajeCliente::Transferir {
+            host_id,
+            direccion: operacion.direccion,
+            elementos,
+            politica,
+            borrar_origen: operacion.borrar_origen,
+        });
+        self.mensaje(
+            match operacion.borrar_origen {
+                true => format!("moviendo {cuantos} elemento(s)"),
+                false => format!("copiando {cuantos} elemento(s)"),
+            },
+            false,
+        );
+        if let Some(estado) = &mut self.archivos {
+            estado.operacion = None;
+            estado.aviso = None;
+        }
+    }
+
+    /// Cancela todas las transferencias que no hayan terminado (paleta).
+    fn cancelar_todas_las_transferencias(&mut self) {
+        let Some(estado) = &self.archivos else {
+            self.mensaje("no hay ninguna cola abierta", true);
+            return;
+        };
+        let vivas: Vec<u32> = estado
+            .cola
+            .iter()
+            .filter(|fila| !fila.estado.terminada())
+            .map(|fila| fila.id)
+            .collect();
+        if vivas.is_empty() {
+            self.mensaje("no hay transferencias que cancelar", false);
+            return;
+        }
+        let cuantas = vivas.len();
+        for id in vivas {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::CancelarTransferencia { id });
+        }
+        self.mensaje(format!("cancelando {cuantas} transferencia(s)"), false);
+    }
+}
+
+/// Nombre final de una ruta (local o remota).
+fn nombre_de_ruta(ruta: &str) -> String {
+    ruta.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(ruta)
+        .to_string()
+}
+
+// ------------------------------------------------- eventos de la vista Archivos
+
+impl App {
+    /// El canal SFTP del host está listo: se pide el primer listado remoto.
+    fn sftp_abierto(&mut self, host_id: i64, dir_inicio: String) {
+        let guardada = self
+            .hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .and_then(|host| host.sftp_dir_remoto.clone());
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        if estado.host_id != host_id {
+            return;
+        }
+        estado
+            .peticiones
+            .retain(|_, peticion| !matches!(peticion, crate::archivos::Peticion::AbrirSftp));
+        estado.dir_inicio = dir_inicio.clone();
+        // La ruta guardada manda; si ya no existe, el error del listado cae al
+        // directorio de inicio.
+        let ruta = guardada.unwrap_or(dir_inicio);
+        estado.remoto.cambiar_ruta(ruta.clone());
+        self.pedir_listado_remoto(ruta, crate::archivos::panel::MotivoListado::Inicial);
+    }
+
+    /// Llegó el listado de un directorio remoto.
+    fn dir_listado(
+        &mut self,
+        host_id: i64,
+        ruta: String,
+        entradas: Vec<crate::archivos::Entrada>,
+        peticion_id: u64,
+    ) {
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        if estado.host_id != host_id {
+            return;
+        }
+        // Una respuesta de una petición que ya no está en vuelo se descarta:
+        // si no, un `g` rápido pintaría el directorio abandonado.
+        let motivo = match estado.resolver_peticion(peticion_id) {
+            Some(crate::archivos::Peticion::ListarRemoto(motivo)) => motivo,
+            _ => return,
+        };
+        let _ = motivo;
+        estado.remoto.ruta = ruta;
+        estado.remoto.fijar_entradas(entradas);
+        estado.recalcular_marcas();
+        self.guardar_dirs_sftp();
+    }
+
+    /// Difusión de la cola de transferencias.
+    fn actualizar_cola(&mut self, lista: Vec<protocolo::InfoTransferencia>) {
+        let ahora = Instant::now();
+        // Los orígenes locales de un «mover» (subida) se borran aquí, en la
+        // ventana que los encoló, y solo cuando la transferencia está hecha.
+        let mut a_borrar: Vec<(u32, Vec<String>)> = Vec::new();
+        let cliente_id = self.cliente_id;
+        {
+            let Some(estado) = &mut self.archivos else {
+                return;
+            };
+            for fila in &lista {
+                let conocida = estado.cola.iter().any(|previa| previa.id == fila.id);
+                if conocida {
+                    continue;
+                }
+                let nuestra = cliente_id == Some(fila.solicitante)
+                    && fila.borrar_origen
+                    && fila.direccion == protocolo::Direccion::Subida;
+                if nuestra {
+                    if let Some(rutas) = self.borrados_locales_pendientes.first().cloned() {
+                        self.borrados_locales_pendientes.remove(0);
+                        estado.borrar_local.insert(fila.id, rutas);
+                    }
+                }
+            }
+            for fila in &lista {
+                if fila.estado == protocolo::EstadoTransferencia::Hecha {
+                    if let Some(rutas) = estado.borrar_local.remove(&fila.id) {
+                        a_borrar.push((fila.id, rutas));
+                    }
+                }
+            }
+            estado.cola = lista;
+            estado.muestrear(ahora);
+            if !estado.cola.is_empty() && self.seleccion_cola >= estado.cola.len() {
+                self.seleccion_cola = estado.cola.len() - 1;
+            }
+            // El panel de destino cambia cuando una transferencia nuestra
+            // termina: se refresca para que las marcas digan la verdad.
+            let terminadas_nuestras: Vec<u32> = estado
+                .cola
+                .iter()
+                .filter(|fila| {
+                    fila.estado.terminada()
+                        && cliente_id == Some(fila.solicitante)
+                        && fila.terminada_en.is_some()
+                })
+                .map(|fila| fila.id)
+                .collect();
+            let refrescar = terminadas_nuestras
+                .iter()
+                .any(|id| !self.transferencias_refrescadas.contains(id));
+            for id in terminadas_nuestras {
+                self.transferencias_refrescadas.insert(id);
+            }
+            if refrescar {
+                self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+            }
+        }
+        for (id, rutas) in a_borrar {
+            for ruta in rutas {
+                let camino = std::path::Path::new(&ruta);
+                let es_dir = camino.is_dir();
+                if let Err(error) = crate::archivos::local::borrar(camino, es_dir) {
+                    self.mensaje(format!("no se pudo borrar el origen: {error}"), true);
+                }
+            }
+            self.mensaje(
+                format!("transferencia {id} terminada y origen borrado"),
+                false,
+            );
+            self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+        }
+    }
+
+    /// Una operación remota terminó bien: se refresca el panel afectado.
+    fn hecho_de_archivos(&mut self, peticion_id: u64) {
+        let Some(estado) = &mut self.archivos else {
+            return;
+        };
+        let Some(peticion) = estado.resolver_peticion(peticion_id) else {
+            return;
+        };
+        match peticion {
+            crate::archivos::Peticion::ListarRemoto(_) => {
+                let ruta = estado.remoto.ruta.clone();
+                self.pedir_listado_remoto(ruta, crate::archivos::panel::MotivoListado::Operacion);
+            }
+            _ => {
+                self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
+            }
+        }
+    }
+
+    /// Un error del servidor que puede venir de la vista Archivos.
+    fn error_de_archivos(&mut self, mensaje: String, peticion_id: Option<u64>) {
+        let Some(estado) = &mut self.archivos else {
+            self.mensaje(mensaje, true);
+            return;
+        };
+        let Some(peticion_id) = peticion_id else {
+            // Sin petición: o es la apertura del canal, o es cosa de sesiones.
+            let abriendo = estado
+                .peticiones
+                .values()
+                .any(|peticion| matches!(peticion, crate::archivos::Peticion::AbrirSftp));
+            if abriendo {
+                estado.peticiones.retain(|_, peticion| {
+                    !matches!(peticion, crate::archivos::Peticion::AbrirSftp)
+                });
+                estado.solo_local = true;
+                estado.motivo_solo_local = Some(mensaje.clone());
+            }
+            self.mensaje(mensaje, true);
+            return;
+        };
+        let Some(peticion) = estado.resolver_peticion(peticion_id) else {
+            // Respuesta de algo que ya no esperábamos: se descarta.
+            return;
+        };
+        match peticion {
+            // La ruta remota guardada ya no existe: se cae al directorio de
+            // inicio con un aviso, como pide el informe.
+            crate::archivos::Peticion::ListarRemoto(
+                crate::archivos::panel::MotivoListado::Inicial,
+            ) => {
+                let inicio = estado.dir_inicio.clone();
+                if !inicio.is_empty() && inicio != estado.remoto.ruta {
+                    estado.remoto.cambiar_ruta(inicio.clone());
+                    self.mensaje(format!("{mensaje}; se abre {inicio}"), true);
+                    self.pedir_listado_remoto(
+                        inicio,
+                        crate::archivos::panel::MotivoListado::Inicial,
+                    );
+                    return;
+                }
+                estado.remoto.error = Some(mensaje.clone());
+                self.mensaje(mensaje, true);
+            }
+            crate::archivos::Peticion::VerRemoto(_) => {
+                estado.viendo = None;
+                self.mensaje(mensaje, true);
+            }
+            _ => {
+                self.mensaje(mensaje, true);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -9,9 +9,11 @@
 
 pub mod local;
 pub mod marcas;
+pub mod panel;
 pub mod sensibles;
 
 pub use marcas::{Entrada, Marca, TipoEntrada};
+pub use panel::{EstadoArchivos, Lado, Panel, Peticion};
 
 /// Fecha relativa de una entrada del panel: `hoy`, `ayer`, `12 sep` o `2025`.
 /// Los mtime desconocidos (cero o fuera de rango) se pintan con `—`.

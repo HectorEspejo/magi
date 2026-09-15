@@ -49,6 +49,30 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
 fn atajos(app: &App) -> Line<'static> {
     let tema = &app.tema;
     let pares: Vec<(&str, &str)> = match app.vista {
+        Vista::Archivos => vec![
+            ("⇥", "panel"),
+            ("↵", "abrir"),
+            ("c", "copiar"),
+            ("m", "mover"),
+            ("x", "borrar"),
+            ("r", "renombrar"),
+            ("d", "dir"),
+            (".", "ocultos"),
+            ("/", "filtrar"),
+            ("g", "ruta"),
+            ("h", "host"),
+            ("t", "cola"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
+        Vista::Transferencias => vec![
+            (super::tecla(tema, "↓↑", "j/k"), "mover"),
+            ("x", "cancelar"),
+            ("C", "limpiar"),
+            ("↵", "detalle"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
         Vista::Registro => vec![
             (super::tecla(tema, "↓↑", "j/k"), "mover"),
             ("↵", "detalle"),

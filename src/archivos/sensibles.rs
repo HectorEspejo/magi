@@ -14,6 +14,7 @@ pub const AVISO_POR_DEFECTO: [&str; 4] = [".env*", "*.pem", "*.key", "id_*"];
 pub const MAXIMO_EN_EL_AVISO: usize = 5;
 
 /// Ficheros que coinciden con los patrones de aviso, con su tamaño.
+#[derive(Debug, Clone)]
 pub struct Sensibles {
     conjunto: GlobSet,
     patrones: Vec<String>,

@@ -17,3 +17,4 @@ pub mod sshconfig;
 pub mod teclas;
 pub mod tema;
 pub mod ui;
+pub mod visor;

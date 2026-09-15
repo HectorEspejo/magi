@@ -128,6 +128,44 @@ fn comando_terminal_por_defecto() -> &'static str {
     }
 }
 
+/// Sección `[archivos]` de `config.toml` (vista Archivos, F4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionArchivos {
+    /// Globs que disparan el aviso antes de subir; vacío desactiva el aviso
+    /// (la barra lo indica al abrir Archivos).
+    pub avisar: Vec<String>,
+    /// Mostrar los ficheros que empiezan por punto al abrir un panel.
+    pub mostrar_ocultos: bool,
+    /// Visor de ficheros; vacío usa `$PAGER` y, si no hay, `less`.
+    pub pager: String,
+}
+
+impl Default for SeccionArchivos {
+    fn default() -> Self {
+        Self {
+            avisar: crate::archivos::sensibles::AVISO_POR_DEFECTO
+                .iter()
+                .map(|patron| patron.to_string())
+                .collect(),
+            mostrar_ocultos: false,
+            pager: String::new(),
+        }
+    }
+}
+
+/// Visor de ficheros de la vista Archivos: `[archivos] pager`, luego `$PAGER`
+/// y, si no hay ninguno, `less`.
+pub fn pager_por_defecto(seccion: &SeccionArchivos) -> String {
+    if !seccion.pager.trim().is_empty() {
+        return seccion.pager.trim().to_string();
+    }
+    match std::env::var("PAGER") {
+        Ok(valor) if !valor.trim().is_empty() => valor.trim().to_string(),
+        _ => "less".to_string(),
+    }
+}
+
 /// Sección `[servidor]` de `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -162,6 +200,8 @@ pub struct Config {
     pub terminal: SeccionTerminal,
     /// Servidor de sesiones: `[servidor] gracia_apagado_seg`.
     pub servidor: SeccionServidor,
+    /// Vista Archivos: `[archivos] avisar`, `mostrar_ocultos`, `pager`.
+    pub archivos: SeccionArchivos,
 }
 
 impl Default for Config {
@@ -174,6 +214,7 @@ impl Default for Config {
             flota: SeccionFlota::default(),
             terminal: SeccionTerminal::default(),
             servidor: SeccionServidor::default(),
+            archivos: SeccionArchivos::default(),
         }
     }
 }

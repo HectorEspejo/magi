@@ -110,6 +110,21 @@ impl Entrada {
     }
 }
 
+/// Entrada sintética `..` para subir al padre. La añade el listado, de modo
+/// que la selección, el filtro y las marcas la tratan como una fila más.
+pub fn entrada_padre() -> Entrada {
+    Entrada {
+        nombre: "..".to_string(),
+        tipo: TipoEntrada::Directorio,
+        tamano: 0,
+        mtime: 0,
+        permisos: None,
+        propietario: None,
+        enlace: None,
+        marca: Marca::Ninguna,
+    }
+}
+
 /// Directorios primero y, dentro de cada grupo, por nombre sin distinguir
 /// mayúsculas (con el nombre exacto como desempate, para que el orden sea
 /// estable).
