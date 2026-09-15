@@ -45,6 +45,14 @@ impl Pool {
         Some(entrada.handle.clone())
     }
 
+    /// Devuelve la conexión viva del host sin tocar su contador de canales.
+    /// Solo para quien acaba de contar un canal con `reutilizar`.
+    pub fn handle_de(&self, host_id: i64) -> Option<Arc<Handle<Cliente>>> {
+        self.entradas
+            .get(&host_id)
+            .map(|entrada| entrada.handle.clone())
+    }
+
     /// Guarda un transporte recién abierto como conexión del pool, con el
     /// canal que acaba de abrirse contado.
     pub fn guardar(&mut self, host_id: i64, transporte: Transporte) {

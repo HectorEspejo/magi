@@ -38,11 +38,19 @@ pub enum ComandoSesion {
     Cerrar,
 }
 
-/// Una decisión pendiente de un diálogo cuyo destinatario es el solicitante.
-pub enum Pendiente {
+/// Un diálogo de conexión esperando la respuesta de un cliente.
+pub enum DialogoPendiente {
     Huella(oneshot::Sender<bool>),
     Frase(oneshot::Sender<Option<Zeroizing<String>>>),
     Contrasena(oneshot::Sender<Option<(Zeroizing<String>, bool)>>),
+}
+
+/// Una decisión pendiente: el diálogo y el cliente que puede responderla. El
+/// solicitante se guarda aquí y no se busca en la sesión porque una apertura
+/// de canal SFTP (Fase 4) también dialoga y no tiene sesión propia.
+pub struct Pendiente {
+    pub solicitante: u32,
+    pub dialogo: DialogoPendiente,
 }
 
 /// Respuesta de un diálogo que llega por el protocolo desde un cliente.
@@ -347,9 +355,11 @@ fn emitir_estado(tx: &mpsc::UnboundedSender<EventoConexion>, estado: EstadoSesio
 
 /// Traduce los eventos de la tarea de conexión a mensajes del protocolo:
 /// diálogos solo al solicitante (con respuesta diferida), estados al resto.
-async fn puente_eventos(
+/// La usan igual las sesiones y las aperturas de canal SFTP, que no tienen
+/// sesión propia: `peticion_id` es el id de la solicitud de conexión.
+pub async fn puente_eventos(
     estado: Arc<tokio::sync::Mutex<EstadoServidor>>,
-    sesion_id: u32,
+    peticion_id: u32,
     solicitante: u32,
     mut rx: mpsc::UnboundedReceiver<EventoConexion>,
 ) {
@@ -359,7 +369,7 @@ async fn puente_eventos(
                 let motivo = motivo_de_estado(fino).to_string();
                 {
                     let mut estado_bloqueado = estado.lock().await;
-                    if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
+                    if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&peticion_id) {
                         sesion.motivo = Some(motivo.clone());
                     }
                 }
@@ -374,11 +384,11 @@ async fn puente_eventos(
             } => {
                 decidir(
                     &estado,
-                    sesion_id,
+                    peticion_id,
                     solicitante,
-                    Pendiente::Huella(responder),
+                    DialogoPendiente::Huella(responder),
                     MensajeServidor::HuellaDesconocida {
-                        sesion_id,
+                        sesion_id: peticion_id,
                         host,
                         tipo_clave: tipo,
                         huella,
@@ -395,11 +405,11 @@ async fn puente_eventos(
             } => {
                 decidir(
                     &estado,
-                    sesion_id,
+                    peticion_id,
                     solicitante,
-                    Pendiente::Huella(responder),
+                    DialogoPendiente::Huella(responder),
                     MensajeServidor::HuellaCambiada {
-                        sesion_id,
+                        sesion_id: peticion_id,
                         host,
                         tipo_clave: tipo,
                         anterior,
@@ -415,11 +425,11 @@ async fn puente_eventos(
             } => {
                 decidir(
                     &estado,
-                    sesion_id,
+                    peticion_id,
                     solicitante,
-                    Pendiente::Frase(responder),
+                    DialogoPendiente::Frase(responder),
                     MensajeServidor::PideFrase {
-                        sesion_id,
+                        sesion_id: peticion_id,
                         host,
                         intento,
                     },
@@ -434,11 +444,11 @@ async fn puente_eventos(
             } => {
                 decidir(
                     &estado,
-                    sesion_id,
+                    peticion_id,
                     solicitante,
-                    Pendiente::Contrasena(responder),
+                    DialogoPendiente::Contrasena(responder),
                     MensajeServidor::PideContrasena {
-                        sesion_id,
+                        sesion_id: peticion_id,
                         host,
                         intento,
                         recordar_por_defecto,
@@ -485,16 +495,27 @@ async fn puente_eventos(
 }
 
 /// Guarda una decisión pendiente, avisa al solicitante y al resto de clientes,
-/// y programa el timeout de 5 minutos.
-async fn decidir(
+/// y programa el timeout de 5 minutos. `peticion_id` es el id de la solicitud
+/// de conexión: el de una sesión o el de una apertura de canal SFTP.
+pub async fn decidir(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
-    sesion_id: u32,
+    peticion_id: u32,
     solicitante: u32,
-    pendiente: Pendiente,
+    dialogo: DialogoPendiente,
     mensaje: MensajeServidor,
 ) {
     let mut estado_bloqueado = estado.lock().await;
-    estado_bloqueado.pendientes.insert(sesion_id, pendiente);
+    eprintln!(
+        "[TRAZA-DECIDIR] solicitante={solicitante} peticion={peticion_id} clientes={:?}",
+        estado_bloqueado.clientes.keys().collect::<Vec<_>>()
+    );
+    estado_bloqueado.pendientes.insert(
+        peticion_id,
+        Pendiente {
+            solicitante,
+            dialogo,
+        },
+    );
     let mut otros: Vec<u32> = Vec::new();
     for (id_cliente, cliente) in &estado_bloqueado.clientes {
         if *id_cliente == solicitante {
@@ -503,16 +524,20 @@ async fn decidir(
             otros.push(*id_cliente);
         }
     }
-    for id in otros {
-        if let Some(cliente) = estado_bloqueado.clientes.get(&id) {
-            difusion::enviar(
-                cliente,
-                MensajeServidor::Estado {
-                    sesion_id,
-                    estado: EstadoSesionRemota::Abriendo,
-                    motivo: Some("esperando decisión en otra ventana".to_string()),
-                },
-            );
+    // Al resto solo se le avisa cuando la solicitud es una sesión: una apertura
+    // de canal SFTP no tiene pestaña que enseñar en las demás ventanas.
+    if estado_bloqueado.sesiones.contains_key(&peticion_id) {
+        for id in otros {
+            if let Some(cliente) = estado_bloqueado.clientes.get(&id) {
+                difusion::enviar(
+                    cliente,
+                    MensajeServidor::Estado {
+                        sesion_id: peticion_id,
+                        estado: EstadoSesionRemota::Abriendo,
+                        motivo: Some("esperando decisión en otra ventana".to_string()),
+                    },
+                );
+            }
         }
     }
     // Timeout: si la decisión no llega, se descarta el canal de respuesta y
@@ -521,57 +546,61 @@ async fn decidir(
     tokio::spawn(async move {
         tokio::time::sleep(TIMEOUT_DECISION).await;
         let mut estado_bloqueado = estado_timeout.lock().await;
-        if estado_bloqueado.pendientes.remove(&sesion_id).is_some() {
-            warn!(sesion = sesion_id, "decisión sin respuesta tras 5 minutos");
+        if estado_bloqueado.pendientes.remove(&peticion_id).is_some() {
+            warn!(
+                peticion = peticion_id,
+                "decisión sin respuesta tras 5 minutos"
+            );
         }
     });
 }
 
-/// Resuelve una decisión que llega por el protocolo. Solo el solicitante de
-/// la sesión puede responder; devuelve si se aceptó la respuesta.
+/// Resuelve una decisión que llega por el protocolo. Solo el solicitante de la
+/// solicitud puede responder; devuelve si se aceptó la respuesta.
 pub async fn resolver_decision(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
-    sesion_id: u32,
+    peticion_id: u32,
     cliente_id: u32,
     decision: DecisionDialogo,
 ) -> bool {
     let mut estado_bloqueado = estado.lock().await;
-    let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
-        warn!(
-            sesion = sesion_id,
-            "decisión para una sesión que ya no existe"
-        );
+    let Some(pendiente) = estado_bloqueado.pendientes.get(&peticion_id) else {
+        warn!(peticion = peticion_id, "decisión sin diálogo pendiente");
         return false;
     };
-    if sesion.solicitante != cliente_id {
+    if pendiente.solicitante != cliente_id {
         warn!(
-            sesion = sesion_id,
+            peticion = peticion_id,
             cliente = cliente_id,
             "un cliente que no es el solicitante intentó responder a un diálogo"
         );
         return false;
     }
-    match (estado_bloqueado.pendientes.remove(&sesion_id), decision) {
-        (Some(Pendiente::Huella(responder)), DecisionDialogo::Huella(d)) => {
+    let Some(pendiente) = estado_bloqueado.pendientes.remove(&peticion_id) else {
+        return false;
+    };
+    match (pendiente.dialogo, decision) {
+        (DialogoPendiente::Huella(responder), DecisionDialogo::Huella(d)) => {
             let _ = responder.send(d);
             true
         }
-        (Some(Pendiente::Frase(responder)), DecisionDialogo::Frase(frase)) => {
+        (DialogoPendiente::Frase(responder), DecisionDialogo::Frase(frase)) => {
             let _ = responder.send(Some(frase.0));
             true
         }
         (
-            Some(Pendiente::Contrasena(responder)),
+            DialogoPendiente::Contrasena(responder),
             DecisionDialogo::Contrasena(contrasena, recordar),
         ) => {
             let _ = responder.send(Some((contrasena.0, recordar)));
             true
         }
-        (pendiente, _) => {
-            if let Some(sin_usar) = pendiente {
-                drop(sin_usar);
-            }
-            warn!(sesion = sesion_id, "decisión sin diálogo pendiente");
+        (dialogo, _) => {
+            drop(dialogo);
+            warn!(
+                peticion = peticion_id,
+                "decisión que no casa con el diálogo"
+            );
             false
         }
     }

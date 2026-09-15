@@ -813,7 +813,8 @@ pub struct App {
     /// Conexión con el servidor de sesiones.
     pub servidor: cliente::Cliente,
     /// El servidor habla otra versión de protocolo.
-    pub servidor_incompatible: bool,
+    /// Versión del servidor cuando habla otra distinta de la nuestra.
+    pub servidor_incompatible: Option<u32>,
     /// El servidor ha caído (pendiente del diálogo de relanzado).
     pub servidor_caido: bool,
     /// Sesiones que el servidor perdió al caer (para el diálogo).
@@ -903,7 +904,7 @@ impl App {
             pestanas: Vec::new(),
             pestana_activa: None,
             servidor: cliente::Cliente::sin_servidor(),
-            servidor_incompatible: false,
+            servidor_incompatible: None,
             servidor_caido: false,
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
@@ -960,8 +961,8 @@ impl App {
                 app.servidor = servidor;
                 app.servidor_desde = Some(Instant::now());
             }
-            Err(cliente::FalloConexion::VersionIncompatible) => {
-                app.servidor_incompatible = true;
+            Err(cliente::FalloConexion::VersionIncompatible { version }) => {
+                app.servidor_incompatible = Some(version);
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
                 app.mensaje(motivo, true);
@@ -1405,7 +1406,7 @@ impl App {
     /// Pide al servidor una sesión nueva al host (↵ en Hosts y Flota,
     /// paleta, `magi conectar`); siempre abre una nueva.
     fn conectar(&mut self, host_id: i64) {
-        if self.servidor_incompatible {
+        if self.servidor_incompatible.is_some() {
             self.mensaje(
                 "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
                 true,
@@ -1834,8 +1835,8 @@ impl App {
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
-                if self.servidor_incompatible {
-                    self.servidor_incompatible = false;
+                if self.servidor_incompatible.is_some() {
+                    self.servidor_incompatible = None;
                 }
                 // Al abrir una ventana nueva, las sesiones que ya custodia el
                 // servidor aparecen como pestañas; pero ninguna debe robar la
@@ -1844,10 +1845,18 @@ impl App {
                 self.reconciliar_sesiones(sesiones);
                 self.aperturas_pendientes = pendientes;
             }
-            protocolo::MensajeServidor::Error { mensaje } => {
+            protocolo::MensajeServidor::Error { mensaje, .. } => {
                 self.mensaje(mensaje, true);
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
+            protocolo::MensajeServidor::SftpAbierto { .. }
+            | protocolo::MensajeServidor::DirListado { .. }
+            | protocolo::MensajeServidor::Transferencias { .. }
+            | protocolo::MensajeServidor::Hecho { .. }
+            | protocolo::MensajeServidor::RutaTemporal { .. } => {
+                // La vista Archivos los atiende en la Fase 4; aquí no hay
+                // ninguna petición en vuelo todavía.
+            }
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
@@ -2524,6 +2533,8 @@ impl App {
             etiquetas: datos.etiquetas.clone(),
             grupo_nombre: None,
             salto_nombre: None,
+            sftp_dir_local: None,
+            sftp_dir_remoto: None,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);
@@ -3029,7 +3040,7 @@ impl App {
     /// F3: con pestaña activa va a la última usada; sin ella, a la lista de
     /// sesiones del servidor para retomar la que se quiera.
     fn ir_a_sesion(&mut self) {
-        if self.servidor_caido || self.servidor_incompatible {
+        if self.servidor_caido || self.servidor_incompatible.is_some() {
             self.vista_previa = Some(self.vista);
             self.vista = Vista::Sesiones;
             return;

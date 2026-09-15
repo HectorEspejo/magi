@@ -3,7 +3,7 @@
 ## Contexto
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con app Android prevista. Cliente: 4d3 (producto propio).
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS).
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (fijado, compatible con russh), globset, filetime.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 
 ## Documentación del proyecto
@@ -91,6 +91,21 @@ coméntalo con el desarrollador.
   escriben en ningún log; `Datos`/`PantallaCompleta` solo a clientes adjuntos.
 - Depuración del servidor: `cargo run -- --servidor` en primer plano en una
   terminal y `cargo run` en otra; log en `~/.local/state/magi/logs/servidor.log.<fecha>`.
+- En el servidor las escrituras de SQLite van por el hilo escritor (`OrdenBd`);
+  no abras conexiones de escritura desde tareas async. El servidor nunca toca
+  el llavero: `FuenteContrasena::Solicitante`.
+- El estado cliente-servidor se sincroniza solo por difusión de listas
+  completas (`Sesiones{lista}`); no añadas mensajes de sincronización finos.
+- Sanea todo tamaño de terminal que llegue de fuera (mín. 2×1) y calcula el
+  alto del PTY con `alto_pty`; `vt100` entra en pánico con un 0.
+- SFTP y transferencias (`src/servidor/sftp.rs`, `transferencias.rs`): todo lo
+  remoto en el servidor sobre el pool; la cola es FIFO con una transferencia
+  en curso por host; nunca preguntes desde el servidor: el cliente decide
+  conflictos y avisos antes de `Transferir` y tú aplicas la política. Ninguna
+  ruta pasa por un shell.
+- Tests aislados: `directories` resuelve el home por uid, así que fija
+  `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_RUNTIME_DIR`,
+  no solo `HOME`.
 
 ## Al terminar una fase (o al pausar la sesión)
 

@@ -8,7 +8,8 @@ const SELECCION: &str = "
     SELECT h.id, h.nombre, h.grupo_id, h.direccion, h.puerto, h.usuario,
            h.identidad_ref, h.salto_host_id, h.multiplexar, h.keepalive_seg,
            h.opciones_extra, h.origen, h.ultimo_estado, h.ultima_conexion_en,
-           h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios
+           h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios,
+           h.sftp_dir_local, h.sftp_dir_remoto
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -35,6 +36,8 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
         grupo_nombre: fila.get(16)?,
         salto_nombre: fila.get(17)?,
         servicios: fila.get(18)?,
+        sftp_dir_local: fila.get(19)?,
+        sftp_dir_remoto: fila.get(20)?,
     })
 }
 
@@ -259,4 +262,19 @@ pub fn contar(conexion: &Connection) -> Result<i64> {
         .query_row("SELECT COUNT(*) FROM HOSTS", [], |fila| fila.get(0))
         .context("contando hosts")?;
     Ok(total)
+}
+
+/// Guarda los últimos directorios de la vista Archivos de un host. No toca
+/// `actualizado_en`: navegar no es editar la ficha.
+pub fn fijar_dirs_sftp(
+    conexion: &Connection,
+    id: i64,
+    dir_local: Option<&str>,
+    dir_remoto: Option<&str>,
+) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET sftp_dir_local = ?1, sftp_dir_remoto = ?2 WHERE id = ?3",
+        params![dir_local, dir_remoto, id],
+    )?;
+    Ok(())
 }

@@ -2,86 +2,18 @@
 //! arranque, saludo versionado, apagado por inactividad, lock duplicado y
 //! mensajes mal formados.
 
-use std::path::Path;
+mod comun;
+
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
-use tokio_stream::StreamExt as _;
 
-use magi::config::{Config, Rutas};
-use magi::protocolo::{decodificar, MensajeCliente, MensajeServidor, VERSION_PROTOCOLO};
+use magi::config::Config;
+use magi::protocolo::{MensajeCliente, MensajeServidor, VERSION_PROTOCOLO};
 use magi::servidor;
 
-struct Entorno {
-    _temporal: tempfile::TempDir,
-    rutas: Rutas,
-    config: Config,
-}
-
-fn entorno() -> Entorno {
-    let temporal = tempfile::tempdir().expect("directorio temporal");
-    let raiz = temporal.path().to_path_buf();
-    let rutas = Rutas {
-        datos: raiz.join("datos"),
-        config: raiz.join("config"),
-        estado: raiz.join("estado"),
-        hogar: raiz.join("hogar"),
-        runtime: raiz.join("runtime"),
-    };
-    // Gracia corta para que las pruebas de apagado no tarden 10 s.
-    let mut config = Config::default();
-    config.servidor.gracia_apagado_seg = 1;
-    Entorno {
-        _temporal: temporal,
-        rutas,
-        config,
-    }
-}
-
-async fn esperar_socket(ruta: &Path) {
-    for _ in 0..100 {
-        if UnixStream::connect(ruta).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("el socket del servidor no ha aparecido en 2 s");
-}
-
-/// Envía una línea de mensaje al socket.
-async fn enviar(stream: &mut UnixStream, mensaje: &MensajeCliente) {
-    let linea = magi::protocolo::codificar(mensaje).unwrap();
-    stream
-        .write_all(linea.as_bytes())
-        .await
-        .expect("escribiendo");
-    stream.write_all(b"\n").await.expect("escribiendo el salto");
-    stream.flush().await.expect("vaciando");
-}
-
-/// Conecta, saluda y devuelve el lector del socket.
-async fn cliente(ruta: &Path, version: u32) -> BufReader<UnixStream> {
-    let mut stream = UnixStream::connect(ruta)
-        .await
-        .expect("conectando al socket");
-    let saludo = MensajeCliente::Hola {
-        version,
-        pid: std::process::id(),
-    };
-    enviar(&mut stream, &saludo).await;
-    BufReader::new(stream)
-}
-
-/// Lee la siguiente línea del socket y la decodifica.
-async fn siguiente<M: serde::de::DeserializeOwned>(lector: &mut BufReader<UnixStream>) -> M {
-    let mut linea = String::new();
-    lector
-        .read_line(&mut linea)
-        .await
-        .expect("leyendo la respuesta");
-    decodificar::<M>(linea.trim_end()).expect("mensaje decodificable")
-}
+use comun::*;
 
 #[tokio::test]
 async fn el_saludo_versionado_da_la_bienvenida() {
@@ -124,8 +56,12 @@ async fn una_version_distinta_no_coopera() {
 
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 99).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
+    // La versión que viaja es la **del servidor**, que es lo que permite al
+    // cliente decir si el viejo es él o el servidor.
     match respuesta {
-        MensajeServidor::VersionIncompatible { version } => assert_eq!(version, 99),
+        MensajeServidor::VersionIncompatible { version } => {
+            assert_eq!(version, VERSION_PROTOCOLO);
+        }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
     }
     // El servidor cierra la conexión al cliente incompatible.
@@ -135,6 +71,26 @@ async fn una_version_distinta_no_coopera() {
         lector.get_mut().read_to_end(&mut resto),
     )
     .await;
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
+}
+
+/// Un servidor v2 no coopera con un cliente v1: el protocolo cambió y el
+/// cliente antiguo no lo entendería.
+#[tokio::test]
+async fn un_cliente_de_la_version_anterior_tampoco_coopera() {
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    let tarea = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    let mut lector = cliente(&servidor::ruta_socket(&rutas), 1).await;
+    let respuesta: MensajeServidor = siguiente(&mut lector).await;
+    match respuesta {
+        MensajeServidor::VersionIncompatible { version } => {
+            assert_eq!(version, VERSION_PROTOCOLO);
+        }
+        otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
+    }
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
 }
 
@@ -216,103 +172,6 @@ async fn la_gracia_de_apagado_es_de_diez_segundos_por_defecto() {
 
 // -------------------------------------------------------------- flujo completo
 
-/// Envía un mensaje por la mitad de escritura del socket.
-async fn enviar_a(escritura: &mut tokio::net::unix::OwnedWriteHalf, mensaje: &MensajeCliente) {
-    let linea = magi::protocolo::codificar(mensaje).unwrap();
-    escritura
-        .write_all(linea.as_bytes())
-        .await
-        .expect("escribiendo");
-    escritura
-        .write_all(b"\n")
-        .await
-        .expect("escribiendo el salto");
-    escritura.flush().await.expect("vaciando");
-}
-
-/// Lee el siguiente mensaje del servidor con el codec del protocolo.
-async fn siguiente_framed<M: serde::de::DeserializeOwned, R: tokio::io::AsyncRead + Unpin>(
-    lector: &mut tokio_util::codec::FramedRead<R, magi::protocolo::LinesCodec>,
-) -> M {
-    match lector.next().await {
-        Some(Ok(linea)) => decodificar::<M>(linea.trim_end()).expect("mensaje decodificable"),
-        otro => panic!("el servidor cerró la conexión: {otro:?}"),
-    }
-}
-
-/// Servidor russh de pruebas que autentica por contraseña y acepta pty+shell.
-struct ServidorSesion;
-
-impl russh::server::Server for ServidorSesion {
-    type Handler = HandlerSesion;
-    fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> HandlerSesion {
-        HandlerSesion
-    }
-}
-
-struct HandlerSesion;
-
-impl russh::server::Handler for HandlerSesion {
-    type Error = russh::Error;
-
-    async fn auth_password(
-        &mut self,
-        _usuario: &str,
-        contrasena: &str,
-    ) -> Result<russh::server::Auth, Self::Error> {
-        if contrasena == "secreta" {
-            Ok(russh::server::Auth::Accept)
-        } else {
-            Ok(russh::server::Auth::reject())
-        }
-    }
-
-    async fn auth_publickey(
-        &mut self,
-        _usuario: &str,
-        _clave: &ssh_key::PublicKey,
-    ) -> Result<russh::server::Auth, Self::Error> {
-        // Pruebas: cualquier clave vale.
-        Ok(russh::server::Auth::Accept)
-    }
-
-    async fn channel_open_session(
-        &mut self,
-        _canal: russh::Channel<russh::server::Msg>,
-        respuesta: russh::server::ChannelOpenHandle,
-        _sesion: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
-        respuesta.accept().await;
-        Ok(())
-    }
-
-    async fn pty_request(
-        &mut self,
-        canal: russh::ChannelId,
-        _: &str,
-        _: u32,
-        _: u32,
-        _: u32,
-        _: u32,
-        _: &[(russh::Pty, u32)],
-        sesion: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
-        let _ = sesion.channel_success(canal);
-        Ok(())
-    }
-
-    async fn shell_request(
-        &mut self,
-        canal: russh::ChannelId,
-        sesion: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
-        let _ = sesion.channel_success(canal);
-        // Contenido inicial para que el volcado al adjuntar no esté vacío.
-        let _ = sesion.data(canal, &b"MARCA_CLIENTE\r\n"[..]);
-        Ok(())
-    }
-}
-
 /// El solicitante recibe el diálogo de contraseña por el protocolo y su
 /// respuesta abre la sesión (la pieza que fallaba con el llavero).
 #[tokio::test]
@@ -340,7 +199,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
         .unwrap();
     let puerto_ssh = escucha.local_addr().unwrap().port();
     let tarea_ssh = tokio::spawn(async move {
-        let mut servidor = ServidorSesion;
+        let mut servidor = ServidorSesion::default();
         let _ = servidor.run_on_socket(config, &escucha).await;
     });
 
@@ -506,7 +365,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
         .unwrap();
     let puerto_ssh = escucha.local_addr().unwrap().port();
     let tarea_ssh = tokio::spawn(async move {
-        let mut servidor = ServidorSesion;
+        let mut servidor = ServidorSesion::default();
         let _ = servidor.run_on_socket(config, &escucha).await;
     });
 

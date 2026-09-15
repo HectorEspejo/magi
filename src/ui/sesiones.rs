@@ -30,7 +30,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
         trozos[0],
     );
     if app.pestanas.is_empty() {
-        let aviso = if app.servidor_incompatible || app.servidor_caido {
+        let aviso = if app.servidor_incompatible.is_some() || app.servidor_caido {
             "El servidor de sesiones no está disponible.\nRelánzalo desde el diálogo o ejecuta «magi servidor parar» y vuelve a abrir."
         } else {
             "Sin sesiones abiertas. ↵ en un host, prefijo c o «n» abre una nueva."
