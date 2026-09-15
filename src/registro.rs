@@ -19,8 +19,14 @@ pub const CLAVE_GENERADA: &str = "clave_generada";
 pub const CLAVE_IMPORTADA: &str = "clave_importada";
 pub const REFERENCIA_REVOCADA: &str = "referencia_revocada";
 pub const SONDEO_FALLIDO: &str = "sondeo_fallido";
+pub const SONDEO_RECUPERADO: &str = "sondeo_recuperado";
+pub const SESION_CERRADA: &str = "sesion_cerrada";
+pub const SESION_RECONECTADA: &str = "sesion_reconectada";
+pub const SERVIDOR_ARRANCADO: &str = "servidor_arrancado";
+pub const SERVIDOR_DETENIDO: &str = "servidor_detenido";
+pub const SERVIDOR_CAIDO: &str = "servidor_caido";
 
-pub const TIPOS: [&str; 10] = [
+pub const TIPOS: [&str; 16] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -31,19 +37,36 @@ pub const TIPOS: [&str; 10] = [
     CLAVE_IMPORTADA,
     REFERENCIA_REVOCADA,
     SONDEO_FALLIDO,
+    SONDEO_RECUPERADO,
+    SESION_CERRADA,
+    SESION_RECONECTADA,
+    SERVIDOR_ARRANCADO,
+    SERVIDOR_DETENIDO,
+    SERVIDOR_CAIDO,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
 pub const FILTROS: [(&str, &[&str]); 6] = [
     ("todos", &[]),
-    ("conexiones", &[CONEXION_ABIERTA, CONEXION_FALLIDA]),
+    (
+        "conexiones",
+        &[
+            CONEXION_ABIERTA,
+            CONEXION_FALLIDA,
+            SESION_CERRADA,
+            SESION_RECONECTADA,
+            SERVIDOR_ARRANCADO,
+            SERVIDOR_DETENIDO,
+            SERVIDOR_CAIDO,
+        ],
+    ),
     ("huellas", &[HUELLA_ACEPTADA, HUELLA_SUSTITUIDA]),
     (
         "claves",
         &[CLAVE_GENERADA, CLAVE_IMPORTADA, REFERENCIA_REVOCADA],
     ),
     ("importación", &[IMPORTACION, EXPORTACION]),
-    ("sondeos", &[SONDEO_FALLIDO]),
+    ("sondeos", &[SONDEO_FALLIDO, SONDEO_RECUPERADO]),
 ];
 
 #[derive(Debug, Clone, Default)]

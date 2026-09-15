@@ -713,6 +713,8 @@ pub struct App {
     pub salir: bool,
     salir_pendiente: bool,
     abrir_al_cerrar: Option<i64>,
+    /// Host cuyo `AbrirSesion` se envía nada más conectar con el servidor.
+    pub abrir_al_arrancar: Option<i64>,
     pub vista: Vista,
     pub filtro: String,
     pub filtro_activo: bool,
@@ -782,6 +784,7 @@ impl App {
             salir: false,
             salir_pendiente: false,
             abrir_al_cerrar: None,
+            abrir_al_arrancar: None,
             vista: Vista::Hosts,
             filtro: String::new(),
             filtro_activo: false,
@@ -3848,17 +3851,20 @@ pub fn instalar_hook_panico() {
 }
 
 /// Arranca el runtime de tokio, construye la app y ejecuta el bucle de la UI.
+/// Con `abrir_al_arrancar`, se abre una sesión nueva a ese host al empezar.
 pub fn ejecutar(
     rutas: Rutas,
     config: Config,
     tema: Tema,
     almacen: Almacen,
     aviso: Option<String>,
+    abrir_al_arrancar: Option<i64>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("creando el runtime de tokio")?;
-    let app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
+    let mut app = App::nuevo(rutas, config, tema, almacen, runtime, aviso)?;
+    app.abrir_al_arrancar = abrir_al_arrancar;
     app.ejecutar()
 }

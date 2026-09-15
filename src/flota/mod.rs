@@ -105,6 +105,7 @@ async fn intento(
         usuario_local: peticion.usuario_local.clone(),
         tx: canal_testigo(),
         interactivo: false,
+        fuente_contrasena: crate::conexion::FuenteContrasena::Llavero,
     };
     let transporte = conectar_cadena(&cadena, &contexto).await.map_err(|error| {
         let motivo = error.to_string();
@@ -123,7 +124,7 @@ async fn intento(
 
 /// El sondeo nunca dialoga, pero `Contexto` exige un canal de eventos por
 /// compatibilidad: se descarta nada más crear el contexto.
-fn canal_testigo() -> mpsc::UnboundedSender<crate::app::Evento> {
+fn canal_testigo() -> mpsc::UnboundedSender<crate::conexion::EventoConexion> {
     let (tx, rx) = mpsc::unbounded_channel();
     drop(rx);
     tx

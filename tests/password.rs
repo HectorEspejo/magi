@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use magi::app::Evento;
 use magi::conexion::cliente::{autenticar, Cliente, Contexto};
-use magi::conexion::EventoConexion;
+use magi::conexion::{EventoConexion, FuenteContrasena};
 use magi::modelo::{Host, IdentidadRef, Origen};
 use russh::server::Server as _;
 use ssh_key::rand_core::UnwrapErr;
@@ -106,7 +105,7 @@ fn host_de_prueba(puerto: u16) -> Host {
 fn contexto_de(
     entorno: &Entorno,
     interactivo: bool,
-) -> (Contexto, mpsc::UnboundedReceiver<Evento>) {
+) -> (Contexto, mpsc::UnboundedReceiver<EventoConexion>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (
         Contexto {
@@ -116,6 +115,7 @@ fn contexto_de(
             usuario_local: "hector".to_string(),
             tx,
             interactivo,
+            fuente_contrasena: FuenteContrasena::Llavero,
         },
         rx,
     )
@@ -152,16 +152,16 @@ async fn la_contrasena_correcta_autentica_sin_guardarla() {
 
     loop {
         match eventos.recv().await.expect("petición de contraseña") {
-            Evento::Conexion(EventoConexion::PideContrasena {
+            EventoConexion::PideContrasena {
                 intento, responder, ..
-            }) => {
+            } => {
                 assert_eq!(intento, 1);
                 responder
                     .send(Some((Zeroizing::new(CONTRASENA_VALIDA.to_string()), false)))
                     .unwrap();
                 break;
             }
-            Evento::Conexion(EventoConexion::Estado { .. }) => continue,
+            EventoConexion::Estado { .. } => continue,
             _ => panic!("se esperaba PideContrasena"),
         }
     }
@@ -180,9 +180,9 @@ async fn la_contrasena_incorrecta_reintenta_tres_veces() {
 
     let mut intentos = 0;
     while let Some(evento) = eventos.recv().await {
-        if let Evento::Conexion(EventoConexion::PideContrasena {
+        if let EventoConexion::PideContrasena {
             intento, responder, ..
-        }) = evento
+        } = evento
         {
             intentos += 1;
             assert_eq!(intento, intentos);
@@ -211,10 +211,7 @@ async fn el_sondeo_con_llavero_no_dialoga_y_da_instruccion() {
     assert!(error.contains("conéctate una vez con ↵"), "{error}");
     while let Ok(evento) = eventos.try_recv() {
         assert!(
-            !matches!(
-                evento,
-                Evento::Conexion(EventoConexion::PideContrasena { .. })
-            ),
+            !matches!(evento, EventoConexion::PideContrasena { .. }),
             "el sondeo no debe pedir contraseña"
         );
     }
@@ -233,10 +230,7 @@ async fn el_sondeo_no_dialoga_con_contrasena() {
     assert!(error.contains("no dialoga"), "{error}");
     while let Ok(evento) = eventos.try_recv() {
         assert!(
-            !matches!(
-                evento,
-                Evento::Conexion(EventoConexion::PideContrasena { .. })
-            ),
+            !matches!(evento, EventoConexion::PideContrasena { .. }),
             "el sondeo no debe pedir contraseña"
         );
     }

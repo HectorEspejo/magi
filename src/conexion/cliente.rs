@@ -16,7 +16,6 @@ use super::huellas::{self, EstadoHuella};
 use super::salto::{conectar_cadena, construir_cadena, Transporte};
 use super::terminal::{self, Pantalla};
 use super::{ComandoConexion, EventoConexion, PlanConexion};
-use crate::app::Evento;
 use crate::modelo::{EstadoSesion, Host, IdentidadRef};
 
 #[derive(Debug, thiserror::Error)]
@@ -43,14 +42,15 @@ pub struct Contexto {
     pub dir_ssh: PathBuf,
     pub hogar: PathBuf,
     pub usuario_local: String,
-    pub tx: mpsc::UnboundedSender<Evento>,
+    pub tx: mpsc::UnboundedSender<EventoConexion>,
     pub interactivo: bool,
+    pub fuente_contrasena: super::FuenteContrasena,
 }
 
 /// Implementación del `Handler` de russh: verifica la huella del servidor y,
 /// cuando hace falta, pregunta a la UI (solo en modo interactivo).
 pub struct Cliente {
-    tx: mpsc::UnboundedSender<Evento>,
+    tx: mpsc::UnboundedSender<EventoConexion>,
     host_id: i64,
     host: String,
     puerto: u16,
@@ -60,7 +60,7 @@ pub struct Cliente {
 
 impl Cliente {
     pub fn nuevo(
-        tx: mpsc::UnboundedSender<Evento>,
+        tx: mpsc::UnboundedSender<EventoConexion>,
         host_id: i64,
         host: &str,
         puerto: u16,
@@ -108,23 +108,19 @@ impl russh::client::Handler for Cliente {
                     )));
                 }
                 let (responder, decision) = oneshot::channel();
-                let _ = self
-                    .tx
-                    .send(Evento::Conexion(EventoConexion::HuellaDesconocida {
-                        host: self.host.clone(),
-                        tipo: huellas::tipo_clave(&clave),
-                        huella: huellas::huella(&clave),
-                        responder,
-                    }));
+                let _ = self.tx.send(EventoConexion::HuellaDesconocida {
+                    host: self.host.clone(),
+                    tipo: huellas::tipo_clave(&clave),
+                    huella: huellas::huella(&clave),
+                    responder,
+                });
                 if matches!(decision.await, Ok(true)) {
                     huellas::aprender(&self.known_hosts, &self.host, self.puerto, &clave)?;
-                    let _ = self
-                        .tx
-                        .send(Evento::Conexion(EventoConexion::HuellaRegistrada {
-                            host_id: self.host_id,
-                            anterior: None,
-                            nueva: huellas::huella(&clave),
-                        }));
+                    let _ = self.tx.send(EventoConexion::HuellaRegistrada {
+                        host_id: self.host_id,
+                        anterior: None,
+                        nueva: huellas::huella(&clave),
+                    });
                     info!(
                         host = %self.host,
                         huella = %huellas::huella(&clave),
@@ -144,32 +140,28 @@ impl russh::client::Handler for Cliente {
                     )));
                 }
                 let (responder, decision) = oneshot::channel();
-                let _ = self
-                    .tx
-                    .send(Evento::Conexion(EventoConexion::HuellaCambiada {
-                        host: self.host.clone(),
-                        tipo: huellas::tipo_clave(&anterior),
-                        anterior: format!(
-                            "{} {}",
-                            huellas::tipo_clave(&anterior),
-                            huellas::huella(&anterior)
-                        ),
-                        nueva: format!(
-                            "{} {}",
-                            huellas::tipo_clave(&clave),
-                            huellas::huella(&clave)
-                        ),
-                        responder,
-                    }));
+                let _ = self.tx.send(EventoConexion::HuellaCambiada {
+                    host: self.host.clone(),
+                    tipo: huellas::tipo_clave(&anterior),
+                    anterior: format!(
+                        "{} {}",
+                        huellas::tipo_clave(&anterior),
+                        huellas::huella(&anterior)
+                    ),
+                    nueva: format!(
+                        "{} {}",
+                        huellas::tipo_clave(&clave),
+                        huellas::huella(&clave)
+                    ),
+                    responder,
+                });
                 if matches!(decision.await, Ok(true)) {
                     huellas::sustituir(&self.known_hosts, &self.host, self.puerto, &clave)?;
-                    let _ = self
-                        .tx
-                        .send(Evento::Conexion(EventoConexion::HuellaRegistrada {
-                            host_id: self.host_id,
-                            anterior: Some(huellas::huella(&anterior)),
-                            nueva: huellas::huella(&clave),
-                        }));
+                    let _ = self.tx.send(EventoConexion::HuellaRegistrada {
+                        host_id: self.host_id,
+                        anterior: Some(huellas::huella(&anterior)),
+                        nueva: huellas::huella(&clave),
+                    });
                     info!(
                         host = %self.host,
                         anterior = %huellas::huella(&anterior),
@@ -197,23 +189,13 @@ impl russh::client::Handler for Cliente {
     }
 }
 
-/// Lanza la tarea tokio de la sesión y devuelve el canal de comandos.
-pub fn lanzar(
-    runtime: &tokio::runtime::Runtime,
-    plan: PlanConexion,
-    tx: mpsc::UnboundedSender<Evento>,
-) -> mpsc::UnboundedSender<ComandoConexion> {
-    let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
-    runtime.spawn(async move {
-        sesion_completa(plan, rx_comandos, tx).await;
-    });
-    tx_comandos
-}
-
-async fn sesion_completa(
+/// Flujo completo de una sesión: conectar, autenticar, abrir pty y shell y
+/// servir el bucle de teclas y pantalla hasta el cierre. La lanza el cliente
+/// TUI (con puente hacia la UI) y el servidor de sesiones.
+pub async fn sesion_completa(
     plan: PlanConexion,
     mut comandos: mpsc::UnboundedReceiver<ComandoConexion>,
-    tx: mpsc::UnboundedSender<Evento>,
+    tx: mpsc::UnboundedSender<EventoConexion>,
 ) {
     let host_id = plan.host.id;
     let nombre = plan.host.nombre.clone();
@@ -224,6 +206,7 @@ async fn sesion_completa(
         usuario_local: plan.usuario_local.clone(),
         tx: tx.clone(),
         interactivo: true,
+        fuente_contrasena: super::FuenteContrasena::Llavero,
     };
     emitir_estado(&tx, host_id, EstadoSesion::Resolviendo);
     let cadena = match construir_cadena(&plan.host, &plan.todos_los_hosts) {
@@ -234,7 +217,7 @@ async fn sesion_completa(
     let transporte = match conectar_cadena(&cadena, &contexto).await {
         Ok(transporte) => transporte,
         Err(ErrorCliente::Cancelado) => {
-            let _ = tx.send(Evento::Conexion(EventoConexion::Cancelada { host_id }));
+            let _ = tx.send(EventoConexion::Cancelada { host_id });
             return;
         }
         Err(error) => return emitir_error(&tx, host_id, &error.to_string()),
@@ -245,11 +228,11 @@ async fn sesion_completa(
             .handle
             .disconnect(Disconnect::ByApplication, "", "")
             .await;
-        let _ = tx.send(Evento::Conexion(EventoConexion::PruebaOk {
+        let _ = tx.send(EventoConexion::PruebaOk {
             host_id,
             identidad: transporte.identidad.descripcion,
             huella: transporte.identidad.huella,
-        }));
+        });
         return;
     }
 
@@ -262,20 +245,20 @@ async fn sesion_completa(
         .lock()
         .await
         .insert(host_id, transporte.handle.clone());
-    let _ = tx.send(Evento::Conexion(EventoConexion::Abierta {
+    let _ = tx.send(EventoConexion::Abierta {
         host_id,
         pantalla: pantalla.clone(),
         identidad: transporte.identidad.descripcion.clone(),
         huella: transporte.identidad.huella.clone(),
         cols: plan.cols,
         filas: plan.filas,
-    }));
+    });
     info!(host = %nombre, "sesión abierta");
     bucle_sesion(&mut canal, &pantalla, &mut comandos, &tx, host_id).await;
     plan.registro.lock().await.remove(&host_id);
 }
 
-async fn abrir_canal(
+pub async fn abrir_canal(
     transporte: &Transporte,
     cols: u16,
     filas: u16,
@@ -304,7 +287,7 @@ async fn bucle_sesion(
     canal: &mut Channel<russh::client::Msg>,
     pantalla: &Pantalla,
     comandos: &mut mpsc::UnboundedReceiver<ComandoConexion>,
-    tx: &mpsc::UnboundedSender<Evento>,
+    tx: &mpsc::UnboundedSender<EventoConexion>,
     host_id: i64,
 ) {
     let mut intervalo = tokio::time::interval(Duration::from_millis(33));
@@ -327,10 +310,10 @@ async fn bucle_sesion(
                 Some(ComandoConexion::Cerrar) | None => {
                     let _ = canal.eof().await;
                     let _ = canal.close().await;
-                    let _ = tx.send(Evento::Conexion(EventoConexion::Cerrada {
+                    let _ = tx.send(EventoConexion::Cerrada {
                         host_id,
                         motivo: None,
-                    }));
+                    });
                     return;
                 }
             },
@@ -347,18 +330,18 @@ async fn bucle_sesion(
                     vio_eof = true;
                 }
                 Some(ChannelMsg::Close) => {
-                    let _ = tx.send(Evento::Conexion(EventoConexion::Cerrada {
+                    let _ = tx.send(EventoConexion::Cerrada {
                         host_id,
                         motivo: None,
-                    }));
+                    });
                     return;
                 }
                 None => {
                     if vio_eof {
-                        let _ = tx.send(Evento::Conexion(EventoConexion::Cerrada {
+                        let _ = tx.send(EventoConexion::Cerrada {
                             host_id,
                             motivo: None,
-                        }));
+                        });
                     } else {
                         emitir_error(tx, host_id, "la conexión se ha perdido");
                     }
@@ -368,7 +351,7 @@ async fn bucle_sesion(
             },
             _ = intervalo.tick() => {
                 if sucio {
-                    let _ = tx.send(Evento::Conexion(EventoConexion::Pantalla));
+                    let _ = tx.send(EventoConexion::Pantalla);
                     sucio = false;
                 }
             }
@@ -382,15 +365,15 @@ fn procesar(pantalla: &Pantalla, datos: &[u8]) {
     }
 }
 
-fn emitir_estado(tx: &mpsc::UnboundedSender<Evento>, host_id: i64, estado: EstadoSesion) {
-    let _ = tx.send(Evento::Conexion(EventoConexion::Estado { host_id, estado }));
+fn emitir_estado(tx: &mpsc::UnboundedSender<EventoConexion>, host_id: i64, estado: EstadoSesion) {
+    let _ = tx.send(EventoConexion::Estado { host_id, estado });
 }
 
-fn emitir_error(tx: &mpsc::UnboundedSender<Evento>, host_id: i64, motivo: &str) {
-    let _ = tx.send(Evento::Conexion(EventoConexion::Error {
+fn emitir_error(tx: &mpsc::UnboundedSender<EventoConexion>, host_id: i64, motivo: &str) {
+    let _ = tx.send(EventoConexion::Error {
         host_id,
         motivo: motivo.to_string(),
-    }));
+    });
 }
 
 /// Identidad con la que se autenticó: descripción para la barra y huella para
@@ -458,6 +441,11 @@ pub async fn autenticar(
             autenticar_con_contrasena(handle, host, contexto, &usuario, false).await
         }
         IdentidadRef::ContrasenaLlavero => {
+            if contexto.fuente_contrasena == super::FuenteContrasena::Solicitante {
+                // El servidor no toca el llavero: la contraseña la aporta el
+                // cliente solicitante por el protocolo.
+                return autenticar_con_contrasena(handle, host, contexto, &usuario, true).await;
+            }
             let mut habia_entrada = false;
             match crate::llavero::recuperar(&host.nombre, &usuario) {
                 Ok(Some(contrasena)) => {
@@ -538,14 +526,12 @@ async fn autenticar_con_contrasena(
     }
     for intento in 1..=3u8 {
         let (responder, respuesta) = oneshot::channel();
-        let _ = contexto
-            .tx
-            .send(Evento::Conexion(EventoConexion::PideContrasena {
-                host: host.nombre.clone(),
-                intento,
-                recordar_por_defecto,
-                responder,
-            }));
+        let _ = contexto.tx.send(EventoConexion::PideContrasena {
+            host: host.nombre.clone(),
+            intento,
+            recordar_por_defecto,
+            responder,
+        });
         match respuesta.await {
             Ok(Some((contrasena, recordar))) => {
                 let resultado = handle
@@ -555,27 +541,23 @@ async fn autenticar_con_contrasena(
                     continue;
                 }
                 let mut en_llavero = false;
-                if recordar {
+                if recordar && contexto.fuente_contrasena == super::FuenteContrasena::Llavero {
                     match crate::llavero::guardar(&host.nombre, usuario, contrasena.as_str()) {
                         Ok(()) => en_llavero = true,
                         Err(error) => {
-                            let _ = contexto.tx.send(Evento::Conexion(
-                                EventoConexion::ContrasenaGuardada {
-                                    host_id: host.id,
-                                    ok: false,
-                                    motivo: Some(error),
-                                },
-                            ));
+                            let _ = contexto.tx.send(EventoConexion::ContrasenaGuardada {
+                                host_id: host.id,
+                                ok: false,
+                                motivo: Some(error),
+                            });
                         }
                     }
                     if en_llavero {
-                        let _ = contexto.tx.send(Evento::Conexion(
-                            EventoConexion::ContrasenaGuardada {
-                                host_id: host.id,
-                                ok: true,
-                                motivo: None,
-                            },
-                        ));
+                        let _ = contexto.tx.send(EventoConexion::ContrasenaGuardada {
+                            host_id: host.id,
+                            ok: true,
+                            motivo: None,
+                        });
                     }
                 }
                 return Ok(IdentidadUsada {
@@ -726,13 +708,11 @@ async fn cargar_clave(
     }
     for intento in 1..=3u8 {
         let (responder, respuesta) = oneshot::channel();
-        let _ = contexto
-            .tx
-            .send(Evento::Conexion(EventoConexion::PideFrase {
-                host: host_nombre.to_string(),
-                intento,
-                responder,
-            }));
+        let _ = contexto.tx.send(EventoConexion::PideFrase {
+            host: host_nombre.to_string(),
+            intento,
+            responder,
+        });
         match respuesta.await {
             Ok(Some(frase)) => {
                 if let Ok(clave) = decode_secret_key(&datos, Some(frase.as_str())) {

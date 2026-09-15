@@ -1,5 +1,7 @@
+use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 
+use magi::almacen;
 use magi::almacen::Almacen;
 use magi::app;
 use magi::conexion;
@@ -7,6 +9,7 @@ use magi::config::{Config, Rutas};
 use magi::flota::{self, PeticionSondeo};
 use magi::modelo::{Host, ResultadoRegistro, ResultadoSondeo, Sondeo};
 use magi::registro;
+use magi::servidor;
 use magi::sshconfig;
 use magi::tema;
 
@@ -17,6 +20,10 @@ use magi::tema;
     about = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
 )]
 struct Cli {
+    /// Ejecuta el servidor de sesiones en primer plano.
+    #[arg(long)]
+    servidor: bool,
+
     #[command(subcommand)]
     comando: Option<Comando>,
 }
@@ -40,6 +47,25 @@ enum Comando {
         #[command(subcommand)]
         comando: ComandoRegistro,
     },
+    /// El servidor de sesiones: estado o parada.
+    Servidor {
+        #[command(subcommand)]
+        comando: ComandoServidor,
+    },
+    /// Abre la TUI con una sesión nueva al host indicado.
+    Conectar { host: String },
+}
+
+#[derive(Subcommand)]
+enum ComandoServidor {
+    /// Imprime pid, versión de protocolo, sesiones y clientes del servidor.
+    Estado,
+    /// Cierra todas las sesiones y apaga el servidor.
+    Parar {
+        /// No pide confirmación aunque haya sesiones abiertas.
+        #[arg(long)]
+        si: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -60,12 +86,28 @@ enum ComandoRegistro {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let rutas = Rutas::descubrir()?;
-    let _guardia_log = iniciar_log(&rutas)?;
+    let log_servidor = cli.servidor;
+    let _guardia_log = iniciar_log(
+        &rutas,
+        if log_servidor {
+            "servidor.log"
+        } else {
+            "magi.log"
+        },
+    )?;
     let (config, aviso_config) = Config::cargar(&rutas.fichero_config());
     let ruta_omarchy = rutas
         .hogar
         .join(".config/omarchy/current/theme/alacritty.toml");
     let (tema, aviso_tema) = tema::cargar(&config, &ruta_omarchy);
+
+    if cli.servidor {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("creando el runtime de tokio")?;
+        return runtime.block_on(servidor::arrancar(rutas, config));
+    }
 
     match cli.comando {
         Some(Comando::Importar { ruta }) => {
@@ -94,6 +136,34 @@ fn main() -> anyhow::Result<()> {
             almacen.cerrar()?;
             Ok(())
         }
+        Some(Comando::Servidor { comando }) => {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("creando el runtime de tokio")?;
+            let codigo = runtime.block_on(async {
+                match comando {
+                    ComandoServidor::Estado => servidor::estado_cli(&rutas).await,
+                    ComandoServidor::Parar { si } => servidor::parar_cli(&rutas, si).await,
+                }
+            })?;
+            std::process::exit(codigo);
+        }
+        Some(Comando::Conectar { host }) => {
+            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let existente = almacen::hosts::por_nombre(almacen.conexion(), &host)?;
+            let Some(host) = existente else {
+                eprintln!("no existe el host «{host}»");
+                std::process::exit(1);
+            };
+            let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
+            let aviso = if avisos.is_empty() {
+                None
+            } else {
+                Some(avisos.join(" · "))
+            };
+            app::ejecutar(rutas, config, tema, almacen, aviso, Some(host.id))
+        }
         None => {
             app::instalar_hook_panico();
             let almacen = Almacen::abrir(&rutas.base_datos())?;
@@ -103,7 +173,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 Some(avisos.join(" · "))
             };
-            app::ejecutar(rutas, config, tema, almacen, aviso)
+            app::ejecutar(rutas, config, tema, almacen, aviso, None)
         }
     }
 }
@@ -325,12 +395,13 @@ fn sondear(
 
 fn iniciar_log(
     rutas: &Rutas,
+    prefijo: &str,
 ) -> anyhow::Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let directorio = rutas.dir_logs();
     std::fs::create_dir_all(&directorio)?;
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("magi.log")
+        .filename_prefix(prefijo)
         .build(&directorio)?;
     let (escritor, guardia) = tracing_appender::non_blocking(appender);
     let filtro = tracing_subscriber::EnvFilter::try_from_default_env()
