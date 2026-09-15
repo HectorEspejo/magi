@@ -392,6 +392,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
     let mensaje = MensajeServidor::Bienvenida {
         version: VERSION_PROTOCOLO,
         pid: std::process::id(),
+        cliente_id,
         clientes: estado_bloqueado.clientes.len() as u32,
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
     };
@@ -546,6 +547,7 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
                 sesion_id,
                 cols: tamano.cols,
                 filas: tamano.filas,
+                ventana_minima: None,
             },
         );
     }
@@ -672,6 +674,13 @@ async fn aplicar_tamano(estado_bloqueado: &mut EstadoServidor, sesion_id: u32) {
             .tx_comandos
             .send(ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas));
         let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
+        // La ventana que impone el mínimo, para el aviso de la barra.
+        let minima = sesion
+            .adjuntos
+            .iter()
+            .filter(|(_, tamano)| tamano.cols == nuevo.cols && tamano.filas == nuevo.filas)
+            .map(|(cliente_id, _)| *cliente_id)
+            .min();
         difusion::difundir_a_adjuntos(
             &estado_bloqueado.clientes,
             &ids,
@@ -679,6 +688,7 @@ async fn aplicar_tamano(estado_bloqueado: &mut EstadoServidor, sesion_id: u32) {
                 sesion_id,
                 cols: nuevo.cols,
                 filas: nuevo.filas,
+                ventana_minima: minima,
             },
         );
     }
@@ -1005,6 +1015,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             pid,
             clientes,
             sesiones,
+            ..
         } => {
             println!(
                 "Servidor pid {pid} · protocolo {version} · {clientes} cliente(s) conectado(s)"

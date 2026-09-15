@@ -175,6 +175,8 @@ pub enum MensajeServidor {
     Bienvenida {
         version: u32,
         pid: u32,
+        /// Id que el servidor asigna a este cliente (para «mín. ventana»).
+        cliente_id: u32,
         clientes: u32,
         sesiones: Vec<InfoSesion>,
     },
@@ -200,6 +202,8 @@ pub enum MensajeServidor {
         sesion_id: u32,
         cols: u16,
         filas: u16,
+        /// Cliente cuya ventana impone el tamaño mínimo, si lo hay.
+        ventana_minima: Option<u32>,
     },
     Estado {
         sesion_id: u32,
@@ -338,6 +342,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
             version: 1,
             pid: 100,
+            cliente_id: 3,
             clientes: 2,
             sesiones: sesiones.clone(),
         });
@@ -357,6 +362,7 @@ mod pruebas {
             sesion_id: 1,
             cols: 100,
             filas: 30,
+            ventana_minima: Some(2),
         });
         ida_y_vuelta_servidor(MensajeServidor::Estado {
             sesion_id: 1,

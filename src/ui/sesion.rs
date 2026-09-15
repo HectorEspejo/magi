@@ -53,7 +53,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
         }
     }
     marco.render_widget(
-        Paragraph::new(barra_estado(app, indice, pestaña)),
+        Paragraph::new(barra_estado(app, indice, pestaña, contenido)),
         trozos[3],
     );
 }
@@ -223,7 +223,7 @@ fn truncar(texto: &str, maximo: usize) -> String {
     }
 }
 
-fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI) -> Line<'static> {
+fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> Line<'static> {
     let tema = &app.tema;
     if app.modo_prefijo {
         return Line::from(vec![
@@ -257,11 +257,20 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI) -> Line<'static>
     } else {
         pestaña.identidad.clone()
     };
-    let tamano = if pestaña.cols_remoto > 0 {
-        format!(" · {}×{} remoto", pestaña.cols_remoto, pestaña.filas_remoto)
-    } else {
-        String::new()
-    };
+    let mut tamano = String::new();
+    if pestaña.cols_remoto > 0 {
+        tamano = format!(" · {}×{}", pestaña.cols_remoto, pestaña.filas_remoto);
+        if area.width > pestaña.cols_remoto || area.height > pestaña.filas_remoto {
+            // Otra ventana más pequeña comparte la pestaña y fija el tamaño.
+            match pestaña.ventana_minima {
+                Some(minima) if Some(minima) == app.cliente_id => {
+                    tamano.push_str(" (mín. esta ventana)");
+                }
+                Some(minima) => tamano.push_str(&format!(" (mín. ventana {minima})")),
+                None => tamano.push_str(" (mín. otra ventana)"),
+            }
+        }
+    }
     Line::from(vec![
         Span::styled(
             format!(" {} ", glifo_pestaña(true, pestaña, tema)),

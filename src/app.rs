@@ -685,6 +685,8 @@ pub struct PestanaUI {
     /// Tamaño remoto vigente (0 mientras no se sepa).
     pub cols_remoto: u16,
     pub filas_remoto: u16,
+    /// Cliente que impone el tamaño mínimo (aviso «mín. ventana N»).
+    pub ventana_minima: Option<u32>,
 }
 
 impl PestanaUI {
@@ -824,6 +826,8 @@ pub struct App {
     contrasenas_pendientes: HashMap<u32, (protocolo::Secreto, bool)>,
     /// Datos de la bienvenida del servidor para la vista Sesiones.
     pub servidor_pid: Option<u32>,
+    /// Id que el servidor dio a ESTA ventana (para «mín. ventana N»).
+    pub cliente_id: Option<u32>,
     servidor_desde: Option<Instant>,
     comandos_sesion: Option<mpsc::UnboundedSender<ComandoConexion>>,
     pub host_conectando: Option<i64>,
@@ -906,6 +910,7 @@ impl App {
             aperturas_pendientes: HashSet::new(),
             contrasenas_pendientes: HashMap::new(),
             servidor_pid: None,
+            cliente_id: None,
             servidor_desde: None,
             comandos_sesion: None,
             host_conectando: None,
@@ -1732,6 +1737,7 @@ impl App {
                 sesion_id,
                 cols,
                 filas,
+                ventana_minima,
             } => {
                 if let Some(pestaña) = self
                     .pestanas
@@ -1741,6 +1747,7 @@ impl App {
                     crate::conexion::terminal::redimensionar(&pestaña.pantalla, filas, cols);
                     pestaña.cols_remoto = cols;
                     pestaña.filas_remoto = filas;
+                    pestaña.ventana_minima = ventana_minima;
                 }
             }
             protocolo::MensajeServidor::HuellaDesconocida {
@@ -1804,8 +1811,11 @@ impl App {
                     foco_casilla: false,
                 });
             }
-            protocolo::MensajeServidor::Bienvenida { pid, .. } => {
+            protocolo::MensajeServidor::Bienvenida {
+                pid, cliente_id, ..
+            } => {
                 self.servidor_pid = Some(pid);
+                self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
                 if self.servidor_incompatible {
                     self.servidor_incompatible = false;
@@ -1887,6 +1897,7 @@ impl App {
                     ventanas: info.ventanas,
                     cols_remoto: 0,
                     filas_remoto: 0,
+                    ventana_minima: None,
                 });
                 self.aperturas_pendientes.remove(&info.host_id);
                 if activar {
