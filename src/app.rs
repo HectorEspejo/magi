@@ -1887,10 +1887,8 @@ impl App {
             .map(|pestaña| pestaña.sesion_id)
             .collect();
         for sesion_id in desaparecidas {
-            self.pantallas.quitar(sesion_id);
+            self.quitar_pestaña(sesion_id);
         }
-        self.pestanas
-            .retain(|pestaña| vivos.contains(&pestaña.sesion_id));
         for info in lista {
             if let Some(pestaña) = self
                 .pestanas
@@ -2002,6 +2000,57 @@ impl App {
         }
     }
 
+    /// Quita la pestaña de una sesión que ya no existe, deja el foco en la
+    /// anterior (re-adjuntándola al servidor) y, si era la última, sale de la
+    /// vista Sesión: nunca se queda una vista Sesión sin pestaña que pintar.
+    fn quitar_pestaña(&mut self, sesion_id: u32) {
+        self.pantallas.quitar(sesion_id);
+        let Some(indice) = self
+            .pestanas
+            .iter()
+            .position(|pestaña| pestaña.sesion_id == sesion_id)
+        else {
+            return;
+        };
+        let activa = self.pestana_activa_id();
+        self.pestanas.remove(indice);
+        if self.seleccion_sesiones >= self.pestanas.len() {
+            self.seleccion_sesiones = self.pestanas.len().saturating_sub(1);
+        }
+        if self.pestanas.is_empty() {
+            self.pestana_activa = None;
+            if self.vista == Vista::Sesion {
+                self.volver_tras_cierre();
+                self.mensaje("sesión cerrada", false);
+            }
+            return;
+        }
+        if activa == Some(sesion_id) {
+            // El foco pasa a la anterior (o al principio si era la primera).
+            self.pestana_activa = Some(indice.saturating_sub(1).min(self.pestanas.len() - 1));
+            if self.vista == Vista::Sesion {
+                self.adjuntar_pestaña_activa();
+            }
+        } else if let Some(activa) = activa {
+            // La activa sigue viva: su índice pudo desplazarse.
+            self.pestana_activa = self
+                .pestanas
+                .iter()
+                .position(|pestaña| pestaña.sesion_id == activa);
+        }
+    }
+
+    /// Vuelve a la vista desde la que se entró en Sesión (o a la lista) cuando
+    /// la última pestaña desaparece.
+    fn volver_tras_cierre(&mut self) {
+        let destino = self.vista_previa.unwrap_or(Vista::Sesiones);
+        self.vista = if destino == Vista::Sesion {
+            Vista::Sesiones
+        } else {
+            destino
+        };
+    }
+
     /// Estado difundido de una sesión (abriendo, caída, cierre).
     fn estado_de_sesion(
         &mut self,
@@ -2011,30 +2060,10 @@ impl App {
     ) {
         match estado {
             EstadoSesionRemota::Cerrada => {
-                // La sesión se elimina; el foco pasa a la anterior y, si era
-                // la última, se vuelve a la vista previa.
-                self.pantallas.quitar(sesion_id);
-                if let Some(indice) = self
-                    .pestanas
-                    .iter()
-                    .position(|pestaña| pestaña.sesion_id == sesion_id)
-                {
-                    self.pestanas.remove(indice);
-                    if !self.pestanas.is_empty() {
-                        self.pestana_activa = Some(indice.min(self.pestanas.len() - 1));
-                    } else {
-                        self.pestana_activa = None;
-                        if self.vista == Vista::Sesion {
-                            let destino = self.vista_previa.unwrap_or(Vista::Hosts);
-                            self.vista = if destino == Vista::Sesion {
-                                Vista::Hosts
-                            } else {
-                                destino
-                            };
-                        }
-                        self.mensaje("sesión cerrada", false);
-                    }
+                if let Some(motivo) = motivo.filter(|motivo| !motivo.is_empty()) {
+                    self.mensaje(motivo, true);
                 }
+                self.quitar_pestaña(sesion_id);
             }
             EstadoSesionRemota::Caida => {
                 if let Some(pestaña) = self
@@ -2093,6 +2122,9 @@ impl App {
         self.pestanas.clear();
         self.pestana_activa = None;
         self.servidor_caido = false;
+        if self.vista == Vista::Sesion {
+            self.volver_tras_cierre();
+        }
         if relanzar {
             let rutas = self.rutas.clone();
             let tx = self.eventos_tx.clone();
@@ -2131,11 +2163,12 @@ impl App {
                 KeyCode::Char('q') | KeyCode::Esc => {
                     self.desadjuntar_pestaña_activa();
                     let destino = self.vista_previa.unwrap_or(Vista::Hosts);
-                    if destino == Vista::Sesion || destino == Vista::Sesiones {
-                        self.vista = Vista::Hosts;
+                    // Si se entró desde la lista, se vuelve a ella.
+                    self.vista = if destino == Vista::Sesion {
+                        Vista::Sesiones
                     } else {
-                        self.vista = destino;
-                    }
+                        destino
+                    };
                     self.mensaje("sesiones en el servidor", false);
                 }
                 KeyCode::Char('n') => self.navegar_pestañas(1),
@@ -4037,12 +4070,19 @@ impl App {
                 });
             }
             KeyCode::Char('q') | KeyCode::Esc => {
-                // Vuelta a la vista previa (o Flota).
+                // Vuelta a la vista previa: si se abrió la lista desde una
+                // pestaña, vuelve a ella (re-adjuntándola); si no, a Flota.
                 let destino = self.vista_previa.unwrap_or(Vista::Flota);
-                self.vista = if destino == Vista::Sesion || destino == Vista::Sesiones {
-                    Vista::Flota
-                } else {
-                    destino
+                self.vista = match destino {
+                    Vista::Sesion if !self.pestanas.is_empty() => {
+                        if self.pestana_activa.is_none() {
+                            self.pestana_activa = Some(self.pestanas.len() - 1);
+                        }
+                        self.adjuntar_pestaña_activa();
+                        Vista::Sesion
+                    }
+                    Vista::Sesiones => Vista::Flota,
+                    otro => otro,
                 };
             }
             _ => {}
@@ -4609,6 +4649,9 @@ impl App {
                 self.servidor = cliente::Cliente::sin_servidor();
                 self.servidor_pid = None;
                 self.servidor_desde = None;
+                if self.vista == Vista::Sesion {
+                    self.volver_tras_cierre();
+                }
                 if self.vista == Vista::Sesiones {
                     self.mensaje("servidor apagado", false);
                 }
