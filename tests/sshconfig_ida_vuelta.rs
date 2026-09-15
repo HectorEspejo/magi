@@ -6,6 +6,42 @@ use magi::modelo::{DatosHost, IdentidadRef, Origen};
 use magi::sshconfig::{exportar, importar, parser};
 
 #[test]
+fn sobrescribir_al_importar_conserva_servicios_y_etiquetas() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config"),
+        "Host uno\n  HostName 10.0.0.1\n  User hector\n",
+    )
+    .unwrap();
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let analisis = importar::analizar_fichero(&dir.path().join("config"), dir.path()).unwrap();
+    importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
+    let host = almacen
+        .listar_hosts()
+        .unwrap()
+        .into_iter()
+        .find(|host| host.nombre == "uno")
+        .unwrap();
+    let datos = DatosHost {
+        nombre: "uno".to_string(),
+        direccion: "10.0.0.1".to_string(),
+        usuario: Some("hector".to_string()),
+        servicios: "nginx.service\npostgresql".to_string(),
+        etiquetas: vec!["prod".to_string()],
+        grupo_id: host.grupo_id,
+        ..DatosHost::default()
+    };
+    almacen.actualizar_host(host.id, &datos).unwrap();
+
+    let mut decisiones = HashMap::new();
+    decisiones.insert("uno".to_string(), true);
+    importar::aplicar(almacen.conexion(), &analisis, &decisiones).unwrap();
+    let host = almacen.obtener_host(host.id).unwrap();
+    assert_eq!(host.servicios, "nginx.service\npostgresql");
+    assert_eq!(host.etiquetas, vec!["prod"]);
+}
+
+#[test]
 fn ida_y_vuelta_reproduce_el_inventario() {
     let dir = tempfile::tempdir().unwrap();
     let origen = Almacen::abrir_en_memoria().unwrap();
@@ -42,6 +78,7 @@ fn ida_y_vuelta_reproduce_el_inventario() {
         multiplexar: true,
         keepalive_seg: Some(45),
         opciones_extra: "ForwardAgent yes\nLocalForward 5432 127.0.0.1:5432".to_string(),
+        servicios: "nginx\npostgresql".to_string(),
         etiquetas: vec!["backup".to_string()],
         grupo_id: Some(grupo),
     };

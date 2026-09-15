@@ -51,6 +51,17 @@ fn barra_estado(app: &App, sesion: &crate::app::SesionUI) -> Line<'static> {
         ]);
     }
     let tiempo = formatear_duracion(sesion.iniciada.elapsed().as_secs());
+    let carga = app
+        .sondeos
+        .get(&sesion.host_id)
+        .and_then(|sondeo| {
+            let edad = crate::flota::estado::antiguedad_segundos(&sondeo.fecha)?;
+            if edad > 600.0 {
+                return None;
+            }
+            sondeo.carga_1m.map(|carga| format!(" · carga {carga:.1}"))
+        })
+        .unwrap_or_default();
     Line::from(vec![
         Span::styled(
             format!(" {} ", tema.glifos.conectado),
@@ -59,7 +70,7 @@ fn barra_estado(app: &App, sesion: &crate::app::SesionUI) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("conectado {tiempo} · {} · ", sesion.identidad),
+            format!("conectado {tiempo} · {}{carga} · ", sesion.identidad),
             Style::default().fg(tema.paleta.texto),
         ),
         Span::styled(

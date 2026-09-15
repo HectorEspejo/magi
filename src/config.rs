@@ -65,6 +65,15 @@ impl Rutas {
 
 pub const PREFIJO_POR_DEFECTO: &str = "Ctrl+]";
 
+/// Sección `[flota]` de `config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SeccionFlota {
+    /// Segundos entre auto-refrescos; 0 = desactivado y mínimo 15.
+    pub auto_refresco_seg: u64,
+    pub umbrales: crate::flota::estado::Umbrales,
+}
+
 /// Contenido de `~/.config/magi/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -77,6 +86,8 @@ pub struct Config {
     pub tema: String,
     /// Forzar el modo degradado ASCII.
     pub terminal_ascii: bool,
+    /// Sondeo de flota: auto-refresco y umbrales.
+    pub flota: SeccionFlota,
 }
 
 impl Default for Config {
@@ -86,6 +97,7 @@ impl Default for Config {
             exportar_al_guardar: true,
             tema: "auto".to_string(),
             terminal_ascii: false,
+            flota: SeccionFlota::default(),
         }
     }
 }

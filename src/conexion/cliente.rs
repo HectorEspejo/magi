@@ -35,37 +35,50 @@ impl From<anyhow::Error> for ErrorCliente {
     }
 }
 
-/// Datos compartidos por toda la tarea de conexión.
+/// Datos compartidos por toda la tarea de conexión. `interactivo` distingue
+/// las conexiones de la UI (pueden dialogar) de las automáticas como el sondeo
+/// (nunca abren diálogos: huella o frase pendientes son un error).
 pub struct Contexto {
     pub known_hosts: PathBuf,
     pub dir_ssh: PathBuf,
     pub hogar: PathBuf,
     pub usuario_local: String,
     pub tx: mpsc::UnboundedSender<Evento>,
+    pub interactivo: bool,
 }
 
 /// Implementación del `Handler` de russh: verifica la huella del servidor y,
-/// cuando hace falta, pregunta a la UI.
+/// cuando hace falta, pregunta a la UI (solo en modo interactivo).
 pub struct Cliente {
     tx: mpsc::UnboundedSender<Evento>,
+    host_id: i64,
     host: String,
     puerto: u16,
     known_hosts: PathBuf,
+    interactivo: bool,
 }
 
 impl Cliente {
     pub fn nuevo(
         tx: mpsc::UnboundedSender<Evento>,
+        host_id: i64,
         host: &str,
         puerto: u16,
         known_hosts: PathBuf,
+        interactivo: bool,
     ) -> Self {
         Self {
             tx,
+            host_id,
             host: host.to_string(),
             puerto,
             known_hosts,
+            interactivo,
         }
+    }
+
+    fn error_no_interactivo(&self, motivo: String) -> ErrorCliente {
+        ErrorCliente::Mensaje(format!("{motivo}; conéctate una vez con ↵"))
     }
 }
 
@@ -88,6 +101,12 @@ impl russh::client::Handler for Cliente {
                 Ok(true)
             }
             Ok(EstadoHuella::Desconocida) => {
+                if !self.interactivo {
+                    return Err(self.error_no_interactivo(format!(
+                        "huella desconocida de {} en known_hosts",
+                        self.host
+                    )));
+                }
                 let (responder, decision) = oneshot::channel();
                 let _ = self
                     .tx
@@ -99,6 +118,13 @@ impl russh::client::Handler for Cliente {
                     }));
                 if matches!(decision.await, Ok(true)) {
                     huellas::aprender(&self.known_hosts, &self.host, self.puerto, &clave)?;
+                    let _ = self
+                        .tx
+                        .send(Evento::Conexion(EventoConexion::HuellaRegistrada {
+                            host_id: self.host_id,
+                            anterior: None,
+                            nueva: huellas::huella(&clave),
+                        }));
                     info!(
                         host = %self.host,
                         huella = %huellas::huella(&clave),
@@ -110,6 +136,13 @@ impl russh::client::Handler for Cliente {
                 }
             }
             Ok(EstadoHuella::Cambiada { anterior }) => {
+                if !self.interactivo {
+                    return Err(self.error_no_interactivo(format!(
+                        "huella cambiada de {} (anterior {})",
+                        self.host,
+                        huellas::huella(&anterior)
+                    )));
+                }
                 let (responder, decision) = oneshot::channel();
                 let _ = self
                     .tx
@@ -130,6 +163,13 @@ impl russh::client::Handler for Cliente {
                     }));
                 if matches!(decision.await, Ok(true)) {
                     huellas::sustituir(&self.known_hosts, &self.host, self.puerto, &clave)?;
+                    let _ = self
+                        .tx
+                        .send(Evento::Conexion(EventoConexion::HuellaRegistrada {
+                            host_id: self.host_id,
+                            anterior: Some(huellas::huella(&anterior)),
+                            nueva: huellas::huella(&clave),
+                        }));
                     info!(
                         host = %self.host,
                         anterior = %huellas::huella(&anterior),
@@ -144,7 +184,14 @@ impl russh::client::Handler for Cliente {
             }
             Err(error) => {
                 warn!(host = %self.host, "no se pudo comprobar known_hosts: {error}");
-                Ok(false)
+                if self.interactivo {
+                    Ok(false)
+                } else {
+                    Err(ErrorCliente::Mensaje(format!(
+                        "no se pudo comprobar known_hosts de {}: {error}",
+                        self.host
+                    )))
+                }
             }
         }
     }
@@ -176,6 +223,7 @@ async fn sesion_completa(
         hogar: plan.hogar.clone(),
         usuario_local: plan.usuario_local.clone(),
         tx: tx.clone(),
+        interactivo: true,
     };
     emitir_estado(&tx, host_id, EstadoSesion::Resolviendo);
     let cadena = match construir_cadena(&plan.host, &plan.todos_los_hosts) {
@@ -199,7 +247,8 @@ async fn sesion_completa(
             .await;
         let _ = tx.send(Evento::Conexion(EventoConexion::PruebaOk {
             host_id,
-            identidad: transporte.identidad,
+            identidad: transporte.identidad.descripcion,
+            huella: transporte.identidad.huella,
         }));
         return;
     }
@@ -209,15 +258,21 @@ async fn sesion_completa(
         Ok(canal) => canal,
         Err(error) => return emitir_error(&tx, host_id, &error.to_string()),
     };
+    plan.registro
+        .lock()
+        .await
+        .insert(host_id, transporte.handle.clone());
     let _ = tx.send(Evento::Conexion(EventoConexion::Abierta {
         host_id,
         pantalla: pantalla.clone(),
-        identidad: transporte.identidad.clone(),
+        identidad: transporte.identidad.descripcion.clone(),
+        huella: transporte.identidad.huella.clone(),
         cols: plan.cols,
         filas: plan.filas,
     }));
     info!(host = %nombre, "sesión abierta");
     bucle_sesion(&mut canal, &pantalla, &mut comandos, &tx, host_id).await;
+    plan.registro.lock().await.remove(&host_id);
 }
 
 async fn abrir_canal(
@@ -338,13 +393,20 @@ fn emitir_error(tx: &mpsc::UnboundedSender<Evento>, host_id: i64, motivo: &str) 
     }));
 }
 
-/// Autentica según `identidad_ref` y devuelve la descripción de la identidad
-/// usada para la barra de estado.
+/// Identidad con la que se autenticó: descripción para la barra y huella para
+/// actualizar `IDENTIDADES.ultimo_uso_en`.
+#[derive(Debug)]
+pub struct IdentidadUsada {
+    pub descripcion: String,
+    pub huella: Option<String>,
+}
+
+/// Autentica según `identidad_ref` y devuelve la identidad usada.
 pub async fn autenticar(
     handle: &mut Handle<Cliente>,
     host: &Host,
     contexto: &Contexto,
-) -> Result<String, ErrorCliente> {
+) -> Result<IdentidadUsada, ErrorCliente> {
     emitir_estado(&contexto.tx, host.id, EstadoSesion::Autenticando);
     let usuario = host
         .usuario
@@ -352,35 +414,87 @@ pub async fn autenticar(
         .unwrap_or_else(|| contexto.usuario_local.clone());
     match &host.identidad_ref {
         IdentidadRef::Auto => {
-            if let Some(descripcion) = autenticar_con_agente(handle, &usuario, None).await? {
-                return Ok(descripcion);
+            if let Some(identidad) = autenticar_con_agente(handle, &usuario, None).await? {
+                return Ok(identidad);
             }
+            let mut motivo_frase: Option<String> = None;
             for ruta in ficheros_por_defecto(&contexto.dir_ssh) {
                 if !ruta.exists() {
                     continue;
                 }
-                let Some(clave) = cargar_clave(&ruta, contexto, &host.nombre).await? else {
-                    return Err(ErrorCliente::Cancelado);
+                let clave = match cargar_clave(&ruta, contexto, &host.nombre).await {
+                    Ok(Some(clave)) => clave,
+                    Ok(None) => return Err(ErrorCliente::Cancelado),
+                    Err(error) => {
+                        motivo_frase = Some(error.to_string());
+                        continue;
+                    }
                 };
                 let tipo = clave.algorithm().as_str().to_string();
+                let huella = huellas::huella(clave.public_key());
                 if autenticar_clave(handle, &usuario, clave).await? {
-                    return Ok(format!(
-                        "{tipo} · fichero {}",
-                        acortar_hogar(&ruta, &contexto.hogar)
-                    ));
+                    return Ok(IdentidadUsada {
+                        descripcion: format!(
+                            "{tipo} · fichero {}",
+                            acortar_hogar(&ruta, &contexto.hogar)
+                        ),
+                        huella: Some(huella),
+                    });
                 }
             }
-            Err(ErrorCliente::Mensaje(
-                "autenticación rechazada: agente y claves por defecto agotados".to_string(),
-            ))
+            Err(ErrorCliente::Mensaje(motivo_frase.unwrap_or_else(|| {
+                "autenticación rechazada: agente y claves por defecto agotados".to_string()
+            })))
         }
         IdentidadRef::Agente(huella) => {
             match autenticar_con_agente(handle, &usuario, Some(huella)).await? {
-                Some(descripcion) => Ok(descripcion),
+                Some(identidad) => Ok(identidad),
                 None => Err(ErrorCliente::Mensaje(format!(
                     "la clave {huella} no está cargada en el agente; ejecuta ssh-add"
                 ))),
             }
+        }
+        IdentidadRef::Contrasena => {
+            autenticar_con_contrasena(handle, host, contexto, &usuario, false).await
+        }
+        IdentidadRef::ContrasenaLlavero => {
+            let mut habia_entrada = false;
+            match crate::llavero::recuperar(&host.nombre, &usuario) {
+                Ok(Some(contrasena)) => {
+                    habia_entrada = true;
+                    let resultado = handle
+                        .authenticate_password(usuario.as_str(), contrasena.as_str())
+                        .await?;
+                    if resultado.success() {
+                        return Ok(IdentidadUsada {
+                            descripcion: "contraseña · llavero".to_string(),
+                            huella: None,
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if !contexto.interactivo {
+                        return Err(ErrorCliente::Mensaje(format!(
+                            "«{}» usa contraseña y el llavero no está disponible ({error}); \
+                             conéctate una vez con ↵ o usa una clave",
+                            host.nombre
+                        )));
+                    }
+                }
+            }
+            if !contexto.interactivo {
+                let motivo = if habia_entrada {
+                    "la contraseña guardada en el llavero ya no vale"
+                } else {
+                    "no hay ninguna contraseña guardada en el llavero"
+                };
+                return Err(ErrorCliente::Mensaje(format!(
+                    "«{}» usa contraseña y {motivo}; conéctate una vez con ↵ o usa una clave",
+                    host.nombre
+                )));
+            }
+            autenticar_con_contrasena(handle, host, contexto, &usuario, true).await
         }
         IdentidadRef::Fichero(ruta) => {
             let ruta = expandir_home(ruta, &contexto.hogar);
@@ -394,15 +508,91 @@ pub async fn autenticar(
                 return Err(ErrorCliente::Cancelado);
             };
             let tipo = clave.algorithm().as_str().to_string();
+            let huella = huellas::huella(clave.public_key());
             if !autenticar_clave(handle, &usuario, clave).await? {
                 return Err(ErrorCliente::Mensaje("autenticación rechazada".to_string()));
             }
-            Ok(format!(
-                "{tipo} · fichero {}",
-                acortar_hogar(&ruta, &contexto.hogar)
-            ))
+            Ok(IdentidadUsada {
+                descripcion: format!("{tipo} · fichero {}", acortar_hogar(&ruta, &contexto.hogar)),
+                huella: Some(huella),
+            })
         }
     }
+}
+
+/// Pide la contraseña en la UI (hasta 3 intentos) y, si el usuario lo marca,
+/// la guarda en el llavero del sistema. El secreto no toca `magi.db`.
+async fn autenticar_con_contrasena(
+    handle: &mut Handle<Cliente>,
+    host: &Host,
+    contexto: &Contexto,
+    usuario: &str,
+    recordar_por_defecto: bool,
+) -> Result<IdentidadUsada, ErrorCliente> {
+    if !contexto.interactivo {
+        return Err(ErrorCliente::Mensaje(format!(
+            "«{}» autentica con contraseña y el sondeo no dialoga; \
+             conéctate una vez con ↵ o usa una clave",
+            host.nombre
+        )));
+    }
+    for intento in 1..=3u8 {
+        let (responder, respuesta) = oneshot::channel();
+        let _ = contexto
+            .tx
+            .send(Evento::Conexion(EventoConexion::PideContrasena {
+                host: host.nombre.clone(),
+                intento,
+                recordar_por_defecto,
+                responder,
+            }));
+        match respuesta.await {
+            Ok(Some((contrasena, recordar))) => {
+                let resultado = handle
+                    .authenticate_password(usuario, contrasena.as_str())
+                    .await?;
+                if !resultado.success() {
+                    continue;
+                }
+                let mut en_llavero = false;
+                if recordar {
+                    match crate::llavero::guardar(&host.nombre, usuario, contrasena.as_str()) {
+                        Ok(()) => en_llavero = true,
+                        Err(error) => {
+                            let _ = contexto.tx.send(Evento::Conexion(
+                                EventoConexion::ContrasenaGuardada {
+                                    host_id: host.id,
+                                    ok: false,
+                                    motivo: Some(error),
+                                },
+                            ));
+                        }
+                    }
+                    if en_llavero {
+                        let _ = contexto.tx.send(Evento::Conexion(
+                            EventoConexion::ContrasenaGuardada {
+                                host_id: host.id,
+                                ok: true,
+                                motivo: None,
+                            },
+                        ));
+                    }
+                }
+                return Ok(IdentidadUsada {
+                    descripcion: if en_llavero {
+                        "contraseña · llavero".to_string()
+                    } else {
+                        "contraseña".to_string()
+                    },
+                    huella: None,
+                });
+            }
+            _ => return Err(ErrorCliente::Cancelado),
+        }
+    }
+    Err(ErrorCliente::Mensaje(
+        "contraseña incorrecta tras 3 intentos".to_string(),
+    ))
 }
 
 /// Intenta todas las claves del agente o solo la de la huella indicada.
@@ -410,7 +600,7 @@ async fn autenticar_con_agente(
     handle: &mut Handle<Cliente>,
     usuario: &str,
     huella_buscada: Option<&str>,
-) -> Result<Option<String>, ErrorCliente> {
+) -> Result<Option<IdentidadUsada>, ErrorCliente> {
     let mut agente = match AgentClient::connect_env().await {
         Ok(agente) => agente,
         Err(error) => {
@@ -445,7 +635,10 @@ async fn autenticar_con_agente(
                 {
                     Ok(resultado) if resultado.success() => {
                         let huella = huellas::huella(&key);
-                        return Ok(Some(descripcion_agente(&key, &comment, &huella)));
+                        return Ok(Some(IdentidadUsada {
+                            descripcion: descripcion_agente(&key, &comment, &huella),
+                            huella: Some(huella),
+                        }));
                     }
                     Ok(_) => continue,
                     Err(error) => {
@@ -469,7 +662,10 @@ async fn autenticar_con_agente(
                 {
                     Ok(resultado) if resultado.success() => {
                         let huella = huellas::huella(&clave_cert);
-                        return Ok(Some(descripcion_agente(&clave_cert, &comment, &huella)));
+                        return Ok(Some(IdentidadUsada {
+                            descripcion: descripcion_agente(&clave_cert, &comment, &huella),
+                            huella: Some(huella),
+                        }));
                     }
                     Ok(_) => continue,
                     Err(error) => {
@@ -521,6 +717,12 @@ async fn cargar_clave(
     );
     if let Ok(clave) = decode_secret_key(&datos, None) {
         return Ok(Some(clave));
+    }
+    if !contexto.interactivo {
+        return Err(ErrorCliente::Mensaje(format!(
+            "la clave {} requiere frase y no hay diálogo posible",
+            ruta.display()
+        )));
     }
     for intento in 1..=3u8 {
         let (responder, respuesta) = oneshot::channel();

@@ -8,7 +8,7 @@ const SELECCION: &str = "
     SELECT h.id, h.nombre, h.grupo_id, h.direccion, h.puerto, h.usuario,
            h.identidad_ref, h.salto_host_id, h.multiplexar, h.keepalive_seg,
            h.opciones_extra, h.origen, h.ultimo_estado, h.ultima_conexion_en,
-           h.creado_en, h.actualizado_en, g.nombre, s.nombre
+           h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -34,6 +34,7 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
         etiquetas: Vec::new(),
         grupo_nombre: fila.get(16)?,
         salto_nombre: fila.get(17)?,
+        servicios: fila.get(18)?,
     })
 }
 
@@ -61,7 +62,11 @@ pub fn por_nombre(conexion: &Connection, nombre: &str) -> Result<Option<Host>> {
     let mut sentencia = conexion.prepare(&format!("{SELECCION} WHERE h.nombre = ?1"))?;
     let mut filas = sentencia.query_map(params![nombre], mapear)?;
     match filas.next() {
-        Some(host) => Ok(Some(host?)),
+        Some(host) => {
+            let mut host = host?;
+            host.etiquetas = etiquetas::de_host(conexion, host.id)?;
+            Ok(Some(host))
+        }
         None => Ok(None),
     }
 }
@@ -90,8 +95,8 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
             "INSERT INTO HOSTS (
                 nombre, grupo_id, direccion, puerto, usuario, identidad_ref,
                 salto_host_id, multiplexar, keepalive_seg, opciones_extra,
-                origen, creado_en, actualizado_en
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                origen, creado_en, actualizado_en, servicios
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
             params![
                 datos.nombre.trim(),
                 datos.grupo_id,
@@ -105,6 +110,7 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
                 datos.opciones_extra,
                 origen.como_texto(),
                 ahora,
+                datos.servicios,
             ],
         )
         .map_err(|error| {
@@ -127,8 +133,8 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
                 nombre = ?1, grupo_id = ?2, direccion = ?3, puerto = ?4,
                 usuario = ?5, identidad_ref = ?6, salto_host_id = ?7,
                 multiplexar = ?8, keepalive_seg = ?9, opciones_extra = ?10,
-                actualizado_en = ?11
-             WHERE id = ?12",
+                actualizado_en = ?11, servicios = ?12
+             WHERE id = ?13",
             params![
                 datos.nombre.trim(),
                 datos.grupo_id,
@@ -141,6 +147,7 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
                 datos.keepalive_seg.map(|valor| valor as i64),
                 datos.opciones_extra,
                 fecha_ahora(),
+                datos.servicios,
                 id,
             ],
         )
@@ -211,6 +218,20 @@ pub fn dependientes_de_salto(conexion: &Connection, id: i64) -> Result<i64> {
         |fila| fila.get(0),
     )?;
     Ok(total)
+}
+
+/// Cambia solo la referencia de identidad (p. ej. al guardar la contraseña
+/// en el llavero).
+pub fn marcar_identidad_ref(
+    conexion: &Connection,
+    id: i64,
+    identidad: &IdentidadRef,
+) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET identidad_ref = ?1, actualizado_en = ?2 WHERE id = ?3",
+        params![identidad.a_bd(), fecha_ahora(), id],
+    )?;
+    Ok(())
 }
 
 /// Marca una conexión abierta con éxito.

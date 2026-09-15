@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,14 +15,163 @@ use zeroize::Zeroizing;
 use crate::almacen::Almacen;
 use crate::conexion::{self, ComandoConexion, EventoConexion, PlanConexion};
 use crate::config::{Config, Rutas};
+use crate::flota::{self, PeticionSondeo};
 use crate::identidades::Identidades;
 use crate::modelo::{
-    self, fecha_ahora, DatosHost, EstadoSesion, Grupo, Host, IdentidadRef, Origen, UltimoEstado,
+    self, fecha_ahora, DatosHost, EntradaRegistro, EstadoSesion, Grupo, Host, IdentidadRef, Origen,
+    ResultadoRegistro, ResultadoSondeo, Sondeo, UltimoEstado,
 };
+use crate::registro::FiltroRegistro;
 use crate::sshconfig;
 use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::Vista;
+
+/// Entradas que carga cada página de la vista Registro.
+pub const REGISTRO_PAGINA: i64 = 200;
+
+pub struct EstadoRegistro {
+    pub entradas: Vec<EntradaRegistro>,
+    pub total: i64,
+    pub filtro: FiltroRegistro,
+    pub campo: CampoTexto,
+    pub texto_activo: bool,
+    pub seleccion: usize,
+}
+
+impl EstadoRegistro {
+    pub fn nuevo() -> Self {
+        Self {
+            entradas: Vec::new(),
+            total: 0,
+            filtro: FiltroRegistro::default(),
+            campo: CampoTexto::default(),
+            texto_activo: false,
+            seleccion: 0,
+        }
+    }
+
+    pub fn entrada_seleccionada(&self) -> Option<&EntradaRegistro> {
+        self.entradas.get(self.seleccion)
+    }
+}
+
+pub struct ExportacionRegistro {
+    pub json: bool,
+    pub campo: CampoTexto,
+    /// 0 = formato, 1 = ruta.
+    pub foco: usize,
+}
+
+/// Campos del diálogo de generación de clave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CampoGeneracion {
+    Fichero,
+    Tipo,
+    Comentario,
+    Frase,
+    Repetir,
+    Agente,
+    Copiar,
+}
+
+pub const ORDEN_GENERACION: [CampoGeneracion; 7] = [
+    CampoGeneracion::Fichero,
+    CampoGeneracion::Tipo,
+    CampoGeneracion::Comentario,
+    CampoGeneracion::Frase,
+    CampoGeneracion::Repetir,
+    CampoGeneracion::Agente,
+    CampoGeneracion::Copiar,
+];
+
+pub struct EstadoGeneracion {
+    pub campo: CampoGeneracion,
+    pub fichero: CampoTexto,
+    pub rsa: bool,
+    pub comentario: CampoTexto,
+    pub frase: CampoTexto,
+    pub repetir: CampoTexto,
+    pub agente: bool,
+    pub copiar: bool,
+}
+
+pub enum AccionGeneracion {
+    Nada,
+    Generar,
+    Cancelar,
+}
+
+impl EstadoGeneracion {
+    pub fn nuevo() -> Self {
+        let comentario = std::env::var("USER").unwrap_or_default();
+        Self {
+            campo: CampoGeneracion::Fichero,
+            fichero: CampoTexto::nuevo("id_ed25519"),
+            rsa: false,
+            comentario: CampoTexto::nuevo(comentario),
+            frase: CampoTexto::default(),
+            repetir: CampoTexto::default(),
+            agente: true,
+            copiar: true,
+        }
+    }
+
+    fn avanzar(&mut self, paso: i32) {
+        let posicion = ORDEN_GENERACION
+            .iter()
+            .position(|campo| *campo == self.campo)
+            .unwrap_or(0) as i32;
+        let total = ORDEN_GENERACION.len() as i32;
+        self.campo = ORDEN_GENERACION[(posicion + paso).rem_euclid(total) as usize];
+    }
+
+    fn editar(&mut self, tecla: &KeyEvent) {
+        match self.campo {
+            CampoGeneracion::Fichero => {
+                self.fichero.manejar_tecla(tecla);
+            }
+            CampoGeneracion::Comentario => {
+                self.comentario.manejar_tecla(tecla);
+            }
+            CampoGeneracion::Frase => {
+                self.frase.manejar_tecla(tecla);
+            }
+            CampoGeneracion::Repetir => {
+                self.repetir.manejar_tecla(tecla);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn manejar_tecla(&mut self, tecla: &KeyEvent) -> AccionGeneracion {
+        if tecla.modifiers.contains(KeyModifiers::CONTROL) {
+            if tecla.code == KeyCode::Char('s') {
+                return AccionGeneracion::Generar;
+            }
+            return AccionGeneracion::Nada;
+        }
+        match tecla.code {
+            KeyCode::Esc => return AccionGeneracion::Cancelar,
+            KeyCode::Tab => {
+                self.avanzar(1);
+                return AccionGeneracion::Nada;
+            }
+            KeyCode::BackTab => {
+                self.avanzar(-1);
+                return AccionGeneracion::Nada;
+            }
+            KeyCode::Char(' ') => match self.campo {
+                CampoGeneracion::Tipo => self.rsa = !self.rsa,
+                CampoGeneracion::Agente => self.agente = !self.agente,
+                CampoGeneracion::Copiar => self.copiar = !self.copiar,
+                _ => self.editar(tecla),
+            },
+            _ => self.editar(tecla),
+        }
+        AccionGeneracion::Nada
+    }
+}
 
 /// Eventos que llegan al bucle principal de la UI.
 pub enum Evento {
@@ -31,6 +180,8 @@ pub enum Evento {
     Tick,
     Conexion(EventoConexion),
     Identidades(Identidades),
+    Sondeo(Sondeo),
+    ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -67,10 +218,11 @@ pub enum CampoFicha {
     Multiplexar,
     Mantener,
     Keepalive,
+    Servicios,
     Opciones,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 12] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 13] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -82,6 +234,7 @@ pub const ORDEN_CAMPOS: [CampoFicha; 12] = [
     CampoFicha::Multiplexar,
     CampoFicha::Mantener,
     CampoFicha::Keepalive,
+    CampoFicha::Servicios,
     CampoFicha::Opciones,
 ];
 
@@ -104,6 +257,7 @@ pub struct Ficha {
     pub etiquetas: CampoTexto,
     pub usuario: CampoTexto,
     pub keepalive: CampoTexto,
+    pub servicios: AreaTexto,
     pub opciones: AreaTexto,
     pub grupo: Desplegable,
     pub identidad: Desplegable,
@@ -151,6 +305,7 @@ impl Ficha {
             multiplexar: self.multiplexar,
             keepalive_seg: keepalive,
             opciones_extra: self.opciones.texto(),
+            servicios: self.servicios.texto(),
             etiquetas: self
                 .etiquetas
                 .texto
@@ -332,9 +487,16 @@ impl Ficha {
     }
 
     fn editar(&mut self, tecla: KeyEvent, disponibles: &[String]) -> AccionFicha {
-        if self.campo == CampoFicha::Opciones {
-            self.opciones.manejar_tecla(&tecla);
-            return AccionFicha::Nada;
+        match self.campo {
+            CampoFicha::Opciones => {
+                self.opciones.manejar_tecla(&tecla);
+                return AccionFicha::Nada;
+            }
+            CampoFicha::Servicios => {
+                self.servicios.manejar_tecla(&tecla);
+                return AccionFicha::Nada;
+            }
+            _ => {}
         }
         if let Some(campo) = self.campo_texto_mut(self.campo) {
             campo.manejar_tecla(&tecla);
@@ -350,19 +512,37 @@ pub enum AccionDialogo {
     Nada,
     BorrarHost(i64),
     BorrarGrupo(i64),
-    RenombrarGrupo { id: i64, nombre: String },
-    CrearGrupo { nombre: String },
-    MoverHost { host_id: i64, grupo_id: Option<i64> },
+    RenombrarGrupo {
+        id: i64,
+        nombre: String,
+    },
+    CrearGrupo {
+        nombre: String,
+    },
+    MoverHost {
+        host_id: i64,
+        grupo_id: Option<i64>,
+    },
     CerrarSesion,
     CerrarSesionYAbrir(i64),
     Salir,
     DescartarFicha,
+    DescartarFichaHacia(Vista),
     InsertarInclude,
+    PurgarRegistro(String),
+    RevocarIdentidad(i64),
+    OlvidarContrasena {
+        host_id: i64,
+        nombre: String,
+        usuario: String,
+    },
 }
 
 pub enum EntradaTextoAccion {
     CrearGrupo,
     RenombrarGrupo(i64),
+    ImportarClave,
+    EditarAliasIdentidad(i64),
 }
 
 pub enum Dialogo {
@@ -392,6 +572,14 @@ pub enum Dialogo {
         campo: CampoTexto,
         responder: oneshot::Sender<Option<Zeroizing<String>>>,
     },
+    Contrasena {
+        host: String,
+        intento: u8,
+        campo: CampoTexto,
+        recordar: bool,
+        foco_casilla: bool,
+        responder: oneshot::Sender<Option<(Zeroizing<String>, bool)>>,
+    },
     MenuGrupo {
         seleccion: usize,
     },
@@ -413,6 +601,20 @@ pub enum Dialogo {
     ConflictoImportacion {
         nombre: String,
         restantes: usize,
+    },
+    Detalle {
+        titulo: String,
+        lineas: Vec<String>,
+    },
+    ExportarRegistro {
+        estado: ExportacionRegistro,
+    },
+    GenerarClave {
+        estado: EstadoGeneracion,
+    },
+    FraseImportacion {
+        ruta: std::path::PathBuf,
+        campo: CampoTexto,
     },
 }
 
@@ -453,6 +655,14 @@ pub enum AccionPaleta {
     Importar,
     Exportar,
     IrASesion,
+    IrARegistro,
+    ExportarRegistro,
+    IrAIdentidades,
+    GenerarClave,
+    SondearHost(i64),
+    SondearTodos,
+    IrAFlota,
+    OlvidarContrasena(i64),
 }
 
 pub struct PaletaCmd {
@@ -529,6 +739,21 @@ pub struct App {
     pub contador_ticks: u64,
     sucio: bool,
     segundos_sesion: u64,
+    pub registro_sesiones: conexion::RegistroSesiones,
+    pub registro: EstadoRegistro,
+    pub sondeos: HashMap<i64, Sondeo>,
+    pub tasas_red: HashMap<i64, (f64, f64)>,
+    pub sondeando: HashSet<i64>,
+    pub sondeo_total: usize,
+    pub sondeo_hechos: usize,
+    pub seleccion_flota: usize,
+    pub auto_refresco: bool,
+    ultimo_auto: Instant,
+    pub identidades_bd: Vec<crate::modelo::Identidad>,
+    pub uso_identidades: HashMap<i64, Vec<String>>,
+    pub huellas_escaneadas: HashSet<String>,
+    pub seleccion_identidad: usize,
+    pub ver_revocadas: bool,
 }
 
 impl App {
@@ -544,6 +769,7 @@ impl App {
         let salir_flag = Arc::new(AtomicBool::new(false));
         let prefijo = crate::teclas::parsear_prefijo(&config.prefijo_escape)
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
+        let auto_refresco = config.flota.auto_refresco_seg >= 15;
         let mut app = Self {
             rutas,
             config,
@@ -582,6 +808,21 @@ impl App {
             contador_ticks: 0,
             sucio: true,
             segundos_sesion: 0,
+            registro_sesiones: conexion::registro_sesiones(),
+            registro: EstadoRegistro::nuevo(),
+            sondeos: HashMap::new(),
+            tasas_red: HashMap::new(),
+            sondeando: HashSet::new(),
+            sondeo_total: 0,
+            sondeo_hechos: 0,
+            seleccion_flota: 0,
+            auto_refresco,
+            ultimo_auto: Instant::now(),
+            identidades_bd: Vec::new(),
+            uso_identidades: HashMap::new(),
+            huellas_escaneadas: HashSet::new(),
+            seleccion_identidad: 0,
+            ver_revocadas: false,
         };
         app.recargar_inventario()?;
         if let Some(aviso) = aviso_inicial {
@@ -590,6 +831,8 @@ impl App {
         lanzar_hilo_teclas(eventos_tx.clone(), salir_flag.clone());
         lanzar_tick(&app.runtime, eventos_tx.clone());
         app.refrescar_identidades();
+        app.cargar_sondeos();
+        app.entrar_en_flota();
         Ok(app)
     }
 
@@ -635,7 +878,20 @@ impl App {
             Evento::Identidades(identidades) => {
                 self.sucio = true;
                 self.identidades = identidades;
-                self.refrescar_opciones_identidad();
+                let claves = crate::identidades::claves_sincronizables(&self.identidades);
+                if let Err(error) = self.almacen.sincronizar_identidades(&claves) {
+                    warn!("no se pudieron sincronizar las identidades: {error}");
+                }
+                self.huellas_escaneadas = claves.iter().map(|clave| clave.huella.clone()).collect();
+                self.recargar_identidades();
+            }
+            Evento::Sondeo(sondeo) => {
+                self.sucio = true;
+                self.sondeo_recibido(sondeo);
+            }
+            Evento::ClaveGenerada(resultado) => {
+                self.sucio = true;
+                self.evento_clave_generada(resultado);
             }
         }
     }
@@ -666,6 +922,24 @@ impl App {
                 }
             }
         }
+        if self.vista == Vista::Flota {
+            if !self.sondeando.is_empty() {
+                self.sucio = true;
+            }
+            if self.auto_refresco
+                && self.sondeando.is_empty()
+                && self.ultimo_auto.elapsed().as_secs()
+                    >= self.config.flota.auto_refresco_seg.max(15)
+            {
+                self.ultimo_auto = Instant::now();
+                let ids: Vec<i64> = self
+                    .hosts_flota()
+                    .iter()
+                    .filter_map(|indice| self.hosts.get(*indice).map(|host| host.id))
+                    .collect();
+                self.sondear_hosts(ids);
+            }
+        }
     }
 
     pub fn mensaje(&mut self, texto: impl Into<String>, error: bool) {
@@ -674,6 +948,35 @@ impl App {
             error,
             creado: Instant::now(),
         });
+    }
+
+    /// Única vía de escritura en REGISTRO desde la UI.
+    pub fn anotar(
+        &self,
+        tipo: &str,
+        host_id: Option<i64>,
+        identidad_id: Option<i64>,
+        detalle: &str,
+        resultado: crate::modelo::ResultadoRegistro,
+    ) {
+        if let Err(error) = crate::registro::anotar(
+            self.almacen.conexion(),
+            tipo,
+            host_id,
+            identidad_id,
+            detalle,
+            resultado,
+        ) {
+            warn!("no se pudo anotar en el registro: {error}");
+        }
+    }
+
+    fn marcar_ultimo_uso(&self, huella: Option<&str>) {
+        if let Some(huella) = huella {
+            if let Err(error) = self.almacen.marcar_uso_identidad(huella) {
+                warn!("no se pudo marcar el último uso de la identidad: {error}");
+            }
+        }
     }
 
     // ---------------------------------------------------------------- almacén
@@ -963,9 +1266,7 @@ impl App {
             let tamano = crossterm::terminal::size().unwrap_or((80, 24));
             (tamano.0, tamano.1.saturating_sub(2).max(1))
         };
-        let usuario_local = std::env::var("USER")
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_else(|_| "root".to_string());
+        let usuario_local = usuario_local();
         let plan = PlanConexion {
             host: host.clone(),
             todos_los_hosts,
@@ -976,6 +1277,7 @@ impl App {
             solo_prueba,
             cols,
             filas,
+            registro: self.registro_sesiones.clone(),
         };
         let comandos = conexion::lanzar(&self.runtime, plan, self.eventos_tx.clone());
         self.comandos_sesion = Some(comandos);
@@ -1041,10 +1343,71 @@ impl App {
                     responder,
                 });
             }
+            EventoConexion::PideContrasena {
+                host,
+                intento,
+                recordar_por_defecto,
+                responder,
+            } => {
+                self.dialogo = Some(Dialogo::Contrasena {
+                    host,
+                    intento,
+                    campo: CampoTexto::default(),
+                    recordar: recordar_por_defecto && crate::llavero::disponible(),
+                    foco_casilla: false,
+                    responder,
+                });
+            }
+            EventoConexion::ContrasenaGuardada {
+                host_id,
+                ok,
+                motivo,
+            } => {
+                if ok {
+                    if host_id != 0 {
+                        if let Err(error) = self
+                            .almacen
+                            .marcar_identidad_ref(host_id, &IdentidadRef::ContrasenaLlavero)
+                        {
+                            warn!("no se pudo marcar la identidad de llavero: {error}");
+                        } else if let Err(error) = self.recargar_inventario() {
+                            warn!("no se pudo recargar el inventario: {error}");
+                        }
+                    }
+                    self.mensaje("contraseña guardada en el llavero del sistema", false);
+                } else {
+                    let motivo = motivo.unwrap_or_else(|| "error del llavero".to_string());
+                    self.mensaje(format!("no se pudo guardar la contraseña: {motivo}"), true);
+                }
+            }
+            EventoConexion::HuellaRegistrada {
+                host_id,
+                anterior,
+                nueva,
+            } => {
+                let (tipo, detalle) = match anterior {
+                    Some(anterior) => (
+                        crate::registro::HUELLA_SUSTITUIDA,
+                        format!("anterior {anterior} · nueva {nueva}"),
+                    ),
+                    None => (
+                        crate::registro::HUELLA_ACEPTADA,
+                        format!("huella nueva {nueva}"),
+                    ),
+                };
+                self.anotar(
+                    tipo,
+                    (host_id != 0).then_some(host_id),
+                    None,
+                    &detalle,
+                    crate::modelo::ResultadoRegistro::Ok,
+                );
+            }
             EventoConexion::Abierta {
                 host_id,
                 pantalla,
                 identidad,
+                huella,
                 cols,
                 filas,
             } => {
@@ -1057,6 +1420,14 @@ impl App {
                 if let Err(error) = self.almacen.marcar_conexion(host_id) {
                     warn!("no se pudo actualizar el estado del host: {error}");
                 }
+                self.anotar(
+                    crate::registro::CONEXION_ABIERTA,
+                    Some(host_id),
+                    None,
+                    &format!("sesión abierta con «{nombre}» · {identidad}"),
+                    crate::modelo::ResultadoRegistro::Ok,
+                );
+                self.marcar_ultimo_uso(huella.as_deref());
                 self.sesion = Some(SesionUI {
                     host_id,
                     host_nombre: nombre.clone(),
@@ -1080,13 +1451,18 @@ impl App {
                     self.sucio = true;
                 }
             }
-            EventoConexion::PruebaOk { host_id, identidad } => {
+            EventoConexion::PruebaOk {
+                host_id,
+                identidad,
+                huella,
+            } => {
                 if host_id != 0 {
                     let _ = self.almacen.marcar_estado(host_id, Some(UltimoEstado::Ok));
                     self.destello = Some((host_id, Instant::now()));
                 }
                 self.host_conectando = None;
                 self.comandos_sesion = None;
+                self.marcar_ultimo_uso(huella.as_deref());
                 let _ = self.recargar_inventario();
                 self.mensaje(format!("conexión correcta · {identidad}"), false);
             }
@@ -1134,6 +1510,13 @@ impl App {
                     self.vista = Vista::Hosts;
                 }
                 let _ = self.recargar_inventario();
+                self.anotar(
+                    crate::registro::CONEXION_FALLIDA,
+                    (host_id != 0).then_some(host_id),
+                    None,
+                    &motivo,
+                    crate::modelo::ResultadoRegistro::Error,
+                );
                 self.mensaje(motivo, true);
             }
             EventoConexion::Cancelada { .. } => {
@@ -1237,6 +1620,7 @@ impl App {
                 multiplexar: host.multiplexar,
                 keepalive_seg: host.keepalive_seg,
                 opciones_extra: host.opciones_extra.clone(),
+                servicios: host.servicios.clone(),
                 etiquetas: host.etiquetas.clone(),
             })
             .unwrap_or_else(|| DatosHost {
@@ -1288,6 +1672,7 @@ impl App {
                     .map(|valor| valor.to_string())
                     .unwrap_or_default(),
             ),
+            servicios: AreaTexto::nuevo(&datos.servicios),
             opciones: AreaTexto::nuevo(&datos.opciones_extra),
             grupo,
             identidad,
@@ -1305,30 +1690,31 @@ impl App {
             etiqueta: "auto".to_string(),
             valor: ValorOpcion::Identidad(IdentidadRef::Auto),
         }];
-        if let Some(agente) = &self.identidades.agente {
-            for clave in agente {
-                let etiqueta = if clave.comentario.is_empty() {
-                    format!("agente · {} · {}", clave.tipo, acorta_huella(&clave.huella))
-                } else {
-                    format!(
-                        "agente · {} · {} · {}",
-                        clave.comentario,
-                        clave.tipo,
-                        acorta_huella(&clave.huella)
-                    )
-                };
-                opciones.push(Opcion {
-                    etiqueta,
-                    valor: ValorOpcion::Identidad(IdentidadRef::Agente(clave.huella.clone())),
-                });
-            }
-        }
-        for clave in &self.identidades.ficheros {
+        opciones.push(Opcion {
+            etiqueta: "contraseña · se pide al conectar".to_string(),
+            valor: ValorOpcion::Identidad(IdentidadRef::Contrasena),
+        });
+        opciones.push(Opcion {
+            etiqueta: "contraseña · llavero del sistema".to_string(),
+            valor: ValorOpcion::Identidad(IdentidadRef::ContrasenaLlavero),
+        });
+        for identidad in self.identidades_bd.iter().filter(|i| !i.revocada()) {
+            let valor = match identidad.origen {
+                crate::modelo::OrigenIdentidad::Agente | crate::modelo::OrigenIdentidad::Token => {
+                    IdentidadRef::Agente(identidad.huella.clone())
+                }
+                crate::modelo::OrigenIdentidad::Fichero => {
+                    IdentidadRef::Fichero(identidad.ruta.clone().unwrap_or_default())
+                }
+            };
             opciones.push(Opcion {
-                etiqueta: format!("fichero · {}", clave.ruta.display()),
-                valor: ValorOpcion::Identidad(IdentidadRef::Fichero(
-                    clave.ruta.display().to_string(),
-                )),
+                etiqueta: format!(
+                    "{} · {} · {}",
+                    identidad.alias,
+                    identidad.tipo,
+                    identidad.origen.como_texto()
+                ),
+                valor: ValorOpcion::Identidad(valor),
             });
         }
         opciones
@@ -1395,6 +1781,7 @@ impl App {
         modelo::validar_usuario(datos.usuario.as_deref())?;
         modelo::validar_keepalive(datos.keepalive_seg)?;
         modelo::validar_opciones_extra(&datos.opciones_extra)?;
+        modelo::normalizar_servicios(&datos.servicios)?;
         let mapa: HashMap<i64, Host> = self
             .hosts
             .iter()
@@ -1410,10 +1797,13 @@ impl App {
             return;
         };
         let host_id = ficha.host_id;
-        let datos = ficha.datos();
+        let mut datos = ficha.datos();
         if let Err(motivo) = self.validar_ficha(&datos, host_id) {
             self.mensaje(motivo, true);
             return;
+        }
+        if let Ok(normalizados) = modelo::normalizar_servicios(&datos.servicios) {
+            datos.servicios = normalizados;
         }
         let resultado = match host_id {
             Some(id) => self.almacen.actualizar_host(id, &datos).map(|_| id),
@@ -1497,6 +1887,7 @@ impl App {
             multiplexar: datos.multiplexar,
             keepalive_seg: datos.keepalive_seg,
             opciones_extra: datos.opciones_extra.clone(),
+            servicios: datos.servicios.clone(),
             origen: Origen::Manual,
             ultimo_estado: None,
             ultima_conexion_en: None,
@@ -1677,6 +2068,18 @@ impl App {
                 for aviso in analisis.avisos.iter().take(6) {
                     lineas.push(format!("· aviso: {aviso}"));
                 }
+                self.anotar(
+                    crate::registro::IMPORTACION,
+                    None,
+                    None,
+                    &format!(
+                        "importados {} · sobrescritos {} · omitidos {}",
+                        resumen.importados,
+                        resumen.sobrescritos,
+                        resumen.omitidos.len() + analisis.avisos.len()
+                    ),
+                    ResultadoRegistro::Ok,
+                );
                 if let Err(error) = self.recargar_inventario() {
                     self.mensaje(error.to_string(), true);
                     return;
@@ -1701,6 +2104,13 @@ impl App {
                             resultado.ruta.display()
                         ),
                         false,
+                    );
+                    self.anotar(
+                        crate::registro::EXPORTACION,
+                        None,
+                        None,
+                        &format!("{} hosts → {}", resultado.hosts, resultado.ruta.display()),
+                        ResultadoRegistro::Ok,
                     );
                 }
                 if comprobar_include && !resultado.include_presente {
@@ -1756,6 +2166,50 @@ impl App {
             categoria: "acción",
             accion: AccionPaleta::IrASesion,
         });
+        entradas.push(EntradaPaleta {
+            etiqueta: "ir a registro".to_string(),
+            categoria: "acción",
+            accion: AccionPaleta::IrARegistro,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "exportar registro".to_string(),
+            categoria: "acción",
+            accion: AccionPaleta::ExportarRegistro,
+        });
+        for host in &self.hosts {
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("sondear · {}", host.nombre),
+                categoria: "flota",
+                accion: AccionPaleta::SondearHost(host.id),
+            });
+            if host.identidad_ref.usa_llavero() {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("olvidar contraseña · {}", host.nombre),
+                    categoria: "seguridad",
+                    accion: AccionPaleta::OlvidarContrasena(host.id),
+                });
+            }
+        }
+        entradas.push(EntradaPaleta {
+            etiqueta: "sondear todos".to_string(),
+            categoria: "flota",
+            accion: AccionPaleta::SondearTodos,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "ir a flota".to_string(),
+            categoria: "acción",
+            accion: AccionPaleta::IrAFlota,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "ir a identidades".to_string(),
+            categoria: "acción",
+            accion: AccionPaleta::IrAIdentidades,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "generar clave".to_string(),
+            categoria: "acción",
+            accion: AccionPaleta::GenerarClave,
+        });
         let mut paleta = PaletaCmd {
             consulta: CampoTexto::default(),
             entradas,
@@ -1802,6 +2256,43 @@ impl App {
                         self.paleta = None;
                         self.ir_a_sesion();
                     }
+                    Some(AccionPaleta::IrARegistro) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Registro);
+                    }
+                    Some(AccionPaleta::ExportarRegistro) => {
+                        self.paleta = None;
+                        self.abrir_exportacion_registro();
+                    }
+                    Some(AccionPaleta::IrAIdentidades) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Identidades);
+                    }
+                    Some(AccionPaleta::GenerarClave) => {
+                        self.paleta = None;
+                        self.abrir_generacion();
+                    }
+                    Some(AccionPaleta::SondearHost(id)) => {
+                        let id = *id;
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Flota);
+                        self.sondear_hosts(vec![id]);
+                    }
+                    Some(AccionPaleta::SondearTodos) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Flota);
+                        let ids: Vec<i64> = self.hosts.iter().map(|host| host.id).collect();
+                        self.sondear_hosts(ids);
+                    }
+                    Some(AccionPaleta::IrAFlota) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Flota);
+                    }
+                    Some(AccionPaleta::OlvidarContrasena(id)) => {
+                        let id = *id;
+                        self.paleta = None;
+                        self.abrir_olvido_contrasena(id);
+                    }
                     None => {}
                 }
             }
@@ -1832,6 +2323,848 @@ impl App {
             self.vista = Vista::Sesion;
         } else {
             self.mensaje("no hay sesión activa", true);
+        }
+    }
+
+    /// Cambia de vista comprobando antes si la ficha tiene cambios.
+    fn ir_a_vista(&mut self, vista: Vista) {
+        if self.ficha.as_ref().is_some_and(|ficha| ficha.sucio()) {
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "DESCARTAR CAMBIOS".to_string(),
+                lineas: vec!["Hay cambios sin guardar. ¿Descartarlos?".to_string()],
+                peligro: true,
+                accion: AccionDialogo::DescartarFichaHacia(vista),
+            });
+            return;
+        }
+        match vista {
+            Vista::Flota => self.entrar_en_flota(),
+            Vista::Hosts => self.ir_a_hosts(),
+            Vista::Sesion => self.ir_a_sesion(),
+            Vista::Identidades => self.ir_a_identidades(),
+            Vista::Registro => self.ir_a_registro(),
+            Vista::Ficha => self.vista = vista,
+        }
+    }
+
+    // ------------------------------------------------------------- identidades
+
+    fn ir_a_identidades(&mut self) {
+        self.vista = Vista::Identidades;
+        self.ficha = None;
+        self.paleta = None;
+        self.refrescar_identidades();
+        self.recargar_identidades();
+    }
+
+    fn recargar_identidades(&mut self) {
+        match self.almacen.listar_identidades(true) {
+            Ok(identidades) => self.identidades_bd = identidades,
+            Err(error) => warn!("no se pudieron cargar las identidades: {error}"),
+        }
+        self.uso_identidades.clear();
+        for identidad in &self.identidades_bd {
+            if let Ok(nombres) = self
+                .almacen
+                .hosts_que_usan_identidad(identidad, &self.rutas.hogar)
+            {
+                self.uso_identidades.insert(identidad.id, nombres);
+            }
+        }
+        let total = self.identidades_visibles().len();
+        if self.seleccion_identidad >= total && total > 0 {
+            self.seleccion_identidad = total - 1;
+        }
+        self.refrescar_opciones_identidad();
+    }
+
+    pub fn identidades_visibles(&self) -> Vec<&crate::modelo::Identidad> {
+        self.identidades_bd
+            .iter()
+            .filter(|identidad| self.ver_revocadas || !identidad.revocada())
+            .collect()
+    }
+
+    pub fn identidad_seleccionada(&self) -> Option<&crate::modelo::Identidad> {
+        self.identidades_visibles()
+            .get(self.seleccion_identidad)
+            .copied()
+    }
+
+    fn mover_seleccion_identidad(&mut self, delta: i32) {
+        let total = self.identidades_visibles().len() as i32;
+        if total == 0 {
+            return;
+        }
+        let nueva = (self.seleccion_identidad as i32 + delta).clamp(0, total - 1);
+        self.seleccion_identidad = nueva as usize;
+    }
+
+    fn tecla_identidades(&mut self, tecla: KeyEvent) {
+        let total = self.identidades_visibles().len();
+        match tecla.code {
+            KeyCode::Char('j') | KeyCode::Down => self.mover_seleccion_identidad(1),
+            KeyCode::Char('k') | KeyCode::Up => self.mover_seleccion_identidad(-1),
+            KeyCode::PageDown => self.mover_seleccion_identidad(10),
+            KeyCode::PageUp => self.mover_seleccion_identidad(-10),
+            KeyCode::Home => self.seleccion_identidad = 0,
+            KeyCode::End => self.seleccion_identidad = total.saturating_sub(1),
+            KeyCode::Char('n') => {
+                self.dialogo = Some(Dialogo::GenerarClave {
+                    estado: EstadoGeneracion::nuevo(),
+                });
+            }
+            KeyCode::Char('i') => {
+                if self.identidad_seleccionada().is_some_and(|identidad| {
+                    identidad.origen == crate::modelo::OrigenIdentidad::Token
+                }) {
+                    self.mensaje(
+                        "las claves -sk se usan a través del agente; no se importan como fichero",
+                        true,
+                    );
+                } else {
+                    self.dialogo = Some(Dialogo::EntradaTexto {
+                        titulo: "IMPORTAR CLAVE".to_string(),
+                        etiqueta: "Ruta".to_string(),
+                        campo: CampoTexto::nuevo("~/.ssh/"),
+                        accion: EntradaTextoAccion::ImportarClave,
+                    });
+                }
+            }
+            KeyCode::Char('c') => self.copiar_publica_identidad(),
+            KeyCode::Char('e') => {
+                if let Some(identidad) = self.identidad_seleccionada() {
+                    self.dialogo = Some(Dialogo::EntradaTexto {
+                        titulo: "ALIAS DE LA IDENTIDAD".to_string(),
+                        etiqueta: "Alias".to_string(),
+                        campo: CampoTexto::nuevo(identidad.alias.clone()),
+                        accion: EntradaTextoAccion::EditarAliasIdentidad(identidad.id),
+                    });
+                }
+            }
+            KeyCode::Char('x') => self.alternar_revocacion_identidad(),
+            KeyCode::Char('s') => {
+                self.refrescar_identidades();
+                self.mensaje("reescaneando ~/.ssh y el agente…", false);
+            }
+            KeyCode::Char('v') => {
+                self.ver_revocadas = !self.ver_revocadas;
+                let total = self.identidades_visibles().len();
+                if self.seleccion_identidad >= total {
+                    self.seleccion_identidad = total.saturating_sub(1);
+                }
+            }
+            KeyCode::Char('?') => self.ayuda = true,
+            KeyCode::Char('q') => self.intentar_salir(),
+            _ => {}
+        }
+    }
+
+    fn alternar_revocacion_identidad(&mut self) {
+        let Some(identidad) = self.identidad_seleccionada() else {
+            return;
+        };
+        let id = identidad.id;
+        let alias = identidad.alias.clone();
+        if identidad.revocada() {
+            match self.almacen.reactivar_identidad(id) {
+                Ok(()) => {
+                    self.mensaje(format!("identidad «{alias}» reactivada"), false);
+                    self.recargar_identidades();
+                }
+                Err(error) => self.mensaje(error.to_string(), true),
+            }
+            return;
+        }
+        let hosts = self
+            .almacen
+            .hosts_que_usan_identidad(identidad, &self.rutas.hogar)
+            .unwrap_or_default();
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "REVOCAR IDENTIDAD".to_string(),
+            lineas: vec![
+                format!("¿Revocar «{alias}»?"),
+                format!("{} host(s) pasarán a identidad auto.", hosts.len()),
+                "La clave seguirá en ~/.ssh y en el agente.".to_string(),
+                "MAGI no borra ficheros ni quita claves del agente.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::RevocarIdentidad(id),
+        });
+    }
+
+    fn copiar_publica_identidad(&mut self) {
+        let Some(identidad) = self.identidad_seleccionada() else {
+            return;
+        };
+        let huella = identidad.huella.clone();
+        let ruta = identidad.ruta.clone();
+        let texto = ruta
+            .as_deref()
+            .and_then(|ruta| crate::identidades::publica_de(std::path::Path::new(ruta)))
+            .or_else(|| {
+                self.identidades.agente.as_ref().and_then(|claves| {
+                    claves
+                        .iter()
+                        .find(|clave| clave.huella == huella)
+                        .and_then(|clave| clave.clave.to_openssh().ok())
+                })
+            });
+        match texto {
+            Some(texto) => match crate::portapapeles::copiar(&texto) {
+                Ok(herramienta) => self.mensaje(
+                    format!("clave pública copiada con {}", herramienta.nombre()),
+                    false,
+                ),
+                Err(error) => {
+                    self.dialogo = Some(Dialogo::Detalle {
+                        titulo: "CLAVE PÚBLICA".to_string(),
+                        lineas: vec![
+                            format!("No se pudo copiar al portapapeles ({error})."),
+                            String::new(),
+                            "Copia la línea a mano:".to_string(),
+                            String::new(),
+                            texto,
+                        ],
+                    });
+                }
+            },
+            None => self.mensaje("no se pudo obtener la clave pública", true),
+        }
+    }
+
+    fn abrir_olvido_contrasena(&mut self, host_id: i64) {
+        let host = match self.almacen.obtener_host(host_id) {
+            Ok(host) => host,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return;
+            }
+        };
+        if !host.identidad_ref.usa_llavero() {
+            self.mensaje("ese host no usa el llavero del sistema", true);
+            return;
+        }
+        let usuario = host.usuario.clone().unwrap_or_else(usuario_local);
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "OLVIDAR CONTRASEÑA".to_string(),
+            lineas: vec![
+                format!(
+                    "¿Borrar la contraseña de «{}» del llavero del sistema?",
+                    host.nombre
+                ),
+                "El host volverá a pedirla en la próxima conexión.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::OlvidarContrasena {
+                host_id,
+                nombre: host.nombre,
+                usuario,
+            },
+        });
+    }
+
+    fn abrir_generacion(&mut self) {
+        self.dialogo = Some(Dialogo::GenerarClave {
+            estado: EstadoGeneracion::nuevo(),
+        });
+    }
+
+    /// Devuelve `true` si la generación se lanzó (el diálogo se puede cerrar).
+    fn lanzar_generacion(&mut self, estado: &EstadoGeneracion) -> bool {
+        let nombre = estado.fichero.texto.trim().to_string();
+        if nombre.is_empty() {
+            self.mensaje("el nombre de fichero no puede estar vacío", true);
+            return false;
+        }
+        if estado.frase.texto != estado.repetir.texto {
+            self.mensaje("las frases no coinciden", true);
+            return false;
+        }
+        let ruta = self.rutas.dir_ssh().join(&nombre);
+        if ruta.exists() || crate::identidades::ruta_publica(&ruta).exists() {
+            self.mensaje(
+                format!("ya existe {}; elige otro nombre", ruta.display()),
+                true,
+            );
+            return false;
+        }
+        let peticion = crate::identidades::PeticionGeneracion {
+            dir_ssh: self.rutas.dir_ssh(),
+            nombre,
+            tipo: if estado.rsa {
+                crate::identidades::TipoClave::Rsa4096
+            } else {
+                crate::identidades::TipoClave::Ed25519
+            },
+            comentario: estado.comentario.texto.clone(),
+            frase: Zeroizing::new(estado.frase.texto.clone()),
+            anadir_agente: estado.agente,
+            copiar_publica: estado.copiar,
+        };
+        let tx = self.eventos_tx.clone();
+        self.runtime.spawn(async move {
+            let resultado = crate::identidades::generar(peticion).await;
+            let _ = tx.send(Evento::ClaveGenerada(resultado));
+        });
+        self.mensaje("generando clave…", false);
+        true
+    }
+
+    fn evento_clave_generada(
+        &mut self,
+        resultado: Result<crate::identidades::ClaveGenerada, String>,
+    ) {
+        let clave = match resultado {
+            Ok(clave) => clave,
+            Err(motivo) => {
+                self.mensaje(motivo, true);
+                return;
+            }
+        };
+        let origen = if clave.en_agente {
+            crate::modelo::OrigenIdentidad::Agente
+        } else {
+            crate::modelo::OrigenIdentidad::Fichero
+        };
+        let ruta = clave.ruta.display().to_string();
+        match self.almacen.crear_identidad(
+            &clave.tipo,
+            &clave.huella,
+            origen,
+            Some(&ruta),
+            clave.comentario.as_deref(),
+        ) {
+            Ok(id) => self.anotar(
+                crate::registro::CLAVE_GENERADA,
+                None,
+                Some(id),
+                &format!("{} {} → {ruta}", clave.tipo, acorta_huella(&clave.huella)),
+                ResultadoRegistro::Ok,
+            ),
+            Err(error) => self.mensaje(error.to_string(), true),
+        }
+        self.recargar_identidades();
+        let mut texto = format!("clave {} generada en {ruta}", clave.tipo);
+        if let Some(aviso) = &clave.aviso_agente {
+            texto.push_str(" · ");
+            texto.push_str(aviso);
+        } else if clave.en_agente {
+            texto.push_str(" · añadida al agente");
+        }
+        if clave.copiada {
+            texto.push_str(" · pública copiada al portapapeles");
+        }
+        self.mensaje(texto, clave.aviso_agente.is_some());
+        if clave.solicito_copia && !clave.copiada {
+            self.dialogo = Some(Dialogo::Detalle {
+                titulo: "CLAVE PÚBLICA".to_string(),
+                lineas: vec![
+                    "No se pudo copiar al portapapeles; copia la línea a mano:".to_string(),
+                    String::new(),
+                    clave.publica.trim().to_string(),
+                ],
+            });
+        }
+    }
+
+    fn importar_clave(&mut self, ruta: std::path::PathBuf, frase: Option<Zeroizing<String>>) {
+        match crate::identidades::leer_clave(&ruta, frase.as_deref().map(String::as_str)) {
+            crate::identidades::LecturaClave::Ok(clave) => {
+                let origen = if clave.tipo.ends_with("-sk") {
+                    crate::modelo::OrigenIdentidad::Token
+                } else {
+                    crate::modelo::OrigenIdentidad::Fichero
+                };
+                let sincronizada = crate::almacen::identidades::ClaveSincronizada {
+                    tipo: clave.tipo.clone(),
+                    huella: clave.huella.clone(),
+                    origen,
+                    ruta: Some(clave.ruta.display().to_string()),
+                    comentario: clave.comentario.clone(),
+                };
+                if let Err(error) = self.almacen.sincronizar_identidades(&[sincronizada]) {
+                    self.mensaje(error.to_string(), true);
+                    return;
+                }
+                let identidad_id = self
+                    .almacen
+                    .identidad_por_huella(&clave.huella)
+                    .ok()
+                    .flatten()
+                    .map(|identidad| identidad.id);
+                self.anotar(
+                    crate::registro::CLAVE_IMPORTADA,
+                    None,
+                    identidad_id,
+                    &format!(
+                        "{} {} ← {}",
+                        clave.tipo,
+                        acorta_huella(&clave.huella),
+                        clave.ruta.display()
+                    ),
+                    ResultadoRegistro::Ok,
+                );
+                self.recargar_identidades();
+                self.mensaje(
+                    format!("clave importada: {} ({})", clave.ruta.display(), clave.tipo),
+                    false,
+                );
+            }
+            crate::identidades::LecturaClave::NecesitaFrase => {
+                self.dialogo = Some(Dialogo::FraseImportacion {
+                    ruta,
+                    campo: CampoTexto::default(),
+                });
+            }
+            crate::identidades::LecturaClave::Error(motivo) => self.mensaje(motivo, true),
+        }
+    }
+
+    // ------------------------------------------------------------------- flota
+
+    fn cargar_sondeos(&mut self) {
+        match self.almacen.sondeos_por_host() {
+            Ok(mapa) => self.sondeos = mapa,
+            Err(error) => warn!("no se pudieron cargar los sondeos: {error}"),
+        }
+        let ids: Vec<i64> = self.hosts.iter().map(|host| host.id).collect();
+        for id in ids {
+            if let Ok(ultimos) = self.almacen.ultimos_sondeos(id, 2) {
+                if ultimos.len() == 2 {
+                    if let Some(tasa) = flota::estado::tasa_red(&ultimos[0], &ultimos[1]) {
+                        self.tasas_red.insert(id, tasa);
+                    }
+                }
+            }
+        }
+    }
+
+    fn entrar_en_flota(&mut self) {
+        self.vista = Vista::Flota;
+        self.ficha = None;
+        self.paleta = None;
+        self.ultimo_auto = Instant::now();
+        let ids: Vec<i64> = self
+            .hosts
+            .iter()
+            .filter(|host| self.necesita_sondeo(host.id))
+            .map(|host| host.id)
+            .collect();
+        if !ids.is_empty() {
+            self.sondear_hosts(ids);
+        }
+    }
+
+    fn necesita_sondeo(&self, host_id: i64) -> bool {
+        match self.sondeos.get(&host_id) {
+            Some(sondeo) => flota::estado::antiguedad_segundos(&sondeo.fecha)
+                .is_none_or(|segundos| segundos > 60.0),
+            None => true,
+        }
+    }
+
+    fn sondear_hosts(&mut self, ids: Vec<i64>) {
+        if ids.is_empty() {
+            return;
+        }
+        let todos: HashMap<i64, Host> = self
+            .hosts
+            .iter()
+            .cloned()
+            .map(|host| (host.id, host))
+            .collect();
+        let mut peticiones = Vec::new();
+        for id in ids {
+            if self.sondeando.contains(&id) {
+                continue;
+            }
+            let Some(host) = todos.get(&id).cloned() else {
+                continue;
+            };
+            self.sondeando.insert(id);
+            peticiones.push(PeticionSondeo {
+                servicios: modelo::servicios_de(&host),
+                host,
+                todos_los_hosts: todos.clone(),
+                known_hosts: self.rutas.fichero_known_hosts(),
+                dir_ssh: self.rutas.dir_ssh(),
+                hogar: self.rutas.hogar.clone(),
+                usuario_local: usuario_local(),
+            });
+        }
+        if peticiones.is_empty() {
+            return;
+        }
+        self.sondeo_total = peticiones.len();
+        self.sondeo_hechos = 0;
+        let (tx, mut rx) = mpsc::unbounded_channel::<Sondeo>();
+        let eventos = self.eventos_tx.clone();
+        self.runtime.spawn(async move {
+            while let Some(sondeo) = rx.recv().await {
+                if eventos.send(Evento::Sondeo(sondeo)).is_err() {
+                    break;
+                }
+            }
+        });
+        flota::lanzar_lote(
+            &self.runtime,
+            peticiones,
+            tx,
+            self.registro_sesiones.clone(),
+        );
+    }
+
+    fn sondeo_recibido(&mut self, sondeo: Sondeo) {
+        self.sondeando.remove(&sondeo.host_id);
+        self.sondeo_hechos = self.sondeo_hechos.saturating_add(1);
+        if let Some(anterior) = self.sondeos.get(&sondeo.host_id) {
+            if let Some(tasa) = flota::estado::tasa_red(&sondeo, anterior) {
+                self.tasas_red.insert(sondeo.host_id, tasa);
+            }
+        }
+        if sondeo.resultado == ResultadoSondeo::Error {
+            let motivo = sondeo
+                .error
+                .clone()
+                .unwrap_or_else(|| "error de sondeo".to_string());
+            self.anotar(
+                crate::registro::SONDEO_FALLIDO,
+                Some(sondeo.host_id),
+                None,
+                &motivo,
+                ResultadoRegistro::Error,
+            );
+        }
+        if let Err(error) = self.almacen.guardar_sondeo(&sondeo) {
+            warn!("no se pudo guardar el sondeo: {error}");
+        }
+        self.sondeos.insert(sondeo.host_id, sondeo);
+    }
+
+    /// Índices de `hosts` visibles en Flota con el filtro actual.
+    pub fn hosts_flota(&self) -> Vec<usize> {
+        self.hosts
+            .iter()
+            .enumerate()
+            .filter(|(_, host)| {
+                self.filtro.trim().is_empty() || modelo::coincide(host, &self.filtro)
+            })
+            .map(|(indice, _)| indice)
+            .collect()
+    }
+
+    pub fn host_flota_seleccionado(&self) -> Option<&Host> {
+        let indices = self.hosts_flota();
+        indices
+            .get(self.seleccion_flota)
+            .and_then(|indice| self.hosts.get(*indice))
+    }
+
+    fn tecla_flota(&mut self, tecla: KeyEvent) {
+        if self.filtro_activo {
+            match tecla.code {
+                KeyCode::Esc => {
+                    self.filtro.clear();
+                    self.filtro_activo = false;
+                    self.seleccion_flota = 0;
+                    return;
+                }
+                KeyCode::Enter => {
+                    self.filtro_activo = false;
+                    return;
+                }
+                KeyCode::Up => {
+                    self.seleccion_flota = self.seleccion_flota.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    let total = self.hosts_flota().len();
+                    if self.seleccion_flota + 1 < total {
+                        self.seleccion_flota += 1;
+                    }
+                    return;
+                }
+                _ => {
+                    if manejar_texto(&mut self.filtro, tecla) {
+                        self.seleccion_flota = 0;
+                    }
+                    return;
+                }
+            }
+        }
+        let total = self.hosts_flota().len();
+        match tecla.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.seleccion_flota + 1 < total {
+                    self.seleccion_flota += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.seleccion_flota = self.seleccion_flota.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.seleccion_flota = (self.seleccion_flota + 10).min(total.saturating_sub(1));
+            }
+            KeyCode::PageUp => {
+                self.seleccion_flota = self.seleccion_flota.saturating_sub(10);
+            }
+            KeyCode::Home => self.seleccion_flota = 0,
+            KeyCode::End => self.seleccion_flota = total.saturating_sub(1),
+            KeyCode::Enter => {
+                if let Some(host) = self.host_flota_seleccionado() {
+                    self.conectar(host.id);
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(id) = self.host_flota_seleccionado().map(|host| host.id) {
+                    self.sondear_hosts(vec![id]);
+                    self.mensaje("sondeando…", false);
+                }
+            }
+            KeyCode::Char('R') => {
+                let ids: Vec<i64> = self
+                    .hosts_flota()
+                    .iter()
+                    .filter_map(|indice| self.hosts.get(*indice).map(|host| host.id))
+                    .collect();
+                if !ids.is_empty() {
+                    self.mensaje(format!("sondeando {} hosts…", ids.len()), false);
+                    self.sondear_hosts(ids);
+                }
+            }
+            KeyCode::Char('/') => {
+                self.filtro_activo = true;
+                self.filtro.clear();
+                self.seleccion_flota = 0;
+            }
+            KeyCode::Char('e') => {
+                if let Some(id) = self.host_flota_seleccionado().map(|host| host.id) {
+                    self.abrir_ficha(Some(id));
+                }
+            }
+            KeyCode::Char('a') => {
+                self.auto_refresco = !self.auto_refresco;
+                self.ultimo_auto = Instant::now();
+                if self.auto_refresco {
+                    let segundos = self.config.flota.auto_refresco_seg.max(15);
+                    self.mensaje(format!("auto-refresco cada {segundos} s"), false);
+                } else {
+                    self.mensaje("auto-refresco desactivado", false);
+                }
+            }
+            KeyCode::Char('?') => self.ayuda = true,
+            KeyCode::Char('q') => self.intentar_salir(),
+            KeyCode::Esc if !self.filtro.is_empty() => {
+                self.filtro.clear();
+                self.seleccion_flota = 0;
+            }
+            _ => {}
+        }
+    }
+
+    // ----------------------------------------------------------------- registro
+
+    fn ir_a_registro(&mut self) {
+        self.vista = Vista::Registro;
+        self.ficha = None;
+        self.paleta = None;
+        self.recargar_registro();
+    }
+
+    fn recargar_registro(&mut self) {
+        let filtro = self.registro.filtro.clone();
+        match self.almacen.listar_registro(&filtro, REGISTRO_PAGINA, 0) {
+            Ok(entradas) => self.registro.entradas = entradas,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return;
+            }
+        }
+        match self.almacen.contar_registro(&filtro) {
+            Ok(total) => self.registro.total = total,
+            Err(error) => self.mensaje(error.to_string(), true),
+        }
+        if self.registro.seleccion >= self.registro.entradas.len() {
+            self.registro.seleccion = self.registro.entradas.len().saturating_sub(1);
+        }
+    }
+
+    fn cargar_mas_registro(&mut self) {
+        let cargadas = self.registro.entradas.len() as i64;
+        if cargadas >= self.registro.total || self.registro.total == 0 {
+            return;
+        }
+        let filtro = self.registro.filtro.clone();
+        match self
+            .almacen
+            .listar_registro(&filtro, REGISTRO_PAGINA, cargadas)
+        {
+            Ok(mas) => self.registro.entradas.extend(mas),
+            Err(error) => self.mensaje(error.to_string(), true),
+        }
+    }
+
+    fn mover_seleccion_registro(&mut self, delta: i32) {
+        if self.registro.entradas.is_empty() {
+            return;
+        }
+        let total = self.registro.entradas.len() as i32;
+        let nueva = (self.registro.seleccion as i32 + delta).clamp(0, total - 1) as usize;
+        self.registro.seleccion = nueva;
+        if self.registro.seleccion + 1 >= self.registro.entradas.len() {
+            self.cargar_mas_registro();
+        }
+    }
+
+    fn tecla_registro(&mut self, tecla: KeyEvent) {
+        if self.registro.texto_activo {
+            match tecla.code {
+                KeyCode::Esc => {
+                    self.registro.filtro.texto.clear();
+                    self.registro.campo.limpiar();
+                    self.registro.texto_activo = false;
+                    self.recargar_registro();
+                }
+                KeyCode::Enter => {
+                    self.registro.filtro.texto = self.registro.campo.texto.clone();
+                    self.registro.texto_activo = false;
+                    self.recargar_registro();
+                }
+                KeyCode::Up => self.mover_seleccion_registro(-1),
+                KeyCode::Down => self.mover_seleccion_registro(1),
+                _ => {
+                    if self.registro.campo.manejar_tecla(&tecla) {
+                        self.registro.filtro.texto = self.registro.campo.texto.clone();
+                        self.recargar_registro();
+                    }
+                }
+            }
+            return;
+        }
+        match tecla.code {
+            KeyCode::Char('j') | KeyCode::Down => self.mover_seleccion_registro(1),
+            KeyCode::Char('k') | KeyCode::Up => self.mover_seleccion_registro(-1),
+            KeyCode::PageDown => self.mover_seleccion_registro(10),
+            KeyCode::PageUp => self.mover_seleccion_registro(-10),
+            KeyCode::Home => {
+                self.registro.seleccion = 0;
+            }
+            KeyCode::End => {
+                self.registro.seleccion = self.registro.entradas.len().saturating_sub(1);
+                self.cargar_mas_registro();
+            }
+            KeyCode::Enter => self.abrir_detalle_registro(),
+            KeyCode::Char('/') => {
+                self.registro.texto_activo = true;
+                self.registro.campo = CampoTexto::nuevo(self.registro.filtro.texto.clone());
+            }
+            KeyCode::Char('t') => {
+                self.registro.filtro.ciclo_tipo();
+                self.recargar_registro();
+            }
+            KeyCode::Char('p') => self.abrir_purga_registro(),
+            KeyCode::Char('x') => self.abrir_exportacion_registro(),
+            KeyCode::Char('?') => self.ayuda = true,
+            KeyCode::Esc if !self.registro.filtro.texto.is_empty() => {
+                self.registro.filtro.texto.clear();
+                self.recargar_registro();
+            }
+            _ => {}
+        }
+    }
+
+    fn abrir_detalle_registro(&mut self) {
+        let Some(entrada) = self.registro.entrada_seleccionada() else {
+            return;
+        };
+        let lineas = vec![
+            format!(
+                "Fecha:     {}",
+                crate::ui::registro::formatear_fecha_larga(&entrada.fecha)
+            ),
+            format!("Tipo:      {}", entrada.tipo),
+            format!(
+                "Host:      {}",
+                entrada.host_nombre.as_deref().unwrap_or("—")
+            ),
+            format!(
+                "Identidad: {}",
+                entrada.identidad_alias.as_deref().unwrap_or("—")
+            ),
+            format!("Resultado: {}", entrada.resultado.como_texto()),
+            String::new(),
+            entrada.detalle.clone(),
+        ];
+        self.dialogo = Some(Dialogo::Detalle {
+            titulo: "DETALLE DEL REGISTRO".to_string(),
+            lineas,
+        });
+    }
+
+    fn abrir_purga_registro(&mut self) {
+        let corte = corte_purga();
+        let total = self.almacen.contar_registro_anterior(&corte).unwrap_or(0);
+        let legible = crate::ui::registro::formatear_fecha_larga(&corte);
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "PURGAR REGISTRO".to_string(),
+            lineas: vec![
+                format!("Se borrarán {total} entradas anteriores a {legible}."),
+                "Las entradas del registro nunca se editan; solo se purgan.".to_string(),
+                "¿Purgar?".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::PurgarRegistro(corte),
+        });
+    }
+
+    fn abrir_exportacion_registro(&mut self) {
+        let nombre = format!(
+            "magi-registro-{}.csv",
+            chrono::Local::now().format("%Y%m%d")
+        );
+        let ruta = self.rutas.hogar.join(nombre);
+        self.dialogo = Some(Dialogo::ExportarRegistro {
+            estado: ExportacionRegistro {
+                json: false,
+                campo: CampoTexto::nuevo(ruta.display().to_string()),
+                foco: 1,
+            },
+        });
+    }
+
+    fn ejecutar_exportacion_registro(&mut self, json: bool, ruta: &str) {
+        let ruta = conexion::cliente::expandir_home(ruta, &self.rutas.hogar);
+        let entradas = match self.almacen.registro_para_exportar(None) {
+            Ok(entradas) => entradas,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return;
+            }
+        };
+        let resultado = if json {
+            crate::registro::exportar_json(&ruta, &entradas)
+        } else {
+            crate::registro::exportar_csv(&ruta, &entradas)
+        };
+        match resultado {
+            Ok(total) => {
+                self.anotar(
+                    crate::registro::EXPORTACION,
+                    None,
+                    None,
+                    &format!("{total} entradas → {}", ruta.display()),
+                    ResultadoRegistro::Ok,
+                );
+                self.mensaje(
+                    format!("exportadas {total} entradas a {}", ruta.display()),
+                    false,
+                );
+                if self.vista == Vista::Registro {
+                    self.recargar_registro();
+                }
+            }
+            Err(error) => self.mensaje(error.to_string(), true),
         }
     }
 
@@ -1890,7 +3223,19 @@ impl App {
                 }
                 return;
             }
-            KeyCode::F(1) | KeyCode::F(4) | KeyCode::F(5) | KeyCode::F(6) | KeyCode::F(7) => {
+            KeyCode::F(1) => {
+                self.ir_a_vista(Vista::Flota);
+                return;
+            }
+            KeyCode::F(5) => {
+                self.ir_a_vista(Vista::Identidades);
+                return;
+            }
+            KeyCode::F(7) => {
+                self.ir_a_vista(Vista::Registro);
+                return;
+            }
+            KeyCode::F(4) | KeyCode::F(6) => {
                 self.mensaje("vista no disponible en esta fase", true);
                 return;
             }
@@ -1901,9 +3246,12 @@ impl App {
             _ => {}
         }
         match self.vista {
+            Vista::Flota => self.tecla_flota(tecla),
             Vista::Hosts => self.tecla_hosts(tecla),
             Vista::Ficha => self.tecla_ficha(tecla),
             Vista::Sesion => {}
+            Vista::Identidades => self.tecla_identidades(tecla),
+            Vista::Registro => self.tecla_registro(tecla),
         }
     }
 
@@ -2002,6 +3350,57 @@ impl App {
                     });
                 }
             },
+            Dialogo::Contrasena {
+                host,
+                intento,
+                mut campo,
+                mut recordar,
+                mut foco_casilla,
+                responder,
+            } => match tecla.code {
+                KeyCode::Enter => {
+                    let contrasena = Zeroizing::new(campo.texto.clone());
+                    campo.limpiar();
+                    let _ = responder.send(Some((contrasena, recordar)));
+                }
+                KeyCode::Esc => {
+                    let _ = responder.send(None);
+                }
+                KeyCode::Tab | KeyCode::BackTab => {
+                    foco_casilla = !foco_casilla;
+                    self.dialogo = Some(Dialogo::Contrasena {
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
+                        responder,
+                    });
+                }
+                KeyCode::Char(' ') if foco_casilla => {
+                    recordar = !recordar;
+                    self.dialogo = Some(Dialogo::Contrasena {
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
+                        responder,
+                    });
+                }
+                _ => {
+                    foco_casilla = false;
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::Contrasena {
+                        host,
+                        intento,
+                        campo,
+                        recordar,
+                        foco_casilla,
+                        responder,
+                    });
+                }
+            },
             Dialogo::MenuGrupo { mut seleccion } => match tecla.code {
                 KeyCode::Esc | KeyCode::Char('q') => {}
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -2035,6 +3434,20 @@ impl App {
                             }
                             EntradaTextoAccion::RenombrarGrupo(id) => {
                                 self.ejecutar_accion(AccionDialogo::RenombrarGrupo { id, nombre });
+                            }
+                            EntradaTextoAccion::ImportarClave => {
+                                let ruta =
+                                    conexion::cliente::expandir_home(&nombre, &self.rutas.hogar);
+                                self.importar_clave(ruta, None);
+                            }
+                            EntradaTextoAccion::EditarAliasIdentidad(id) => {
+                                match self.almacen.renombrar_identidad(id, &nombre) {
+                                    Ok(()) => {
+                                        self.recargar_identidades();
+                                        self.mensaje("alias actualizado", false);
+                                    }
+                                    Err(error) => self.mensaje(error.to_string(), true),
+                                }
                             }
                         }
                     }
@@ -2077,6 +3490,60 @@ impl App {
                     self.dialogo = Some(Dialogo::ResumenImportacion { titulo, lineas });
                 }
             }
+            Dialogo::Detalle { titulo, lineas } => {
+                if !matches!(tecla.code, KeyCode::Enter | KeyCode::Esc) {
+                    self.dialogo = Some(Dialogo::Detalle { titulo, lineas });
+                }
+            }
+            Dialogo::GenerarClave { mut estado } => match estado.manejar_tecla(&tecla) {
+                AccionGeneracion::Cancelar => {}
+                AccionGeneracion::Generar => {
+                    if !self.lanzar_generacion(&estado) {
+                        self.dialogo = Some(Dialogo::GenerarClave { estado });
+                    }
+                }
+                AccionGeneracion::Nada => {
+                    self.dialogo = Some(Dialogo::GenerarClave { estado });
+                }
+            },
+            Dialogo::FraseImportacion { ruta, mut campo } => match tecla.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => {
+                    let frase = Zeroizing::new(campo.texto.clone());
+                    campo.limpiar();
+                    self.importar_clave(ruta, Some(frase));
+                }
+                _ => {
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::FraseImportacion { ruta, campo });
+                }
+            },
+            Dialogo::ExportarRegistro { mut estado } => match tecla.code {
+                KeyCode::Esc => {}
+                KeyCode::Tab | KeyCode::BackTab => {
+                    estado.foco = (estado.foco + 1) % 2;
+                    self.dialogo = Some(Dialogo::ExportarRegistro { estado });
+                }
+                KeyCode::Enter => {
+                    self.ejecutar_exportacion_registro(estado.json, &estado.campo.texto.clone());
+                }
+                _ if estado.foco == 0 => {
+                    if matches!(
+                        tecla.code,
+                        KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+                    ) {
+                        estado.json = !estado.json;
+                        let actual = estado.campo.texto.clone();
+                        estado.campo.texto = cambiar_extension(&actual, estado.json);
+                        estado.campo.cursor = estado.campo.texto.chars().count();
+                    }
+                    self.dialogo = Some(Dialogo::ExportarRegistro { estado });
+                }
+                _ => {
+                    estado.campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::ExportarRegistro { estado });
+                }
+            },
             Dialogo::ConflictoImportacion { nombre, restantes } => {
                 let decision = match tecla.code {
                     KeyCode::Char('s') => Some(true),
@@ -2178,6 +3645,62 @@ impl App {
                 self.ficha = None;
                 self.vista = Vista::Hosts;
             }
+            AccionDialogo::DescartarFichaHacia(vista) => {
+                self.ficha = None;
+                match vista {
+                    Vista::Flota => self.entrar_en_flota(),
+                    Vista::Hosts => self.ir_a_hosts(),
+                    Vista::Identidades => self.ir_a_identidades(),
+                    Vista::Registro => self.ir_a_registro(),
+                    _ => self.vista = vista,
+                }
+            }
+            AccionDialogo::RevocarIdentidad(id) => {
+                match self.almacen.revocar_identidad(id, &self.rutas.hogar) {
+                    Ok(afectados) => {
+                        self.anotar(
+                            crate::registro::REFERENCIA_REVOCADA,
+                            None,
+                            Some(id),
+                            &format!("{afectados} host(s) pasan a identidad auto"),
+                            ResultadoRegistro::Ok,
+                        );
+                        self.mensaje(
+                            "revocada; la clave sigue en ~/.ssh y en el agente: bórrala a mano si procede",
+                            false,
+                        );
+                        if self.config.exportar_al_guardar {
+                            self.exportar(false, true);
+                        }
+                        if let Err(error) = self.recargar_inventario() {
+                            warn!("no se pudo recargar el inventario: {error}");
+                        }
+                        self.recargar_identidades();
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionDialogo::OlvidarContrasena {
+                host_id: _,
+                nombre,
+                usuario,
+            } => match crate::llavero::olvidar(&nombre, &usuario) {
+                Ok(true) => self.mensaje(
+                    format!("contraseña de «{nombre}» borrada del llavero"),
+                    false,
+                ),
+                Ok(false) => self.mensaje("no había contraseña guardada en el llavero", false),
+                Err(error) => self.mensaje(error.to_string(), true),
+            },
+            AccionDialogo::PurgarRegistro(corte) => match self.almacen.purgar_registro(&corte) {
+                Ok(borradas) => {
+                    self.mensaje(format!("{borradas} entradas purgadas del registro"), false);
+                    if self.vista == Vista::Registro {
+                        self.recargar_registro();
+                    }
+                }
+                Err(error) => self.mensaje(error.to_string(), true),
+            },
             AccionDialogo::InsertarInclude => {
                 let config = self.rutas.fichero_ssh_config();
                 let magi_config = self.rutas.fichero_magi_config();
@@ -2230,6 +3753,29 @@ fn lanzar_tick(runtime: &tokio::runtime::Runtime, tx: mpsc::UnboundedSender<Even
     });
 }
 
+fn usuario_local() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "root".to_string())
+}
+
+/// Fecha de corte de la purga del registro (90 días atrás).
+fn corte_purga() -> String {
+    (chrono::Local::now() - chrono::Duration::days(90))
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string()
+}
+
+fn cambiar_extension(ruta: &str, json: bool) -> String {
+    let objetivo = if json { ".json" } else { ".csv" };
+    let alternativa = if json { ".csv" } else { ".json" };
+    if let Some(base) = ruta.strip_suffix(alternativa) {
+        format!("{base}{objetivo}")
+    } else {
+        ruta.to_string()
+    }
+}
+
 fn manejar_texto(texto: &mut String, tecla: KeyEvent) -> bool {
     match tecla.code {
         KeyCode::Char(caracter) if !tecla.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -2279,6 +3825,8 @@ fn opciones_salto(hosts: &[Host], excluido: Option<i64>) -> Vec<Opcion> {
 fn etiqueta_identidad(identidad: &IdentidadRef) -> String {
     match identidad {
         IdentidadRef::Auto => "auto".to_string(),
+        IdentidadRef::Contrasena => "contraseña · se pide al conectar".to_string(),
+        IdentidadRef::ContrasenaLlavero => "contraseña · llavero del sistema".to_string(),
         IdentidadRef::Agente(huella) => format!("agente · {}", acorta_huella(huella)),
         IdentidadRef::Fichero(ruta) => format!("fichero · {ruta}"),
     }
