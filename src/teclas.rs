@@ -44,9 +44,34 @@ pub fn parsear_prefijo(texto: &str) -> Result<(KeyCode, KeyModifiers), String> {
     Ok((tecla, modos))
 }
 
+/// Equivalencia de las teclas de control que crossterm entrega como dígitos.
+/// Los bytes `0x1C`–`0x1F` los mapea a `Ctrl+4`…`Ctrl+7`, de modo que
+/// `Ctrl+]` llega como `Ctrl+5`; se normaliza a la tecla «real».
+fn normalizar_control(codigo: KeyCode) -> KeyCode {
+    match codigo {
+        KeyCode::Char('4') => KeyCode::Char('['),
+        KeyCode::Char('5') => KeyCode::Char(']'),
+        KeyCode::Char('6') => KeyCode::Char('^'),
+        KeyCode::Char('7') => KeyCode::Char('_'),
+        otro => otro,
+    }
+}
+
 /// Comprueba si una pulsación es exactamente el prefijo configurado.
 pub fn es_prefijo(tecla: &KeyEvent, prefijo: (KeyCode, KeyModifiers)) -> bool {
-    tecla.code == prefijo.0 && tecla.modifiers.contains(prefijo.1)
+    let control = tecla.modifiers.contains(KeyModifiers::CONTROL);
+    let codigo = if control {
+        normalizar_control(tecla.code)
+    } else {
+        tecla.code
+    };
+    let (codigo_prefijo, modos_prefijo) = prefijo;
+    let codigo_prefijo = if modos_prefijo.contains(KeyModifiers::CONTROL) {
+        normalizar_control(codigo_prefijo)
+    } else {
+        codigo_prefijo
+    };
+    codigo == codigo_prefijo && tecla.modifiers.contains(modos_prefijo)
 }
 
 /// Traduce una tecla de crossterm a los bytes que espera un PTY remoto.
@@ -60,6 +85,10 @@ pub fn bytes_de_tecla(tecla: KeyEvent) -> Option<Vec<u8>> {
                     'a'..='z' => caracter as u8 - b'a' + 1,
                     'A'..='Z' => caracter as u8 - b'A' + 1,
                     ' ' | '@' => 0,
+                    '4' => 0x1c,
+                    '5' => 0x1d,
+                    '6' => 0x1e,
+                    '7' => 0x1f,
                     '[' => 27,
                     '\\' => 28,
                     ']' => 29,
@@ -109,4 +138,50 @@ pub fn bytes_de_tecla(tecla: KeyEvent) -> Option<Vec<u8>> {
         return Some(con_alt);
     }
     Some(bytes)
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn el_prefijo_ctrl_corchete_reconoce_ambas_formas() {
+        let prefijo = parsear_prefijo("Ctrl+]").unwrap();
+        assert_eq!(prefijo, (KeyCode::Char(']'), KeyModifiers::CONTROL));
+        let corchete = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
+        let digito = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::CONTROL);
+        assert!(es_prefijo(&corchete, prefijo));
+        assert!(es_prefijo(&digito, prefijo));
+        assert!(!es_prefijo(
+            &KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            prefijo
+        ));
+        assert!(!es_prefijo(
+            &KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+            prefijo
+        ));
+    }
+
+    #[test]
+    fn ctrl_corchete_se_traduce_al_byte_de_control() {
+        let digito = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::CONTROL);
+        assert_eq!(bytes_de_tecla(digito), Some(vec![0x1d]));
+        let corchete = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
+        assert_eq!(bytes_de_tecla(corchete), Some(vec![0x1d]));
+    }
+
+    #[test]
+    fn parsear_prefijo_valida_el_texto() {
+        assert_eq!(
+            parsear_prefijo("Ctrl+b").unwrap(),
+            (KeyCode::Char('b'), KeyModifiers::CONTROL)
+        );
+        assert_eq!(
+            parsear_prefijo("Alt+x").unwrap(),
+            (KeyCode::Char('x'), KeyModifiers::ALT)
+        );
+        assert!(parsear_prefijo("Ctrl+Alt+7").is_ok());
+        assert!(parsear_prefijo("b").is_err());
+        assert!(parsear_prefijo("Meta+b").is_err());
+    }
 }

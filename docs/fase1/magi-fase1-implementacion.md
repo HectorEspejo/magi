@@ -159,8 +159,17 @@ magi/
 - **Permisos y atomicidad**: `OpenOptions::mode(0o600)` + rename sobre
   temporal en el mismo directorio; `known_hosts.old`, `config.bak-<fecha>` y
   `known_hosts` siempre 600.
-- **Tests**: 22 en total (7 unitarios de modelo, 9 de almacén en memoria y 6
-  de ssh_config e ida y vuelta), incluidos los casos límite del checklist.
+- **Tests**: 25 en total (10 unitarios de modelo y teclas, 9 de almacén en
+  memoria y 6 de ssh_config e ida y vuelta), incluidos los casos límite del
+  checklist.
+- **Corrección posterior (15/09/2026)**: crossterm entrega los bytes de
+  control `0x1C`–`0x1F` como `Ctrl+4`…`Ctrl+7`, de modo que `Ctrl+]` llegaba
+  como `Ctrl+5` y el prefijo por defecto no coincidía (además de no enviarse
+  al remoto). Se normalizan esas equivalencias en `teclas.rs`
+  (`es_prefijo`/`bytes_de_tecla`) y se añaden tres tests; verificado de
+  extremo a extremo contra un `sshd` efímero: huella nueva aceptada, shell
+  remoto, `Ctrl+] q` a segundo plano, `F3` de vuelta, `Ctrl+] x` con
+  confirmación y salida limpia.
 
 ## Funcionalidades del checklist completadas (copiando su texto exacto)
 
@@ -346,7 +355,7 @@ magi/
 cargo run                       # TUI (vista Hosts); crea config, BD y log
 cargo run -- importar [ruta]    # importa ~/.ssh/config o la ruta indicada
 cargo run -- exportar           # regenera ~/.ssh/magi_config
-cargo test                      # 22 tests: modelo, almacén y ssh_config
+cargo test                      # 25 tests: modelo, teclas, almacén y ssh_config
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
@@ -358,7 +367,7 @@ cargo fmt --check
   aislar con `HOME` + `XDG_DATA_HOME`/`XDG_CONFIG_HOME`/`XDG_STATE_HOME`
   para pruebas.
 - **Pruebas realizadas en esta sesión**:
-  - `cargo test` (22 verdes), `cargo clippy --all-targets -- -D warnings`
+  - `cargo test` (25 verdes), `cargo clippy --all-targets -- -D warnings`
     y `cargo fmt` sin avisos.
   - CLI contra un `HOME`/XDG aislado con el `~/.ssh/config` real: importa 2
     hosts, omite «Host ssh.4d3.org win-gp» con motivo, exporta `magi_config`
