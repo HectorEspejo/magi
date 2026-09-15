@@ -4,7 +4,6 @@ use clap::{Parser, Subcommand};
 use magi::almacen;
 use magi::almacen::Almacen;
 use magi::app;
-use magi::conexion;
 use magi::config::{Config, Rutas};
 use magi::flota::{self, PeticionSondeo};
 use magi::modelo::{Host, ResultadoRegistro, ResultadoSondeo, Sondeo};
@@ -312,7 +311,14 @@ fn sondear(
         .collect();
     let total = peticiones.len();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Sondeo>();
-    flota::lanzar_lote(&runtime, peticiones, tx, conexion::registro_sesiones());
+    // El CLI no habla con el servidor de sesiones: sondeo efímero (F2).
+    flota::lanzar_lote(
+        &runtime,
+        peticiones,
+        tx,
+        std::collections::HashSet::new(),
+        magi::cliente::Cliente::sin_servidor(),
+    );
     let mut resultados: Vec<Sondeo> = Vec::with_capacity(total);
     for _ in 0..total {
         match rx.blocking_recv() {
@@ -335,15 +341,33 @@ fn sondear(
         "HOST", "ESTADO", "CARGA", "MEM", "DSK"
     );
     for sondeo in &resultados {
-        if sondeo.resultado == ResultadoSondeo::Error {
-            let motivo = sondeo.error.clone().unwrap_or_default();
+        // R12: anotar solo las transiciones a CAÍDA y de vuelta.
+        let (estado_previo, _) = flota::estado::evaluar(
+            almacen.ultimo_sondeo(sondeo.host_id)?.as_ref(),
+            &config.flota.umbrales,
+        );
+        let (estado_nuevo, _) = flota::estado::evaluar(Some(sondeo), &config.flota.umbrales);
+        if estado_nuevo == flota::estado::EstadoFlota::Caida
+            && estado_previo != flota::estado::EstadoFlota::Caida
+        {
             registro::anotar(
                 almacen.conexion(),
                 registro::SONDEO_FALLIDO,
                 Some(sondeo.host_id),
                 None,
-                &motivo,
+                &sondeo.error.clone().unwrap_or_default(),
                 ResultadoRegistro::Error,
+            )?;
+        } else if estado_previo == flota::estado::EstadoFlota::Caida
+            && estado_nuevo != flota::estado::EstadoFlota::Caida
+        {
+            registro::anotar(
+                almacen.conexion(),
+                registro::SONDEO_RECUPERADO,
+                Some(sondeo.host_id),
+                None,
+                "el host responde de nuevo",
+                ResultadoRegistro::Ok,
             )?;
         }
         almacen.guardar_sondeo(sondeo)?;

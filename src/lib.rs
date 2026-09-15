@@ -1,5 +1,6 @@
 pub mod almacen;
 pub mod app;
+pub mod cliente;
 pub mod conexion;
 pub mod config;
 pub mod ficheros;

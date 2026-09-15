@@ -46,6 +46,224 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
             ]));
             modal(marco, recta, titulo, contenido, *peligro, tema);
         }
+        Dialogo::ServidorCaido { perdidas } => {
+            let recta = centrar(area, 70, 10);
+            let mut contenido = vec![Line::from(Span::styled(
+                "✕ El servidor de sesiones ha dejado de responder",
+                Style::default()
+                    .fg(tema.paleta.critico)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            if *perdidas > 0 {
+                contenido.push(linea(&format!("  {perdidas} sesión(es) se han perdido.")));
+            }
+            contenido.push(Line::from(""));
+            contenido.push(linea("  Detalle en el registro y en logs/servidor.log."));
+            contenido.push(Line::from(""));
+            contenido.push(Line::from(vec![
+                atajo("s", tema),
+                span_texto(" relanzar servidor   "),
+                atajo("n", tema),
+                span_texto(" seguir sin sesiones"),
+            ]));
+            modal(marco, recta, "SERVIDOR CAÍDO", contenido, true, tema);
+        }
+        Dialogo::HuellaServidor {
+            host, tipo, huella, ..
+        } => {
+            let recta = centrar(area, 66, 12);
+            let contenido = vec![
+                Line::from(vec![
+                    span_texto("Host: "),
+                    Span::styled(host.clone(), Style::default().fg(tema.paleta.texto)),
+                ]),
+                Line::from(vec![
+                    span_texto("Tipo:  "),
+                    Span::styled(tipo.clone(), Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(vec![
+                    span_texto("Huella: "),
+                    Span::styled(huella.clone(), Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                linea("La huella no está en known_hosts. Comprueba que es la correcta."),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("a", tema),
+                    span_texto(" aceptar y añadir   "),
+                    atajo("x", tema),
+                    span_texto(" cancelar la apertura"),
+                ]),
+            ];
+            modal(marco, recta, "HUELLA DESCONOCIDA", contenido, false, tema);
+        }
+        Dialogo::HuellaCambiadaServidor {
+            host,
+            anterior,
+            nueva,
+            campo,
+            ..
+        } => {
+            let recta = centrar(area, 74, 15);
+            let contenido = vec![
+                Line::from(Span::styled(
+                    "✕ La clave del servidor NO coincide con known_hosts",
+                    Style::default()
+                        .fg(tema.paleta.critico)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    span_texto("Anterior  "),
+                    Span::styled(anterior.clone(), Style::default().fg(tema.paleta.inactivo)),
+                ]),
+                Line::from(vec![
+                    span_texto("Nueva     "),
+                    Span::styled(nueva.clone(), Style::default().fg(tema.paleta.critico)),
+                ]),
+                Line::from(""),
+                linea("Puede ser una reinstalación… o un intermediario."),
+                linea(&format!(
+                    "Para sustituir la huella escribe el nombre del host ({host}):"
+                )),
+                Line::from(vec![
+                    Span::styled("[ ", Style::default().fg(tema.paleta.critico)),
+                    campo.span(true, Style::default().fg(tema.paleta.critico)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.critico)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("r", tema),
+                    span_texto(" sustituir   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar (recomendado)"),
+                ]),
+            ];
+            modal(marco, recta, "HUELLA CAMBIADA", contenido, true, tema);
+        }
+        Dialogo::FraseServidor {
+            host,
+            intento,
+            campo,
+            ..
+        } => {
+            let recta = centrar(area, 60, 9);
+            let enmascarado: String = campo
+                .texto
+                .chars()
+                .map(|_| if tema.ascii { '*' } else { '•' })
+                .collect();
+            let visible = if campo.texto.is_empty() {
+                "\u{2503}".to_string()
+            } else {
+                enmascarado
+            };
+            let contenido = vec![
+                linea(&format!(
+                    "Clave con frase para «{host}» · intento {intento} de 3"
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(visible, Style::default().fg(tema.paleta.texto)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("↵", tema),
+                    span_texto(" aceptar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar la apertura"),
+                ]),
+            ];
+            modal(marco, recta, "FRASE DE LA CLAVE", contenido, false, tema);
+        }
+        Dialogo::ContrasenaServidor {
+            host,
+            intento,
+            campo,
+            recordar,
+            foco_casilla,
+            ..
+        } => {
+            let recta = centrar(area, 64, 11);
+            let mascara = |_: char| if tema.ascii { '*' } else { '•' };
+            let mut visible = String::new();
+            if !*foco_casilla {
+                let mut cursor_puesto = false;
+                for (indice, caracter) in campo.texto.chars().enumerate() {
+                    if indice == campo.cursor {
+                        visible.push('\u{2503}');
+                        cursor_puesto = true;
+                    }
+                    visible.push(mascara(caracter));
+                }
+                if !cursor_puesto {
+                    visible.push('\u{2503}');
+                }
+            } else if campo.texto.is_empty() {
+                visible.push('\u{2503}');
+            } else {
+                visible = campo.texto.chars().map(mascara).collect();
+            }
+            let estilo_casilla = if *foco_casilla {
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD)
+            } else if *recordar {
+                Style::default().fg(tema.paleta.correcto)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            };
+            let contenido = vec![
+                linea(&format!(
+                    "Contraseña para «{host}» · intento {intento} de 3"
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(
+                        visible,
+                        if *foco_casilla {
+                            Style::default().fg(tema.paleta.inactivo)
+                        } else {
+                            Style::default().fg(tema.paleta.texto)
+                        },
+                    ),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!(
+                            "{} recordar en el llavero del sistema",
+                            crate::ui::componentes::casilla(*recordar)
+                        ),
+                        estilo_casilla,
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    if *recordar {
+                        "  la contraseña queda cifrada en el llavero, nunca en magi.db"
+                    } else {
+                        "  sin marcar: se pedirá en cada conexión y no se guarda"
+                    },
+                    Style::default().fg(tema.paleta.inactivo),
+                )),
+                Line::from(vec![
+                    atajo("↵", tema),
+                    span_texto(" aceptar   "),
+                    atajo("⇥", tema),
+                    span_texto(" campo/casilla   "),
+                    atajo("espacio", tema),
+                    span_texto(" marcar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar"),
+                ]),
+            ];
+            modal(marco, recta, "CONTRASEÑA", contenido, false, tema);
+        }
         Dialogo::HuellaDesconocida {
             host, tipo, huella, ..
         } => {

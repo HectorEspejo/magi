@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio_util::codec::LinesCodec;
+pub use tokio_util::codec::LinesCodec;
 use zeroize::Zeroizing;
 
 /// Versión del protocolo. Se negocia en el saludo `Hola`/`Bienvenida`;

@@ -77,6 +77,7 @@ fn atajos(app: &App) -> Line<'static> {
             ("esc", "descartar"),
         ],
         Vista::Sesion => vec![],
+        Vista::Sesiones => vec![],
     };
     let mut spans = Vec::new();
     for (indice, (tecla, descripcion)) in pares.iter().enumerate() {

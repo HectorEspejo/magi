@@ -46,24 +46,7 @@ pub async fn sondear(peticion: &PeticionSondeo, registro: &RegistroSesiones) -> 
     .await
     {
         Ok(Ok(metricas)) => {
-            sondeo.nucleos = metricas.nucleos;
-            sondeo.carga_1m = metricas.carga_1m;
-            sondeo.carga_5m = metricas.carga_5m;
-            sondeo.carga_15m = metricas.carga_15m;
-            sondeo.mem_total_kb = metricas.mem_total_kb;
-            sondeo.mem_disponible_kb = metricas.mem_disponible_kb;
-            sondeo.disco_total_kb = metricas.disco_total_kb;
-            sondeo.disco_usado_kb = metricas.disco_usado_kb;
-            sondeo.red_rx_bytes = metricas.red_rx_bytes;
-            sondeo.red_tx_bytes = metricas.red_tx_bytes;
-            sondeo.uptime_seg = metricas.uptime_seg;
-            let tiene_metricas = metricas.tiene_metricas();
-            sondeo.servicios = metricas.servicios;
-            sondeo.resultado = if tiene_metricas {
-                ResultadoSondeo::Ok
-            } else {
-                ResultadoSondeo::SinMetricas
-            };
+            rellenar(&mut sondeo, metricas);
         }
         Ok(Err(motivo)) => {
             sondeo.resultado = ResultadoSondeo::Error;
@@ -76,6 +59,56 @@ pub async fn sondear(peticion: &PeticionSondeo, registro: &RegistroSesiones) -> 
     }
     sondeo.duracion_ms = inicio.elapsed().as_millis() as i64;
     sondeo
+}
+
+/// Sondeo con sesión viva: pide `Ejecutar` al servidor (sobre la conexión del
+/// pool o de cualquier sesión abierta); con `SinSesion` cae a la conexión
+/// efímera de la Fase 2.
+pub async fn sondear_via_servidor(
+    peticion: &PeticionSondeo,
+    cliente: &crate::cliente::Cliente,
+) -> Sondeo {
+    let inicio = Instant::now();
+    let mut sondeo = Sondeo::vacio(peticion.host.id);
+    let comando = comando_de_sondeo(&peticion.servicios);
+    match cliente.ejecutar(peticion.host.id, &comando).await {
+        crate::cliente::ResultadoEjecutar::Salida { salida, codigo } => {
+            if codigo == 0 && !salida.trim().is_empty() {
+                rellenar(&mut sondeo, parser::parsear(&salida));
+            } else {
+                sondeo.resultado = ResultadoSondeo::Error;
+                sondeo.error = Some(format!("el sondeo devolvió el código {codigo}"));
+            }
+        }
+        crate::cliente::ResultadoEjecutar::SinSesion => {
+            // Sin conexión viva al host: efímera como en la Fase 2.
+            let registro_vacio = crate::conexion::registro_sesiones();
+            return sondear(peticion, &registro_vacio).await;
+        }
+    }
+    sondeo.duracion_ms = inicio.elapsed().as_millis() as i64;
+    sondeo
+}
+
+fn rellenar(sondeo: &mut Sondeo, metricas: parser::Metricas) {
+    sondeo.nucleos = metricas.nucleos;
+    sondeo.carga_1m = metricas.carga_1m;
+    sondeo.carga_5m = metricas.carga_5m;
+    sondeo.carga_15m = metricas.carga_15m;
+    sondeo.mem_total_kb = metricas.mem_total_kb;
+    sondeo.mem_disponible_kb = metricas.mem_disponible_kb;
+    sondeo.disco_total_kb = metricas.disco_total_kb;
+    sondeo.disco_usado_kb = metricas.disco_usado_kb;
+    sondeo.red_rx_bytes = metricas.red_rx_bytes;
+    sondeo.red_tx_bytes = metricas.red_tx_bytes;
+    sondeo.uptime_seg = metricas.uptime_seg;
+    let tiene_metricas = metricas.tiene_metricas();
+    sondeo.servicios = metricas.servicios;
+    sondeo.resultado = if tiene_metricas {
+        ResultadoSondeo::Ok
+    } else {
+        ResultadoSondeo::SinMetricas
+    };
 }
 
 async fn intento(
@@ -156,21 +189,29 @@ async fn ejecutar_en_handle(
     Ok(String::from_utf8_lossy(&salida).to_string())
 }
 
-/// Lanza un sondeo por host respetando el semáforo de 8 concurrentes.
+/// Lanza un sondeo por host respetando el semáforo de 8 concurrentes. Los
+/// hosts con sesión viva van por el servidor (`Ejecutar`); el resto, por
+/// conexión efímera.
 pub fn lanzar_lote(
     runtime: &tokio::runtime::Runtime,
     peticiones: Vec<PeticionSondeo>,
     tx: mpsc::UnboundedSender<Sondeo>,
-    registro: RegistroSesiones,
+    con_sesion: std::collections::HashSet<i64>,
+    cliente: crate::cliente::Cliente,
 ) {
     let semaforo = Arc::new(Semaphore::new(CONCURRENTES));
     for peticion in peticiones {
         let tx = tx.clone();
         let semaforo = semaforo.clone();
-        let registro = registro.clone();
+        let con_sesion = con_sesion.clone();
+        let cliente = cliente.clone();
         runtime.spawn(async move {
             let _permiso = semaforo.acquire().await;
-            let sondeo = sondear(&peticion, &registro).await;
+            let sondeo = if con_sesion.contains(&peticion.host.id) {
+                sondear_via_servidor(&peticion, &cliente).await
+            } else {
+                sondear(&peticion, &crate::conexion::registro_sesiones()).await
+            };
             let _ = tx.send(sondeo);
         });
     }
