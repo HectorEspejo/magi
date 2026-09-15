@@ -5398,16 +5398,8 @@ impl App {
                 self.mensaje(format!("«{ruta}» no es un directorio"), true);
                 return;
             }
-            let ruta = ruta.clone();
             estado.local.cambiar_ruta(ruta);
             listar_local(estado);
-            let ruta = estado.local.ruta.clone();
-            let remoto = estado.remoto.entradas.clone();
-            if let Some(estado) = &mut self.archivos {
-                let _ = ruta;
-                let _ = remoto;
-                estado.recalcular_marcas();
-            }
             self.guardar_dirs_sftp();
         }
     }
