@@ -132,6 +132,14 @@ con `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` limpios.
    re-adjuntándola; el servidor caído y el apagado por orden también salen
    de la vista Sesión. Verificado con la TUI real en un pty aislado: cerrar
    la pestaña adjunta deja la otra adjunta (1 ventana) y el eco vuelve.
+6. **El prompt del remoto quedaba oculto bajo la barra de estado.** La
+   petición de tamaño al PTY restaba tres filas (marco, pestañas y barra de
+   sesión), pero la vista reserva cuatro: la barra global inferior también
+   ocupa fila. El remoto creía tener una fila más de las visibles y su última
+   línea (el prompt) caía bajo la barra. Arreglo: helper `alto_pty` que resta
+   las cuatro filas fijas y se usa en `AbrirSesion`, `Adjuntar` y
+   `Redimensionar`. Verificado con `stty size` en el remoto: 26 filas para
+   una ventana de 30, con el prompt ya visible; test unitario del helper.
 
 ## Desviaciones respecto a la especificación
 
