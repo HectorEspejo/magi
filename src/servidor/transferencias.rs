@@ -304,7 +304,7 @@ pub async fn encolar(
         (canal.host_nombre.clone(), canal.sesion.clone())
     };
 
-    let ficheros = expandir(&sesion, direccion, &elementos, politica).await?;
+    let (ficheros, enlaces_omitidos) = expandir(&sesion, direccion, &elementos, politica).await?;
 
     let id = {
         let mut estado_bloqueado = estado.lock().await;
@@ -317,6 +317,13 @@ pub async fn encolar(
             borrar_origen,
             ficheros,
         );
+        // Los enlaces a directorio que se dejaron atrás al expandir cuentan
+        // como omitidos, para que el detalle lo diga.
+        if enlaces_omitidos > 0 {
+            if let Some(transferencia) = estado_bloqueado.transferencias.obtener_mut(id) {
+                transferencia.info.omitidos = enlaces_omitidos;
+            }
+        }
         estado_bloqueado.difusion_cola.marcar(true);
         id
     };
@@ -373,8 +380,9 @@ async fn expandir(
     direccion: Direccion,
     elementos: &[ElementoTransferencia],
     politica: Politica,
-) -> Result<Vec<FicheroTransferencia>, String> {
+) -> Result<(Vec<FicheroTransferencia>, u32), String> {
     let mut ficheros = Vec::new();
+    let mut omitidos = 0u32;
     for elemento in elementos {
         let politica = elemento.politica.unwrap_or(politica);
         if !elemento.es_directorio {
@@ -406,12 +414,13 @@ async fn expandir(
                     &elemento.destino,
                     politica,
                     &mut ficheros,
+                    &mut omitidos,
                 )
                 .await?;
             }
         }
     }
-    Ok(ficheros)
+    Ok((ficheros, omitidos))
 }
 
 /// Recorre un directorio remoto en anchura y añade sus ficheros.
@@ -421,6 +430,7 @@ async fn expandir_remoto(
     destino: &str,
     politica: Politica,
     ficheros: &mut Vec<FicheroTransferencia>,
+    omitidos: &mut u32,
 ) -> Result<(), String> {
     let entradas = sftp::listar(sesion, origen).await?;
     for entrada in entradas {
@@ -441,6 +451,7 @@ async fn expandir_remoto(
                     &destino_hijo,
                     politica,
                     ficheros,
+                    omitidos,
                 ))
                 .await?;
             }
@@ -453,9 +464,19 @@ async fn expandir_remoto(
                     politica,
                 });
             }
-            // Los enlaces a directorio se omiten con nota en el detalle; los
-            // de fichero se copian como el fichero apuntado.
+            // Un enlace se copia como el fichero al que apunta; si apunta a
+            // un directorio se omite (seguirlo podría duplicar árboles
+            // enteros) y se cuenta para que el detalle lo diga.
             crate::archivos::TipoEntrada::Enlace => {
+                let apunta_a_dir = sesion
+                    .metadata(&origen_hijo)
+                    .await
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false);
+                if apunta_a_dir {
+                    *omitidos += 1;
+                    continue;
+                }
                 ficheros.push(FicheroTransferencia {
                     origen: origen_hijo,
                     destino: destino_hijo,
@@ -510,7 +531,16 @@ pub async fn tarea(estado: Arc<tokio::sync::Mutex<EstadoServidor>>, id: u32) {
 
     let mut hechos = 0u64;
     let mut ficheros_hechos = 0u32;
-    let mut omitidos = 0u32;
+    // Los omitidos al expandir (enlaces a directorio) ya cuentan desde el
+    // principio y no se pueden perder al terminar.
+    let mut omitidos = {
+        let estado_bloqueado = estado.lock().await;
+        estado_bloqueado
+            .transferencias
+            .obtener(id)
+            .map(|transferencia| transferencia.info.omitidos)
+            .unwrap_or(0)
+    };
     let mut ultimo_aviso = Instant::now();
     let mut fallo: Option<String> = None;
     let mut cancelada_por_el_usuario = false;

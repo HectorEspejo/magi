@@ -732,6 +732,45 @@ async fn bajar_un_directorio_lo_recorre_entero() {
     assert_eq!(leer(&destino.join("css/app.css")), "body{}");
 }
 
+/// Un enlace a directorio no se sigue al bajar: duplicaría el árbol entero.
+#[tokio::test]
+async fn bajar_un_directorio_omite_los_enlaces_a_directorio() {
+    let Some(mut montaje) = montar(true).await else {
+        return;
+    };
+    let remoto = montaje.remoto();
+    let local = montaje.local();
+    std::fs::create_dir_all(remoto.join("sitio/real")).unwrap();
+    std::fs::write(remoto.join("sitio/real/dentro.txt"), b"x").unwrap();
+    std::fs::write(remoto.join("sitio/suelto.txt"), b"y").unwrap();
+    std::os::unix::fs::symlink(remoto.join("sitio/real"), remoto.join("sitio/atajo")).unwrap();
+    montaje.abrir_sftp().await;
+
+    let destino = local.join("sitio");
+    let id = montaje
+        .transferir(
+            Direccion::Bajada,
+            vec![ElementoTransferencia {
+                origen: remoto.join("sitio").display().to_string(),
+                destino: destino.display().to_string(),
+                bytes: 0,
+                es_directorio: true,
+                politica: None,
+            }],
+            Politica::Sobrescribir,
+            false,
+        )
+        .await;
+    let fila = montaje.esperar_terminada(id).await;
+    assert_eq!(fila.estado, EstadoTransferencia::Hecha, "{fila:?}");
+    assert_eq!(fila.omitidos, 1, "el enlace a directorio se omite");
+    assert!(destino.join("real/dentro.txt").exists());
+    assert!(
+        !destino.join("atajo").exists(),
+        "no se sigue el enlace a directorio"
+    );
+}
+
 /// El criterio de aceptación del checklist: un directorio con tres ficheros de
 /// los que dos ya existen, con política `omitir`, copia uno y lo dice.
 #[tokio::test]
