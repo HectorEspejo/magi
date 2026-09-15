@@ -99,6 +99,27 @@ con `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` limpios.
    guardadas por la Fase 2 no tienen: `recuperar` devolvía vacío y la
    conexión pedía la contraseña en un diálogo que debía ser automático.
    Arreglo: se volvió a los atributos de la Fase 2 (`magi-host` + `magi-user`).
+3. **Tamaños degenerados derribaban el servidor con un pánico de `vt100`**
+   (`grid.rs:683`, «attempt to subtract with overflow»): un terminal que
+   reporta 0 columnas (o una `Redimensionar` con 0) hacía que el parser del
+   servidor quedara en 1 columna y el remoto, con un `window_change` a 0,
+   dibujara anchos imposibles. Arreglo: el servidor sanea todo tamaño
+   entrante a mínimo 2 columnas y 1 fila (`AbrirSesion`, `Adjuntar`,
+   `Redimensionar`). Detectado reproduciendo la TUI con un pty sin tamaño.
+4. **CRÍTICO — la pantalla de la pestaña quedaba en blanco aunque la sesión
+   funcionase.** La tarea de lectura del cliente creaba su **propio** registro
+   de parsers (`Pantallas::default()` local), distinto del registro que pinta
+   la UI: los `Datos`/`PantallaCompleta` del remoto se procesaban en parsers
+   fantasma y la ventana mostraba una pantalla vacía; las teclas sí llegaban
+   al remoto (se verificó ejecutando un `echo` y leyendo la pantalla del
+   servidor por protocolo). Arreglo: el `Cliente` posee el registro y comparte
+   el mismo con la tarea de lectura; la App adopta el registro del cliente al
+   conectar (`App::nuevo` y relanzado). De paso: la `Bienvenida` reconcilia
+   las sesiones existentes (al abrir una ventana nueva reaparecen sus
+   pestañas), activar una pestaña nueva desadjunta la visible, `crear()` no
+   pisa un parser ya volcado y el indicador ◐ se marca en pestañas no
+   visibles. Regresión cubierta por un test que abre una sesión con el
+   `Cliente` real y comprueba que el volcado llega a su registro de pantallas.
 
 ## Desviaciones respecto a la especificación
 
