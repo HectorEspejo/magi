@@ -2994,21 +2994,29 @@ impl App {
     }
 
     /// F3: con pestaña activa va a la última usada; sin ella, a la lista de
-    /// sesiones del servidor.
+    /// sesiones del servidor para retomar la que se quiera.
     fn ir_a_sesion(&mut self) {
-        if self.pestana_activa.is_none() && !self.pestanas.is_empty() {
-            self.pestana_activa = Some(self.pestanas.len() - 1);
-        }
-        if self.pestana_activa.is_some() && !self.servidor_caido && !self.servidor_incompatible {
-            self.vista_previa = Some(self.vista);
-            self.vista = Vista::Sesion;
-            if let Some(sesion_id) = self.pestana_activa_id() {
-                self.limpiar_actividad(sesion_id);
-            }
-            self.adjuntar_pestaña_activa();
-        } else {
+        if self.servidor_caido || self.servidor_incompatible {
             self.vista_previa = Some(self.vista);
             self.vista = Vista::Sesiones;
+            return;
+        }
+        match self.pestana_activa {
+            Some(_) if !self.pestanas.is_empty() => {
+                self.vista_previa = Some(self.vista);
+                self.vista = Vista::Sesion;
+                if let Some(sesion_id) = self.pestana_activa_id() {
+                    self.limpiar_actividad(sesion_id);
+                }
+                self.adjuntar_pestaña_activa();
+            }
+            _ => {
+                self.vista_previa = Some(self.vista);
+                self.vista = Vista::Sesiones;
+                if self.seleccion_sesiones >= self.pestanas.len() {
+                    self.seleccion_sesiones = self.pestanas.len().saturating_sub(1);
+                }
+            }
         }
     }
 
