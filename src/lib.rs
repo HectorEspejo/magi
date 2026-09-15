@@ -1,5 +1,6 @@
 pub mod almacen;
 pub mod app;
+pub mod archivos;
 pub mod cliente;
 pub mod conexion;
 pub mod config;
@@ -16,3 +17,4 @@ pub mod sshconfig;
 pub mod teclas;
 pub mod tema;
 pub mod ui;
+pub mod visor;

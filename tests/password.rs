@@ -99,6 +99,8 @@ fn host_de_prueba(puerto: u16) -> Host {
         etiquetas: Vec::new(),
         grupo_nombre: None,
         salto_nombre: None,
+        sftp_dir_local: None,
+        sftp_dir_remoto: None,
     }
 }
 

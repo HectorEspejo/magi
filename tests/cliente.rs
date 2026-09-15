@@ -32,7 +32,8 @@ async fn el_cliente_recibe_la_difusion_de_sesiones_tras_el_saludo() {
             Err(magi::cliente::FalloConexion::Inaccesible(motivo)) => {
                 panic!("sin conexión: {motivo}")
             }
-            Err(magi::cliente::FalloConexion::VersionIncompatible) => {
+            Err(magi::cliente::FalloConexion::VersionIncompatible { version }) => {
+                let _ = version;
                 panic!("versión incompatible")
             }
         }

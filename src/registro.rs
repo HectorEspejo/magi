@@ -25,8 +25,12 @@ pub const SESION_RECONECTADA: &str = "sesion_reconectada";
 pub const SERVIDOR_ARRANCADO: &str = "servidor_arrancado";
 pub const SERVIDOR_DETENIDO: &str = "servidor_detenido";
 pub const SERVIDOR_CAIDO: &str = "servidor_caido";
+/// Fase 4: una transferencia terminada (dirección, rutas, bytes y resultado).
+pub const TRANSFERENCIA: &str = "transferencia";
+/// Fase 4: borrado remoto por SFTP.
+pub const BORRADO_REMOTO: &str = "borrado_remoto";
 
-pub const TIPOS: [&str; 16] = [
+pub const TIPOS: [&str; 18] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -43,10 +47,12 @@ pub const TIPOS: [&str; 16] = [
     SERVIDOR_ARRANCADO,
     SERVIDOR_DETENIDO,
     SERVIDOR_CAIDO,
+    TRANSFERENCIA,
+    BORRADO_REMOTO,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
-pub const FILTROS: [(&str, &[&str]); 6] = [
+pub const FILTROS: [(&str, &[&str]); 7] = [
     ("todos", &[]),
     (
         "conexiones",
@@ -67,6 +73,7 @@ pub const FILTROS: [(&str, &[&str]); 6] = [
     ),
     ("importación", &[IMPORTACION, EXPORTACION]),
     ("sondeos", &[SONDEO_FALLIDO, SONDEO_RECUPERADO]),
+    ("archivos", &[TRANSFERENCIA, BORRADO_REMOTO]),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -189,6 +196,7 @@ mod pruebas {
             "claves",
             "importación",
             "sondeos",
+            "archivos",
             "todos",
         ] {
             filtro.ciclo_tipo();

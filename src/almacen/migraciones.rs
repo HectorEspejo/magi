@@ -3,7 +3,7 @@ use rusqlite::Connection;
 
 /// Migraciones numeradas y aplicadas por `PRAGMA user_version`. Nunca se
 /// modifica una migración ya publicada: se añade otra al final.
-pub const MIGRACIONES: &[&str] = &[MIGRACION_1_INICIAL, MIGRACION_2_FLOTA];
+pub const MIGRACIONES: &[&str] = &[MIGRACION_1_INICIAL, MIGRACION_2_FLOTA, MIGRACION_3_ARCHIVOS];
 
 const MIGRACION_1_INICIAL: &str = r#"
 CREATE TABLE GRUPOS (
@@ -99,6 +99,14 @@ CREATE TABLE REGISTRO (
 CREATE INDEX idx_sondeos_host ON SONDEOS(host_id, id DESC);
 CREATE INDEX idx_registro_fecha ON REGISTRO(fecha DESC);
 CREATE INDEX idx_registro_tipo ON REGISTRO(tipo);
+"#;
+
+/// Fase 4: últimos directorios de la vista Archivos, por host. Nulos mientras
+/// no se haya navegado con ese host (el remoto nulo es el directorio de inicio
+/// del usuario remoto).
+const MIGRACION_3_ARCHIVOS: &str = r#"
+ALTER TABLE HOSTS ADD COLUMN sftp_dir_local TEXT;
+ALTER TABLE HOSTS ADD COLUMN sftp_dir_remoto TEXT;
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {

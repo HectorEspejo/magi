@@ -10,6 +10,43 @@ use crate::ui::{centrar, Vista};
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let tema = &app.tema;
     let (titulo, atajos): (&str, Vec<(&str, &str)>) = match app.vista {
+        Vista::Archivos => (
+            "AYUDA · ARCHIVOS",
+            vec![
+                ("⇥", "cambiar de panel (local ⇄ remoto)"),
+                ("↑ ↓ / j k", "mover la selección"),
+                ("PgUp PgDn", "página arriba / abajo"),
+                ("Home End", "primero / último"),
+                ("↵", "entrar en un directorio o ver un fichero"),
+                ("⌫ / -", "subir al directorio padre"),
+                ("espacio", "marcar o desmarcar y bajar"),
+                ("a / A", "marcar todo / desmarcar"),
+                ("c", "copiar al otro panel"),
+                ("m", "mover al otro panel"),
+                ("x", "borrar (sin papelera, con confirmación)"),
+                ("r", "renombrar"),
+                ("d", "crear directorio"),
+                (".", "mostrar u ocultar los ocultos"),
+                ("/", "filtrar por nombre en el panel activo"),
+                ("R", "refrescar los dos paneles"),
+                ("g", "ir a una ruta"),
+                ("i", "detalle de la entrada"),
+                ("h", "cambiar de host"),
+                ("t", "cola de transferencias"),
+                ("esc", "limpiar filtro o marcas; después volver"),
+                ("q", "volver (la cola sigue en el servidor)"),
+            ],
+        ),
+        Vista::Transferencias => (
+            "AYUDA · TRANSFERENCIAS",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("x", "cancelar la seleccionada"),
+                ("C", "limpiar las terminadas"),
+                ("↵", "detalle de la transferencia"),
+                ("q", "volver a Archivos"),
+            ],
+        ),
         Vista::Hosts => (
             "AYUDA · HOSTS",
             vec![

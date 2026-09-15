@@ -8,12 +8,21 @@ use crate::app::App;
 use crate::ui::Vista;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
-    let linea = if app.servidor_incompatible {
-        Line::from(Span::styled(
+    let linea = if let Some(version) = app.servidor_incompatible {
+        let texto = if version < crate::protocolo::VERSION_PROTOCOLO {
             format!(
-                " {} el servidor es de otra versión de protocolo: «magi servidor parar» y volver a abrir",
+                " {} servidor de una versión anterior (protocolo {version}): «magi servidor parar» y volver a abrir",
                 app.tema.glifos.error
-            ),
+            )
+        } else {
+            format!(
+                " {} el servidor habla el protocolo {version}, más nuevo que el {} de esta MAGI",
+                app.tema.glifos.error,
+                crate::protocolo::VERSION_PROTOCOLO
+            )
+        };
+        Line::from(Span::styled(
+            texto,
             Style::default().fg(app.tema.paleta.critico),
         ))
     } else if let Some(mensaje) = &app.mensaje {
@@ -40,6 +49,30 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
 fn atajos(app: &App) -> Line<'static> {
     let tema = &app.tema;
     let pares: Vec<(&str, &str)> = match app.vista {
+        Vista::Archivos => vec![
+            ("⇥", "panel"),
+            ("↵", "abrir"),
+            ("c", "copiar"),
+            ("m", "mover"),
+            ("x", "borrar"),
+            ("r", "renombrar"),
+            ("d", "dir"),
+            (".", "ocultos"),
+            ("/", "filtrar"),
+            ("g", "ruta"),
+            ("h", "host"),
+            ("t", "cola"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
+        Vista::Transferencias => vec![
+            (super::tecla(tema, "↓↑", "j/k"), "mover"),
+            ("x", "cancelar"),
+            ("C", "limpiar"),
+            ("↵", "detalle"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
         Vista::Registro => vec![
             (super::tecla(tema, "↓↑", "j/k"), "mover"),
             ("↵", "detalle"),

@@ -1,3 +1,4 @@
+pub mod archivos;
 pub mod ayuda;
 pub mod barra;
 pub mod componentes;
@@ -6,10 +7,12 @@ pub mod ficha;
 pub mod flota;
 pub mod hosts;
 pub mod identidades;
+pub mod pager;
 pub mod paleta;
 pub mod registro;
 pub mod sesion;
 pub mod sesiones;
+pub mod transferencias;
 
 use std::io::{self, Stdout};
 
@@ -39,6 +42,10 @@ pub enum Vista {
     Sesiones,
     Identidades,
     Registro,
+    /// Vista Archivos (F4): panel doble local ⇄ remoto.
+    Archivos,
+    /// Cola de transferencias ampliada.
+    Transferencias,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -69,6 +76,8 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         Vista::Sesiones => sesiones::dibujar(marco, trozos[0], app),
         Vista::Identidades => identidades::dibujar(marco, trozos[0], app),
         Vista::Registro => registro::dibujar(marco, trozos[0], app),
+        Vista::Archivos => archivos::dibujar(marco, trozos[0], app),
+        Vista::Transferencias => transferencias::dibujar(marco, trozos[0], app),
     }
     barra::dibujar(marco, trozos[1], app);
     if let Some(dialogo) = &app.dialogo {

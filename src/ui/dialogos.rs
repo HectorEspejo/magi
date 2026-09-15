@@ -595,6 +595,79 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
             ]));
             modal(marco, recta, titulo, contenido, false, tema);
         }
+        Dialogo::Conflicto {
+            nombre,
+            es_dir,
+            lado_origen,
+            tamano_origen,
+            fecha_origen,
+            tamano_destino,
+            fecha_destino,
+        } => {
+            let recta = centrar(area, 74, 12);
+            let (etiqueta_origen, etiqueta_destino) = match lado_origen {
+                crate::archivos::Lado::Local => ("local", "remoto"),
+                crate::archivos::Lado::Remoto => ("remoto", "local"),
+            };
+            let contenido = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {nombre}"),
+                    Style::default()
+                        .fg(tema.paleta.texto)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "    {:<8} {:>10}   {}   (origen)",
+                        etiqueta_origen,
+                        crate::archivos::tamano_legible(*tamano_origen),
+                        crate::archivos::fecha_completa(*fecha_origen)
+                    ),
+                    Style::default().fg(tema.paleta.acento),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "    {:<8} {:>10}   {}   (destino)",
+                        etiqueta_destino,
+                        crate::archivos::tamano_legible(*tamano_destino),
+                        crate::archivos::fecha_completa(*fecha_destino)
+                    ),
+                    Style::default().fg(tema.paleta.critico),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    match es_dir {
+                        true => "  Es un directorio: la decisión vale para todo su contenido.",
+                        false => "  Ya existe algo con ese nombre en el destino.",
+                    },
+                    Style::default().fg(tema.paleta.inactivo),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("s", tema),
+                    span_texto(" sobrescribir   "),
+                    atajo("o", tema),
+                    span_texto(" omitir   "),
+                    atajo("S", tema),
+                    span_texto(" todos   "),
+                    atajo("O", tema),
+                    span_texto(" omitir todos"),
+                ]),
+                Line::from(vec![
+                    atajo("esc", tema),
+                    span_texto(" cancelar la operación entera"),
+                ]),
+            ];
+            modal(
+                marco,
+                recta,
+                "YA EXISTE EN EL DESTINO",
+                contenido,
+                true,
+                tema,
+            );
+        }
         Dialogo::Detalle { titulo, lineas } => {
             let alto = lineas.len() as u16 + 4;
             let recta = centrar(area, 74, alto);

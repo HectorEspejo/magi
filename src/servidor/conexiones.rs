@@ -45,10 +45,23 @@ impl Pool {
         Some(entrada.handle.clone())
     }
 
+    /// Devuelve la conexión viva del host sin tocar su contador de canales.
+    /// Solo para quien acaba de contar un canal con `reutilizar`.
+    pub fn handle_de(&self, host_id: i64) -> Option<Arc<Handle<Cliente>>> {
+        self.entradas
+            .get(&host_id)
+            .map(|entrada| entrada.handle.clone())
+    }
+
     /// Guarda un transporte recién abierto como conexión del pool, con el
-    /// canal que acaba de abrirse contado.
-    pub fn guardar(&mut self, host_id: i64, transporte: Transporte) {
-        self.entradas.remove(&host_id);
+    /// canal que acaba de abrirse contado. Devuelve la conexión que hubiera
+    /// antes, si la había, para que el llamador la desconecte: dejarla
+    /// suelta sería una conexión huérfana que nadie cerraría.
+    pub fn guardar(&mut self, host_id: i64, transporte: Transporte) -> Option<Cerrable> {
+        let anterior = self
+            .entradas
+            .remove(&host_id)
+            .map(|entrada| (entrada.handle, entrada.saltos));
         self.entradas.insert(
             host_id,
             Entrada {
@@ -58,6 +71,23 @@ impl Pool {
                 sin_canales_desde: None,
             },
         );
+        anterior
+    }
+
+    /// Descuenta un canal **solo si la entrada sigue siendo esa conexión**.
+    /// Con dos conexiones al mismo host que se turnan en el pool, descontar a
+    /// ciegas podría dejar a cero el contador de otra viva (y cerrarla).
+    pub fn liberar_si_es(&mut self, host_id: i64, handle: &Arc<Handle<Cliente>>) {
+        let Some(entrada) = self.entradas.get_mut(&host_id) else {
+            return;
+        };
+        if !Arc::ptr_eq(&entrada.handle, handle) {
+            return;
+        }
+        entrada.canales = entrada.canales.saturating_sub(1);
+        if entrada.canales == 0 {
+            entrada.sin_canales_desde = Some(Instant::now());
+        }
     }
 
     /// Descuenta un canal; al llegar a cero arranca la gracia de cierre.

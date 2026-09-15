@@ -87,6 +87,46 @@ apagar el servidor. `↵` en Hosts y Flota abre siempre una sesión nueva; `q`
 sale sin confirmar avisando de las sesiones que siguen abiertas.
 `magi conectar <host>` abre una sesión desde un lanzador o atajo.
 
+## Archivos
+
+`F4` (o `s` en Hosts y Flota, o el prefijo `f` en Sesión, o `sftp · <host>` en
+la paleta) abre la vista Archivos: un panel doble local ⇄ remoto. Todo lo
+remoto lo hace el servidor sobre un canal SFTP por host, así que las
+transferencias siguen cuando se cierra la ventana.
+
+- **Paneles**: `Tab` cambia de panel; el activo lleva el nombre en ámbar. Las
+  columnas son nombre, tamaño y fecha (`hoy`, `ayer`, `12 sep`, `2025`), con
+  los directorios primero y una fila `..` para subir.
+- **Marcas**: `≠` si el elemento existe al otro lado con otro tamaño o fecha
+  (tolerancia de 2 s) y `✕` si no está. Los directorios solo llevan `✕`. Se
+  comparan los dos listados visibles, así que sirven para ver qué cambió en un
+  despliegue.
+- **Copiar y mover**: `c` copia y `m` mueve lo marcado (o la fila actual) al
+  directorio del otro panel. Si el destino ya existe, se pregunta sobrescribir
+  u omitir, con el tamaño y la fecha de los dos lados; `S` y `O` aplican la
+  decisión a todo lo que queda. Un «mover» borra el origen solo cuando la
+  copia ha terminado bien.
+- **Aviso de sensibles**: antes de subir, se avisa si algún fichero coincide
+  con los patrones de `[archivos] avisar` (por defecto `.env*`, `*.pem`,
+  `*.key`, `id_*`), recorriendo también los directorios. Con la lista vacía el
+  aviso queda desactivado y la barra lo dice.
+- **Cola**: al pie, tres filas con la transferencia en curso y lo que espera
+  turno. `t` abre la vista ampliada (`x` cancelar, `C` limpiar terminadas, `↵`
+  detalle), y `magi servidor estado` lista la cola desde fuera de la TUI. Una
+  transferencia en curso se cancela por bloques de 64 KiB: el parcial se borra
+  y nada queda a medias.
+- **Ver ficheros**: `↵` sobre un fichero lo abre con `[archivos] pager`
+  (`$PAGER` o `less`): la TUI se suspende, se ve el fichero y se restaura. Un
+  remoto se trae antes a un temporal en `$XDG_RUNTIME_DIR/magi/tmp` (700, 600)
+  que se borra al cerrar el visor; si pasa de 10 MB se pide confirmación.
+- **Borrar, renombrar y crear**: `x` borra sin papelera tras confirmar con el
+  recuento, `r` renombra y `d` crea un directorio. En remoto lo hace el
+  servidor (el borrado, recursivo) y queda anotado en el historial.
+
+Últimos directorios: cada host recuerda dónde se quedó cada panel
+(`HOSTS.sftp_dir_local` y `HOSTS.sftp_dir_remoto`), así que al volver se abre
+donde se estaba.
+
 ## Sondeo de flota
 
 `F1` abre **Flota**, la vista de arranque. El sondeo ejecuta un único script
@@ -178,8 +218,9 @@ paleta fija de respaldo.
 ## Atajos
 
 Globales: `F1` Flota · `F2` Hosts · `F3` pestaña activa o lista de sesiones ·
-`F5` Identidades · `F7` Registro · `Ctrl+P` paleta · `?` ayuda · `Esc` cierra
-diálogos y filtros · `q` vuelve o sale.
+`F4` Archivos · `F5` Identidades · `F7` Registro · `Ctrl+P` paleta · `?`
+ayuda · `Esc` cierra diálogos y filtros · `q` vuelve o sale. (`F6` sigue
+reservada.)
 
 Flota: `↑` `↓` / `j` `k` mover · `↵` conectar · `r` sondear el host · `R`
 sondear todos los visibles · `e` editar la ficha · `/` filtro · `a`
@@ -202,10 +243,29 @@ descartar.
 
 Sesión: todas las teclas van al host remoto salvo el prefijo configurado
 (`Ctrl+]` por defecto). Con el prefijo: navegación de pestañas (`1-9`, `n`,
-`p`), lista (`l`), nueva sesión (`c`), cerrar pestaña (`x`), reconectar
-(`r`), ventana nueva (`w`), volver (`q`/`Esc`) y el prefijo literal
-(`prefijo prefijo`). Las sesiones viven en el servidor: cerrar la ventana no
-las cierra.
+`p`), lista (`l`), nueva sesión (`c`), archivos (`f`), cerrar pestaña (`x`),
+reconectar (`r`), ventana nueva (`w`), volver (`q`/`Esc`) y el prefijo
+literal (`prefijo prefijo`). Las sesiones viven en el servidor: cerrar la
+ventana no las cierra.
+
+Archivos: `Tab` panel · `↑` `↓` / `j` `k` mover · `PgUp` `PgDn` página ·
+`Home` `End` extremos · `↵` entrar o ver · `⌫` / `-` subir · `Espacio` marcar y
+bajar · `a` / `A` marcar todo / desmarcar · `c` copiar · `m` mover · `x`
+borrar · `r` renombrar · `d` crear directorio · `.` ocultos · `/` filtro · `R`
+refrescar · `g` ir a ruta · `i` detalle · `h` cambiar de host · `t` cola ·
+`Esc` limpiar filtro o marcas · `q` volver.
+
+Transferencias: `↑` `↓` mover · `x` cancelar · `C` limpiar terminadas · `↵`
+detalle · `q` volver.
+
+En `config.toml`:
+
+```toml
+[archivos]
+avisar = [".env*", "*.pem", "*.key", "id_*"]
+mostrar_ocultos = false
+pager = ""        # vacío usa $PAGER y, si no hay, less
+```
 
 ## El `Include` de `~/.ssh/config`
 
@@ -263,3 +323,11 @@ extra), el protocolo (ida y vuelta de todos los mensajes, bytes en base64,
 secretos ocultos en el depurado, mensajes desconocidos) y el servidor con
 socket temporal (arranque, saludo versionado, apagado por inactividad, lock
 duplicado y desconexión por mensaje mal formado).
+
+Las pruebas de archivos (`tests/sftp.rs`) levantan un servidor SSH en proceso
+que sirve el subsistema `sftp` con el **`sftp-server` real de OpenSSH**: listar,
+subir y bajar ficheros y directorios, conflicto con `omitir`, cancelación en
+curso, `mtime` conservado, temporales en 600, borrado recursivo y la cola que
+ve una segunda ventana. Si el sistema no trae `sftp-server`, esas pruebas se
+saltan con un aviso en lugar de fallar. El resto (marcas, avisos de sensibles,
+paneles, orden y fechas) son pruebas unitarias puras.

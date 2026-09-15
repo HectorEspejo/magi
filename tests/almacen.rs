@@ -67,11 +67,15 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
     assert_eq!(hosts[0].servicios, "");
+    assert_eq!(
+        hosts[0].sftp_dir_local, None,
+        "la migración 3 deja los directorios nulos"
+    );
     assert!(almacen.listar_identidades(true).unwrap().is_empty());
 }
 

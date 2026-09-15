@@ -138,6 +138,16 @@ impl Almacen {
         hosts::marcar_estado(&self.conexion, id, estado)
     }
 
+    /// Últimos directorios de la vista Archivos de un host (F4).
+    pub fn fijar_dirs_sftp(
+        &self,
+        id: i64,
+        dir_local: Option<&str>,
+        dir_remoto: Option<&str>,
+    ) -> Result<()> {
+        hosts::fijar_dirs_sftp(&self.conexion, id, dir_local, dir_remoto)
+    }
+
     // Grupos ----------------------------------------------------------------
 
     pub fn listar_grupos(&self) -> Result<Vec<crate::modelo::Grupo>> {

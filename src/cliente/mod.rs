@@ -92,9 +92,9 @@ impl Cliente {
 /// Conecta con el servidor, lanzándolo si no está; errores legibles.
 #[derive(Debug)]
 pub enum FalloConexion {
-    /// El servidor habla otra versión del protocolo: la TUI arranca sin
-    /// sesiones y lo explica en la barra.
-    VersionIncompatible,
+    /// El servidor habla otra versión de protocolo: la TUI arranca sin
+    /// sesiones y lo explica en la barra. Lleva la versión **del servidor**.
+    VersionIncompatible { version: u32 },
     /// No hay manera de llegar a un servidor.
     Inaccesible(String),
 }
@@ -216,7 +216,9 @@ async fn saludar(
             ));
             Ok(cliente)
         }
-        MensajeServidor::VersionIncompatible { .. } => Err(FalloConexion::VersionIncompatible),
+        MensajeServidor::VersionIncompatible { version } => {
+            Err(FalloConexion::VersionIncompatible { version })
+        }
         otro => Err(FalloConexion::Inaccesible(format!(
             "respuesta inesperada al saludo: {otro:?}"
         ))),
@@ -276,9 +278,12 @@ async fn tarea_lectura(
                         let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
                     }
                     Err(motivo) => {
-                        let _ = tx_eventos.send(crate::app::Evento::Servidor(MensajeServidor::Error {
-                            mensaje: format!("mensaje corrupto del servidor: {motivo}"),
-                        }));
+                        let _ = tx_eventos.send(crate::app::Evento::Servidor(
+                            MensajeServidor::Error {
+                                mensaje: format!("mensaje corrupto del servidor: {motivo}"),
+                                peticion_id: None,
+                            },
+                        ));
                     }
                 },
                 // EOF del socket sin Adios: el servidor ha caído.
@@ -386,9 +391,18 @@ pub async fn esperar_socket(ruta: &std::path::Path, plazo: Duration) -> bool {
 /// Comprueba la conexión y devuelve el error legible para mensajes.
 pub fn describe_fallo(fallo: &FalloConexion) -> String {
     match fallo {
-        FalloConexion::VersionIncompatible => {
-            "el servidor es de otra versión de protocolo; ejecuta «magi servidor parar» y vuelve a abrir"
-                .to_string()
+        FalloConexion::VersionIncompatible { version } => {
+            if *version < crate::protocolo::VERSION_PROTOCOLO {
+                format!(
+                    "el servidor habla el protocolo {version} y esta MAGI el {}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
+                    crate::protocolo::VERSION_PROTOCOLO
+                )
+            } else {
+                format!(
+                    "el servidor habla el protocolo {version}, más nuevo que el {} de esta MAGI",
+                    crate::protocolo::VERSION_PROTOCOLO
+                )
+            }
         }
         FalloConexion::Inaccesible(motivo) => motivo.clone(),
     }

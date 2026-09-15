@@ -134,6 +134,11 @@ pub struct Host {
     pub etiquetas: Vec<String>,
     pub grupo_nombre: Option<String>,
     pub salto_nombre: Option<String>,
+    /// Último directorio local usado en la vista Archivos (F4).
+    pub sftp_dir_local: Option<String>,
+    /// Último directorio remoto usado en la vista Archivos (F4); nulo es el
+    /// directorio de inicio del usuario remoto.
+    pub sftp_dir_remoto: Option<String>,
 }
 
 /// Datos editables de un host (ficha), sin id ni marcas de tiempo.
@@ -576,6 +581,12 @@ pub fn fecha_hoy() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// Época en segundos. Es la unidad de `mtime` del panel y de la cola de
+/// transferencias, que se comparan con tolerancia.
+pub fn fecha_ahora_epoca() -> i64 {
+    chrono::Local::now().timestamp()
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -602,6 +613,8 @@ mod pruebas {
             etiquetas: vec!["web".to_string(), "crítico".to_string()],
             grupo_nombre: Some("4d3 · producción".to_string()),
             salto_nombre: None,
+            sftp_dir_local: None,
+            sftp_dir_remoto: None,
         }
     }
 

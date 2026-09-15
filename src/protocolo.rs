@@ -10,9 +10,16 @@ use serde::{Deserialize, Serialize};
 pub use tokio_util::codec::LinesCodec;
 use zeroize::Zeroizing;
 
+use crate::archivos::Entrada;
+
 /// Versión del protocolo. Se negocia en el saludo `Hola`/`Bienvenida`;
 /// versiones distintas no cooperan.
-pub const VERSION_PROTOCOLO: u32 = 1;
+///
+/// v2 (Fase 4): archivos (SFTP) y cola de transferencias. Además, el
+/// `sesion_id` de los diálogos de conexión pasa a significar «id de la
+/// solicitud de conexión»: sirve igual para una sesión que para una apertura
+/// de canal SFTP, que no tiene sesión propia.
+pub const VERSION_PROTOCOLO: u32 = 2;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -106,6 +113,141 @@ pub struct InfoSesion {
     pub actividad_no_vista: bool,
 }
 
+// ---------------------------------------------------------------- archivos
+
+/// Sentido de una transferencia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direccion {
+    Subida,
+    Bajada,
+}
+
+impl Direccion {
+    pub fn texto(self) -> &'static str {
+        match self {
+            Direccion::Subida => "subida",
+            Direccion::Bajada => "bajada",
+        }
+    }
+
+    /// Glifo de la cola: hacia el remoto o hacia el local.
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (Direccion::Subida, false) => "↑",
+            (Direccion::Bajada, false) => "↓",
+            (Direccion::Subida, true) => "^",
+            (Direccion::Bajada, true) => "v",
+        }
+    }
+}
+
+/// Qué hace el servidor cuando el destino de un elemento ya existe. La decide
+/// el cliente antes de encolar; el servidor la aplica sin dialogar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Politica {
+    Sobrescribir,
+    Omitir,
+}
+
+/// Estado de una transferencia en la cola.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EstadoTransferencia {
+    EnCola,
+    EnCurso,
+    Hecha,
+    Error,
+    Cancelada,
+}
+
+impl EstadoTransferencia {
+    pub fn texto(self) -> &'static str {
+        match self {
+            EstadoTransferencia::EnCola => "en cola",
+            EstadoTransferencia::EnCurso => "en curso",
+            EstadoTransferencia::Hecha => "hecha",
+            EstadoTransferencia::Error => "error",
+            EstadoTransferencia::Cancelada => "cancelada",
+        }
+    }
+
+    /// Glifo de la vista Transferencias.
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (EstadoTransferencia::EnCola, false) => "○",
+            (EstadoTransferencia::EnCurso, false) => "◐",
+            (EstadoTransferencia::Hecha, false) => "●",
+            (EstadoTransferencia::Error, false) => "✕",
+            (EstadoTransferencia::Cancelada, false) => "⊘",
+            (EstadoTransferencia::EnCola, true) => "o",
+            (EstadoTransferencia::EnCurso, true) => "o",
+            (EstadoTransferencia::Hecha, true) => "*",
+            (EstadoTransferencia::Error, true) => "x",
+            (EstadoTransferencia::Cancelada, true) => "-",
+        }
+    }
+
+    pub fn terminada(self) -> bool {
+        matches!(
+            self,
+            EstadoTransferencia::Hecha
+                | EstadoTransferencia::Error
+                | EstadoTransferencia::Cancelada
+        )
+    }
+}
+
+/// Elemento de primer nivel de una transferencia: lo que el usuario marcó en
+/// el panel, no cada fichero del interior de un directorio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElementoTransferencia {
+    pub origen: String,
+    pub destino: String,
+    /// Bytes del elemento completo (para un directorio, la suma de su contenido).
+    pub bytes: u64,
+    pub es_directorio: bool,
+    /// Política decidida para este elemento; sin ella manda la del mensaje.
+    pub politica: Option<Politica>,
+}
+
+/// Fila de la cola de transferencias que ve el cliente. No lleva la lista de
+/// ficheros: la cola se difunde entera y a menudo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InfoTransferencia {
+    pub id: u32,
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub direccion: Direccion,
+    pub estado: EstadoTransferencia,
+    pub origen: String,
+    pub destino: String,
+    /// Nombre del elemento de primer nivel, para la columna «origen → destino».
+    pub es_directorio: bool,
+    pub ficheros_total: u32,
+    pub ficheros_hechos: u32,
+    /// Ficheros que ya existían en el destino y se omitieron.
+    pub omitidos: u32,
+    pub bytes_total: u64,
+    pub bytes_hechos: u64,
+    pub fichero_actual: Option<String>,
+    pub error: Option<String>,
+    pub borrar_origen: bool,
+    /// Cliente que la encoló (para que borre él el origen local de una subida).
+    pub solicitante: u32,
+    pub creada_en: i64,
+    pub terminada_en: Option<i64>,
+}
+
+impl InfoTransferencia {
+    /// Porcentaje de progreso, redondeado; 0 si no se conocen los bytes.
+    pub fn porcentaje(&self) -> u16 {
+        if self.bytes_total == 0 {
+            return 0;
+        }
+        let tanto = self.bytes_hechos.saturating_mul(100) / self.bytes_total;
+        tanto.min(100) as u16
+    }
+}
+
 // ---------------------------------------------------------------- cliente → servidor
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -161,6 +303,58 @@ pub enum MensajeCliente {
         host_id: i64,
         comando: String,
     },
+    /// Abre (o reutiliza) el canal SFTP del host. Responde `SftpAbierto` o
+    /// `Error`; si no hay conexión viva, la abre con los diálogos de siempre.
+    AbrirSftp {
+        host_id: i64,
+    },
+    ListarDir {
+        host_id: i64,
+        ruta: String,
+        peticion_id: u64,
+    },
+    /// Encola una transferencia. `elementos` es la lista de primer nivel; en
+    /// una subida el cliente ya la ha expandido (incluidos los directorios) y
+    /// en una bajada la expande el servidor.
+    Transferir {
+        host_id: i64,
+        direccion: Direccion,
+        elementos: Vec<ElementoTransferencia>,
+        /// Política por defecto de los elementos que no traigan la suya.
+        politica: Politica,
+        borrar_origen: bool,
+    },
+    CancelarTransferencia {
+        id: u32,
+    },
+    /// Quita de la cola las transferencias terminadas.
+    LimpiarTransferencias,
+    BorrarRemoto {
+        host_id: i64,
+        rutas: Vec<String>,
+        peticion_id: u64,
+    },
+    RenombrarRemoto {
+        host_id: i64,
+        de: String,
+        a: String,
+        peticion_id: u64,
+    },
+    CrearDirRemoto {
+        host_id: i64,
+        ruta: String,
+        peticion_id: u64,
+    },
+    /// Copia un fichero remoto a un temporal local para verlo con `$PAGER`.
+    DescargarTemporal {
+        host_id: i64,
+        ruta: String,
+        peticion_id: u64,
+    },
+    /// Borra un temporal creado por `DescargarTemporal`.
+    BorrarTemporal {
+        ruta: String,
+    },
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
@@ -179,6 +373,8 @@ pub enum MensajeServidor {
         cliente_id: u32,
         clientes: u32,
         sesiones: Vec<InfoSesion>,
+        /// Cola de transferencias actual, para que una ventana nueva la vea.
+        transferencias: Vec<InfoTransferencia>,
     },
     VersionIncompatible {
         version: u32,
@@ -242,8 +438,37 @@ pub enum MensajeServidor {
     SinSesion {
         host_id: i64,
     },
+    /// Canal SFTP listo. `dir_inicio` es el directorio de inicio del usuario
+    /// remoto (el que se usa si el host no tiene guardado el suyo).
+    SftpAbierto {
+        host_id: i64,
+        dir_inicio: String,
+    },
+    DirListado {
+        host_id: i64,
+        ruta: String,
+        entradas: Vec<Entrada>,
+        peticion_id: u64,
+    },
+    /// Difusión de la cola completa: al menos en cada cambio de estado y como
+    /// mucho cuatro veces por segundo durante el progreso.
+    Transferencias {
+        lista: Vec<InfoTransferencia>,
+    },
+    /// Operación remota terminada (`BorrarRemoto`, `RenombrarRemoto`,
+    /// `CrearDirRemoto`).
+    Hecho {
+        peticion_id: u64,
+    },
+    RutaTemporal {
+        ruta: String,
+        peticion_id: u64,
+    },
     Error {
         mensaje: String,
+        /// Petición que provocó el error, si venía de una.
+        #[serde(default)]
+        peticion_id: Option<u64>,
     },
 }
 
@@ -325,6 +550,139 @@ mod pruebas {
         ida_y_vuelta_cliente(MensajeCliente::Adios);
     }
 
+    /// Los mensajes que estrena la Fase 4 (v2): archivos y transferencias.
+    #[test]
+    fn los_mensajes_de_archivos_hacen_ida_y_vuelta() {
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp { host_id: 7 });
+        ida_y_vuelta_cliente(MensajeCliente::ListarDir {
+            host_id: 7,
+            ruta: "/var/www".to_string(),
+            peticion_id: 4,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::Transferir {
+            host_id: 7,
+            direccion: Direccion::Subida,
+            elementos: vec![ElementoTransferencia {
+                origen: "static".to_string(),
+                destino: "/var/www/static".to_string(),
+                bytes: 4096,
+                es_directorio: true,
+                politica: Some(Politica::Omitir),
+            }],
+            politica: Politica::Sobrescribir,
+            borrar_origen: false,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::CancelarTransferencia { id: 2 });
+        ida_y_vuelta_cliente(MensajeCliente::LimpiarTransferencias);
+        ida_y_vuelta_cliente(MensajeCliente::BorrarRemoto {
+            host_id: 7,
+            rutas: vec!["/var/www/viejo".to_string()],
+            peticion_id: 5,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::RenombrarRemoto {
+            host_id: 7,
+            de: "/var/www/a".to_string(),
+            a: "/var/www/b".to_string(),
+            peticion_id: 6,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::CrearDirRemoto {
+            host_id: 7,
+            ruta: "/var/www/nuevo".to_string(),
+            peticion_id: 7,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::DescargarTemporal {
+            host_id: 7,
+            ruta: "/var/log/nginx/error.log".to_string(),
+            peticion_id: 8,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::BorrarTemporal {
+            ruta: "/run/magi/tmp/8-error.log".to_string(),
+        });
+
+        ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
+            host_id: 7,
+            dir_inicio: "/home/hector".to_string(),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::DirListado {
+            host_id: 7,
+            ruta: "/var/www".to_string(),
+            entradas: vec![
+                Entrada {
+                    nombre: "app".to_string(),
+                    tipo: crate::archivos::TipoEntrada::Directorio,
+                    tamano: 4096,
+                    mtime: 1_700_000_000,
+                    permisos: Some(0o755),
+                    propietario: Some("hector:hector".to_string()),
+                    enlace: None,
+                    marca: Default::default(),
+                },
+                Entrada {
+                    nombre: "index.html".to_string(),
+                    tipo: crate::archivos::TipoEntrada::Fichero,
+                    tamano: 14_208,
+                    mtime: 1_700_000_000,
+                    permisos: Some(0o644),
+                    propietario: None,
+                    enlace: None,
+                    marca: crate::archivos::Marca::Distinta,
+                },
+            ],
+            peticion_id: 4,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Transferencias {
+            lista: vec![InfoTransferencia {
+                id: 1,
+                host_id: 7,
+                host_nombre: "hetzner-01".to_string(),
+                direccion: Direccion::Bajada,
+                estado: EstadoTransferencia::EnCurso,
+                origen: "/var/log/nginx".to_string(),
+                destino: "~/logs".to_string(),
+                es_directorio: true,
+                ficheros_total: 14,
+                ficheros_hechos: 3,
+                omitidos: 2,
+                bytes_total: 12_582_912,
+                bytes_hechos: 3_145_728,
+                fichero_actual: Some("access.log".to_string()),
+                error: None,
+                borrar_origen: false,
+                solicitante: 1,
+                creada_en: 1_700_000_000,
+                terminada_en: None,
+            }],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Hecho { peticion_id: 5 });
+        ida_y_vuelta_servidor(MensajeServidor::RutaTemporal {
+            ruta: "/run/magi/tmp/8-error.log".to_string(),
+            peticion_id: 8,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Error {
+            mensaje: "la ruta no existe".to_string(),
+            peticion_id: Some(4),
+        });
+    }
+
+    /// Un `Error` sin `peticion_id` (el que manda la versión 1 del protocolo)
+    /// se decodifica como si no trajera petición.
+    #[test]
+    fn un_error_sin_peticion_se_decodifica_como_ninguno() {
+        let linea = r#"{"tipo":"Error","mensaje":"algo"}"#;
+        assert_eq!(
+            decodificar::<MensajeServidor>(linea).unwrap(),
+            MensajeServidor::Error {
+                mensaje: "algo".to_string(),
+                peticion_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn la_version_del_protocolo_es_la_dos() {
+        assert_eq!(VERSION_PROTOCOLO, 2);
+    }
+
     #[test]
     fn los_mensajes_del_servidor_hacen_ida_y_vuelta() {
         let sesiones = vec![InfoSesion {
@@ -345,6 +703,7 @@ mod pruebas {
             cliente_id: 3,
             clientes: 2,
             sesiones: sesiones.clone(),
+            transferencias: Vec::new(),
         });
         ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible { version: 99 });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });
@@ -401,6 +760,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::SinSesion { host_id: 7 });
         ida_y_vuelta_servidor(MensajeServidor::Error {
             mensaje: "mensaje desconocido".to_string(),
+            peticion_id: None,
         });
     }
 
