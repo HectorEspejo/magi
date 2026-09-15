@@ -38,6 +38,9 @@ pub enum ResultadoEjecutar {
 pub struct Cliente {
     pub tx: mpsc::UnboundedSender<MensajeCliente>,
     esperas: Arc<Mutex<HashMap<i64, Vec<oneshot::Sender<ResultadoEjecutar>>>>>,
+    /// Registro de pantallas compartido con la tarea de lectura: es el que
+    /// pinta la UI, de modo que los datos del remoto acaban en su parser.
+    pantallas: pantallas::Pantallas,
 }
 
 impl Default for Cliente {
@@ -54,7 +57,13 @@ impl Cliente {
         Self {
             tx,
             esperas: Arc::new(Mutex::new(HashMap::new())),
+            pantallas: pantallas::Pantallas::default(),
         }
+    }
+
+    /// El registro de pantallas que alimenta la tarea de lectura.
+    pub fn pantallas(&self) -> pantallas::Pantallas {
+        self.pantallas.clone()
     }
 
     pub fn enviar(&self, mensaje: MensajeCliente) {
@@ -81,6 +90,7 @@ impl Cliente {
 }
 
 /// Conecta con el servidor, lanzándolo si no está; errores legibles.
+#[derive(Debug)]
 pub enum FalloConexion {
     /// El servidor habla otra versión del protocolo: la TUI arranca sin
     /// sesiones y lo explica en la barra.
@@ -185,15 +195,25 @@ async fn saludar(
     match decodificar::<MensajeServidor>(&linea)
         .map_err(|error| FalloConexion::Inaccesible(error.to_string()))?
     {
-        MensajeServidor::Bienvenida { .. } => {
+        mensaje @ MensajeServidor::Bienvenida { .. } => {
+            // La bienvenida también va a la UI: con ella reconcilia las
+            // sesiones que el servidor ya custodiaba.
+            let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
             // Tareas de lectura y escritura sobre el socket ya saludado.
             let (tx_mensajes, rx_mensajes) = mpsc::unbounded_channel();
+            let pantallas = pantallas::Pantallas::default();
             let cliente = Cliente {
                 tx: tx_mensajes,
                 esperas: Arc::new(Mutex::new(HashMap::new())),
+                pantallas: pantallas.clone(),
             };
             tokio::spawn(tarea_escritura(rx_mensajes, salida));
-            tokio::spawn(tarea_lectura(entrada, tx_eventos, cliente.esperas.clone()));
+            tokio::spawn(tarea_lectura(
+                entrada,
+                tx_eventos,
+                cliente.esperas.clone(),
+                pantallas,
+            ));
             Ok(cliente)
         }
         MensajeServidor::VersionIncompatible { .. } => Err(FalloConexion::VersionIncompatible),
@@ -224,8 +244,8 @@ async fn tarea_lectura(
     mut entrada: FramedRead<tokio::net::unix::OwnedReadHalf, crate::protocolo::LinesCodec>,
     tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
     esperas: Arc<Mutex<HashMap<i64, Vec<oneshot::Sender<ResultadoEjecutar>>>>>,
+    pantallas: pantallas::Pantallas,
 ) {
-    let pantallas = pantallas::Pantallas::default();
     let mut sucias: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut intervalo = tokio::time::interval(Duration::from_millis(33));
     loop {

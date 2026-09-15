@@ -267,6 +267,15 @@ impl russh::server::Handler for HandlerSesion {
         }
     }
 
+    async fn auth_publickey(
+        &mut self,
+        _usuario: &str,
+        _clave: &ssh_key::PublicKey,
+    ) -> Result<russh::server::Auth, Self::Error> {
+        // Pruebas: cualquier clave vale.
+        Ok(russh::server::Auth::Accept)
+    }
+
     async fn channel_open_session(
         &mut self,
         _canal: russh::Channel<russh::server::Msg>,
@@ -298,6 +307,8 @@ impl russh::server::Handler for HandlerSesion {
         sesion: &mut russh::server::Session,
     ) -> Result<(), Self::Error> {
         let _ = sesion.channel_success(canal);
+        // Contenido inicial para que el volcado al adjuntar no esté vacío.
+        let _ = sesion.data(canal, &b"MARCA_CLIENTE\r\n"[..]);
         Ok(())
     }
 }
@@ -464,5 +475,160 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
     // 5. Limpieza: cerrar la sesión y parar el servidor.
     drop(tarea_ssh);
     let _ = escritura.shutdown().await;
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea_magi).await;
+}
+
+/// Regresión: los datos que llegan del servidor acaban en el MISMO registro de
+/// pantallas que usa la UI (`cliente.pantallas()`), no en uno privado de la
+/// tarea de lectura.
+#[tokio::test]
+async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
+    use std::sync::Arc;
+
+    use magi::almacen::{hosts, Almacen};
+    use magi::modelo::{DatosHost, IdentidadRef, Origen};
+    use russh::server::Server as _;
+
+    // 1. Servidor SSH de pruebas con clave pública aceptada.
+    let _dir_ssh = tempfile::tempdir().unwrap();
+    let clave_servidor = ssh_key::PrivateKey::random(
+        &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+        ssh_key::Algorithm::Ed25519,
+    )
+    .unwrap();
+    let config = Arc::new(russh::server::Config {
+        auth_rejection_time: Duration::from_millis(1),
+        keys: vec![clave_servidor.clone()],
+        ..Default::default()
+    });
+    let escucha = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let puerto_ssh = escucha.local_addr().unwrap().port();
+    let tarea_ssh = tokio::spawn(async move {
+        let mut servidor = ServidorSesion;
+        let _ = servidor.run_on_socket(config, &escucha).await;
+    });
+
+    // 2. Entorno MAGI con clave de cliente y huella conocida.
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    std::fs::create_dir_all(rutas.dir_ssh()).unwrap();
+    let clave_cliente = ssh_key::PrivateKey::random(
+        &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+        ssh_key::Algorithm::Ed25519,
+    )
+    .unwrap();
+    let ruta_clave = rutas.dir_ssh().join("prueba_cliente");
+    std::fs::write(
+        &ruta_clave,
+        clave_cliente.to_openssh(ssh_key::LineEnding::LF).unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&ruta_clave, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let known_hosts = rutas.fichero_known_hosts();
+    std::fs::write(
+        &known_hosts,
+        format!(
+            "[127.0.0.1]:{puerto_ssh} {}\n",
+            clave_servidor.public_key().to_openssh().unwrap()
+        ),
+    )
+    .unwrap();
+    {
+        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        hosts::crear(
+            almacen.conexion(),
+            &DatosHost {
+                nombre: "prueba".to_string(),
+                direccion: "127.0.0.1".to_string(),
+                puerto: puerto_ssh,
+                usuario: Some("hector".to_string()),
+                identidad_ref: IdentidadRef::Fichero(ruta_clave.display().to_string()),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+        almacen.cerrar().unwrap();
+    }
+
+    // 3. Servidor de sesiones y cliente real.
+    let tarea_magi = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    let (tx_eventos, mut eventos) = tokio::sync::mpsc::unbounded_channel();
+    let cliente = magi::cliente::conectar(&rutas, tx_eventos)
+        .await
+        .expect("el cliente conecta con el servidor");
+
+    let host_id = {
+        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        magi::almacen::hosts::por_nombre(almacen.conexion(), "prueba")
+            .unwrap()
+            .expect("el host de prueba existe")
+            .id
+    };
+    cliente.enviar(magi::protocolo::MensajeCliente::AbrirSesion {
+        host_id,
+        cols: 80,
+        filas: 24,
+    });
+
+    // 4. Espera la sesión abierta y adjunta.
+    let mut sesion_id = None;
+    let mut adjuntado = false;
+    let plazo = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut contenido = None;
+    while tokio::time::Instant::now() < plazo {
+        let Some(evento) = eventos.recv().await else {
+            break;
+        };
+        match evento {
+            magi::app::Evento::Servidor(MensajeServidor::Sesiones { lista }) => {
+                if let Some(sesion) = lista.iter().find(|s| s.host_id == host_id) {
+                    if sesion.estado == magi::protocolo::EstadoSesionRemota::Abierta
+                        && sesion_id.is_none()
+                    {
+                        sesion_id = Some(sesion.id);
+                    }
+                }
+            }
+            magi::app::Evento::Pantallas(ids) => {
+                if let Some(id) = ids.first() {
+                    if let Some(texto) = cliente.pantallas().contenido(*id) {
+                        if texto.contains("MARCA_CLIENTE") {
+                            contenido = Some(texto);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let (Some(id), false) = (sesion_id, adjuntado) {
+            cliente.enviar(magi::protocolo::MensajeCliente::Adjuntar {
+                sesion_id: id,
+                cols: 80,
+                filas: 24,
+            });
+            adjuntado = true;
+        }
+        if contenido.is_some() {
+            break;
+        }
+    }
+
+    let contenido = contenido.expect("el registro de pantallas del cliente debe recibir los datos");
+    assert!(
+        contenido.contains("MARCA_CLIENTE"),
+        "el volcado debe llegar al registro compartido: {contenido:?}"
+    );
+
+    drop(cliente);
+    drop(tarea_ssh);
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea_magi).await;
 }

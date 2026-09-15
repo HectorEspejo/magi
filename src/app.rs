@@ -956,6 +956,7 @@ impl App {
             .block_on(cliente::conectar(&rutas_cliente, tx_conexion))
         {
             Ok(servidor) => {
+                app.pantallas = servidor.pantallas();
                 app.servidor = servidor;
                 app.servidor_desde = Some(Instant::now());
             }
@@ -1032,6 +1033,7 @@ impl App {
                 self.sucio = true;
                 match resultado {
                     Ok(servidor) => {
+                        self.pantallas = servidor.pantallas();
                         self.servidor = servidor;
                         self.servidor_desde = Some(Instant::now());
                         self.mensaje("servidor relanzado", false);
@@ -1040,13 +1042,25 @@ impl App {
                 }
             }
             Evento::Pantallas(ids) => {
-                // Las pantallas ya se alimentaron en la tarea de lectura;
-                // solo hace falta repintar si una de ellas está a la vista.
-                if self.vista == Vista::Sesion {
-                    self.sucio = true;
-                }
+                // Las pantallas ya se alimentaron en la tarea de lectura
+                // (registro compartido); aquí solo se decide el repintado y el
+                // indicador ◐ de actividad sin ver.
+                let visible = if self.vista == Vista::Sesion {
+                    self.pestana_activa_id()
+                } else {
+                    None
+                };
                 for sesion_id in ids {
-                    self.limpiar_actividad(sesion_id);
+                    if Some(sesion_id) == visible {
+                        self.sucio = true;
+                        self.limpiar_actividad(sesion_id);
+                    } else if let Some(pestaña) = self
+                        .pestanas
+                        .iter_mut()
+                        .find(|pestaña| pestaña.sesion_id == sesion_id)
+                    {
+                        pestaña.actividad_no_vista = true;
+                    }
                 }
             }
             Evento::Identidades(identidades) => {
@@ -1812,7 +1826,10 @@ impl App {
                 });
             }
             protocolo::MensajeServidor::Bienvenida {
-                pid, cliente_id, ..
+                pid,
+                cliente_id,
+                sesiones,
+                ..
             } => {
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
@@ -1820,6 +1837,12 @@ impl App {
                 if self.servidor_incompatible {
                     self.servidor_incompatible = false;
                 }
+                // Al abrir una ventana nueva, las sesiones que ya custodia el
+                // servidor aparecen como pestañas; pero ninguna debe robar la
+                // activación de una apertura en curso.
+                let pendientes = std::mem::take(&mut self.aperturas_pendientes);
+                self.reconciliar_sesiones(sesiones);
+                self.aperturas_pendientes = pendientes;
             }
             protocolo::MensajeServidor::Error { mensaje } => {
                 self.mensaje(mensaje, true);
@@ -1878,7 +1901,9 @@ impl App {
                 pestaña.motivo = info.motivo;
                 pestaña.identidad = info.identidad;
                 pestaña.ventanas = info.ventanas;
-                pestaña.actividad_no_vista = info.actividad_no_vista;
+                // El indicador local (◐ de esta ventana) no se borra con la
+                // difusión: se limpia al entrar en la pestaña.
+                pestaña.actividad_no_vista = pestaña.actividad_no_vista || info.actividad_no_vista;
                 pestaña.abierta_en = info.abierta_en;
             } else {
                 let pantalla = self.pantallas.crear(info.id, 24, 80);
@@ -1901,6 +1926,11 @@ impl App {
                 });
                 self.aperturas_pendientes.remove(&info.host_id);
                 if activar {
+                    // La sesión nueva pasa a ser la visible: la anterior deja
+                    // de recibir datos.
+                    if self.vista == Vista::Sesion {
+                        self.desadjuntar_pestaña_activa();
+                    }
                     self.pestana_activa = Some(self.pestanas.len() - 1);
                     self.vista_previa = Some(self.vista);
                     self.vista = Vista::Sesion;
@@ -1917,14 +1947,13 @@ impl App {
                 }
             }
         }
-        if let Some(indice) = self.pestana_activa {
-            if indice >= self.pestanas.len() {
-                self.pestana_activa = self
-                    .pestanas
-                    .is_empty()
-                    .then_some(0)
-                    .map(|_| self.pestanas.len().saturating_sub(1));
-            }
+        if self.pestanas.is_empty() {
+            self.pestana_activa = None;
+        } else if self
+            .pestana_activa
+            .is_some_and(|indice| indice >= self.pestanas.len())
+        {
+            self.pestana_activa = Some(self.pestanas.len() - 1);
         }
         // Contraseñas a guardar cuando la sesión quedó abierta.
         let abiertas: Vec<u32> = self

@@ -14,14 +14,28 @@ pub struct Pantallas {
 }
 
 impl Pantallas {
-    /// Crea el parser de una pestaña y devuelve el puntero compartido para la UI.
+    /// Devuelve el parser de una pestaña, creándolo si aún no existe. Si la
+    /// tarea de lectura ya volcó una pantalla, se reutiliza el mismo parser
+    /// (nunca se reemplaza: UI y lectura comparten el puntero).
     pub fn crear(&self, sesion_id: u32, filas: u16, cols: u16) -> Pantalla {
-        let pantalla = nuevo(filas, cols);
-        self.interno
-            .lock()
-            .expect("pantallas del cliente")
-            .insert(sesion_id, pantalla.clone());
+        let mut guardia = self.interno.lock().expect("pantallas del cliente");
+        guardia
+            .entry(sesion_id)
+            .or_insert_with(|| nuevo(filas, cols))
+            .clone()
+    }
+
+    /// Contenido actual de la pantalla de una sesión (para diagnósticos y
+    /// pruebas).
+    pub fn contenido(&self, sesion_id: u32) -> Option<String> {
+        let pantalla = {
+            let guardia = self.interno.lock().expect("pantallas del cliente");
+            guardia.get(&sesion_id).cloned()
+        }?;
         pantalla
+            .lock()
+            .ok()
+            .map(|parser| parser.screen().contents())
     }
 
     /// Reemplaza el contenido del parser de una pestaña con el volcado del
