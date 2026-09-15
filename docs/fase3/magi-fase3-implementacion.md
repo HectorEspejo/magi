@@ -120,6 +120,18 @@ con `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` limpios.
    pisa un parser ya volcado y el indicador ◐ se marca en pestañas no
    visibles. Regresión cubierta por un test que abre una sesión con el
    `Cliente` real y comprueba que el volcado llega a su registro de pantallas.
+5. **La vista Sesión se quedaba bloqueada al desaparecer la pestaña activa.**
+   Al cerrarse la pestaña adjunta, el foco pasaba a la anterior **sin
+   re-adjuntarla** al servidor: pantalla congelada y teclas ignoradas. Si
+   desaparecía la última, la vista seguía en Sesión sin nada que pintar
+   (área negra) y, como todas las teclas se enrutan a la sesión, F3 no
+   abría la lista. Arreglo: `quitar_pestaña` pasa el foco a la anterior y la
+   re-adjunta; si no queda ninguna, la vista sale a la previa (o a la lista)
+   y nunca se queda en negro. `prefijo q`/`Esc` desde Sesión respeta la
+   lista como vista anterior, y desde la lista vuelve a la pestaña
+   re-adjuntándola; el servidor caído y el apagado por orden también salen
+   de la vista Sesión. Verificado con la TUI real en un pty aislado: cerrar
+   la pestaña adjunta deja la otra adjunta (1 ventana) y el eco vuelve.
 
 ## Desviaciones respecto a la especificación
 
