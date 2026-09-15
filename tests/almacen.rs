@@ -24,14 +24,187 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         .collect::<rusqlite::Result<Vec<String>>>()
         .unwrap();
     nombres.sort();
-    for tabla in ["ETIQUETAS", "GRUPOS", "HOSTS", "HOST_ETIQUETAS"] {
+    for tabla in [
+        "ETIQUETAS",
+        "GRUPOS",
+        "HOSTS",
+        "HOST_ETIQUETAS",
+        "SONDEOS",
+        "IDENTIDADES",
+        "REGISTRO",
+    ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert!(version >= 1);
+    assert!(version >= 2);
+}
+
+#[test]
+fn migracion_desde_fase1_conserva_los_datos() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        conexion
+            .execute_batch(magi::almacen::migraciones::MIGRACIONES[0])
+            .unwrap();
+        conexion.pragma_update(None, "user_version", 1).unwrap();
+        conexion
+            .execute(
+                "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
+                                    creado_en, actualizado_en)
+                 VALUES ('viejo', '10.0.0.9', 22, '', 'manual',
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00')",
+                [],
+            )
+            .unwrap();
+    }
+    let almacen = Almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let hosts = almacen.listar_hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].nombre, "viejo");
+    assert_eq!(hosts[0].servicios, "");
+    assert!(almacen.listar_identidades(true).unwrap().is_empty());
+}
+
+#[test]
+fn los_sondeos_se_purgan_a_los_veinte_y_caen_con_el_host() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    for indice in 0..25 {
+        let mut sondeo = magi::modelo::Sondeo::vacio(host);
+        sondeo.duracion_ms = indice;
+        sondeo.nucleos = Some(8);
+        almacen.guardar_sondeo(&sondeo).unwrap();
+    }
+    let guardados = almacen.ultimos_sondeos(host, 100).unwrap();
+    assert_eq!(guardados.len(), 20);
+    assert_eq!(guardados[0].duracion_ms, 24);
+    assert_eq!(guardados[19].duracion_ms, 5);
+    almacen.borrar_host(host).unwrap();
+    assert_eq!(almacen.ultimos_sondeos(host, 100).unwrap().len(), 0);
+}
+
+#[test]
+fn el_registro_conserva_la_fila_con_host_e_identidad_a_null() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let identidad = almacen
+        .crear_identidad(
+            "ed25519",
+            "SHA256:abc",
+            magi::modelo::OrigenIdentidad::Agente,
+            None,
+            Some("prueba"),
+        )
+        .unwrap();
+    magi::registro::anotar(
+        almacen.conexion(),
+        magi::registro::CONEXION_ABIERTA,
+        Some(host),
+        Some(identidad),
+        "sesión abierta",
+        magi::modelo::ResultadoRegistro::Ok,
+    )
+    .unwrap();
+    almacen.borrar_host(host).unwrap();
+    almacen
+        .conexion()
+        .execute("DELETE FROM IDENTIDADES WHERE id = ?1", [identidad])
+        .unwrap();
+    let filtro = magi::registro::FiltroRegistro::default();
+    let entradas = almacen.listar_registro(&filtro, 10, 0).unwrap();
+    assert_eq!(entradas.len(), 1);
+    assert_eq!(entradas[0].host_id, None);
+    assert_eq!(entradas[0].host_nombre, None);
+    assert_eq!(entradas[0].identidad_id, None);
+    assert_eq!(entradas[0].identidad_alias, None);
+    assert_eq!(entradas[0].detalle, "sesión abierta");
+}
+
+#[test]
+fn las_identidades_sincronizan_por_huella_y_no_resucitan_revocadas() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let claves = vec![
+        magi::almacen::identidades::ClaveSincronizada {
+            tipo: "ed25519".to_string(),
+            huella: "SHA256:uno".to_string(),
+            origen: magi::modelo::OrigenIdentidad::Agente,
+            ruta: None,
+            comentario: Some("4d3".to_string()),
+        },
+        magi::almacen::identidades::ClaveSincronizada {
+            tipo: "rsa".to_string(),
+            huella: "SHA256:dos".to_string(),
+            origen: magi::modelo::OrigenIdentidad::Fichero,
+            ruta: Some("~/.ssh/id_rsa".to_string()),
+            comentario: None,
+        },
+    ];
+    almacen.sincronizar_identidades(&claves).unwrap();
+    assert_eq!(almacen.listar_identidades(false).unwrap().len(), 2);
+    let uno = almacen.identidad_por_huella("SHA256:uno").unwrap().unwrap();
+    assert_eq!(uno.alias, "4d3");
+
+    let mut datos_host = datos("uno");
+    datos_host.identidad_ref = IdentidadRef::Agente("SHA256:uno".to_string());
+    let host = almacen.crear_host(&datos_host, Origen::Manual).unwrap();
+    let afectados = almacen
+        .revocar_identidad(uno.id, std::path::Path::new("/home/nadie"))
+        .unwrap();
+    assert_eq!(afectados, 1);
+    assert!(almacen.obtener_host(host).unwrap().identidad_ref.es_auto());
+    almacen.sincronizar_identidades(&claves).unwrap();
+    let uno = almacen.identidad_por_huella("SHA256:uno").unwrap().unwrap();
+    assert!(uno.revocada());
+    assert_eq!(almacen.listar_identidades(false).unwrap().len(), 1);
+    almacen.reactivar_identidad(uno.id).unwrap();
+    assert!(!almacen
+        .identidad_por_huella("SHA256:uno")
+        .unwrap()
+        .unwrap()
+        .revocada());
+}
+
+#[test]
+fn el_registro_se_exporta_a_csv_y_json() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    magi::registro::anotar(
+        almacen.conexion(),
+        magi::registro::SONDEO_FALLIDO,
+        Some(host),
+        None,
+        "timeout tras 5 s",
+        magi::modelo::ResultadoRegistro::Error,
+    )
+    .unwrap();
+    let entradas = almacen.registro_para_exportar(None).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("registro.csv");
+    let json = dir.path().join("registro.json");
+    assert_eq!(magi::registro::exportar_csv(&csv, &entradas).unwrap(), 1);
+    assert_eq!(magi::registro::exportar_json(&json, &entradas).unwrap(), 1);
+    let texto = std::fs::read_to_string(&csv).unwrap();
+    assert!(
+        texto.starts_with("fecha,tipo,host,identidad,resultado,detalle"),
+        "{texto}"
+    );
+    assert!(texto.contains("uno"));
+    let valor: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+    assert_eq!(valor[0]["tipo"], "sondeo_fallido");
+    assert_eq!(valor[0]["host"], "uno");
+    let desde = almacen.registro_para_exportar(Some("2999-01-01")).unwrap();
+    assert!(desde.is_empty());
 }
 
 #[test]
@@ -66,6 +239,27 @@ fn crud_de_hosts_conserva_campos_y_etiquetas() {
 
     almacen.borrar_host(id).unwrap();
     assert!(almacen.listar_hosts().unwrap().is_empty());
+}
+
+#[test]
+fn la_identidad_de_contrasena_se_guarda_como_marca_sin_secreto() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let mut con_contrasena = datos("pass");
+    con_contrasena.identidad_ref = IdentidadRef::Contrasena;
+    let id = almacen.crear_host(&con_contrasena, Origen::Manual).unwrap();
+    assert_eq!(
+        almacen.obtener_host(id).unwrap().identidad_ref,
+        IdentidadRef::Contrasena
+    );
+    let bruto: String = almacen
+        .conexion()
+        .query_row(
+            "SELECT identidad_ref FROM HOSTS WHERE id = ?1",
+            [id],
+            |fila| fila.get(0),
+        )
+        .unwrap();
+    assert_eq!(bruto, "contrasena");
 }
 
 #[test]

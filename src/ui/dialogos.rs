@@ -156,6 +156,92 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
             ];
             modal(marco, recta, "FRASE DE LA CLAVE", contenido, false, tema);
         }
+        Dialogo::Contrasena {
+            host,
+            intento,
+            campo,
+            recordar,
+            foco_casilla,
+            ..
+        } => {
+            let recta = centrar(area, 64, 11);
+            let mascara = |_: char| if tema.ascii { '*' } else { '•' };
+            let mut visible = String::new();
+            if !*foco_casilla {
+                let mut cursor_puesto = false;
+                for (indice, caracter) in campo.texto.chars().enumerate() {
+                    if indice == campo.cursor {
+                        visible.push('\u{2503}');
+                        cursor_puesto = true;
+                    }
+                    visible.push(mascara(caracter));
+                }
+                if !cursor_puesto {
+                    visible.push('\u{2503}');
+                }
+            } else if campo.texto.is_empty() {
+                visible.push('\u{2503}');
+            } else {
+                visible = campo.texto.chars().map(mascara).collect();
+            }
+            let estilo_casilla = if *foco_casilla {
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD)
+            } else if *recordar {
+                Style::default().fg(tema.paleta.correcto)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            };
+            let contenido = vec![
+                linea(&format!(
+                    "Contraseña para «{host}» · intento {intento} de 3"
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(
+                        visible,
+                        if *foco_casilla {
+                            Style::default().fg(tema.paleta.inactivo)
+                        } else {
+                            Style::default().fg(tema.paleta.texto)
+                        },
+                    ),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!(
+                            "{} recordar en el llavero del sistema",
+                            crate::ui::componentes::casilla(*recordar)
+                        ),
+                        estilo_casilla,
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    if *recordar {
+                        "  la contraseña queda cifrada en el llavero, nunca en magi.db"
+                    } else {
+                        "  sin marcar: se pedirá en cada conexión y no se guarda"
+                    },
+                    Style::default().fg(tema.paleta.inactivo),
+                )),
+                Line::from(vec![
+                    atajo("↵", tema),
+                    span_texto(" aceptar   "),
+                    atajo("⇥", tema),
+                    span_texto(" campo/casilla   "),
+                    atajo("espacio", tema),
+                    span_texto(" marcar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar"),
+                ]),
+            ];
+            modal(marco, recta, "CONTRASEÑA", contenido, false, tema);
+        }
         Dialogo::MenuGrupo { seleccion } => {
             let opciones = [
                 "nuevo grupo",
@@ -290,6 +376,219 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
                 span_texto(" cerrar"),
             ]));
             modal(marco, recta, titulo, contenido, false, tema);
+        }
+        Dialogo::Detalle { titulo, lineas } => {
+            let alto = lineas.len() as u16 + 4;
+            let recta = centrar(area, 74, alto);
+            let mut contenido: Vec<Line> = lineas.iter().map(|texto| linea(texto)).collect();
+            contenido.push(Line::from(""));
+            contenido.push(Line::from(vec![
+                atajo("↵ / esc", tema),
+                span_texto(" cerrar"),
+            ]));
+            modal(marco, recta, titulo, contenido, false, tema);
+        }
+        Dialogo::ExportarRegistro { estado } => {
+            let recta = centrar(area, 70, 11);
+            let marca = |activo: bool| if activo { "(•)" } else { "( )" };
+            let estilo_foco = |foco: bool| {
+                if foco {
+                    Style::default()
+                        .fg(tema.paleta.acento)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(tema.paleta.texto)
+                }
+            };
+            let contenido = vec![
+                Line::from(vec![
+                    Span::styled("Formato  ", estilo_foco(estado.foco == 0)),
+                    Span::raw(format!(
+                        "{} CSV   {} JSON",
+                        marca(!estado.json),
+                        marca(estado.json)
+                    )),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Ruta     ", estilo_foco(estado.foco == 1)),
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    estado
+                        .campo
+                        .span(estado.foco == 1, Style::default().fg(tema.paleta.texto)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  el fichero se escribe con permisos 600",
+                    Style::default().fg(tema.paleta.inactivo),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("⇥", tema),
+                    span_texto(" cambiar campo   "),
+                    atajo("espacio", tema),
+                    span_texto(" alternar formato   "),
+                    atajo("↵", tema),
+                    span_texto(" exportar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar"),
+                ]),
+            ];
+            modal(marco, recta, "EXPORTAR REGISTRO", contenido, false, tema);
+        }
+        Dialogo::GenerarClave { estado } => {
+            use crate::app::CampoGeneracion;
+            let recta = centrar(area, 74, 17);
+            let activo = |campo: CampoGeneracion| estado.campo == campo;
+            let estilo = |campo: CampoGeneracion| {
+                let base = Style::default().fg(tema.paleta.texto);
+                if activo(campo) {
+                    base.fg(tema.paleta.acento).add_modifier(Modifier::BOLD)
+                } else {
+                    base
+                }
+            };
+            let etiqueta = |campo: CampoGeneracion, texto: &str| {
+                Span::styled(
+                    format!("{texto:<12}"),
+                    Style::default().fg(if activo(campo) {
+                        tema.paleta.acento
+                    } else {
+                        tema.paleta.inactivo
+                    }),
+                )
+            };
+            let enmascarar = |texto: &str| -> String {
+                if texto.is_empty() {
+                    "\u{2503}".to_string()
+                } else {
+                    texto
+                        .chars()
+                        .map(|_| if tema.ascii { '*' } else { '•' })
+                        .collect()
+                }
+            };
+            let mut frase_visible = enmascarar(&estado.frase.texto);
+            let mut repetir_visible = enmascarar(&estado.repetir.texto);
+            if activo(CampoGeneracion::Frase) && !estado.frase.texto.is_empty() {
+                frase_visible.push('\u{2503}');
+            }
+            if activo(CampoGeneracion::Repetir) && !estado.repetir.texto.is_empty() {
+                repetir_visible.push('\u{2503}');
+            }
+            let contenido = vec![
+                Line::from(vec![
+                    etiqueta(CampoGeneracion::Fichero, "Fichero"),
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    estado.fichero.span(
+                        activo(CampoGeneracion::Fichero),
+                        estilo(CampoGeneracion::Fichero),
+                    ),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(vec![
+                    etiqueta(CampoGeneracion::Tipo, "Tipo"),
+                    Span::styled(
+                        format!(
+                            "{} ed25519   {} rsa 4096",
+                            if estado.rsa { "( )" } else { "(•)" },
+                            if estado.rsa { "(•)" } else { "( )" }
+                        ),
+                        estilo(CampoGeneracion::Tipo),
+                    ),
+                ]),
+                Line::from(vec![
+                    etiqueta(CampoGeneracion::Comentario, "Comentario"),
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    estado.comentario.span(
+                        activo(CampoGeneracion::Comentario),
+                        estilo(CampoGeneracion::Comentario),
+                    ),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(vec![
+                    etiqueta(CampoGeneracion::Frase, "Frase"),
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(frase_visible, estilo(CampoGeneracion::Frase)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(vec![
+                    etiqueta(CampoGeneracion::Repetir, "Repetir"),
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(repetir_visible, estilo(CampoGeneracion::Repetir)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!(
+                            "{} añadir al agente",
+                            crate::ui::componentes::casilla(estado.agente)
+                        ),
+                        estilo(CampoGeneracion::Agente),
+                    ),
+                    Span::raw("      "),
+                    Span::styled(
+                        format!(
+                            "{} copiar la pública",
+                            crate::ui::componentes::casilla(estado.copiar)
+                        ),
+                        estilo(CampoGeneracion::Copiar),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    if estado.frase.texto.is_empty() {
+                        "  sin frase: la clave quedará sin cifrar en ~/.ssh"
+                    } else {
+                        "  la frase cifra la clave en formato OpenSSH"
+                    },
+                    Style::default().fg(tema.paleta.inactivo),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("^s", tema),
+                    span_texto(" generar   "),
+                    atajo("⇥", tema),
+                    span_texto(" campo   "),
+                    atajo("espacio", tema),
+                    span_texto(" marcar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar"),
+                ]),
+            ];
+            modal(marco, recta, "GENERAR CLAVE", contenido, false, tema);
+        }
+        Dialogo::FraseImportacion { campo, .. } => {
+            let recta = centrar(area, 60, 9);
+            let enmascarado: String = campo
+                .texto
+                .chars()
+                .map(|_| if tema.ascii { '*' } else { '•' })
+                .collect();
+            let visible = if campo.texto.is_empty() {
+                "\u{2503}".to_string()
+            } else {
+                enmascarado
+            };
+            let contenido = vec![
+                linea("La clave importada está cifrada."),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("[ ", Style::default().fg(tema.paleta.acento)),
+                    Span::styled(visible, Style::default().fg(tema.paleta.texto)),
+                    Span::styled(" ]", Style::default().fg(tema.paleta.acento)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    atajo("↵", tema),
+                    span_texto(" aceptar   "),
+                    atajo("esc", tema),
+                    span_texto(" cancelar"),
+                ]),
+            ];
+            modal(marco, recta, "FRASE DE LA CLAVE", contenido, false, tema);
         }
         Dialogo::ConflictoImportacion { nombre, restantes } => {
             let recta = centrar(area, 74, 12);

@@ -1,7 +1,7 @@
 use anyhow::Context;
 use russh::client::Handle;
 
-use super::cliente::{autenticar, Cliente, Contexto, ErrorCliente};
+use super::cliente::{autenticar, Cliente, Contexto, ErrorCliente, IdentidadUsada};
 use crate::modelo::Host;
 
 /// Cadena de conexión ordenada del salto más lejano al destino.
@@ -33,9 +33,9 @@ pub fn construir_cadena(
 }
 
 pub struct Transporte {
-    pub handle: Handle<Cliente>,
+    pub handle: std::sync::Arc<Handle<Cliente>>,
     pub saltos: Vec<Handle<Cliente>>,
-    pub identidad: String,
+    pub identidad: IdentidadUsada,
 }
 
 /// Conecta y autentica toda la cadena, saltando con canales `direct-tcpip`
@@ -47,15 +47,20 @@ pub async fn conectar_cadena(
     let mut saltos: Vec<Handle<Cliente>> = Vec::new();
     let mut canal: Option<russh::Channel<russh::client::Msg>> = None;
     let mut handle_final: Option<Handle<Cliente>> = None;
-    let mut identidad_usada = String::new();
+    let mut identidad_usada = IdentidadUsada {
+        descripcion: String::new(),
+        huella: None,
+    };
 
     for (indice, host) in cadena.iter().enumerate() {
         let config = std::sync::Arc::new(config_cliente(host));
         let manejador = Cliente::nuevo(
             contexto.tx.clone(),
+            host.id,
             &host.direccion,
             host.puerto,
             contexto.known_hosts.clone(),
+            contexto.interactivo,
         );
         let mut handle = match canal.take() {
             Some(canal) => {
@@ -91,7 +96,7 @@ pub async fn conectar_cadena(
         }
     }
     Ok(Transporte {
-        handle: handle_final.expect("la cadena siempre incluye el destino"),
+        handle: std::sync::Arc::new(handle_final.expect("la cadena siempre incluye el destino")),
         saltos,
         identidad: identidad_usada,
     })

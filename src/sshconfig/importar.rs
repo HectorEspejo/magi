@@ -202,6 +202,7 @@ pub fn aplicar(
         match hosts::por_nombre(conexion, &candidato.nombre)? {
             Some(existente) => {
                 datos.etiquetas = existente.etiquetas.clone();
+                datos.servicios = existente.servicios.clone();
                 hosts::actualizar(conexion, existente.id, &datos)?;
                 hosts::marcar_origen(conexion, existente.id, Origen::SshConfig)?;
                 resumen.sobrescritos += 1;

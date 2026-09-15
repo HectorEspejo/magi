@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::app::{App, CampoFicha, Ficha};
 use crate::tema::Tema;
-use crate::ui::componentes::{casilla, estilo_campo, Desplegable};
+use crate::ui::componentes::{casilla, estilo_campo, AreaTexto, Desplegable};
 
 const ANCHO_DESPLEGABLE: u16 = 34;
 const ALTO_MAXIMO_DESPLEGABLE: usize = 8;
@@ -23,7 +23,7 @@ pub fn linea_de(campo: CampoFicha) -> u16 {
         CampoFicha::Salto => 10,
         CampoFicha::Multiplexar => 13,
         CampoFicha::Mantener | CampoFicha::Keepalive => 14,
-        CampoFicha::Opciones => 17,
+        CampoFicha::Servicios | CampoFicha::Opciones => 17,
     }
 }
 
@@ -59,28 +59,26 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let lineas = construir_lineas(app, ficha);
     marco.render_widget(Paragraph::new(lineas), trozos[0]);
 
-    let activo_opciones = ficha.campo == CampoFicha::Opciones;
-    let color_borde = if activo_opciones {
-        tema.paleta.acento
-    } else {
-        tema.paleta.inactivo
-    };
-    let bloque_opciones = Block::default()
-        .borders(Borders::ALL)
-        .border_set(tema.bordes())
-        .title(Span::styled(
-            " OPCIONES EXTRA (ssh_config, una por línea) ",
-            Style::default().fg(color_borde),
-        ))
-        .border_style(Style::default().fg(color_borde));
-    let interior_opciones = bloque_opciones.inner(trozos[1]);
-    marco.render_widget(bloque_opciones, trozos[1]);
-    if interior_opciones.height > 0 {
-        let lineas_opciones = ficha
-            .opciones
-            .lineas_con_cursor(activo_opciones, estilo_campo(tema, activo_opciones));
-        marco.render_widget(Paragraph::new(lineas_opciones), interior_opciones);
-    }
+    let columnas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(trozos[1]);
+    dibujar_area_texto(
+        marco,
+        columnas[0],
+        " SERVICIOS (systemd, una por línea) ",
+        &ficha.servicios,
+        ficha.campo == CampoFicha::Servicios,
+        tema,
+    );
+    dibujar_area_texto(
+        marco,
+        columnas[1],
+        " OPCIONES EXTRA (ssh_config, una por línea) ",
+        &ficha.opciones,
+        ficha.campo == CampoFicha::Opciones,
+        tema,
+    );
 
     // Desplegable abierto.
     if let Some(campo) = ficha.desplegable_abierto {
@@ -230,13 +228,36 @@ fn construir_lineas(app: &App, ficha: &Ficha) -> Vec<Line<'static>> {
         Span::styled(" ] s", Style::default().fg(tema.paleta.texto)),
     ]));
     lineas.push(Line::from(""));
-    lineas.push(Line::from(Span::styled(
-        "  OPCIONES EXTRA (ssh_config, una por línea)",
-        Style::default()
-            .fg(tema.paleta.acento)
-            .add_modifier(Modifier::BOLD),
-    )));
     lineas
+}
+
+fn dibujar_area_texto(
+    marco: &mut Frame,
+    area: Rect,
+    titulo: &str,
+    area_texto: &AreaTexto,
+    activo: bool,
+    tema: &Tema,
+) {
+    let color_borde = if activo {
+        tema.paleta.acento
+    } else {
+        tema.paleta.inactivo
+    };
+    let bloque = Block::default()
+        .borders(Borders::ALL)
+        .border_set(tema.bordes())
+        .title(Span::styled(
+            titulo.to_string(),
+            Style::default().fg(color_borde),
+        ))
+        .border_style(Style::default().fg(color_borde));
+    let interior = bloque.inner(area);
+    marco.render_widget(bloque, area);
+    if interior.height > 0 {
+        let lineas = area_texto.lineas_con_cursor(activo, estilo_campo(tema, activo));
+        marco.render_widget(Paragraph::new(lineas), interior);
+    }
 }
 
 fn cabecera(texto: &str, tema: &Tema) -> Line<'static> {

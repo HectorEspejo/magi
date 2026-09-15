@@ -8,7 +8,10 @@ use rusqlite::Connection;
 pub mod etiquetas;
 pub mod grupos;
 pub mod hosts;
+pub mod identidades;
 pub mod migraciones;
+pub mod registro;
+pub mod sondeos;
 
 /// Fichero SQLite del inventario.
 pub struct Almacen {
@@ -119,6 +122,14 @@ impl Almacen {
         hosts::marcar_conexion(&self.conexion, id)
     }
 
+    pub fn marcar_identidad_ref(
+        &self,
+        id: i64,
+        identidad: &crate::modelo::IdentidadRef,
+    ) -> Result<()> {
+        hosts::marcar_identidad_ref(&self.conexion, id, identidad)
+    }
+
     pub fn marcar_estado(
         &self,
         id: i64,
@@ -161,6 +172,112 @@ impl Almacen {
 
     pub fn listar_etiquetas(&self) -> Result<Vec<crate::modelo::Etiqueta>> {
         etiquetas::listar(&self.conexion)
+    }
+
+    // Sondeos ---------------------------------------------------------------
+
+    pub fn guardar_sondeo(&self, sondeo: &crate::modelo::Sondeo) -> Result<i64> {
+        sondeos::guardar(&self.conexion, sondeo)
+    }
+
+    pub fn ultimo_sondeo(&self, host_id: i64) -> Result<Option<crate::modelo::Sondeo>> {
+        sondeos::ultimo(&self.conexion, host_id)
+    }
+
+    pub fn ultimos_sondeos(&self, host_id: i64, limite: i64) -> Result<Vec<crate::modelo::Sondeo>> {
+        sondeos::ultimos(&self.conexion, host_id, limite)
+    }
+
+    pub fn sondeos_por_host(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, crate::modelo::Sondeo>> {
+        sondeos::ultimos_por_host(&self.conexion)
+    }
+
+    // Identidades -----------------------------------------------------------
+
+    pub fn sincronizar_identidades(&self, claves: &[identidades::ClaveSincronizada]) -> Result<()> {
+        identidades::sincronizar(&self.conexion, claves)
+    }
+
+    pub fn listar_identidades(
+        &self,
+        incluir_revocadas: bool,
+    ) -> Result<Vec<crate::modelo::Identidad>> {
+        identidades::listar(&self.conexion, incluir_revocadas)
+    }
+
+    pub fn obtener_identidad(&self, id: i64) -> Result<crate::modelo::Identidad> {
+        identidades::obtener(&self.conexion, id)
+    }
+
+    pub fn identidad_por_huella(&self, huella: &str) -> Result<Option<crate::modelo::Identidad>> {
+        identidades::por_huella(&self.conexion, huella)
+    }
+
+    pub fn crear_identidad(
+        &self,
+        tipo: &str,
+        huella: &str,
+        origen: crate::modelo::OrigenIdentidad,
+        ruta: Option<&str>,
+        comentario: Option<&str>,
+    ) -> Result<i64> {
+        identidades::crear(&self.conexion, tipo, huella, origen, ruta, comentario)
+    }
+
+    pub fn renombrar_identidad(&self, id: i64, alias: &str) -> Result<()> {
+        identidades::renombrar(&self.conexion, id, alias)
+    }
+
+    pub fn marcar_uso_identidad(&self, huella: &str) -> Result<()> {
+        identidades::marcar_uso(&self.conexion, huella, &crate::modelo::fecha_ahora())
+    }
+
+    pub fn hosts_que_usan_identidad(
+        &self,
+        identidad: &crate::modelo::Identidad,
+        hogar: &std::path::Path,
+    ) -> Result<Vec<String>> {
+        identidades::hosts_que_usan(&self.conexion, identidad, hogar)
+    }
+
+    pub fn revocar_identidad(&self, id: i64, hogar: &std::path::Path) -> Result<usize> {
+        identidades::revocar(&self.conexion, id, hogar)
+    }
+
+    pub fn reactivar_identidad(&self, id: i64) -> Result<()> {
+        identidades::reactivar(&self.conexion, id)
+    }
+
+    // Registro --------------------------------------------------------------
+
+    pub fn listar_registro(
+        &self,
+        filtro: &crate::registro::FiltroRegistro,
+        limite: i64,
+        desplazamiento: i64,
+    ) -> Result<Vec<crate::modelo::EntradaRegistro>> {
+        registro::listar(&self.conexion, filtro, limite, desplazamiento)
+    }
+
+    pub fn contar_registro(&self, filtro: &crate::registro::FiltroRegistro) -> Result<i64> {
+        registro::contar(&self.conexion, filtro)
+    }
+
+    pub fn registro_para_exportar(
+        &self,
+        desde: Option<&str>,
+    ) -> Result<Vec<crate::modelo::EntradaRegistro>> {
+        registro::listar_todas(&self.conexion, desde)
+    }
+
+    pub fn purgar_registro(&self, fecha_corte: &str) -> Result<usize> {
+        registro::purgar_anteriores(&self.conexion, fecha_corte)
+    }
+
+    pub fn contar_registro_anterior(&self, fecha_corte: &str) -> Result<i64> {
+        registro::contar_anteriores(&self.conexion, fecha_corte)
     }
 }
 

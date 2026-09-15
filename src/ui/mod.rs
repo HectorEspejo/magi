@@ -3,8 +3,11 @@ pub mod barra;
 pub mod componentes;
 pub mod dialogos;
 pub mod ficha;
+pub mod flota;
 pub mod hosts;
+pub mod identidades;
 pub mod paleta;
+pub mod registro;
 pub mod sesion;
 
 use std::io::{self, Stdout};
@@ -27,9 +30,12 @@ use crate::tema::Tema;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vista {
+    Flota,
     Hosts,
     Ficha,
     Sesion,
+    Identidades,
+    Registro,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -53,9 +59,12 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
     match app.vista {
+        Vista::Flota => flota::dibujar(marco, trozos[0], app),
         Vista::Hosts => hosts::dibujar(marco, trozos[0], app),
         Vista::Ficha => ficha::dibujar(marco, trozos[0], app),
         Vista::Sesion => sesion::dibujar(marco, trozos[0], app),
+        Vista::Identidades => identidades::dibujar(marco, trozos[0], app),
+        Vista::Registro => registro::dibujar(marco, trozos[0], app),
     }
     barra::dibujar(marco, trozos[1], app);
     if let Some(dialogo) = &app.dialogo {

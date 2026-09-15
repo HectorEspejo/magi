@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -49,10 +49,15 @@ impl UltimoEstado {
     }
 }
 
-/// Referencia a la identidad usada al conectar: nunca contiene la clave.
+/// Referencia a la identidad usada al conectar: nunca contiene la clave ni la
+/// contraseña. `Contrasena` marca que MAGI la pide al conectar y
+/// `ContrasenaLlavero` que además puede recuperarla del llavero del sistema
+/// (el secreto no está en `magi.db`, solo esta referencia).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentidadRef {
     Auto,
+    Contrasena,
+    ContrasenaLlavero,
     Agente(String),
     Fichero(String),
 }
@@ -60,6 +65,8 @@ pub enum IdentidadRef {
 impl IdentidadRef {
     pub fn desde_bd(texto: Option<&str>) -> Self {
         match texto {
+            Some("contrasena:llavero") => IdentidadRef::ContrasenaLlavero,
+            Some("contrasena") => IdentidadRef::Contrasena,
             Some(valor) if valor.starts_with("agente:") => {
                 IdentidadRef::Agente(valor["agente:".len()..].to_string())
             }
@@ -73,6 +80,8 @@ impl IdentidadRef {
     pub fn a_bd(&self) -> Option<String> {
         match self {
             IdentidadRef::Auto => None,
+            IdentidadRef::Contrasena => Some("contrasena".to_string()),
+            IdentidadRef::ContrasenaLlavero => Some("contrasena:llavero".to_string()),
             IdentidadRef::Agente(huella) => Some(format!("agente:{huella}")),
             IdentidadRef::Fichero(ruta) => Some(format!("fichero:{ruta}")),
         }
@@ -80,6 +89,10 @@ impl IdentidadRef {
 
     pub fn es_auto(&self) -> bool {
         matches!(self, IdentidadRef::Auto)
+    }
+
+    pub fn usa_llavero(&self) -> bool {
+        matches!(self, IdentidadRef::ContrasenaLlavero)
     }
 }
 
@@ -112,6 +125,7 @@ pub struct Host {
     pub multiplexar: bool,
     pub keepalive_seg: Option<u32>,
     pub opciones_extra: String,
+    pub servicios: String,
     pub origen: Origen,
     pub ultimo_estado: Option<UltimoEstado>,
     pub ultima_conexion_en: Option<String>,
@@ -135,6 +149,7 @@ pub struct DatosHost {
     pub multiplexar: bool,
     pub keepalive_seg: Option<u32>,
     pub opciones_extra: String,
+    pub servicios: String,
     pub etiquetas: Vec<String>,
 }
 
@@ -151,9 +166,173 @@ impl Default for DatosHost {
             multiplexar: false,
             keepalive_seg: Some(30),
             opciones_extra: String::new(),
+            servicios: String::new(),
             etiquetas: Vec::new(),
         }
     }
+}
+
+/// Resultado de un sondeo de flota.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResultadoSondeo {
+    #[default]
+    Ok,
+    SinMetricas,
+    Error,
+}
+
+impl ResultadoSondeo {
+    pub fn como_texto(self) -> &'static str {
+        match self {
+            ResultadoSondeo::Ok => "ok",
+            ResultadoSondeo::SinMetricas => "sin_metricas",
+            ResultadoSondeo::Error => "error",
+        }
+    }
+
+    pub fn desde_texto(texto: &str) -> Self {
+        match texto {
+            "sin_metricas" => ResultadoSondeo::SinMetricas,
+            "error" => ResultadoSondeo::Error,
+            _ => ResultadoSondeo::Ok,
+        }
+    }
+}
+
+/// Instantánea del estado de un host tras ejecutar `sondeo.sh`.
+#[derive(Debug, Clone, Default)]
+pub struct Sondeo {
+    pub id: i64,
+    pub host_id: i64,
+    pub fecha: String,
+    pub resultado: ResultadoSondeo,
+    pub error: Option<String>,
+    pub nucleos: Option<i64>,
+    pub carga_1m: Option<f64>,
+    pub carga_5m: Option<f64>,
+    pub carga_15m: Option<f64>,
+    pub mem_total_kb: Option<i64>,
+    pub mem_disponible_kb: Option<i64>,
+    pub disco_total_kb: Option<i64>,
+    pub disco_usado_kb: Option<i64>,
+    pub red_rx_bytes: Option<i64>,
+    pub red_tx_bytes: Option<i64>,
+    pub uptime_seg: Option<i64>,
+    pub servicios: BTreeMap<String, String>,
+    pub duracion_ms: i64,
+}
+
+impl Sondeo {
+    pub fn vacio(host_id: i64) -> Self {
+        Self {
+            host_id,
+            fecha: fecha_ahora(),
+            ..Self::default()
+        }
+    }
+
+    /// Porcentaje de memoria en uso (0-100).
+    pub fn memoria_pct(&self) -> Option<f64> {
+        let total = self.mem_total_kb? as f64;
+        let disponible = self.mem_disponible_kb? as f64;
+        if total <= 0.0 {
+            return None;
+        }
+        Some(((total - disponible) / total * 100.0).clamp(0.0, 100.0))
+    }
+
+    /// Porcentaje de disco usado (0-100).
+    pub fn disco_pct(&self) -> Option<f64> {
+        let total = self.disco_total_kb? as f64;
+        let usado = self.disco_usado_kb? as f64;
+        if total <= 0.0 {
+            return None;
+        }
+        Some((usado / total * 100.0).clamp(0.0, 100.0))
+    }
+}
+
+/// Origen de una identidad registrada en MAGI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrigenIdentidad {
+    Agente,
+    Fichero,
+    Token,
+}
+
+impl OrigenIdentidad {
+    pub fn como_texto(self) -> &'static str {
+        match self {
+            OrigenIdentidad::Agente => "agente",
+            OrigenIdentidad::Fichero => "fichero",
+            OrigenIdentidad::Token => "token",
+        }
+    }
+
+    pub fn desde_texto(texto: &str) -> Self {
+        match texto {
+            "fichero" => OrigenIdentidad::Fichero,
+            "token" => OrigenIdentidad::Token,
+            _ => OrigenIdentidad::Agente,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Identidad {
+    pub id: i64,
+    pub alias: String,
+    pub tipo: String,
+    pub huella: String,
+    pub origen: OrigenIdentidad,
+    pub ruta: Option<String>,
+    pub comentario: Option<String>,
+    pub anadida_en: String,
+    pub ultimo_uso_en: Option<String>,
+    pub revocada_en: Option<String>,
+}
+
+impl Identidad {
+    pub fn revocada(&self) -> bool {
+        self.revocada_en.is_some()
+    }
+}
+
+/// Resultado de una entrada del registro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultadoRegistro {
+    Ok,
+    Error,
+}
+
+impl ResultadoRegistro {
+    pub fn como_texto(self) -> &'static str {
+        match self {
+            ResultadoRegistro::Ok => "ok",
+            ResultadoRegistro::Error => "error",
+        }
+    }
+
+    pub fn desde_texto(texto: &str) -> Self {
+        match texto {
+            "error" => ResultadoRegistro::Error,
+            _ => ResultadoRegistro::Ok,
+        }
+    }
+}
+
+/// Entrada del historial de MAGI, con los nombres resueltos para la vista.
+#[derive(Debug, Clone)]
+pub struct EntradaRegistro {
+    pub id: i64,
+    pub fecha: String,
+    pub tipo: String,
+    pub host_id: Option<i64>,
+    pub host_nombre: Option<String>,
+    pub identidad_id: Option<i64>,
+    pub identidad_alias: Option<String>,
+    pub detalle: String,
+    pub resultado: ResultadoRegistro,
 }
 
 /// Máquina de estados de la sesión SSH (en memoria, no persistida).
@@ -277,6 +456,47 @@ pub fn validar_keepalive(segundos: Option<u32>) -> Result<(), String> {
     Ok(())
 }
 
+/// Una unidad systemd válida: `[A-Za-z0-9@._-]+`, sin `.service` final.
+pub fn unidad_valida(unidad: &str) -> bool {
+    !unidad.is_empty()
+        && unidad
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-'))
+}
+
+/// Normaliza la lista de servicios: recorta espacios, descarta líneas vacías,
+/// quita el sufijo `.service`, elimina duplicados y valida cada unidad.
+pub fn normalizar_servicios(texto: &str) -> Result<String, String> {
+    let mut unidades: Vec<String> = Vec::new();
+    for (indice, linea) in texto.lines().enumerate() {
+        let unidad = linea.trim();
+        if unidad.is_empty() {
+            continue;
+        }
+        let unidad = unidad.strip_suffix(".service").unwrap_or(unidad);
+        if !unidad_valida(unidad) {
+            return Err(format!(
+                "línea {}: «{unidad}» no es una unidad systemd válida",
+                indice + 1
+            ));
+        }
+        if !unidades.iter().any(|existente| existente == unidad) {
+            unidades.push(unidad.to_string());
+        }
+    }
+    Ok(unidades.join("\n"))
+}
+
+/// Lista de unidades de un host, ya normalizada.
+pub fn servicios_de(host: &Host) -> Vec<String> {
+    host.servicios
+        .lines()
+        .map(str::trim)
+        .filter(|linea| !linea.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Directivas que MAGI gestiona y que no pueden duplicarse en opciones extra.
 const DIRECTIVAS_GESTIONADAS: [&str; 7] = [
     "hostname",
@@ -368,6 +588,7 @@ mod pruebas {
             multiplexar: false,
             keepalive_seg: Some(30),
             opciones_extra: String::new(),
+            servicios: String::new(),
             origen: Origen::Manual,
             ultimo_estado: None,
             ultima_conexion_en: None,
@@ -403,6 +624,38 @@ mod pruebas {
         assert!(validar_nombre("dos palabras").is_err());
         assert!(validar_nombre("host*").is_err());
         assert!(validar_nombre("host?").is_err());
+    }
+
+    #[test]
+    fn la_referencia_de_contrasena_va_y_vuelve_de_la_bd() {
+        assert_eq!(
+            IdentidadRef::Contrasena.a_bd().as_deref(),
+            Some("contrasena")
+        );
+        assert_eq!(
+            IdentidadRef::desde_bd(Some("contrasena")),
+            IdentidadRef::Contrasena
+        );
+        assert_eq!(
+            IdentidadRef::ContrasenaLlavero.a_bd().as_deref(),
+            Some("contrasena:llavero")
+        );
+        assert_eq!(
+            IdentidadRef::desde_bd(Some("contrasena:llavero")),
+            IdentidadRef::ContrasenaLlavero
+        );
+        assert!(IdentidadRef::ContrasenaLlavero.usa_llavero());
+        assert!(!IdentidadRef::Contrasena.es_auto());
+    }
+
+    #[test]
+    fn los_servicios_se_normalizan_y_validan() {
+        let texto = normalizar_servicios(" nginx.service \n\npostgresql\nnginx\n").unwrap();
+        assert_eq!(texto, "nginx\npostgresql");
+        assert!(normalizar_servicios("nginx; rm -rf /").is_err());
+        assert!(normalizar_servicios("unidad con espacio").is_err());
+        assert!(normalizar_servicios("").unwrap().is_empty());
+        assert!(unidad_valida("magi@.service"));
     }
 
     #[test]

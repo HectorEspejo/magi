@@ -49,6 +49,44 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 ("^] ^]", "enviar el prefijo literal"),
             ],
         ),
+        Vista::Registro => (
+            "AYUDA · REGISTRO",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("↵", "ver el detalle completo"),
+                ("/", "filtrar por tipo, host o detalle"),
+                ("t", "ciclar el filtro por tipo"),
+                ("p", "purgar entradas de más de 90 días"),
+                ("x", "exportar a CSV o JSON"),
+                ("esc", "limpiar el filtro"),
+                ("F7", "volver al registro"),
+            ],
+        ),
+        Vista::Identidades => (
+            "AYUDA · IDENTIDADES",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("n", "generar una clave nueva"),
+                ("i", "importar una clave de fichero"),
+                ("c", "copiar la clave pública"),
+                ("e", "editar el alias"),
+                ("x", "revocar o reactivar"),
+                ("s", "reescanear ~/.ssh y el agente"),
+                ("v", "mostrar u ocultar revocadas"),
+            ],
+        ),
+        Vista::Flota => (
+            "AYUDA · FLOTA",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("↵", "conectar con el host"),
+                ("r", "sondear el host seleccionado"),
+                ("R", "sondear todos los visibles"),
+                ("e", "editar la ficha"),
+                ("/", "filtrar"),
+                ("a", "activar o pausar el auto-refresco"),
+            ],
+        ),
     };
     let alto = atajos.len() as u16 + 4;
     let recta = centrar(area, 62, alto);
