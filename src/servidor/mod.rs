@@ -615,7 +615,11 @@ async fn abrir_sesion(
     estado_bloqueado.siguiente_sesion_id += 1;
     let nombre = sesiones::nombre_de_pestaña(&estado_bloqueado.sesiones, &host);
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
-    let tamano = Tamano { cols, filas };
+    // Tamaños degenerados (un terminal sin tamaño aún) paniquean al parser.
+    let tamano = Tamano {
+        cols: cols.max(2),
+        filas: filas.max(1),
+    };
     let pantalla = crate::conexion::terminal::nuevo(filas, cols);
     estado_bloqueado.sesiones.insert(
         sesion_id,
@@ -692,6 +696,10 @@ async fn adjuntar(
     sesion_id: u32,
     tamano: Tamano,
 ) {
+    let tamano = Tamano {
+        cols: tamano.cols.max(2),
+        filas: tamano.filas.max(1),
+    };
     let mut estado_bloqueado = estado.lock().await;
     let volcado = {
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
@@ -745,6 +753,10 @@ async fn redimensionar_adjunto(
     sesion_id: u32,
     tamano: Tamano,
 ) {
+    let tamano = Tamano {
+        cols: tamano.cols.max(2),
+        filas: tamano.filas.max(1),
+    };
     let mut estado_bloqueado = estado.lock().await;
     if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
         if sesion.adjuntos.contains_key(&cliente_id) {
