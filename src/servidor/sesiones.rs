@@ -213,12 +213,17 @@ async fn abrir_y_servir(
             let handle = transporte.handle.clone();
             // Con `multiplexar` la conexión queda en el pool y sobrevive a la
             // sesión; sin él, es conexión propia y se cierra con ella.
-            let propio = if multiplexar {
-                estado.lock().await.pool.guardar(host_id, transporte);
-                None
+            let (propio, desplazada) = if multiplexar {
+                let desplazada = estado.lock().await.pool.guardar(host_id, transporte);
+                (None, desplazada)
             } else {
-                Some(transporte)
+                (Some(transporte), None)
             };
+            // Si el pool ya tenía otra conexión para este host, se cerró al
+            // sustituirla: nadie más la iba a cerrar.
+            if let Some((handle_viejo, saltos_viejos)) = desplazada {
+                super::conexiones::desconectar(handle_viejo, saltos_viejos).await;
+            }
             {
                 let mut estado_bloqueado = estado.lock().await;
                 let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
@@ -505,10 +510,6 @@ pub async fn decidir(
     mensaje: MensajeServidor,
 ) {
     let mut estado_bloqueado = estado.lock().await;
-    eprintln!(
-        "[TRAZA-DECIDIR] solicitante={solicitante} peticion={peticion_id} clientes={:?}",
-        estado_bloqueado.clientes.keys().collect::<Vec<_>>()
-    );
     estado_bloqueado.pendientes.insert(
         peticion_id,
         Pendiente {

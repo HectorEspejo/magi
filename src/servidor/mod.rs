@@ -315,9 +315,15 @@ async fn revisar_cola(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
         };
         tokio::time::sleep(espera).await;
         let mut estado_bloqueado = estado.lock().await;
-        estado_bloqueado
+        if estado_bloqueado
             .transferencias
-            .purgar_caducadas(crate::modelo::fecha_ahora_epoca());
+            .purgar_caducadas(crate::modelo::fecha_ahora_epoca())
+            > 0
+        {
+            // Lo que desaparece de la cola también hay que decirlo: si no, las
+            // ventanas seguirían enseñando lo purgado.
+            estado_bloqueado.difusion_cola.marcar(false);
+        }
         if !estado_bloqueado
             .difusion_cola
             .toca(std::time::Instant::now())

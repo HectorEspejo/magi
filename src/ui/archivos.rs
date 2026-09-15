@@ -19,6 +19,13 @@ use crate::ui::{centrar, tecla};
 /// Filas de la cola al pie de la vista.
 pub const ALTO_COLA: u16 = 3;
 
+/// Filas útiles de un panel: la terminal menos la barra de abajo, la cola (si
+/// la hay) y los dos bordes del marco.
+pub fn alto_panel(terminal_alto: u16, con_cola: bool) -> usize {
+    let cola = if con_cola { ALTO_COLA } else { 0 };
+    terminal_alto.saturating_sub(1 + cola + 2).max(1) as usize
+}
+
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let Some(archivos) = &app.archivos else {
         return;
@@ -231,7 +238,11 @@ fn dibujar_cola(marco: &mut Frame, area: Rect, app: &App, archivos: &EstadoArchi
             Style::default().fg(tema.paleta.inactivo),
         )));
     }
-    let en_cola = archivos.vivas().len() - usize::from(archivos.en_curso().is_some());
+    let en_cola = archivos
+        .cola
+        .iter()
+        .filter(|fila| fila.estado == EstadoTransferencia::EnCola)
+        .count();
     let tamano = tamano_legible(archivos.bytes_en_cola());
     let texto = if en_cola == 0 {
         "  sin nada en cola".to_string()

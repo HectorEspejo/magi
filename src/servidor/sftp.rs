@@ -21,10 +21,11 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::archivos::marcas::{ordenar, Entrada, TipoEntrada};
-use crate::conexion::cliente::Contexto;
+use crate::conexion::cliente::{Cliente, Contexto};
 use crate::conexion::salto::{conectar_cadena, construir_cadena, Transporte};
 use crate::conexion::{EventoConexion, FuenteContrasena};
 use crate::modelo::Host;
+use russh::client::Handle;
 
 use super::{conexiones, sesiones, EstadoServidor};
 
@@ -51,6 +52,9 @@ pub struct SftpHost {
     pub host_id: i64,
     pub host_nombre: String,
     pub sesion: Arc<SftpSession>,
+    /// Conexión sobre la que vive el canal, para descontarla del pool solo si
+    /// sigue siendo la misma.
+    pub handle: Arc<Handle<Cliente>>,
     pub dir_inicio: String,
     pub solicitante: u32,
     pub ultima_actividad: Instant,
@@ -161,7 +165,7 @@ pub async fn asegurar(
     )
     .await
     {
-        Ok((sesion, dir_inicio, propia)) => {
+        Ok((sesion, dir_inicio, propia, handle)) => {
             let mut estado_bloqueado = estado.lock().await;
             estado_bloqueado.sftp.insert(
                 host_id,
@@ -169,6 +173,7 @@ pub async fn asegurar(
                     host_id,
                     host_nombre: host.nombre.clone(),
                     sesion: sesion.clone(),
+                    handle,
                     dir_inicio: dir_inicio.clone(),
                     solicitante,
                     ultima_actividad: Instant::now(),
@@ -209,14 +214,6 @@ pub async fn canal_abierto(
     Some(canal.sesion.clone())
 }
 
-/// Refresca la actividad del canal (lo llama cada operación).
-pub async fn tocar(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, host_id: i64) {
-    let mut estado_bloqueado = estado.lock().await;
-    if let Some(canal) = estado_bloqueado.sftp.get_mut(&host_id) {
-        canal.ultima_actividad = Instant::now();
-    }
-}
-
 /// El canal de un host dejó de funcionar: se quita y sus transferencias pasan
 /// a error, porque el siguiente `AbrirSftp` lo volverá a abrir.
 pub async fn perdido(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, host_id: i64) {
@@ -225,9 +222,12 @@ pub async fn perdido(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, host_id: 
         return;
     };
     warn!(host = %canal.host_nombre, "se perdió el canal SFTP");
-    let del_pool = canal.propia.is_none();
-    if del_pool {
-        estado.lock().await.pool.liberar(host_id);
+    if canal.propia.is_none() {
+        estado
+            .lock()
+            .await
+            .pool
+            .liberar_si_es(host_id, &canal.handle);
     }
     super::transferencias::caida(estado, host_id).await;
 }
@@ -240,71 +240,78 @@ async fn abrir(
     rutas: &crate::config::Rutas,
     id_solicitud: u32,
     solicitante: u32,
-) -> Result<(Arc<SftpSession>, String, Option<Transporte>), String> {
-    // Reutilizar la conexión del pool cuando existe; el canal cuenta como
-    // canal suyo, así que el pool no la cerrará mientras el SFTP viva.
-    let del_pool = {
+) -> Result<
+    (
+        Arc<SftpSession>,
+        String,
+        Option<Transporte>,
+        Arc<Handle<Cliente>>,
+    ),
+    String,
+> {
+    // Conexión: la del pool si la hay (el canal cuenta como canal suyo, así
+    // que el pool no la cerrará mientras el SFTP viva) o una nueva.
+    let (handle, propia) = {
         let mut estado_bloqueado = estado.lock().await;
-        estado_bloqueado.pool.reutilizar(host.id).is_some()
-    };
-
-    let (handle, propia) = if del_pool {
-        let handle = {
-            let estado_bloqueado = estado.lock().await;
-            // El pool acaba de contar el canal; la entrada sigue ahí.
-            estado_bloqueado.pool.handle_de(host.id)
-        };
-        let Some(handle) = handle else {
-            return Err("la conexión del pool desapareció".to_string());
-        };
-        (handle, None)
-    } else {
-        let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
-        // El puente traduce los diálogos al solicitante; se deja vivo porque
-        // el handler de russh conserva un clon del canal mientras la conexión
-        // viva (igual que en las sesiones).
-        tokio::spawn(sesiones::puente_eventos(
-            estado.clone(),
-            id_solicitud,
-            solicitante,
-            rx_eventos,
-        ));
-        let cadena = construir_cadena(host, todos_los_hosts).map_err(|error| error.to_string())?;
-        let contexto = Contexto {
-            known_hosts: rutas.fichero_known_hosts(),
-            dir_ssh: rutas.dir_ssh(),
-            hogar: rutas.hogar.clone(),
-            usuario_local: crate::conexion::usuario_local(),
-            tx: tx_eventos.clone(),
-            interactivo: true,
-            fuente_contrasena: FuenteContrasena::Solicitante,
-        };
-        let transporte = match conectar_cadena(&cadena, &contexto).await {
-            Ok(transporte) => transporte,
-            Err(error) => {
-                return Err(error.to_string());
+        match estado_bloqueado.pool.reutilizar(host.id) {
+            Some(handle) => (handle, None),
+            None => {
+                drop(estado_bloqueado);
+                let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
+                // El puente traduce los diálogos al solicitante; se deja vivo
+                // porque el handler de russh conserva un clon del canal
+                // mientras la conexión viva (igual que en las sesiones).
+                tokio::spawn(sesiones::puente_eventos(
+                    estado.clone(),
+                    id_solicitud,
+                    solicitante,
+                    rx_eventos,
+                ));
+                let cadena =
+                    construir_cadena(host, todos_los_hosts).map_err(|error| error.to_string())?;
+                let contexto = Contexto {
+                    known_hosts: rutas.fichero_known_hosts(),
+                    dir_ssh: rutas.dir_ssh(),
+                    hogar: rutas.hogar.clone(),
+                    usuario_local: crate::conexion::usuario_local(),
+                    tx: tx_eventos.clone(),
+                    interactivo: true,
+                    fuente_contrasena: FuenteContrasena::Solicitante,
+                };
+                let transporte = conectar_cadena(&cadena, &contexto)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let handle = transporte.handle.clone();
+                if host.multiplexar {
+                    let desplazada = {
+                        let mut estado_bloqueado = estado.lock().await;
+                        estado_bloqueado.pool.guardar(host.id, transporte)
+                    };
+                    // Si el pool ya tenía otra conexión para este host, se ha
+                    // quedado fuera al sustituirla: se cierra aquí, que nadie
+                    // más lo va a hacer.
+                    if let Some((handle_viejo, saltos_viejos)) = desplazada {
+                        conexiones::desconectar(handle_viejo, saltos_viejos).await;
+                    }
+                    (handle, None)
+                } else {
+                    (handle, Some(transporte))
+                }
             }
-        };
-        let handle = transporte.handle.clone();
-        if host.multiplexar {
-            let mut estado_bloqueado = estado.lock().await;
-            estado_bloqueado.pool.guardar(host.id, transporte);
-            (handle, None)
-        } else {
-            (handle, Some(transporte))
         }
     };
+    let conexion = handle.clone();
 
     // Abrir el canal y pedir el subsistema. Un host sin SFTP falla aquí.
     let canal = match handle.channel_open_session().await {
         Ok(canal) => canal,
         Err(error) => {
-            liberar(estado, host.id, del_pool, propia).await;
+            liberar(estado, host.id, &conexion, propia).await;
             return Err(format!("no se pudo abrir el canal: {error}"));
         }
     };
     if let Err(error) = canal.request_subsystem(true, "sftp").await {
-        liberar(estado, host.id, del_pool, propia).await;
+        liberar(estado, host.id, &conexion, propia).await;
         return Err(format!("el host no ofrece SFTP ({error})"));
     }
     // Un host sin subsistema `sftp` no falla al pedirlo: simplemente no
@@ -313,11 +320,11 @@ async fn abrir(
         match tokio::time::timeout(HANDSHAKE_SFTP, SftpSession::new(canal.into_stream())).await {
             Ok(Ok(sesion)) => sesion,
             Ok(Err(error)) => {
-                liberar(estado, host.id, del_pool, propia).await;
+                liberar(estado, host.id, &conexion, propia).await;
                 return Err(format!("el host no ofrece SFTP ({error})"));
             }
             Err(_) => {
-                liberar(estado, host.id, del_pool, propia).await;
+                liberar(estado, host.id, &conexion, propia).await;
                 return Err("el host no ofrece SFTP".to_string());
             }
         };
@@ -326,25 +333,28 @@ async fn abrir(
         .canonicalize(".")
         .await
         .unwrap_or_else(|_| "/".to_string());
-    Ok((Arc::new(sesion), dir_inicio, propia))
+    Ok((Arc::new(sesion), dir_inicio, propia, conexion))
 }
 
-/// Suelta lo que se hubiera tomado: el canal del pool o la conexión propia.
+/// Suelta lo que se hubiera tomado: el canal del pool (solo si sigue siendo
+/// esa misma conexión) o la conexión propia del canal.
 async fn liberar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     host_id: i64,
-    del_pool: bool,
+    handle: &Arc<Handle<Cliente>>,
     propia: Option<Transporte>,
 ) {
-    if del_pool {
-        estado.lock().await.pool.liberar(host_id);
-    }
-    if let Some(transporte) = propia {
-        conexiones::desconectar(
-            transporte.handle,
-            transporte.saltos.into_iter().map(Arc::new).collect(),
-        )
-        .await;
+    match propia {
+        Some(transporte) => {
+            conexiones::desconectar(
+                transporte.handle,
+                transporte.saltos.into_iter().map(Arc::new).collect(),
+            )
+            .await;
+        }
+        None => {
+            estado.lock().await.pool.liberar_si_es(host_id, handle);
+        }
     }
 }
 
@@ -387,8 +397,8 @@ pub async fn revisar(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
         for canal in vencidos {
             info!(host = %canal.host_nombre, "cerrando el canal SFTP inactivo");
             let _ = canal.sesion.close().await;
-            let del_pool = canal.propia.is_none();
-            liberar(&estado, canal.host_id, del_pool, canal.propia).await;
+            let handle = canal.handle.clone();
+            liberar(&estado, canal.host_id, &handle, canal.propia).await;
         }
     }
 }
@@ -400,9 +410,12 @@ pub async fn cerrar(
 ) -> Option<SftpHost> {
     let canal = estado.lock().await.sftp.remove(&host_id)?;
     let _ = canal.sesion.close().await;
-    let del_pool = canal.propia.is_none();
-    if del_pool {
-        estado.lock().await.pool.liberar(host_id);
+    if canal.propia.is_none() {
+        estado
+            .lock()
+            .await
+            .pool
+            .liberar_si_es(host_id, &canal.handle);
     }
     Some(canal)
 }

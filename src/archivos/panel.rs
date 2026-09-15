@@ -190,16 +190,37 @@ impl Panel {
 
     /// Recalcula las marcas comparando con el otro lado.
     /// Prepara las entradas de un listado nuevo con la fila `..` delante.
-    pub fn fijar_entradas(&mut self, mut entradas: Vec<Entrada>) {
+    /// `mismo_directorio` distingue un refresco de un cambio de directorio: al
+    /// refrescar se conservan las marcas y el cursor, que si no el usuario
+    /// pierde la selección cada vez que termina una transferencia.
+    pub fn fijar_entradas(&mut self, entradas: Vec<Entrada>, mismo_directorio: bool) {
+        let mut entradas = entradas;
         crate::archivos::marcas::ordenar(&mut entradas);
         let mut con_padre = Vec::with_capacity(entradas.len() + 1);
         con_padre.push(crate::archivos::marcas::entrada_padre());
         con_padre.extend(entradas);
         self.entradas = con_padre;
         self.error = None;
-        self.seleccion = 0;
-        self.desplazamiento = 0;
-        self.marcados.clear();
+        if !mismo_directorio {
+            self.seleccion = 0;
+            self.desplazamiento = 0;
+            self.marcados.clear();
+            return;
+        }
+        // Las marcas de lo que ya no está se van solas.
+        let nombres: std::collections::HashSet<&str> = self
+            .entradas
+            .iter()
+            .map(|entrada| entrada.nombre.as_str())
+            .collect();
+        self.marcados
+            .retain(|nombre| nombres.contains(nombre.as_str()));
+        self.seleccion = self.seleccion.min(self.total_visibles().saturating_sub(1));
+    }
+
+    /// ¿El listado que se va a fijar es del mismo directorio?
+    pub fn es_mismo_directorio(&self, ruta: &str) -> bool {
+        self.ruta == ruta && !self.entradas.is_empty()
     }
 
     pub fn marcar_diferencias(&mut self, otro: &mut Panel) {
@@ -297,9 +318,6 @@ pub struct EstadoArchivos {
     pub muestras: HashMap<u32, (std::time::Instant, u64)>,
     /// Fichero remoto que se está trayendo para verlo.
     pub viendo: Option<String>,
-    /// Rutas locales que hay que borrar cuando su transferencia (un «mover»
-    /// de subida) llegue a `hecha`.
-    pub borrar_local: HashMap<u32, Vec<String>>,
 }
 
 /// Aviso de subida de ficheros sensibles, esperando un sí o un no.
@@ -426,7 +444,7 @@ mod pruebas {
     #[test]
     fn la_fila_padre_encabeza_el_listado_y_no_la_esconde_el_filtro() {
         let mut panel = Panel::nuevo("/".to_string(), false);
-        panel.fijar_entradas(vec![entrada("a.txt", 10), entrada("b.md", 10)]);
+        panel.fijar_entradas(vec![entrada("a.txt", 10), entrada("b.md", 10)], false);
         assert_eq!(panel.entradas[0].nombre, "..");
         assert_eq!(panel.total_visibles(), 3);
 
@@ -491,6 +509,23 @@ mod pruebas {
         let mut marcados: Vec<&String> = panel.marcados.iter().collect();
         marcados.sort();
         assert_eq!(marcados, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn refrescar_el_mismo_directorio_conserva_marcas_y_cursor() {
+        let mut panel = Panel::nuevo("/".to_string(), false);
+        panel.fijar_entradas(vec![entrada("a.txt", 10), entrada("b.txt", 10)], false);
+        panel.filtro.clear();
+        panel.marcados.insert("a.txt".to_string());
+        panel.seleccion = 2;
+        panel.fijar_entradas(vec![entrada("a.txt", 10), entrada("b.txt", 10)], true);
+        assert_eq!(panel.marcados.len(), 1, "el refresco no pierde las marcas");
+        assert_eq!(panel.seleccion, 2);
+
+        // Al cambiar de directorio sí se limpia todo.
+        panel.fijar_entradas(vec![entrada("otra.txt", 10)], false);
+        assert!(panel.marcados.is_empty());
+        assert_eq!(panel.seleccion, 0);
     }
 
     #[test]
@@ -561,14 +596,13 @@ mod pruebas_marcas_sin_remoto {
             aviso: None,
             muestras: std::collections::HashMap::new(),
             viendo: None,
-            borrar_local: std::collections::HashMap::new(),
         }
     }
 
     #[test]
     fn sin_listado_remoto_no_se_marca_nada() {
         let mut estado = estado();
-        estado.local.fijar_entradas(vec![entrada("main.py")]);
+        estado.local.fijar_entradas(vec![entrada("main.py")], false);
         estado.recalcular_marcas();
         assert_eq!(
             estado.local.entradas[1].marca,
@@ -582,8 +616,10 @@ mod pruebas_marcas_sin_remoto {
         let mut estado = estado();
         estado
             .local
-            .fijar_entradas(vec![entrada("main.py"), entrada("solo_local")]);
-        estado.remoto.fijar_entradas(vec![entrada("main.py")]);
+            .fijar_entradas(vec![entrada("main.py"), entrada("solo_local")], false);
+        estado
+            .remoto
+            .fijar_entradas(vec![entrada("main.py")], false);
         estado.recalcular_marcas();
         assert_eq!(estado.local.entradas[1].marca, Marca::Ninguna);
         assert_eq!(estado.local.entradas[2].marca, Marca::Ausente);
@@ -593,7 +629,7 @@ mod pruebas_marcas_sin_remoto {
     fn con_el_host_sin_sftp_tampoco_se_marca() {
         let mut estado = estado();
         estado.solo_local = true;
-        estado.local.fijar_entradas(vec![entrada("main.py")]);
+        estado.local.fijar_entradas(vec![entrada("main.py")], false);
         estado.recalcular_marcas();
         assert_eq!(estado.local.entradas[1].marca, Marca::Ninguna);
     }

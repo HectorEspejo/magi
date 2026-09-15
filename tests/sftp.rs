@@ -732,6 +732,52 @@ async fn bajar_un_directorio_lo_recorre_entero() {
     assert_eq!(leer(&destino.join("css/app.css")), "body{}");
 }
 
+/// Un «mover» con `omitir` no puede borrar del origen lo que no se copió:
+/// sería una pérdida de datos silenciosa.
+#[tokio::test]
+async fn mover_con_omitir_no_borra_del_origen_lo_que_se_omite() {
+    let Some(mut montaje) = montar(true).await else {
+        return;
+    };
+    let remoto = montaje.remoto();
+    let local = montaje.local();
+    std::fs::create_dir_all(remoto.join("sitio")).unwrap();
+    std::fs::write(remoto.join("sitio/va.txt"), b"se copia").unwrap();
+    std::fs::write(remoto.join("sitio/ya_esta.txt"), b"no se copia").unwrap();
+    // El destino ya tiene uno de los dos: se omitirá.
+    std::fs::create_dir_all(local.join("sitio")).unwrap();
+    std::fs::write(local.join("sitio/ya_esta.txt"), "el de aqui").unwrap();
+    montaje.abrir_sftp().await;
+
+    let id = montaje
+        .transferir(
+            Direccion::Bajada,
+            vec![ElementoTransferencia {
+                origen: remoto.join("sitio").display().to_string(),
+                destino: local.join("sitio").display().to_string(),
+                bytes: 0,
+                es_directorio: true,
+                politica: Some(Politica::Omitir),
+            }],
+            Politica::Omitir,
+            true,
+        )
+        .await;
+    let fila = montaje.esperar_terminada(id).await;
+    assert_eq!(fila.estado, EstadoTransferencia::Hecha, "{fila:?}");
+    assert_eq!(fila.omitidos, 1);
+
+    assert!(
+        !remoto.join("sitio/va.txt").exists(),
+        "lo que sí se copió se borra del origen"
+    );
+    assert!(
+        remoto.join("sitio/ya_esta.txt").exists(),
+        "lo que se omitió no se puede borrar: no se copió"
+    );
+    assert_eq!(leer(&local.join("sitio/ya_esta.txt")), "el de aqui");
+}
+
 /// Un enlace a directorio no se sigue al bajar: duplicaría el árbol entero.
 #[tokio::test]
 async fn bajar_un_directorio_omite_los_enlaces_a_directorio() {

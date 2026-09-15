@@ -30,6 +30,11 @@ pub const RETENCION_TERMINADAS: i64 = 3600;
 /// Cada cuánto se publica el progreso, como mucho (el lock es global).
 const AVISO_PROGRESO: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Plazo de un bloque de 64 KiB. Un host que deja de responder sin cerrar la
+/// conexión (un cortafuegos que descarta, una máquina suspendida) no puede
+/// dejar la transferencia en curso para siempre ni impedir el apagado.
+const PLAZO_BLOQUE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Un elemento expandido de una transferencia: un directorio que hay que crear
 /// o un fichero que hay que copiar, con su política ya resuelta.
 #[derive(Debug, Clone, PartialEq)]
@@ -531,6 +536,10 @@ pub async fn tarea(estado: Arc<tokio::sync::Mutex<EstadoServidor>>, id: u32) {
 
     let mut hechos = 0u64;
     let mut ficheros_hechos = 0u32;
+    // Lo que se ha copiado de verdad: con `borrar_origen` solo se borra esto,
+    // nunca los orígenes que se omitieron (no se copiaron, no se pueden
+    // perder).
+    let mut copiados: Vec<FicheroTransferencia> = Vec::new();
     // Los omitidos al expandir (enlaces a directorio) ya cuentan desde el
     // principio y no se pueden perder al terminar.
     let mut omitidos = {
@@ -587,6 +596,7 @@ pub async fn tarea(estado: Arc<tokio::sync::Mutex<EstadoServidor>>, id: u32) {
             Ok(ResultadoCopia::Hecho(bytes)) => {
                 hechos += bytes;
                 ficheros_hechos += 1;
+                copiados.push(fichero.clone());
             }
             Ok(ResultadoCopia::Cancelada) => {
                 cancelada_por_el_usuario = true;
@@ -621,7 +631,7 @@ pub async fn tarea(estado: Arc<tokio::sync::Mutex<EstadoServidor>>, id: u32) {
     };
     if estado_final == EstadoTransferencia::Hecha && borrar_origen && direccion == Direccion::Bajada
     {
-        if let Err(error) = borrar_origenes(&sesion, &ficheros).await {
+        if let Err(error) = borrar_origenes(&sesion, &copiados).await {
             warn!(transferencia = id, "no se pudo borrar el origen: {error}");
         }
     }
@@ -658,10 +668,24 @@ async fn copiar(
     fichero: &FicheroTransferencia,
     cancelada: &AtomicBool,
 ) -> Result<ResultadoCopia, String> {
-    match direccion {
+    let resultado = match direccion {
         Direccion::Bajada => copiar_bajada(sesion, fichero, cancelada).await,
         Direccion::Subida => copiar_subida(sesion, fichero, cancelada).await,
+    };
+    // Un fallo a medias no puede dejar el parcial tirado en el destino: se
+    // borra aquí, en el único sitio por el que pasan todas las salidas.
+    if resultado.is_err() {
+        let parcial = format!("{}{}", fichero.destino, sftp::SUFIJO_PARCIAL);
+        match direccion {
+            Direccion::Bajada => {
+                let _ = std::fs::remove_file(&parcial);
+            }
+            Direccion::Subida => {
+                let _ = sesion.remove_file(&parcial).await;
+            }
+        }
     }
+    resultado
 }
 
 async fn copiar_bajada(
@@ -688,10 +712,16 @@ async fn copiar_bajada(
             let _ = std::fs::remove_file(&parcial);
             return Ok(ResultadoCopia::Cancelada);
         }
-        let leidos = origen
-            .read(&mut bufer)
-            .await
-            .map_err(|error| format!("leyendo {}: {error}", fichero.origen))?;
+        let leidos = match tokio::time::timeout(PLAZO_BLOQUE, origen.read(&mut bufer)).await {
+            Ok(Ok(leidos)) => leidos,
+            Ok(Err(error)) => return Err(format!("leyendo {}: {error}", fichero.origen)),
+            Err(_) => {
+                return Err(format!(
+                    "el host dejó de responder leyendo {}",
+                    fichero.origen
+                ))
+            }
+        };
         if leidos == 0 {
             break;
         }
@@ -746,10 +776,11 @@ async fn copiar_subida(
         if leidos == 0 {
             break;
         }
-        salida
-            .write_all(&bufer[..leidos])
-            .await
-            .map_err(|error| format!("escribiendo {parcial}: {error}"))?;
+        match tokio::time::timeout(PLAZO_BLOQUE, salida.write_all(&bufer[..leidos])).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("escribiendo {parcial}: {error}")),
+            Err(_) => return Err(format!("el host dejó de responder escribiendo {parcial}")),
+        }
         total += leidos as u64;
     }
     salida
@@ -787,11 +818,18 @@ async fn avisar_progreso(
     omitidos: u32,
 ) {
     let mut estado_bloqueado = estado.lock().await;
+    let mut host_id = None;
     if let Some(transferencia) = estado_bloqueado.transferencias.obtener_mut(id) {
         transferencia.info.bytes_hechos = bytes_hechos;
         transferencia.info.ficheros_hechos = ficheros_hechos;
         transferencia.info.omitidos = omitidos;
         transferencia.info.fichero_actual = Some(fichero_actual.to_string());
+        host_id = Some(transferencia.info.host_id);
+    }
+    if let Some(host_id) = host_id {
+        if let Some(canal) = estado_bloqueado.sftp.get_mut(&host_id) {
+            canal.ultima_actividad = Instant::now();
+        }
     }
     estado_bloqueado.difusion_cola.marcar(false);
 }

@@ -242,6 +242,73 @@ como hechas con su texto intacto. Por bloques:
   `F4` operativo con `F6` reservada, ayuda en las dos vistas, `clippy`, `fmt`,
   `cargo test` y README.
 
+## Correcciones tras la revisión adversarial (misma sesión)
+
+Antes de dar la fase por cerrada se pasaron dos revisiones adversariales sobre
+el código nuevo (servidor y cliente). Encontraron trece defectos reales; se han
+corregido todos y el que era una pérdida de datos tiene prueba de regresión.
+
+**Pérdida de datos**
+
+1. Un «mover» con política `omitir` borraba del origen lo que **no** se había
+   copiado: el motor daba la transferencia por `hecha` y borraba el origen
+   entero, incluidos los ficheros omitidos. Ahora solo se borra lo que se copió
+   de verdad (`copiados` en el motor) y, en una subida, la ventana no borra
+   nada si la transferencia tuvo omitidos: avisa de que el origen sigue donde
+   estaba. Prueba nueva:
+   `mover_con_omitir_no_borra_del_origen_lo_que_se_omite`.
+2. El emparejamiento entre una subida con `borrar_origen` y su fila en la cola
+   era **posicional** (la primera entrada de una lista global): con dos hosts a
+   la vez podía borrar los orígenes equivocados, y al cambiar de host se perdía
+   la asociación y el «mover» quedaba en copia. Ahora se empareja por
+   (host, primer origen) y el estado vive en el `App`, no en la vista.
+
+**Servidor**
+
+3. Fuga en la contabilidad del pool: si `channel_open_session`, el subsistema o
+   el saludo SFTP fallaban en un host con `multiplexar`, el canal contado no se
+   devolvía nunca y la conexión no se cerraba jamás. Ahora todas las ramas de
+   error sueltan lo que tomaron.
+4. `Pool::guardar` sustituía la entrada del pool sin desconectar la anterior
+   (conexión huérfana) y `liberar` descontaba a ciegas, de modo que el cierre
+   de un canal SFTP podía dejar a cero el contador de la conexión de una sesión
+   viva y tumbarla. Ahora `guardar` devuelve la desplazada para cerrarla y el
+   canal suelta **su** conexión (`liberar_si_es`, por identidad).
+5. Una transferencia podía quedarse `EnCurso` para siempre con un host que deja
+   de responder sin cerrar la conexión, y eso bloqueaba hasta el apagado
+   automático del servidor. Cada bloque tiene ahora un plazo de 60 s.
+6. Los `.magi-parcial` solo se borraban al cancelar: cualquier error de lectura,
+   escritura o renombrado dejaba el parcial en el destino para siempre. Ahora
+   se borra en todas las salidas de error.
+7. El motor no refrescaba el reloj de actividad del canal, así que una copia de
+   más de diez minutos dejaba el canal «inactivo» y se cerraba nada más
+   terminar. Ahora lo refresca al publicar progreso.
+8. La purga por retención no se difundía: las ventanas seguían enseñando
+   transferencias que el servidor ya había quitado.
+
+**Cliente**
+
+9. La altura con la que se movía el cursor de un panel contaba una fila de más
+   cuando la cola estaba visible, así que el cursor podía salirse de la ventana
+   y quedarse sin fila resaltada. La regla vive ahora en un solo sitio
+   (`ui::archivos::alto_panel`).
+10. La vista Transferencias no se desplazaba nunca: `desplazamiento_cola` solo
+    se ponía a cero. Ahora la lista se desplaza como la de un panel.
+11. Cualquier error del servidor sin `peticion_id` que llegara mientras había
+    una apertura de canal en vuelo se tomaba por «este host no ofrece SFTP» y
+    dejaba el panel remoto inservible (por ejemplo, «el host ya está abierta»
+    de una sesión). Ahora solo se interpreta así si el mensaje lo dice.
+12. Renombrar y borrar volvían a mirar el panel al confirmar en vez de usar lo
+    que el usuario tenía delante: un refresco entre abrir el diálogo y
+    contestar podía renombrar el directorio padre (`..`) o borrar en otro
+    directorio. Ahora el diálogo lleva las rutas completas fijadas al abrirse.
+13. Detalles: refrescar un directorio ya no pierde las marcas ni el cursor;
+    entrar en `..` sube al padre en vez de encadenar `/..` en la ruta; un
+    directorio local que no se puede leer deja el panel donde estaba; el visor
+    no se abre si ya no se está en Archivos (y borra el temporal); el alto de
+    la terminal se refresca al volver del visor; y el pie de la cola cuenta
+    «en cola» por estado, no por resta.
+
 ## Pendientes y bloqueos
 
 - **Nada pendiente de la fase.** Queda por hacer la validación manual de la

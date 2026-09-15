@@ -548,11 +548,11 @@ pub enum AccionDialogo {
         nombre: String,
         usuario: String,
     },
-    /// Borrar lo marcado en un panel de Archivos (local o remoto).
+    /// Borrar lo marcado en un panel de Archivos (local o remoto). Las rutas
+    /// van completas y fijadas al abrir el diálogo.
     BorrarArchivos {
         lado: crate::archivos::Lado,
         rutas: Vec<String>,
-        nombres: Vec<String>,
     },
     /// Ver un fichero remoto que pasa del tamaño de aviso.
     VerRemotoGrande {
@@ -569,8 +569,13 @@ pub enum AccionDialogo {
 pub enum EntradaTextoAccion {
     /// `g` en Archivos: ir a una ruta del panel activo.
     IrARuta,
-    /// `r` en Archivos: renombrar lo marcado (o la fila actual).
-    RenombrarArchivo,
+    /// `r` en Archivos: renombrar lo marcado (o la fila actual). Lleva la ruta
+    /// y el directorio fijados al abrir el diálogo.
+    RenombrarArchivo {
+        de: String,
+        dir: String,
+        lado: crate::archivos::Lado,
+    },
     /// `d` en Archivos: crear un directorio en el panel activo.
     CrearDirectorio,
     CrearGrupo,
@@ -908,8 +913,12 @@ pub struct App {
     /// Alto de la terminal, para mover el cursor dentro de la ventana visible.
     pub terminal_alto: u16,
     /// Orígenes locales de los «mover» que aún no se han asociado a su
-    /// transferencia (el id lo da el servidor en la difusión).
-    pub borrados_locales_pendientes: Vec<Vec<String>>,
+    /// transferencia, por (host, primer origen): el id lo da el servidor en la
+    /// difusión. Emparejar por posición sería frágil con dos hosts a la vez.
+    pub borrados_locales_pendientes: HashMap<(i64, String), Vec<String>>,
+    /// Rutas locales que hay que borrar cuando su transferencia llegue a
+    /// `hecha`.
+    pub borrados_locales: HashMap<u32, Vec<String>>,
     /// Transferencias ya vistas, para no refrescar dos veces por lo mismo.
     pub transferencias_refrescadas: HashSet<u32>,
 }
@@ -1000,7 +1009,8 @@ impl App {
             peticion_pager: None,
             pausa_teclas: Arc::new(AtomicBool::new(false)),
             terminal_alto: 24,
-            borrados_locales_pendientes: Vec::new(),
+            borrados_locales_pendientes: HashMap::new(),
+            borrados_locales: HashMap::new(),
             transferencias_refrescadas: HashSet::new(),
         };
         app.recargar_inventario()?;
@@ -1073,6 +1083,11 @@ impl App {
                 }
                 if let Some(aviso) = aviso {
                     self.mensaje(aviso, true);
+                }
+                // El visor pudo cambiar el tamaño de la ventana: el hilo de
+                // teclas no ve ese evento mientras está pausado.
+                if let Ok(area) = terminal.size() {
+                    self.terminal_alto = area.height;
                 }
                 self.sucio = true;
             }
@@ -1984,12 +1999,18 @@ impl App {
                         )
                     })
                     .unwrap_or(false);
-                if es_lo_que_esperaba {
-                    if let Some(estado) = &mut self.archivos {
-                        estado.viendo = None;
-                    }
-                    self.peticion_pager = Some(crate::visor::Peticion::temporal(&ruta));
+                if let Some(estado) = &mut self.archivos {
+                    estado.viendo = None;
                 }
+                // Si ya no se está en Archivos o la petición se quedó atrás
+                // (cambio de host), el visor no se abre y el temporal no se
+                // queda tirado en el servidor.
+                if !es_lo_que_esperaba || self.vista != Vista::Archivos {
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::BorrarTemporal { ruta });
+                    return;
+                }
+                self.peticion_pager = Some(crate::visor::Peticion::temporal(&ruta));
             }
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
@@ -4729,8 +4750,8 @@ impl App {
                             EntradaTextoAccion::IrARuta => {
                                 self.ir_a_ruta(&nombre);
                             }
-                            EntradaTextoAccion::RenombrarArchivo => {
-                                self.renombrar_archivo(&nombre);
+                            EntradaTextoAccion::RenombrarArchivo { de, dir, lado } => {
+                                self.renombrar_archivo(&de, &dir, lado, &nombre);
                             }
                             EntradaTextoAccion::CrearDirectorio => {
                                 self.crear_directorio(&nombre);
@@ -4951,12 +4972,8 @@ impl App {
                 // Ya no se usa: salir no cierra sesiones (D36).
                 self.salir = true;
             }
-            AccionDialogo::BorrarArchivos {
-                lado,
-                rutas,
-                nombres,
-            } => {
-                self.borrar_archivos(lado, rutas, nombres);
+            AccionDialogo::BorrarArchivos { lado, rutas } => {
+                self.borrar_archivos(lado, rutas);
             }
             AccionDialogo::VerRemotoGrande { ruta, .. } => {
                 self.ver_remoto(&ruta);
@@ -5225,9 +5242,11 @@ impl App {
 
     /// Altura útil de un panel, para mover el cursor dentro de la ventana.
     fn alto_panel(&self) -> usize {
-        self.terminal_alto
-            .saturating_sub(crate::ui::archivos::ALTO_COLA + 2)
-            .max(1) as usize
+        let con_cola = self
+            .archivos
+            .as_ref()
+            .is_some_and(|estado| !estado.cola.is_empty());
+        crate::ui::archivos::alto_panel(self.terminal_alto, con_cola)
     }
 
     /// Host con el que abrir Archivos: el de la pestaña activa de Sesión o el
@@ -5302,7 +5321,6 @@ impl App {
             aviso: None,
             muestras: HashMap::new(),
             viendo: None,
-            borrar_local: HashMap::new(),
         };
         if estado.sensibles.vacia() {
             self.mensaje(
@@ -5310,7 +5328,7 @@ impl App {
                 false,
             );
         }
-        listar_local(&mut estado);
+        listar_local(&mut estado, false);
         estado.nueva_peticion(crate::archivos::Peticion::AbrirSftp);
         self.servidor
             .enviar(protocolo::MensajeCliente::AbrirSftp { host_id });
@@ -5348,7 +5366,7 @@ impl App {
         let Some(mut estado) = self.archivos.take() else {
             return;
         };
-        listar_local(&mut estado);
+        listar_local(&mut estado, true);
         let ruta = estado.remoto.ruta.clone();
         self.archivos = Some(estado);
         if !ruta.is_empty() {
@@ -5398,9 +5416,17 @@ impl App {
                 self.mensaje(format!("«{ruta}» no es un directorio"), true);
                 return;
             }
-            estado.local.cambiar_ruta(ruta);
-            listar_local(estado);
-            self.guardar_dirs_sftp();
+            // Se lista antes de cambiar la ruta: si el directorio no se puede
+            // leer, el panel se queda donde estaba en vez de en blanco.
+            match crate::archivos::local::listar(camino) {
+                Ok(entradas) => {
+                    estado.local.cambiar_ruta(ruta);
+                    estado.local.fijar_entradas(entradas, false);
+                    estado.recalcular_marcas();
+                    self.guardar_dirs_sftp();
+                }
+                Err(motivo) => self.mensaje(motivo, true),
+            }
         }
     }
 
@@ -5580,19 +5606,35 @@ impl App {
             .as_ref()
             .map(|estado| estado.cola.len())
             .unwrap_or(0);
-        let altura = self.terminal_alto.saturating_sub(8).max(1) as usize;
+        let altura = crate::ui::transferencias::alto_lista(self.terminal_alto);
         match tecla.code {
             KeyCode::Esc | KeyCode::Char('q') => self.vista = Vista::Archivos,
             KeyCode::Up | KeyCode::Char('k') => {
                 self.seleccion_cola = self.seleccion_cola.saturating_sub(1);
+                self.ajustar_cola(altura, total);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if total > 0 {
                     self.seleccion_cola = (self.seleccion_cola + 1).min(total - 1);
                 }
+                self.ajustar_cola(altura, total);
             }
-            KeyCode::Home => self.seleccion_cola = 0,
-            KeyCode::End => self.seleccion_cola = total.saturating_sub(1),
+            KeyCode::PageUp => {
+                self.seleccion_cola = self.seleccion_cola.saturating_sub(altura);
+                self.ajustar_cola(altura, total);
+            }
+            KeyCode::PageDown => {
+                self.seleccion_cola = (self.seleccion_cola + altura).min(total.saturating_sub(1));
+                self.ajustar_cola(altura, total);
+            }
+            KeyCode::Home => {
+                self.seleccion_cola = 0;
+                self.ajustar_cola(altura, total);
+            }
+            KeyCode::End => {
+                self.seleccion_cola = total.saturating_sub(1);
+                self.ajustar_cola(altura, total);
+            }
             KeyCode::Char('C') => {
                 self.servidor
                     .enviar(protocolo::MensajeCliente::LimpiarTransferencias);
@@ -5663,7 +5705,20 @@ impl App {
             }
             _ => {}
         }
-        let _ = altura;
+    }
+
+    /// Deja la fila seleccionada de la cola dentro de la ventana visible.
+    fn ajustar_cola(&mut self, altura: usize, total: usize) {
+        let altura = altura.max(1);
+        if self.seleccion_cola < self.desplazamiento_cola {
+            self.desplazamiento_cola = self.seleccion_cola;
+        }
+        if self.seleccion_cola >= self.desplazamiento_cola + altura {
+            self.desplazamiento_cola = self.seleccion_cola + 1 - altura;
+        }
+        if self.desplazamiento_cola + altura > total {
+            self.desplazamiento_cola = total.saturating_sub(altura);
+        }
     }
 
     fn mover_panel(&mut self, delta: i32, altura: usize) {
@@ -5716,6 +5771,12 @@ impl App {
         };
         let ruta = panel_activo(estado).ruta.clone();
         if entrada.es_dir() {
+            if entrada.nombre == ".." {
+                // La fila `..` sube al padre: encadenar «/..» alargaría la
+                // ruta sin cambiar de sitio.
+                self.subir_de_dir();
+                return;
+            }
             let destino = if remoto {
                 crate::servidor::sftp::join(&ruta, &entrada.nombre)
             } else {
@@ -5893,9 +5954,14 @@ impl App {
         let directorios = seleccionados.iter().filter(|(_, es_dir)| *es_dir).count();
         let rutas: Vec<String> = seleccionados
             .iter()
-            .map(|(nombre, _)| nombre.clone())
+            .map(|(nombre, _)| match lado {
+                crate::archivos::Lado::Local => std::path::Path::new(&panel.ruta)
+                    .join(nombre)
+                    .display()
+                    .to_string(),
+                crate::archivos::Lado::Remoto => crate::servidor::sftp::join(&panel.ruta, nombre),
+            })
             .collect();
-        let nombres: Vec<String> = rutas.clone();
         let mut lineas = vec![format!(
             "  {} elemento(s) de «{}»{}",
             seleccionados.len(),
@@ -5912,49 +5978,29 @@ impl App {
             titulo: "BORRAR".to_string(),
             lineas,
             peligro: true,
-            accion: AccionDialogo::BorrarArchivos {
-                lado,
-                rutas,
-                nombres,
-            },
+            accion: AccionDialogo::BorrarArchivos { lado, rutas },
         });
     }
 
     /// Borra de verdad lo confirmado, en el lado que toque.
-    fn borrar_archivos(
-        &mut self,
-        lado: crate::archivos::Lado,
-        rutas: Vec<String>,
-        nombres: Vec<String>,
-    ) {
-        let Some(estado) = &self.archivos else {
-            return;
-        };
-        let dir = match lado {
-            crate::archivos::Lado::Local => estado.local.ruta.clone(),
-            crate::archivos::Lado::Remoto => estado.remoto.ruta.clone(),
-        };
+    fn borrar_archivos(&mut self, lado: crate::archivos::Lado, rutas: Vec<String>) {
         if lado == crate::archivos::Lado::Local {
             let mut fallos = Vec::new();
-            for nombre in &nombres {
-                let camino = std::path::Path::new(&dir).join(nombre);
+            for ruta in &rutas {
+                let camino = std::path::Path::new(ruta);
                 let es_dir = camino.is_dir();
-                if let Err(motivo) = crate::archivos::local::borrar(&camino, es_dir) {
+                if let Err(motivo) = crate::archivos::local::borrar(camino, es_dir) {
                     fallos.push(motivo);
                 }
             }
             if fallos.is_empty() {
-                self.mensaje(format!("{} elemento(s) borrados", nombres.len()), false);
+                self.mensaje(format!("{} elemento(s) borrados", rutas.len()), false);
             } else {
                 self.mensaje(fallos.join(" · "), true);
             }
             self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
             return;
         }
-        let remoto: Vec<String> = rutas
-            .iter()
-            .map(|nombre| crate::servidor::sftp::join(&dir, nombre))
-            .collect();
         let Some(estado) = &mut self.archivos else {
             return;
         };
@@ -5965,7 +6011,7 @@ impl App {
         self.servidor
             .enviar(protocolo::MensajeCliente::BorrarRemoto {
                 host_id,
-                rutas: remoto,
+                rutas,
                 peticion_id: peticion,
             });
     }
@@ -5981,44 +6027,50 @@ impl App {
         if entrada.nombre == ".." {
             return;
         }
+        let dir = panel_activo(estado).ruta.clone();
+        let lado = estado.activo;
+        let de = match lado {
+            crate::archivos::Lado::Local => std::path::Path::new(&dir)
+                .join(&entrada.nombre)
+                .display()
+                .to_string(),
+            crate::archivos::Lado::Remoto => crate::servidor::sftp::join(&dir, &entrada.nombre),
+        };
         self.dialogo = Some(Dialogo::EntradaTexto {
             titulo: "RENOMBRAR".to_string(),
             etiqueta: "Nombre nuevo".to_string(),
             campo: CampoTexto::nuevo(entrada.nombre.clone()),
-            accion: EntradaTextoAccion::RenombrarArchivo,
+            accion: EntradaTextoAccion::RenombrarArchivo { de, dir, lado },
         });
     }
 
-    /// Ejecuta el renombrado con el nombre que escribió el usuario.
-    fn renombrar_archivo(&mut self, nombre: &str) {
-        let Some(estado) = &self.archivos else {
-            return;
-        };
-        let lado = estado.activo;
-        let panel = match lado {
-            crate::archivos::Lado::Local => &estado.local,
-            crate::archivos::Lado::Remoto => &estado.remoto,
-        };
-        let Some(entrada) = panel.entrada_actual() else {
-            return;
-        };
-        if entrada.nombre == nombre {
+    /// Ejecuta el renombrado con el nombre que escribió el usuario, sobre la
+    /// ruta que se fijó al abrir el diálogo (el listado puede haber cambiado).
+    fn renombrar_archivo(
+        &mut self,
+        de: &str,
+        dir: &str,
+        lado: crate::archivos::Lado,
+        nombre: &str,
+    ) {
+        if nombre_de_ruta(de) == nombre {
             return;
         }
         if lado == crate::archivos::Lado::Local {
-            let de = std::path::Path::new(&panel.ruta).join(&entrada.nombre);
-            let a = std::path::Path::new(&panel.ruta).join(nombre);
-            match crate::archivos::local::renombrar(&de, &a) {
+            let a = std::path::Path::new(dir).join(nombre);
+            match crate::archivos::local::renombrar(std::path::Path::new(de), &a) {
                 Ok(()) => {
-                    self.mensaje(format!("«{}» ahora es «{nombre}»", entrada.nombre), false);
+                    self.mensaje(
+                        format!("«{}» ahora es «{nombre}»", nombre_de_ruta(de)),
+                        false,
+                    );
                 }
                 Err(motivo) => self.mensaje(motivo, true),
             }
             self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
             return;
         }
-        let de = crate::servidor::sftp::join(&panel.ruta, &entrada.nombre);
-        let a = crate::servidor::sftp::join(&panel.ruta, nombre);
+        let a = crate::servidor::sftp::join(dir, nombre);
         let Some(estado) = &mut self.archivos else {
             return;
         };
@@ -6029,7 +6081,7 @@ impl App {
         self.servidor
             .enviar(protocolo::MensajeCliente::RenombrarRemoto {
                 host_id,
-                de,
+                de: de.to_string(),
                 a,
                 peticion_id: peticion,
             });
@@ -6098,9 +6150,9 @@ impl App {
 }
 
 /// Lista el panel local (o deja el error en el panel).
-fn listar_local(estado: &mut crate::archivos::EstadoArchivos) {
+fn listar_local(estado: &mut crate::archivos::EstadoArchivos, mismo_directorio: bool) {
     match crate::archivos::local::listar(std::path::Path::new(&estado.local.ruta)) {
-        Ok(entradas) => estado.local.fijar_entradas(entradas),
+        Ok(entradas) => estado.local.fijar_entradas(entradas, mismo_directorio),
         Err(motivo) => estado.local.error = Some(motivo),
     }
     estado.recalcular_marcas();
@@ -6425,14 +6477,19 @@ impl App {
         let cuantos = elementos.len();
         if operacion.borrar_origen && operacion.direccion == protocolo::Direccion::Subida {
             // El origen local lo borra esta ventana cuando la transferencia
-            // llegue a `hecha`; nunca antes.
-            self.borrados_locales_pendientes.push(
-                operacion
-                    .elementos
-                    .iter()
-                    .map(|e| e.origen.clone())
-                    .collect(),
-            );
+            // llegue a `hecha`; nunca antes. Se apunta por (host, primer
+            // origen) para emparejarlo con la fila que difunda el servidor sin
+            // depender del orden.
+            if let Some(primero) = operacion.elementos.first() {
+                self.borrados_locales_pendientes.insert(
+                    (host_id, primero.origen.clone()),
+                    operacion
+                        .elementos
+                        .iter()
+                        .map(|e| e.origen.clone())
+                        .collect(),
+                );
+            }
         }
         self.servidor.enviar(protocolo::MensajeCliente::Transferir {
             host_id,
@@ -6477,6 +6534,11 @@ impl App {
         }
         self.mensaje(format!("cancelando {cuantas} transferencia(s)"), false);
     }
+}
+
+/// ¿Este error significa que el host no tiene remoto?
+fn error_es_de_sftp(mensaje: &str) -> bool {
+    mensaje.contains("SFTP") || mensaje.contains("se cayó la conexión")
 }
 
 /// Nombre final de una ruta (local o remota).
@@ -6536,8 +6598,9 @@ impl App {
             _ => return,
         };
         let _ = motivo;
+        let mismo = estado.remoto.es_mismo_directorio(&ruta);
         estado.remoto.ruta = ruta;
-        estado.remoto.fijar_entradas(entradas);
+        estado.remoto.fijar_entradas(entradas, mismo);
         estado.recalcular_marcas();
         self.guardar_dirs_sftp();
     }
@@ -6548,6 +6611,7 @@ impl App {
         // Los orígenes locales de un «mover» (subida) se borran aquí, en la
         // ventana que los encoló, y solo cuando la transferencia está hecha.
         let mut a_borrar: Vec<(u32, Vec<String>)> = Vec::new();
+        let mut a_conservar: Vec<(u32, u32)> = Vec::new();
         let cliente_id = self.cliente_id;
         {
             let Some(estado) = &mut self.archivos else {
@@ -6555,24 +6619,28 @@ impl App {
             };
             for fila in &lista {
                 let conocida = estado.cola.iter().any(|previa| previa.id == fila.id);
-                if conocida {
+                if !conocida {
+                    let nuestra = cliente_id == Some(fila.solicitante)
+                        && fila.borrar_origen
+                        && fila.direccion == protocolo::Direccion::Subida;
+                    if nuestra {
+                        let clave = (fila.host_id, fila.origen.clone());
+                        if let Some(rutas) = self.borrados_locales_pendientes.remove(&clave) {
+                            self.borrados_locales.insert(fila.id, rutas);
+                        }
+                    }
+                }
+                if fila.estado != protocolo::EstadoTransferencia::Hecha {
                     continue;
                 }
-                let nuestra = cliente_id == Some(fila.solicitante)
-                    && fila.borrar_origen
-                    && fila.direccion == protocolo::Direccion::Subida;
-                if nuestra {
-                    if let Some(rutas) = self.borrados_locales_pendientes.first().cloned() {
-                        self.borrados_locales_pendientes.remove(0);
-                        estado.borrar_local.insert(fila.id, rutas);
-                    }
-                }
-            }
-            for fila in &lista {
-                if fila.estado == protocolo::EstadoTransferencia::Hecha {
-                    if let Some(rutas) = estado.borrar_local.remove(&fila.id) {
-                        a_borrar.push((fila.id, rutas));
-                    }
+                let Some(rutas) = self.borrados_locales.remove(&fila.id) else {
+                    continue;
+                };
+                if fila.omitidos > 0 {
+                    // Si algo no se copió, borrar el origen sería perderlo.
+                    a_conservar.push((fila.id, fila.omitidos));
+                } else {
+                    a_borrar.push((fila.id, rutas));
                 }
             }
             estado.cola = lista;
@@ -6601,6 +6669,15 @@ impl App {
             if refrescar {
                 self.refrescar_archivos(crate::archivos::panel::MotivoListado::Operacion);
             }
+        }
+        for (id, omitidos) in a_conservar {
+            self.mensaje(
+                format!(
+                    "la transferencia {id} se movió a medias: {omitidos} fichero(s) no se copiaron, \
+                     así que el origen sigue donde estaba"
+                ),
+                true,
+            );
         }
         for (id, rutas) in a_borrar {
             for ruta in rutas {
@@ -6649,7 +6726,11 @@ impl App {
                 .peticiones
                 .values()
                 .any(|peticion| matches!(peticion, crate::archivos::Peticion::AbrirSftp));
-            if abriendo {
+            // Sin `peticion_id` no se puede saber de qué era el error: solo se
+            // toma por «este host no tiene remoto» si lo dice el mensaje, o si
+            // no, cualquier error de otra cosa (una sesión, por ejemplo)
+            // dejaría el panel remoto inservible.
+            if abriendo && error_es_de_sftp(&mensaje) {
                 estado.peticiones.retain(|_, peticion| {
                     !matches!(peticion, crate::archivos::Peticion::AbrirSftp)
                 });
@@ -6684,6 +6765,20 @@ impl App {
             }
             crate::archivos::Peticion::VerRemoto(_) => {
                 estado.viendo = None;
+                self.mensaje(mensaje, true);
+            }
+            crate::archivos::Peticion::ListarRemoto(_) => {
+                // Si el canal se cerró por inactividad, el listado falla y el
+                // panel se queda en blanco: se vuelve a pedir el canal, que es
+                // lo que hace el «siguiente AbrirSftp reabre» del informe.
+                if !estado.solo_local && estado.remoto.entradas.is_empty() {
+                    let host_id = estado.host_id;
+                    estado.nueva_peticion(crate::archivos::Peticion::AbrirSftp);
+                    self.mensaje(format!("{mensaje}; se vuelve a abrir el canal"), false);
+                    self.servidor
+                        .enviar(protocolo::MensajeCliente::AbrirSftp { host_id });
+                    return;
+                }
                 self.mensaje(mensaje, true);
             }
             _ => {

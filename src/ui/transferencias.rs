@@ -16,6 +16,14 @@ use crate::ui::{bloque, centrar, tecla};
 /// Filas del panel de detalle inferior.
 const ALTO_DETALLE: u16 = 5;
 
+/// Filas útiles de la lista: la terminal menos la barra de abajo, el detalle,
+/// los dos bordes y la cabecera de columnas.
+pub fn alto_lista(terminal_alto: u16) -> usize {
+    terminal_alto
+        .saturating_sub(1 + ALTO_DETALLE + 2 + 1)
+        .max(1) as usize
+}
+
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let tema = &app.tema;
     let en_curso = app
