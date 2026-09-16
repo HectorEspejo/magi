@@ -12,6 +12,7 @@ pub mod identidades;
 pub mod migraciones;
 pub mod registro;
 pub mod sondeos;
+pub mod tuneles;
 
 /// Fichero SQLite del inventario.
 pub struct Almacen {
@@ -146,6 +147,50 @@ impl Almacen {
         dir_remoto: Option<&str>,
     ) -> Result<()> {
         hosts::fijar_dirs_sftp(&self.conexion, id, dir_local, dir_remoto)
+    }
+
+    // Túneles ---------------------------------------------------------------
+
+    pub fn listar_tuneles(&self) -> Result<Vec<crate::modelo::Tunel>> {
+        tuneles::listar(&self.conexion)
+    }
+
+    pub fn tuneles_de_host(&self, host_id: i64) -> Result<Vec<crate::modelo::Tunel>> {
+        tuneles::de_host(&self.conexion, host_id)
+    }
+
+    pub fn tuneles_por_host(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, Vec<crate::modelo::Tunel>>> {
+        tuneles::por_host(&self.conexion)
+    }
+
+    pub fn obtener_tunel(&self, id: i64) -> Result<crate::modelo::Tunel> {
+        tuneles::obtener(&self.conexion, id)
+    }
+
+    pub fn tunel_por_nombre(
+        &self,
+        host_id: i64,
+        nombre: &str,
+    ) -> Result<Option<crate::modelo::Tunel>> {
+        tuneles::por_nombre(&self.conexion, host_id, nombre)
+    }
+
+    pub fn crear_tunel(&self, datos: &crate::modelo::DatosTunel) -> Result<i64> {
+        tuneles::crear(&self.conexion, datos)
+    }
+
+    pub fn actualizar_tunel(&self, id: i64, datos: &crate::modelo::DatosTunel) -> Result<()> {
+        tuneles::actualizar(&self.conexion, id, datos)
+    }
+
+    pub fn borrar_tunel(&self, id: i64) -> Result<()> {
+        tuneles::borrar(&self.conexion, id)
+    }
+
+    pub fn alternar_tunel_automatico(&self, id: i64, automatico: bool) -> Result<()> {
+        tuneles::alternar_automatico(&self.conexion, id, automatico)
     }
 
     // Grupos ----------------------------------------------------------------
@@ -303,16 +348,22 @@ fn crear_directorio_privado(ruta: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Detecta una violación de restricción UNIQUE.
+/// Detecta una violación de restricción UNIQUE (o de clave primaria, que
+/// también es un choque de unicidad). Se mira el código extendido: la familia
+/// `ConstraintViolation` incluye también las claves ajenas y los nulos, y
+/// llamar «ya existe» a un `host_id` que no existe sería mentir al usuario.
 pub fn es_conflicto_unico(error: &rusqlite::Error) -> bool {
+    const UNIQUE: i32 = rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE;
+    const PRIMARY_KEY: i32 = rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY;
     matches!(
         error,
         rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {
                 code: rusqlite::ErrorCode::ConstraintViolation,
+                extended_code,
                 ..
             },
             _
-        )
+        ) if *extended_code == UNIQUE || *extended_code == PRIMARY_KEY
     )
 }

@@ -29,8 +29,14 @@ pub const SERVIDOR_CAIDO: &str = "servidor_caido";
 pub const TRANSFERENCIA: &str = "transferencia";
 /// Fase 4: borrado remoto por SFTP.
 pub const BORRADO_REMOTO: &str = "borrado_remoto";
+/// Fase 5: un túnel queda escuchando.
+pub const TUNEL_ABIERTO: &str = "tunel_abierto";
+/// Fase 5: un túnel se para, con el motivo y los totales.
+pub const TUNEL_CERRADO: &str = "tunel_cerrado";
+/// Fase 5: un túnel no llega a levantarse (bind ocupado, host que rechaza).
+pub const TUNEL_FALLIDO: &str = "tunel_fallido";
 
-pub const TIPOS: [&str; 18] = [
+pub const TIPOS: [&str; 21] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -49,6 +55,9 @@ pub const TIPOS: [&str; 18] = [
     SERVIDOR_CAIDO,
     TRANSFERENCIA,
     BORRADO_REMOTO,
+    TUNEL_ABIERTO,
+    TUNEL_CERRADO,
+    TUNEL_FALLIDO,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
@@ -64,6 +73,9 @@ pub const FILTROS: [(&str, &[&str]); 7] = [
             SERVIDOR_ARRANCADO,
             SERVIDOR_DETENIDO,
             SERVIDOR_CAIDO,
+            TUNEL_ABIERTO,
+            TUNEL_CERRADO,
+            TUNEL_FALLIDO,
         ],
     ),
     ("huellas", &[HUELLA_ACEPTADA, HUELLA_SUSTITUIDA]),
