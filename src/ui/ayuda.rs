@@ -131,6 +131,25 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 ("v", "mostrar u ocultar revocadas"),
             ],
         ),
+        Vista::Tuneles => (
+            "AYUDA · TÚNELES",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("PgUp PgDn", "página arriba / abajo"),
+                ("Home End", "primero / último"),
+                ("espacio", "activar, parar o descartar el caído"),
+                ("r", "relanzar el túnel caído"),
+                ("n", "nuevo túnel"),
+                ("e", "editar (para el túnel si estaba activo)"),
+                ("x", "borrar el túnel (confirma)"),
+                ("a", "marcar o desmarcar automático"),
+                ("↵", "detalle del túnel"),
+                ("/", "filtrar por host, nombre o destino"),
+                ("esc", "limpiar el filtro; después volver"),
+                ("q", "volver"),
+                ("F6", "volver a Túneles"),
+            ],
+        ),
         Vista::Flota => (
             "AYUDA · FLOTA",
             vec![

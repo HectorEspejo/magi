@@ -19,7 +19,11 @@ use crate::archivos::Entrada;
 /// `sesion_id` de los diálogos de conexión pasa a significar «id de la
 /// solicitud de conexión»: sirve igual para una sesión que para una apertura
 /// de canal SFTP, que no tiene sesión propia.
-pub const VERSION_PROTOCOLO: u32 = 2;
+///
+/// v3 (Fase 5): túneles. El cliente hace el CRUD de `TUNELES` y el servidor
+/// los ejecuta; `Tuneles{lista}` difunde la lista completa (definidos y su
+/// estado en vivo) y `Bienvenida` la lleva para que una ventana nueva la vea.
+pub const VERSION_PROTOCOLO: u32 = 3;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -248,6 +252,114 @@ impl InfoTransferencia {
     }
 }
 
+// ---------------------------------------------------------------- túneles
+
+/// Estado de un túnel visto desde fuera. `Inactivo` es una fila de `TUNELES`
+/// sin nadie escuchando todavía.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EstadoTunelRemoto {
+    Inactivo,
+    Activando,
+    Activo,
+    Parando,
+    Caido,
+}
+
+impl EstadoTunelRemoto {
+    pub fn texto(self) -> &'static str {
+        match self {
+            EstadoTunelRemoto::Inactivo => "inactivo",
+            EstadoTunelRemoto::Activando => "activando",
+            EstadoTunelRemoto::Activo => "activo",
+            EstadoTunelRemoto::Parando => "parando",
+            EstadoTunelRemoto::Caido => "caído",
+        }
+    }
+
+    /// Glifo de la vista Túneles, con doble codificación.
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (EstadoTunelRemoto::Activo, false) => "●",
+            (EstadoTunelRemoto::Activando, false) => "◐",
+            (EstadoTunelRemoto::Parando, false) => "◐",
+            (EstadoTunelRemoto::Inactivo, false) => "○",
+            (EstadoTunelRemoto::Caido, false) => "✕",
+            (EstadoTunelRemoto::Activo, true) => "*",
+            (EstadoTunelRemoto::Activando, true) => "o",
+            (EstadoTunelRemoto::Parando, true) => "o",
+            (EstadoTunelRemoto::Inactivo, true) => "o",
+            (EstadoTunelRemoto::Caido, true) => "x",
+        }
+    }
+
+    /// ¿Hay alguien escuchando o a punto de hacerlo?
+    pub fn en_marcha(self) -> bool {
+        matches!(
+            self,
+            EstadoTunelRemoto::Activo | EstadoTunelRemoto::Activando
+        )
+    }
+}
+
+/// Quién levantó el túnel: la ventana que lo pidió o el ciclo automático.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrigenTunel {
+    Manual,
+    Automatico,
+}
+
+impl OrigenTunel {
+    pub fn texto(self) -> &'static str {
+        match self {
+            OrigenTunel::Manual => "manual",
+            OrigenTunel::Automatico => "automático",
+        }
+    }
+}
+
+/// Resumen de un túnel para la lista que se difunde: la fila de `TUNELES` más
+/// el estado en vivo que lleva el servidor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InfoTunel {
+    pub tunel_id: i64,
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub nombre: String,
+    /// `local` | `remoto` | `dinamico`.
+    pub tipo: String,
+    /// La escucha configurada en `TUNELES`.
+    pub escucha: String,
+    /// La que está escuchando de verdad: cambia si la escucha pedía el puerto
+    /// 0 (local y dinámico) o si el host confirma otro (remoto).
+    pub escucha_efectiva: String,
+    pub destino: Option<String>,
+    pub automatico: bool,
+    pub estado: EstadoTunelRemoto,
+    /// Quién lo levantó; nulo si nadie.
+    pub origen: Option<OrigenTunel>,
+    /// Ventana que lo activó, si sigue conectada.
+    pub solicitante: Option<u32>,
+    pub conexiones: u32,
+    pub aceptadas: u64,
+    pub bytes_subidos: u64,
+    pub bytes_bajados: u64,
+    /// Época en segundos en la que se levantó.
+    pub desde: Option<i64>,
+    pub ultimo_error: Option<String>,
+}
+
+impl InfoTunel {
+    /// Escucha que se pinta en la tabla: la efectiva mientras hay algo
+    /// escuchando, la configurada cuando no.
+    pub fn escucha_mostrada(&self) -> &str {
+        if self.estado == EstadoTunelRemoto::Inactivo {
+            &self.escucha
+        } else {
+            &self.escucha_efectiva
+        }
+    }
+}
+
 // ---------------------------------------------------------------- cliente → servidor
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -355,6 +467,26 @@ pub enum MensajeCliente {
     BorrarTemporal {
         ruta: String,
     },
+    /// Levanta un túnel de `TUNELES` (abre la conexión del host si hace
+    /// falta; los diálogos de conexión van al solicitante).
+    ActivarTunel {
+        tunel_id: i64,
+        peticion_id: u64,
+    },
+    PararTunel {
+        tunel_id: i64,
+        peticion_id: u64,
+    },
+    /// Vuelve a levantar un túnel caído (reinicia los contadores).
+    RelanzarTunel {
+        tunel_id: i64,
+        peticion_id: u64,
+    },
+    /// El cliente ha creado, editado o borrado túneles de este host: el
+    /// servidor relee `TUNELES` y para lo que ya no exista o haya cambiado.
+    RecargarTuneles {
+        host_id: i64,
+    },
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
@@ -375,6 +507,9 @@ pub enum MensajeServidor {
         sesiones: Vec<InfoSesion>,
         /// Cola de transferencias actual, para que una ventana nueva la vea.
         transferencias: Vec<InfoTransferencia>,
+        /// Túneles definidos y su estado en vivo, con lo mismo que difunde
+        /// `Tuneles`.
+        tuneles: Vec<InfoTunel>,
     },
     VersionIncompatible {
         version: u32,
@@ -454,6 +589,12 @@ pub enum MensajeServidor {
     /// mucho cuatro veces por segundo durante el progreso.
     Transferencias {
         lista: Vec<InfoTransferencia>,
+    },
+    /// Difusión de los túneles completos (definidos y su estado): en cada
+    /// cambio de estado y, para los contadores, como mucho dos veces por
+    /// segundo y solo si cambian.
+    Tuneles {
+        lista: Vec<InfoTunel>,
     },
     /// Operación remota terminada (`BorrarRemoto`, `RenombrarRemoto`,
     /// `CrearDirRemoto`).
@@ -679,8 +820,78 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_dos() {
-        assert_eq!(VERSION_PROTOCOLO, 2);
+    fn la_version_del_protocolo_es_la_tres() {
+        assert_eq!(VERSION_PROTOCOLO, 3);
+    }
+
+    /// Los mensajes de túneles hacen ida y vuelta por los dos sentidos.
+    #[test]
+    fn los_mensajes_de_tuneles_hacen_ida_y_vuelta() {
+        for mensaje in [
+            MensajeCliente::ActivarTunel {
+                tunel_id: 3,
+                peticion_id: 10,
+            },
+            MensajeCliente::PararTunel {
+                tunel_id: 3,
+                peticion_id: 11,
+            },
+            MensajeCliente::RelanzarTunel {
+                tunel_id: 3,
+                peticion_id: 12,
+            },
+            MensajeCliente::RecargarTuneles { host_id: 7 },
+        ] {
+            ida_y_vuelta_cliente(mensaje);
+        }
+        let tunel = InfoTunel {
+            tunel_id: 3,
+            host_id: 7,
+            host_nombre: "hetzner-01".to_string(),
+            nombre: "pg-prod".to_string(),
+            tipo: "local".to_string(),
+            escucha: "127.0.0.1:5432".to_string(),
+            escucha_efectiva: "127.0.0.1:5432".to_string(),
+            destino: Some("10.0.0.5:5432".to_string()),
+            automatico: true,
+            estado: EstadoTunelRemoto::Activo,
+            origen: Some(OrigenTunel::Automatico),
+            solicitante: Some(2),
+            conexiones: 1,
+            aceptadas: 3,
+            bytes_subidos: 1024,
+            bytes_bajados: 2048,
+            desde: Some(1_700_000_000),
+            ultimo_error: None,
+        };
+        ida_y_vuelta_servidor(MensajeServidor::Tuneles {
+            lista: vec![tunel.clone()],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
+            version: VERSION_PROTOCOLO,
+            pid: 100,
+            cliente_id: 3,
+            clientes: 2,
+            sesiones: Vec::new(),
+            transferencias: Vec::new(),
+            tuneles: vec![tunel],
+        });
+    }
+
+    /// El glifo y el texto de cada estado, para que la vista no se desvíe.
+    #[test]
+    fn cada_estado_de_tunel_tiene_texto_y_glifo() {
+        for estado in [
+            EstadoTunelRemoto::Inactivo,
+            EstadoTunelRemoto::Activando,
+            EstadoTunelRemoto::Activo,
+            EstadoTunelRemoto::Parando,
+            EstadoTunelRemoto::Caido,
+        ] {
+            assert!(!estado.texto().is_empty());
+            assert!(!estado.glifo(false).is_empty());
+            assert!(!estado.glifo(true).is_empty());
+        }
     }
 
     #[test]
@@ -704,6 +915,7 @@ mod pruebas {
             clientes: 2,
             sesiones: sesiones.clone(),
             transferencias: Vec::new(),
+            tuneles: Vec::new(),
         });
         ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible { version: 99 });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });

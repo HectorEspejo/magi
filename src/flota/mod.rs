@@ -139,6 +139,8 @@ async fn intento(
         tx: canal_testigo(),
         interactivo: false,
         fuente_contrasena: crate::conexion::FuenteContrasena::Llavero,
+        // El sondeo no acepta reenvíos: no es una conexión de túneles.
+        reenvios: None,
     };
     let transporte = conectar_cadena(&cadena, &contexto).await.map_err(|error| {
         let motivo = error.to_string();

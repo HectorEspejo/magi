@@ -61,7 +61,8 @@ pub async fn conectar_cadena(
             host.puerto,
             contexto.known_hosts.clone(),
             contexto.interactivo,
-        );
+        )
+        .con_reenvios(contexto.reenvios.clone());
         let mut handle = match canal.take() {
             Some(canal) => {
                 russh::client::connect_stream(config, canal.into_stream(), manejador).await?

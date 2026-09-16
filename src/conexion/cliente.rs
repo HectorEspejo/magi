@@ -45,6 +45,9 @@ pub struct Contexto {
     pub tx: mpsc::UnboundedSender<EventoConexion>,
     pub interactivo: bool,
     pub fuente_contrasena: super::FuenteContrasena,
+    /// Reenvíos remotos vivos del servidor. Es `None` en la TUI y en el sondeo,
+    /// que no aceptan canales `forwarded-tcpip`; con `None` se rechazan.
+    pub reenvios: Option<std::sync::Arc<super::reenvios::Reenvios>>,
 }
 
 /// Implementación del `Handler` de russh: verifica la huella del servidor y,
@@ -56,6 +59,7 @@ pub struct Cliente {
     puerto: u16,
     known_hosts: PathBuf,
     interactivo: bool,
+    reenvios: Option<std::sync::Arc<super::reenvios::Reenvios>>,
 }
 
 impl Cliente {
@@ -74,7 +78,17 @@ impl Cliente {
             puerto,
             known_hosts,
             interactivo,
+            reenvios: None,
         }
+    }
+
+    /// El servidor de sesiones comparte aquí el registro de reenvíos remotos.
+    pub fn con_reenvios(
+        mut self,
+        reenvios: Option<std::sync::Arc<super::reenvios::Reenvios>>,
+    ) -> Self {
+        self.reenvios = reenvios;
+        self
     }
 
     fn error_no_interactivo(&self, motivo: String) -> ErrorCliente {
@@ -187,6 +201,42 @@ impl russh::client::Handler for Cliente {
             }
         }
     }
+
+    /// Un canal `forwarded-tcpip`: el host ha recibido una conexión en un
+    /// puerto que le pedimos reenviar. Solo se acepta si esa `(dirección,
+    /// puerto)` es de un túnel remoto registrado de este host; el resto se
+    /// rechaza. El handler por defecto de russh los aceptaría todos.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        canal: Channel<russh::client::Msg>,
+        direccion: &str,
+        puerto: u32,
+        origen_direccion: &str,
+        origen_puerto: u32,
+        respuesta: russh::client::ChannelOpenHandle,
+        _sesion: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let reenvio = self
+            .reenvios
+            .as_ref()
+            .and_then(|reenvios| reenvios.buscar(self.host_id, direccion, puerto));
+        let Some(reenvio) = reenvio else {
+            warn!(
+                host = %self.host,
+                direccion = %direccion,
+                puerto,
+                "canal forwarded-tcpip sin túnel registrado: se rechaza"
+            );
+            respuesta
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        respuesta.accept().await;
+        let origen = format!("{origen_direccion}:{origen_puerto}");
+        tokio::spawn(super::reenvios::atender(reenvio, canal, origen));
+        Ok(())
+    }
 }
 
 /// Flujo completo de una sesión: conectar, autenticar, abrir pty y shell y
@@ -207,6 +257,8 @@ pub async fn sesion_completa(
         tx: tx.clone(),
         interactivo: true,
         fuente_contrasena: super::FuenteContrasena::Llavero,
+        // La TUI no custodia túneles: viven en el servidor de sesiones.
+        reenvios: None,
     };
     emitir_estado(&tx, host_id, EstadoSesion::Resolviendo);
     let cadena = match construir_cadena(&plan.host, &plan.todos_los_hosts) {

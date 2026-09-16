@@ -138,15 +138,73 @@ where
 
 // -------------------------------------------------------------- servidor ssh
 
+/// Cómo contesta el host de pruebas a los reenvíos remotos.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModoReenvio {
+    /// Los concede (como un `sshd` con `AllowTcpForwarding`).
+    #[default]
+    Concede,
+    /// Los rechaza (host sin reenvío permitido, puerto ocupado allí...).
+    Rechaza,
+}
+
+/// Lo que el host de pruebas ve y puede provocar en los reenvíos.
+#[derive(Default)]
+pub struct Reenvios {
+    /// Cada `tcpip_forward` pedido y, si se concedió, el puerto que se dio.
+    pub concedidos: Mutex<Vec<(String, u32)>>,
+    /// Cada `cancel_tcpip_forward` recibido.
+    pub cancelados: Mutex<Vec<(String, u32)>>,
+    /// Canales `direct-tcpip` que el host no pudo conectar (destino caído).
+    pub destinos_caidos: Mutex<Vec<String>>,
+    /// Con qué abrir un canal de vuelta: el mango de la sesión del host.
+    mango: Mutex<Option<russh::server::Handle>>,
+}
+
+impl Reenvios {
+    /// Abre un canal `forwarded-tcpip` como si alguien hubiera conectado al
+    /// puerto del host: escribe `saludo` y devuelve lo que conteste el servicio
+    /// local. Vacío si no hay sesión con la que abrirlo.
+    pub async fn conectar_de_vuelta(&self, direccion: &str, puerto: u32, saludo: &str) -> String {
+        let mango = self.mango.lock().expect("mango").clone();
+        let Some(mango) = mango else {
+            return String::new();
+        };
+        let Ok(canal) = mango
+            .channel_open_forwarded_tcpip(direccion.to_string(), puerto, "127.0.0.1", 40_000)
+            .await
+        else {
+            return String::new();
+        };
+        let mut flujo = canal.into_stream();
+        if flujo.write_all(saludo.as_bytes()).await.is_err() {
+            return String::new();
+        }
+        let mut bufer = vec![0u8; 256];
+        match tokio::time::timeout(Duration::from_secs(5), flujo.read(&mut bufer)).await {
+            Ok(Ok(leidos)) => String::from_utf8_lossy(&bufer[..leidos]).to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
 /// Un servidor SSH de pruebas servido por russh, en proceso.
 pub struct ServidorSesion {
     /// ¿Sirve el subsistema `sftp`? Los hosts sin SFTP se prueban con `false`.
     pub sftp: bool,
+    /// Qué hace con los reenvíos remotos.
+    pub reenvio: ModoReenvio,
+    /// Lo que ve el test de los reenvíos (y con qué provocarlos).
+    pub estado: Arc<Reenvios>,
 }
 
 impl Default for ServidorSesion {
     fn default() -> Self {
-        Self { sftp: true }
+        Self {
+            sftp: true,
+            reenvio: ModoReenvio::Concede,
+            estado: Arc::new(Reenvios::default()),
+        }
     }
 }
 
@@ -155,6 +213,8 @@ impl russh::server::Server for ServidorSesion {
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> HandlerSesion {
         HandlerSesion {
             sftp: self.sftp,
+            reenvio: self.reenvio,
+            estado: self.estado.clone(),
             entradas: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -164,6 +224,8 @@ pub struct HandlerSesion {
     /// stdin de cada `sftp-server` lanzado, por canal.
     entradas: Arc<Mutex<HashMap<u32, mpsc::UnboundedSender<Vec<u8>>>>>,
     sftp: bool,
+    reenvio: ModoReenvio,
+    estado: Arc<Reenvios>,
 }
 
 impl russh::server::Handler for HandlerSesion {
@@ -326,6 +388,160 @@ impl russh::server::Handler for HandlerSesion {
             .remove(&u32::from(canal));
         Ok(())
     }
+
+    /// Reenvío remoto: el host concede el puerto (eligiéndolo si se pide 0) o
+    /// lo rechaza, según cómo se haya montado la prueba.
+    async fn tcpip_forward(
+        &mut self,
+        direccion: &str,
+        puerto: &mut u32,
+        sesion: &mut russh::server::Session,
+    ) -> Result<bool, Self::Error> {
+        if self.reenvio == ModoReenvio::Rechaza {
+            return Ok(false);
+        }
+        if *puerto == 0 {
+            // Un puerto libre de verdad, como haría el host al elegirlo.
+            *puerto = puerto_libre().await;
+        }
+        self.estado
+            .concedidos
+            .lock()
+            .expect("concedidos")
+            .push((direccion.to_string(), *puerto));
+        // Se guarda el mango para que la prueba pueda abrir el canal de vuelta
+        // cuando le convenga (en la vida real lo abre alguien al conectar).
+        *self.estado.mango.lock().expect("mango") = Some(sesion.handle());
+        Ok(true)
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        direccion: &str,
+        puerto: u32,
+        _sesion: &mut russh::server::Session,
+    ) -> Result<bool, Self::Error> {
+        self.estado
+            .cancelados
+            .lock()
+            .expect("cancelados")
+            .push((direccion.to_string(), puerto));
+        Ok(true)
+    }
+
+    /// Túnel local y dinámico: el host abre el destino, como un `sshd` de verdad
+    /// (si no puede conectar, rechaza el canal).
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        canal: russh::Channel<russh::server::Msg>,
+        host: &str,
+        puerto: u32,
+        _origen: &str,
+        _puerto_origen: u32,
+        respuesta: russh::server::ChannelOpenHandle,
+        _sesion: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        let destino = format!("{host}:{puerto}");
+        let conexion = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect((host, puerto as u16)),
+        )
+        .await;
+        let Ok(Ok(mut tcp)) = conexion else {
+            self.estado
+                .destinos_caidos
+                .lock()
+                .expect("destinos")
+                .push(destino);
+            respuesta
+                .reject(russh::ChannelOpenFailure::ConnectFailed)
+                .await;
+            return Ok(());
+        };
+        respuesta.accept().await;
+        tokio::spawn(async move {
+            let mut flujo = canal.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut flujo).await;
+        });
+        Ok(())
+    }
+}
+
+/// Un puerto libre de la máquina, para conceder un reenvío pedido con 0.
+async fn puerto_libre() -> u32 {
+    tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .and_then(|escucha| escucha.local_addr())
+        .map(|direccion| u32::from(direccion.port()))
+        .unwrap_or(0)
+}
+
+/// Un servicio local de eco: devuelve lo que reciba. Es el «servicio» al que
+/// apuntan los túneles de las pruebas.
+pub async fn servicio_eco() -> (u16, tokio::task::JoinHandle<()>) {
+    let escucha = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("escuchando el eco");
+    let puerto = escucha.local_addr().expect("dirección del eco").port();
+    let tarea = tokio::spawn(async move {
+        loop {
+            let Ok((mut flujo, _)) = escucha.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut bufer = vec![0u8; 1024];
+                loop {
+                    match flujo.read(&mut bufer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(leidos) => {
+                            if flujo.write_all(&bufer[..leidos]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (puerto, tarea)
+}
+
+/// Habla SOCKS5 con un túnel dinámico y devuelve lo que conteste el destino.
+/// Devuelve `None` si el host rechazó el canal.
+pub async fn socks5_conectar(
+    puerto_socks: u16,
+    destino: &str,
+    puerto_destino: u16,
+    saludo: &str,
+) -> Option<String> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut flujo = tokio::net::TcpStream::connect(("127.0.0.1", puerto_socks))
+        .await
+        .expect("conectando al proxy SOCKS");
+    // Saludo: versión 5, un método, «sin autenticación».
+    flujo.write_all(&[0x05, 0x01, 0x00]).await.expect("saludo");
+    let mut respuesta = [0u8; 2];
+    flujo.read_exact(&mut respuesta).await.expect("respuesta");
+    assert_eq!(respuesta, [0x05, 0x00], "el proxy no acepta sin auth");
+
+    // Petición CONNECT con el dominio tal cual, sin resolver en local.
+    let mut peticion = vec![0x05, 0x01, 0x00, 0x03, destino.len() as u8];
+    peticion.extend_from_slice(destino.as_bytes());
+    peticion.extend_from_slice(&puerto_destino.to_be_bytes());
+    flujo.write_all(&peticion).await.expect("petición");
+    let mut cabecera = [0u8; 10];
+    flujo.read_exact(&mut cabecera).await.expect("respuesta");
+    if cabecera[0] != 0x05 {
+        return None;
+    }
+    if cabecera[1] != 0x00 {
+        return None;
+    }
+    flujo.write_all(saludo.as_bytes()).await.expect("saludo");
+    let mut bufer = vec![0u8; 256];
+    let leidos = flujo.read(&mut bufer).await.expect("eco");
+    Some(String::from_utf8_lossy(&bufer[..leidos]).to_string())
 }
 
 /// Ruta del `sftp-server` de OpenSSH, si está instalado.

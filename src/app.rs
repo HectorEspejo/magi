@@ -19,8 +19,8 @@ use crate::config::{Config, Rutas};
 use crate::flota::{self, PeticionSondeo};
 use crate::identidades::Identidades;
 use crate::modelo::{
-    self, fecha_ahora, DatosHost, EntradaRegistro, Grupo, Host, IdentidadRef, Origen,
-    ResultadoRegistro, Sondeo, UltimoEstado,
+    self, fecha_ahora, DatosHost, DatosTunel, EntradaRegistro, Grupo, Host, IdentidadRef, Origen,
+    ResultadoRegistro, Sondeo, TipoTunel, Tunel, UltimoEstado,
 };
 use crate::protocolo::{self, EstadoSesionRemota};
 use crate::registro::FiltroRegistro;
@@ -175,6 +175,301 @@ impl EstadoGeneracion {
     }
 }
 
+// ---------------------------------------------------------------- túneles
+
+/// Campos del diálogo de túnel, en el orden en el que los recorre `Tab`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CampoTunel {
+    Host,
+    Nombre,
+    Tipo,
+    EscuchaDireccion,
+    EscuchaPuerto,
+    DestinoDireccion,
+    DestinoPuerto,
+    Automatico,
+}
+
+pub const ORDEN_TUNELES: [CampoTunel; 8] = [
+    CampoTunel::Host,
+    CampoTunel::Nombre,
+    CampoTunel::Tipo,
+    CampoTunel::EscuchaDireccion,
+    CampoTunel::EscuchaPuerto,
+    CampoTunel::DestinoDireccion,
+    CampoTunel::DestinoPuerto,
+    CampoTunel::Automatico,
+];
+
+/// Estado del diálogo de alta y edición de un túnel.
+pub struct FormularioTunel {
+    /// `Some` cuando se edita una fila de `TUNELES`.
+    pub id: Option<i64>,
+    /// Desplegable de hosts: `ValorOpcion::Salto` es la única variante que
+    /// lleva un id de host, y aquí es justo lo que hace falta.
+    pub host: Desplegable,
+    pub nombre: CampoTexto,
+    pub tipo: TipoTunel,
+    pub escucha_direccion: CampoTexto,
+    pub escucha_puerto: CampoTexto,
+    pub destino_direccion: CampoTexto,
+    pub destino_puerto: CampoTexto,
+    pub automatico: bool,
+    pub foco: CampoTunel,
+    /// El túnel estaba en marcha al abrir la edición: al guardar se ofrece
+    /// volver a levantarlo.
+    pub relanzar_al_guardar: bool,
+}
+
+pub enum AccionTunel {
+    Nada,
+    Guardar,
+    Cancelar,
+}
+
+/// Operación de túnel pedida al servidor y aún sin respuesta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeticionTunel {
+    Activar,
+    Parar,
+    Relanzar,
+}
+
+impl PeticionTunel {
+    fn etiqueta(self) -> &'static str {
+        match self {
+            PeticionTunel::Activar => "no se pudo activar el túnel",
+            PeticionTunel::Parar => "no se pudo parar el túnel",
+            PeticionTunel::Relanzar => "no se pudo relanzar el túnel",
+        }
+    }
+}
+
+impl FormularioTunel {
+    /// Formulario de alta, con `host_id` preseleccionado si está en la lista.
+    pub fn nuevo(hosts: &[Host], host_id: Option<i64>) -> Self {
+        let mut host = desplegable_hosts(hosts);
+        if let Some(id) = host_id {
+            host.seleccionar_valor(&ValorOpcion::Salto(id));
+        }
+        Self {
+            id: None,
+            host,
+            nombre: CampoTexto::default(),
+            tipo: TipoTunel::Local,
+            escucha_direccion: CampoTexto::nuevo("127.0.0.1"),
+            escucha_puerto: CampoTexto::default(),
+            destino_direccion: CampoTexto::default(),
+            destino_puerto: CampoTexto::default(),
+            automatico: false,
+            foco: CampoTunel::Host,
+            relanzar_al_guardar: false,
+        }
+    }
+
+    /// Formulario de edición, con los datos de la fila ya fijados.
+    pub fn desde(tunel: &Tunel, hosts: &[Host]) -> Self {
+        let mut formulario = Self::nuevo(hosts, Some(tunel.host_id));
+        formulario.id = Some(tunel.id);
+        formulario.nombre = CampoTexto::nuevo(tunel.nombre.clone());
+        formulario.tipo = tunel.tipo;
+        if let Some((direccion, puerto)) = modelo::partir_direccion_puerto(&tunel.escucha) {
+            formulario.escucha_direccion = CampoTexto::nuevo(direccion);
+            formulario.escucha_puerto = CampoTexto::nuevo(puerto.to_string());
+        }
+        if let Some(destino) = tunel.destino.as_deref() {
+            if let Some((direccion, puerto)) = modelo::partir_direccion_puerto(destino) {
+                formulario.destino_direccion = CampoTexto::nuevo(direccion);
+                formulario.destino_puerto = CampoTexto::nuevo(puerto.to_string());
+            }
+        }
+        formulario.automatico = tunel.automatico;
+        formulario
+    }
+
+    /// Datos del túnel tal y como los valida y guarda el almacén.
+    pub fn datos(&self) -> DatosTunel {
+        let host_id = match self.host.valor_seleccionado() {
+            ValorOpcion::Salto(id) => id,
+            _ => 0,
+        };
+        DatosTunel {
+            host_id,
+            nombre: self.nombre.texto.trim().to_string(),
+            tipo: self.tipo,
+            escucha: self.escucha(),
+            destino: if self.tipo.lleva_destino() && !self.destino_direccion.texto.trim().is_empty()
+            {
+                match puerto(&self.destino_puerto.texto) {
+                    Some(puerto) => Some(modelo::juntar_direccion_puerto(
+                        self.destino_direccion.texto.trim(),
+                        puerto,
+                    )),
+                    // Sin puerto legible no hay destino: se avisa al guardar.
+                    None => Some(self.destino_direccion.texto.trim().to_string()),
+                }
+            } else {
+                None
+            },
+            automatico: self.automatico,
+        }
+    }
+
+    /// Escucha compuesta con los dos campos del formulario.
+    /// Escucha tal cual la escribió el usuario, sin arreglar puertos: si el
+    /// puerto no se puede leer, se queda el texto para poder avisar.
+    pub fn escucha(&self) -> String {
+        match puerto(&self.escucha_puerto.texto) {
+            Some(puerto) => {
+                modelo::juntar_direccion_puerto(self.escucha_direccion.texto.trim(), puerto)
+            }
+            None => self.escucha_puerto.texto.trim().to_string(),
+        }
+    }
+
+    /// Aviso en ámbar del diálogo, si la escucha lo merece.
+    pub fn aviso(&self) -> Option<String> {
+        modelo::aviso_escucha(self.tipo, &self.escucha())
+    }
+
+    /// Siguiente campo alcanzable en el orden del `Tab`.
+    fn avanzar(&mut self, paso: i32) {
+        let total = ORDEN_TUNELES.len() as i32;
+        let mut posicion = ORDEN_TUNELES
+            .iter()
+            .position(|campo| *campo == self.foco)
+            .unwrap_or(0) as i32;
+        for _ in 0..total {
+            posicion = (posicion + paso).rem_euclid(total);
+            let campo = ORDEN_TUNELES[posicion as usize];
+            if self.alcanzable(campo) {
+                self.foco = campo;
+                return;
+            }
+        }
+    }
+
+    /// El destino no se visita cuando el tipo es dinámico.
+    fn alcanzable(&self, campo: CampoTunel) -> bool {
+        match campo {
+            CampoTunel::DestinoDireccion | CampoTunel::DestinoPuerto => self.tipo.lleva_destino(),
+            _ => true,
+        }
+    }
+
+    fn cambiar_tipo(&mut self, paso: i32) {
+        let tipos = [TipoTunel::Local, TipoTunel::Remoto, TipoTunel::Dinamico];
+        let actual = tipos
+            .iter()
+            .position(|tipo| *tipo == self.tipo)
+            .unwrap_or(0) as i32;
+        self.tipo = tipos[(actual + paso).rem_euclid(tipos.len() as i32) as usize];
+        if !self.tipo.lleva_destino()
+            && matches!(
+                self.foco,
+                CampoTunel::DestinoDireccion | CampoTunel::DestinoPuerto
+            )
+        {
+            self.foco = CampoTunel::Tipo;
+        }
+    }
+
+    fn editar(&mut self, tecla: &KeyEvent) {
+        match self.foco {
+            CampoTunel::Nombre => {
+                self.nombre.manejar_tecla(tecla);
+            }
+            CampoTunel::EscuchaDireccion => {
+                self.escucha_direccion.manejar_tecla(tecla);
+            }
+            CampoTunel::EscuchaPuerto if es_edicion_de_puerto(tecla) => {
+                self.escucha_puerto.manejar_tecla(tecla);
+            }
+            CampoTunel::DestinoDireccion => {
+                self.destino_direccion.manejar_tecla(tecla);
+            }
+            CampoTunel::DestinoPuerto if es_edicion_de_puerto(tecla) => {
+                self.destino_puerto.manejar_tecla(tecla);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn manejar_tecla(&mut self, tecla: &KeyEvent) -> AccionTunel {
+        // Guardar y cancelar valen siempre, también con el desplegable abierto:
+        // si no, `^s` se perdería dentro del filtro de hosts.
+        if tecla.modifiers.contains(KeyModifiers::CONTROL) && tecla.code == KeyCode::Char('s') {
+            return AccionTunel::Guardar;
+        }
+        // El desplegable abierto se queda con las teclas (filtro, ↑↓, ↵, esc).
+        if self.host.abierto {
+            self.host.manejar_tecla(tecla);
+            return AccionTunel::Nada;
+        }
+        if tecla.modifiers.contains(KeyModifiers::CONTROL) {
+            if tecla.code == KeyCode::Char('s') {
+                return AccionTunel::Guardar;
+            }
+            return AccionTunel::Nada;
+        }
+        match tecla.code {
+            KeyCode::Esc => return AccionTunel::Cancelar,
+            KeyCode::Tab => {
+                self.avanzar(1);
+                return AccionTunel::Nada;
+            }
+            KeyCode::BackTab => {
+                self.avanzar(-1);
+                return AccionTunel::Nada;
+            }
+            KeyCode::Char(' ') => match self.foco {
+                CampoTunel::Tipo => self.cambiar_tipo(1),
+                CampoTunel::Automatico => self.automatico = !self.automatico,
+                // En los campos de texto el espacio es un carácter más.
+                _ => self.editar(tecla),
+            },
+            KeyCode::Left | KeyCode::Right if self.foco == CampoTunel::Tipo => {
+                self.cambiar_tipo(if tecla.code == KeyCode::Left { -1 } else { 1 });
+            }
+            KeyCode::Enter if self.foco == CampoTunel::Host => self.host.abrir(),
+            _ => self.editar(tecla),
+        }
+        AccionTunel::Nada
+    }
+}
+
+/// Desplegable de hosts del diálogo de túnel.
+fn desplegable_hosts(hosts: &[Host]) -> Desplegable {
+    Desplegable::nuevo(
+        hosts
+            .iter()
+            .map(|host| Opcion {
+                etiqueta: host.nombre.clone(),
+                valor: ValorOpcion::Salto(host.id),
+            })
+            .collect(),
+    )
+}
+
+/// Puerto de un campo de texto: vacío o ilegible es el 0 («el que asigne el
+/// sistema»).
+/// Puerto de un campo del formulario. `None` si lo escrito no es un puerto
+/// (vacío, letras, fuera de rango): quien llama tiene que decirlo, no quedarse
+/// con un 0 que cambiaría el significado del túnel.
+fn puerto(texto: &str) -> Option<u16> {
+    texto.trim().parse::<u16>().ok()
+}
+
+/// En los campos de puerto solo entran dígitos.
+fn es_edicion_de_puerto(tecla: &KeyEvent) -> bool {
+    match tecla.code {
+        KeyCode::Char(caracter) => {
+            caracter.is_ascii_digit() && !tecla.modifiers.contains(KeyModifiers::CONTROL)
+        }
+        _ => true,
+    }
+}
+
 /// Eventos que llegan al bucle principal de la UI.
 pub enum Evento {
     Tecla(KeyEvent),
@@ -230,9 +525,11 @@ pub enum CampoFicha {
     Keepalive,
     Servicios,
     Opciones,
+    /// Bloque de túneles del host (no es un campo de texto).
+    Tuneles,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 13] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 14] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -246,6 +543,7 @@ pub const ORDEN_CAMPOS: [CampoFicha; 13] = [
     CampoFicha::Keepalive,
     CampoFicha::Servicios,
     CampoFicha::Opciones,
+    CampoFicha::Tuneles,
 ];
 
 pub enum AccionFicha {
@@ -254,6 +552,13 @@ pub enum AccionFicha {
     Probar,
     Cerrar,
     DescartarConCambios,
+    /// Bloque Túneles: alta, edición, borrado, automático e importación de los
+    /// reenvíos que sigan en `opciones_extra`.
+    TunelNuevo,
+    TunelEditar,
+    TunelBorrar,
+    TunelAutomatico,
+    TunelImportar,
 }
 
 pub struct Ficha {
@@ -277,6 +582,8 @@ pub struct Ficha {
     pub desplegable_abierto: Option<CampoFicha>,
     pub sugerencias: Vec<String>,
     pub indice_sugerencia: usize,
+    /// Túnel seleccionado dentro del bloque «Túneles» de esta ficha.
+    pub indice_tunel: usize,
 }
 
 impl Ficha {
@@ -373,6 +680,21 @@ impl Ficha {
         self.indice_sugerencia = 0;
     }
 
+    /// Índice del túnel seleccionado acotado a la lista actual del host: la
+    /// lista puede haber menguado (un borrado) con la ficha abierta.
+    pub fn indice_tunel_visible(&self, total: usize) -> usize {
+        self.indice_tunel.min(total.saturating_sub(1))
+    }
+
+    /// Mueve la selección del bloque de túneles. El total lo conoce `App`.
+    fn mover_tunel(&mut self, paso: i32, total: usize) {
+        if total == 0 {
+            self.indice_tunel = 0;
+            return;
+        }
+        self.indice_tunel = (self.indice_tunel as i32 + paso).clamp(0, total as i32 - 1) as usize;
+    }
+
     fn actualizar_sugerencias(&mut self, disponibles: &[String]) {
         let token = self
             .etiquetas
@@ -415,8 +737,14 @@ impl Ficha {
         true
     }
 
-    /// Procesa una tecla del formulario.
-    pub fn manejar_tecla(&mut self, tecla: KeyEvent, disponibles: &[String]) -> AccionFicha {
+    /// Procesa una tecla del formulario. `total_tuneles` es el número de
+    /// túneles definidos del host, que vive en `App`.
+    pub fn manejar_tecla(
+        &mut self,
+        tecla: KeyEvent,
+        disponibles: &[String],
+        total_tuneles: usize,
+    ) -> AccionFicha {
         if let Some(campo) = self.desplegable_abierto {
             if let Some(desplegable) = self.desplegable_mut(campo) {
                 match desplegable.manejar_tecla(&tecla) {
@@ -479,6 +807,32 @@ impl Ficha {
                 }
                 AccionFicha::Nada
             }
+            KeyCode::Up if self.campo == CampoFicha::Tuneles => {
+                self.mover_tunel(-1, total_tuneles);
+                AccionFicha::Nada
+            }
+            KeyCode::Down if self.campo == CampoFicha::Tuneles => {
+                self.mover_tunel(1, total_tuneles);
+                AccionFicha::Nada
+            }
+            // En el bloque de túneles las letras son órdenes, no texto.
+            KeyCode::Char(caracter) if self.campo == CampoFicha::Tuneles => match caracter {
+                'j' => {
+                    self.mover_tunel(1, total_tuneles);
+                    AccionFicha::Nada
+                }
+                'k' => {
+                    self.mover_tunel(-1, total_tuneles);
+                    AccionFicha::Nada
+                }
+                'n' => AccionFicha::TunelNuevo,
+                'e' => AccionFicha::TunelEditar,
+                'x' => AccionFicha::TunelBorrar,
+                'a' => AccionFicha::TunelAutomatico,
+                // Solo con el foco aquí: en `Opciones` la `i` es una letra más.
+                'i' => AccionFicha::TunelImportar,
+                _ => AccionFicha::Nada,
+            },
             KeyCode::Char(' ') if Self::es_casilla(self.campo) => {
                 match self.campo {
                     CampoFicha::Multiplexar => self.multiplexar = !self.multiplexar,
@@ -564,6 +918,17 @@ pub enum AccionDialogo {
     CancelarTransferencia(u32),
     /// Cerrar la vista Archivos volviendo a la anterior.
     VolverDeArchivos,
+    /// Volver a levantar el túnel que se acaba de editar y parar.
+    ActivarTunel(i64),
+    /// Parar un túnel con conexiones abiertas, ya confirmado.
+    PararTunel(i64),
+    /// Editar un túnel que está en marcha: hay que pararlo antes.
+    EditarTunelActivo(i64),
+    /// Borrar un túnel (el servidor lo parará si estaba vivo).
+    BorrarTunel {
+        id: i64,
+        host_id: i64,
+    },
 }
 
 pub enum EntradaTextoAccion {
@@ -686,12 +1051,19 @@ pub enum Dialogo {
     Detalle {
         titulo: String,
         lineas: Vec<String>,
+        /// Túnel caído al que se refiere el detalle, si es de uno: dentro del
+        /// detalle, `r` lo relanza y `espacio` descarta el error.
+        tunel_caido: Option<i64>,
     },
     ExportarRegistro {
         estado: ExportacionRegistro,
     },
     GenerarClave {
         estado: EstadoGeneracion,
+    },
+    /// Alta y edición de un túnel de `TUNELES`.
+    Tunel {
+        estado: FormularioTunel,
     },
     FraseImportacion {
         ruta: std::path::PathBuf,
@@ -779,6 +1151,12 @@ pub enum AccionPaleta {
     IrATransferencias,
     /// Cancelar todas las transferencias que no hayan terminado.
     CancelarTransferencias,
+    /// `túnel · <host> · <nombre>`: activa o para ese túnel.
+    Tunel(i64),
+    /// Ir a la vista Túneles.
+    IrATuneles,
+    /// Abrir el diálogo de túnel nuevo.
+    NuevoTunel,
 }
 
 pub struct PaletaCmd {
@@ -921,6 +1299,21 @@ pub struct App {
     pub borrados_locales: HashMap<u32, Vec<String>>,
     /// Transferencias ya vistas, para no refrescar dos veces por lo mismo.
     pub transferencias_refrescadas: HashSet<u32>,
+    /// Túneles definidos en `TUNELES`; los lee y los escribe este cliente.
+    pub tuneles: Vec<Tunel>,
+    /// Estado en vivo de los túneles que custodia el servidor, por `tunel_id`.
+    /// Una fila que no esté aquí está inactiva.
+    pub tuneles_activos: HashMap<i64, protocolo::InfoTunel>,
+    /// Selección en la vista Túneles (sobre `tuneles_visibles`).
+    pub seleccion_tunel: usize,
+    /// Desplazamiento de la vista Túneles.
+    pub desplazamiento_tuneles: usize,
+    /// Filtro incremental propio de la vista Túneles.
+    pub filtro_tuneles: String,
+    pub filtro_tuneles_activo: bool,
+    /// Operaciones de túnel en vuelo, por `peticion_id`.
+    peticiones_tunel: HashMap<u64, PeticionTunel>,
+    siguiente_peticion_tunel: u64,
 }
 
 impl App {
@@ -1012,8 +1405,21 @@ impl App {
             borrados_locales_pendientes: HashMap::new(),
             borrados_locales: HashMap::new(),
             transferencias_refrescadas: HashSet::new(),
+            tuneles: Vec::new(),
+            tuneles_activos: HashMap::new(),
+            seleccion_tunel: 0,
+            desplazamiento_tuneles: 0,
+            filtro_tuneles: String::new(),
+            filtro_tuneles_activo: false,
+            peticiones_tunel: HashMap::new(),
+            // Los túneles y el panel de Archivos resuelven `Hecho`/`Error` por
+            // `peticion_id`, y son dos contadores distintos: el de Archivos
+            // empieza en 0, así que el de túneles arranca muy por encima para
+            // que no puedan confundirse nunca (nadie llega a 2^40 peticiones).
+            siguiente_peticion_tunel: 1 << 40,
         };
         app.recargar_inventario()?;
+        app.recargar_tuneles();
         if let Some(aviso) = aviso_inicial {
             app.mensaje(aviso, true);
         }
@@ -1144,6 +1550,7 @@ impl App {
                         self.pantallas = servidor.pantallas();
                         self.servidor = servidor;
                         self.servidor_desde = Some(Instant::now());
+                        self.servidor_caido = false;
                         self.mensaje("servidor relanzado", false);
                     }
                     Err(motivo) => self.mensaje(motivo, true),
@@ -1946,6 +2353,7 @@ impl App {
                 pid,
                 cliente_id,
                 sesiones,
+                tuneles,
                 ..
             } => {
                 self.servidor_pid = Some(pid);
@@ -1960,11 +2368,20 @@ impl App {
                 let pendientes = std::mem::take(&mut self.aperturas_pendientes);
                 self.reconciliar_sesiones(sesiones);
                 self.aperturas_pendientes = pendientes;
+                self.actualizar_tuneles(tuneles);
             }
             protocolo::MensajeServidor::Error {
                 mensaje,
                 peticion_id,
             } => {
+                // Una operación de túnel con respuesta pendiente no es un
+                // error de la vista Archivos.
+                if let Some(peticion_id) = peticion_id {
+                    if let Some(peticion) = self.peticiones_tunel.remove(&peticion_id) {
+                        self.mensaje(format!("{}: {mensaje}", peticion.etiqueta()), true);
+                        return;
+                    }
+                }
                 self.error_de_archivos(mensaje, peticion_id);
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
@@ -1985,8 +2402,15 @@ impl App {
             protocolo::MensajeServidor::Transferencias { lista } => {
                 self.actualizar_cola(lista);
             }
+            protocolo::MensajeServidor::Tuneles { lista } => {
+                self.actualizar_tuneles(lista);
+            }
             protocolo::MensajeServidor::Hecho { peticion_id } => {
-                self.hecho_de_archivos(peticion_id);
+                // Las peticiones de túnel se resuelven aquí; el resto son de
+                // la vista Archivos.
+                if self.peticiones_tunel.remove(&peticion_id).is_none() {
+                    self.hecho_de_archivos(peticion_id);
+                }
             }
             protocolo::MensajeServidor::RutaTemporal { ruta, peticion_id } => {
                 let es_lo_que_esperaba = self
@@ -2268,6 +2692,10 @@ impl App {
         self.servidor = cliente::Cliente::sin_servidor();
         self.servidor_caido = true;
         self.sesiones_perdidas = self.pestanas.len();
+        // Los túneles se van con el servidor: sin esto la vista seguiría
+        // enseñándolos activos y los glifos de Hosts y Flota mentirían.
+        self.tuneles_activos.clear();
+        self.peticiones_tunel.clear();
         self.anotar(
             crate::registro::SERVIDOR_CAIDO,
             None,
@@ -2285,10 +2713,12 @@ impl App {
     fn resolver_servidor_caido(&mut self, relanzar: bool) {
         self.pestanas.clear();
         self.pestana_activa = None;
-        self.servidor_caido = false;
         if self.vista == Vista::Sesion {
             self.volver_tras_cierre();
         }
+        // La marca de «sin servidor» se levanta cuando el relanzamiento cuaje,
+        // no al contestar el diálogo: si no, las órdenes de túnel dejarían de
+        // avisar de que no hay nadie al otro lado.
         if relanzar {
             let rutas = self.rutas.clone();
             let tx = self.eventos_tx.clone();
@@ -2304,6 +2734,8 @@ impl App {
                     }
                 }
             });
+        } else {
+            self.servidor_caido = false;
         }
         self.sucio = true;
     }
@@ -2487,6 +2919,7 @@ impl App {
             desplegable_abierto: None,
             sugerencias: Vec::new(),
             indice_sugerencia: 0,
+            indice_tunel: 0,
         }
     }
 
@@ -2545,10 +2978,17 @@ impl App {
 
     fn tecla_ficha(&mut self, tecla: KeyEvent) {
         let disponibles = self.etiquetas.clone();
+        // El bloque de túneles necesita saber cuántos hay: la lista vive aquí.
+        let total_tuneles = self
+            .ficha
+            .as_ref()
+            .and_then(|ficha| ficha.host_id)
+            .map(|host_id| self.tuneles_de_host(host_id).len())
+            .unwrap_or(0);
         let Some(ficha) = &mut self.ficha else {
             return;
         };
-        match ficha.manejar_tecla(tecla, &disponibles) {
+        match ficha.manejar_tecla(tecla, &disponibles, total_tuneles) {
             AccionFicha::Nada => {}
             AccionFicha::Guardar => self.guardar_ficha(),
             AccionFicha::Probar => self.probar_ficha(),
@@ -2564,7 +3004,162 @@ impl App {
                     accion: AccionDialogo::DescartarFicha,
                 });
             }
+            AccionFicha::TunelNuevo => self.tunel_nuevo_en_ficha(),
+            AccionFicha::TunelEditar => self.tunel_editar_en_ficha(),
+            AccionFicha::TunelBorrar => self.tunel_borrar_en_ficha(),
+            AccionFicha::TunelAutomatico => self.tunel_automatico_en_ficha(),
+            AccionFicha::TunelImportar => self.importar_reenvios_ficha(),
         }
+        self.ajustar_indice_tunel();
+    }
+
+    /// Túnel seleccionado en el bloque «Túneles» de la ficha abierta.
+    fn tunel_de_ficha(&self) -> Option<Tunel> {
+        let ficha = self.ficha.as_ref()?;
+        let tuneles = self.tuneles_de_host(ficha.host_id?);
+        let indice = ficha.indice_tunel_visible(tuneles.len());
+        tuneles.get(indice).map(|tunel| (*tunel).clone())
+    }
+
+    /// `n` en el bloque: túnel nuevo con el host de la ficha ya elegido.
+    fn tunel_nuevo_en_ficha(&mut self) {
+        let Some(host_id) = self.ficha.as_ref().and_then(|ficha| ficha.host_id) else {
+            // Host sin guardar: no hay a qué colgarle el túnel, y callarse
+            // dejaría al usuario pulsando `n` sin saber por qué no pasa nada.
+            self.mensaje("guarda el host antes de darle túneles", true);
+            return;
+        };
+        self.dialogo = Some(Dialogo::Tunel {
+            estado: FormularioTunel::nuevo(&self.hosts, Some(host_id)),
+        });
+    }
+
+    fn tunel_editar_en_ficha(&mut self) {
+        if let Some(tunel) = self.tunel_de_ficha() {
+            self.editar_tunel(tunel);
+        }
+    }
+
+    fn tunel_borrar_en_ficha(&mut self) {
+        if let Some(tunel) = self.tunel_de_ficha() {
+            self.confirmar_borrado_tunel(tunel);
+        }
+    }
+
+    fn tunel_automatico_en_ficha(&mut self) {
+        if let Some(tunel) = self.tunel_de_ficha() {
+            self.alternar_automatico_de(tunel);
+        }
+    }
+
+    /// Deja el índice del bloque dentro de la lista del host; tras borrar el
+    /// último túnel quedaría apuntando fuera.
+    fn ajustar_indice_tunel(&mut self) {
+        let Some(host_id) = self.ficha.as_ref().and_then(|ficha| ficha.host_id) else {
+            return;
+        };
+        let total = self.tuneles_de_host(host_id).len();
+        if let Some(ficha) = &mut self.ficha {
+            ficha.indice_tunel = ficha.indice_tunel_visible(total);
+        }
+    }
+
+    /// `i` en el bloque Túneles: crea las filas de los reenvíos que sigan en
+    /// `opciones_extra` y quita esas líneas del host, en una sola operación.
+    ///
+    /// Una línea que MAGI no sepa representar se queda donde estaba. Una cuyo
+    /// túnel no se pueda crear (ya hay otro escuchando en ese puerto) tampoco
+    /// se guarda: dejarla sería dejar en opciones extra una directiva que está
+    /// gestionada y que la próxima validación de la ficha rechazaría; además,
+    /// el reenvío que pedía ya lo cubre el túnel que existe.
+    fn importar_reenvios_ficha(&mut self) {
+        let Some(ficha) = self.ficha.as_ref() else {
+            return;
+        };
+        let Some(host_id) = ficha.host_id else {
+            self.mensaje("guarda el host antes de importar sus reenvíos", true);
+            return;
+        };
+        let lineas = ficha.opciones.lineas.clone();
+        let original = ficha.original.clone();
+        let mut conservadas: Vec<String> = Vec::with_capacity(lineas.len());
+        let mut candidatas: Vec<(DatosTunel, String)> = Vec::new();
+        for (posicion, linea) in lineas.into_iter().enumerate() {
+            match reenvio_de_linea(&linea, posicion + 1) {
+                Some(datos) => candidatas.push((datos, linea)),
+                None => conservadas.push(linea),
+            }
+        }
+        if candidatas.is_empty() {
+            self.mensaje(
+                "no hay reenvíos que importar: revisa las líneas de opciones extra",
+                true,
+            );
+            return;
+        }
+        // Lo que se queda tiene que seguir siendo válido: si no, no se toca
+        // nada (ni filas nuevas ni `opciones_extra`).
+        let nuevo = conservadas.join("\n");
+        if let Err(motivo) = modelo::validar_opciones_extra(&nuevo) {
+            self.mensaje(motivo, true);
+            return;
+        }
+        let mut importados = 0usize;
+        let mut repetidos = 0usize;
+        let mut creados: Vec<i64> = Vec::new();
+        for (mut datos, _linea) in candidatas {
+            datos.host_id = host_id;
+            match self.almacen.crear_tunel(&datos) {
+                Ok(id) => {
+                    creados.push(id);
+                    importados += 1;
+                }
+                // Ya hay un túnel con esa escucha: el reenvío está cubierto y
+                // la línea no se queda en opciones extra.
+                Err(_) => repetidos += 1,
+            }
+        }
+        if importados > 0 {
+            let mut datos = original;
+            // Mismo recorte de final que hace `AreaTexto::texto`, para que la
+            // ficha no quede «sucia» por el propio import.
+            datos.opciones_extra = conservadas.join("\n").trim_end().to_string();
+            if let Err(error) = self.almacen.actualizar_host(host_id, &datos) {
+                // Si el host no se puede guardar, los túneles recién creados se
+                // deshacen: dejarlos sería tener el reenvío dos veces (como
+                // túnel y como línea).
+                for id in &creados {
+                    let _ = self.almacen.borrar_tunel(*id);
+                }
+                self.mensaje(
+                    format!("no se pudo importar, no se ha tocado nada: {error}"),
+                    true,
+                );
+                return;
+            }
+            // El formulario queda con lo que acaba de guardarse, para que el
+            // aviso desaparezca y `^s` no reescriba las líneas importadas.
+            if let Some(ficha) = &mut self.ficha {
+                ficha.opciones = AreaTexto::nuevo(&datos.opciones_extra);
+                ficha.original = datos;
+                ficha.indice_tunel = 0;
+            }
+            self.recargar_tuneles();
+            self.avisar_recarga_tuneles(host_id);
+            self.mensaje(
+                format!("{importados} reenvío(s) importados · {repetidos} ya estaban cubiertos"),
+                false,
+            );
+            self.mensaje(
+                format!("{importados} reenvío(s) importados a túneles"),
+                false,
+            );
+            return;
+        }
+        self.mensaje(
+            "no se pudo importar ningún reenvío: ya hay túneles iguales en ese host",
+            true,
+        );
     }
 
     fn validar_ficha(&self, datos: &DatosHost, host_id: Option<i64>) -> Result<(), String> {
@@ -2586,6 +3181,7 @@ impl App {
         modelo::validar_usuario(datos.usuario.as_deref())?;
         modelo::validar_keepalive(datos.keepalive_seg)?;
         modelo::validar_opciones_extra(&datos.opciones_extra)?;
+        validar_reenvios_gestionados(&datos.opciones_extra)?;
         modelo::normalizar_servicios(&datos.servicios)?;
         let mapa: HashMap<i64, Host> = self
             .hosts
@@ -2984,6 +3580,24 @@ impl App {
             categoria: "archivos",
             accion: AccionPaleta::CancelarTransferencias,
         });
+        // Túneles: uno por fila definida (activa o para según su estado).
+        for tunel in &self.tuneles {
+            entradas.push(EntradaPaleta {
+                etiqueta: format!("túnel · {} · {}", tunel.host_nombre, tunel.nombre),
+                categoria: "túneles",
+                accion: AccionPaleta::Tunel(tunel.id),
+            });
+        }
+        entradas.push(EntradaPaleta {
+            etiqueta: "ir a túneles".to_string(),
+            categoria: "túneles",
+            accion: AccionPaleta::IrATuneles,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "nuevo túnel".to_string(),
+            categoria: "túneles",
+            accion: AccionPaleta::NuevoTunel,
+        });
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
             categoria: "acción",
@@ -3215,6 +3829,23 @@ impl App {
                         self.paleta = None;
                         self.cancelar_todas_las_transferencias();
                     }
+                    Some(AccionPaleta::Tunel(id)) => {
+                        let id = *id;
+                        self.paleta = None;
+                        // La misma lógica que `Espacio` en la vista: activa si
+                        // estaba inactivo y, al parar con conexiones abiertas,
+                        // avisa antes.
+                        self.alternar_tunel(id);
+                    }
+                    Some(AccionPaleta::IrATuneles) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Tuneles);
+                    }
+                    Some(AccionPaleta::NuevoTunel) => {
+                        self.paleta = None;
+                        self.ir_a_vista(Vista::Tuneles);
+                        self.nuevo_tunel();
+                    }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
                         let sesiones = self.pestanas.len();
@@ -3310,7 +3941,580 @@ impl App {
             // Archivos y Transferencias se abren con `abrir_archivos`, que
             // necesita saber con qué host.
             Vista::Archivos | Vista::Transferencias => self.abrir_archivos(None),
+            Vista::Tuneles => self.ir_a_tuneles(),
         }
+    }
+
+    // ---------------------------------------------------------------- túneles
+
+    /// Entra en la vista Túneles releyendo las filas de `TUNELES`.
+    fn ir_a_tuneles(&mut self) {
+        self.salir_de_sesion_si_hace_falta();
+        // Volver a pulsar F6 no debe pisar el destino al que vuelve `q`.
+        if self.vista != Vista::Tuneles {
+            self.vista_previa = Some(self.vista);
+        }
+        self.vista = Vista::Tuneles;
+        self.ficha = None;
+        self.paleta = None;
+        self.recargar_tuneles();
+    }
+
+    /// `q`/`Esc`: vuelve a la vista de la que se salió sin tocar el servidor.
+    fn volver_de_tuneles(&mut self) {
+        let destino = match self.vista_previa {
+            // La ficha se cierra al entrar en Túneles, así que volver a ella
+            // sin ficha dejaría la pantalla en blanco y el teclado mudo.
+            Some(Vista::Ficha) if self.ficha.is_none() => Vista::Hosts,
+            Some(vista)
+                if !matches!(
+                    vista,
+                    Vista::Tuneles | Vista::Archivos | Vista::Transferencias
+                ) =>
+            {
+                vista
+            }
+            _ => Vista::Hosts,
+        };
+        match destino {
+            Vista::Flota => self.entrar_en_flota(),
+            Vista::Hosts => self.ir_a_hosts(),
+            Vista::Sesion => self.ir_a_sesion(),
+            otro => self.vista = otro,
+        }
+    }
+
+    /// Relee `TUNELES` y ajusta la selección a lo que quede.
+    pub fn recargar_tuneles(&mut self) {
+        // La tabla va ordenada por host y nombre: renombrar un túnel lo mueve
+        // de sitio, así que la selección se reancla por id (como en Hosts) y no
+        // por índice, o el resaltado acabaría sobre otro túnel.
+        let seleccionado = self.tunel_seleccionado().map(|tunel| tunel.id);
+        match self.almacen.listar_tuneles() {
+            Ok(tuneles) => self.tuneles = tuneles,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return;
+            }
+        }
+        // El mapa de estados solo guarda lo que sigue definido.
+        let definidos: HashSet<i64> = self.tuneles.iter().map(|tunel| tunel.id).collect();
+        self.tuneles_activos
+            .retain(|tunel_id, _| definidos.contains(tunel_id));
+        if let Some(id) = seleccionado {
+            self.seleccionar_tunel_id(id);
+        }
+        let total = self.tuneles_visibles().len();
+        if self.seleccion_tunel >= total {
+            self.seleccion_tunel = total.saturating_sub(1);
+        }
+        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        self.ajustar_tuneles(altura, total);
+    }
+
+    /// Deja seleccionado el túnel con ese id, si sigue en la lista visible.
+    fn seleccionar_tunel_id(&mut self, tunel_id: i64) {
+        if let Some(indice) = self
+            .tuneles_visibles()
+            .iter()
+            .position(|tunel| tunel.id == tunel_id)
+        {
+            self.seleccion_tunel = indice;
+        }
+    }
+
+    /// Túneles definidos que pasan el filtro incremental de la vista.
+    pub fn tuneles_visibles(&self) -> Vec<&Tunel> {
+        let consulta = modelo::normalizar_busqueda(&self.filtro_tuneles);
+        let tokens: Vec<&str> = consulta.split_whitespace().collect();
+        if tokens.is_empty() {
+            return self.tuneles.iter().collect();
+        }
+        self.tuneles
+            .iter()
+            .filter(|tunel| {
+                let pajar = modelo::normalizar_busqueda(&format!(
+                    "{} {} {} {} {} {}",
+                    tunel.nombre,
+                    tunel.host_nombre,
+                    tunel.escucha,
+                    tunel.destino.as_deref().unwrap_or(""),
+                    tunel.tipo.etiqueta(),
+                    tunel.tipo.como_texto(),
+                ));
+                tokens.iter().all(|token| pajar.contains(token))
+            })
+            .collect()
+    }
+
+    pub fn tunel_seleccionado(&self) -> Option<&Tunel> {
+        self.tuneles_visibles().get(self.seleccion_tunel).copied()
+    }
+
+    /// Túneles definidos de un host, en el orden de la tabla. Es lo que pinta
+    /// el bloque «Túneles» de la ficha.
+    pub fn tuneles_de_host(&self, host_id: i64) -> Vec<&Tunel> {
+        self.tuneles
+            .iter()
+            .filter(|tunel| tunel.host_id == host_id)
+            .collect()
+    }
+
+    /// Estado en vivo de un túnel: sin entrada en el mapa, inactivo.
+    pub fn estado_de(&self, tunel_id: i64) -> protocolo::EstadoTunelRemoto {
+        self.tuneles_activos
+            .get(&tunel_id)
+            .map(|info| info.estado)
+            .unwrap_or(protocolo::EstadoTunelRemoto::Inactivo)
+    }
+
+    /// Guarda la lista difundida por el servidor: es completa, así que
+    /// sustituye a la anterior.
+    fn actualizar_tuneles(&mut self, lista: Vec<protocolo::InfoTunel>) {
+        self.tuneles_activos = lista
+            .into_iter()
+            .map(|info| (info.tunel_id, info))
+            .collect();
+        self.sucio = true;
+    }
+
+    /// Pide una operación de túnel al servidor y la deja anotada como en vuelo.
+    pub fn pedir_tunel(&mut self, tunel_id: i64, que: PeticionTunel) {
+        if self.servidor_incompatible.is_some() {
+            self.mensaje(
+                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
+                true,
+            );
+            return;
+        }
+        if self.servidor_caido {
+            self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
+            return;
+        }
+        self.siguiente_peticion_tunel += 1;
+        let peticion_id = self.siguiente_peticion_tunel;
+        self.peticiones_tunel.insert(peticion_id, que);
+        let mensaje = match que {
+            PeticionTunel::Activar => protocolo::MensajeCliente::ActivarTunel {
+                tunel_id,
+                peticion_id,
+            },
+            PeticionTunel::Parar => protocolo::MensajeCliente::PararTunel {
+                tunel_id,
+                peticion_id,
+            },
+            PeticionTunel::Relanzar => protocolo::MensajeCliente::RelanzarTunel {
+                tunel_id,
+                peticion_id,
+            },
+        };
+        self.servidor.enviar(mensaje);
+    }
+
+    /// Avisa al servidor de que `TUNELES` ha cambiado en este host: relee la
+    /// tabla y para lo que ya no exista o haya cambiado.
+    fn avisar_recarga_tuneles(&mut self, host_id: i64) {
+        self.servidor
+            .enviar(protocolo::MensajeCliente::RecargarTuneles { host_id });
+    }
+
+    /// Deja la fila seleccionada de la lista de túneles dentro de la ventana.
+    fn ajustar_tuneles(&mut self, altura: usize, total: usize) {
+        let altura = altura.max(1);
+        if self.seleccion_tunel < self.desplazamiento_tuneles {
+            self.desplazamiento_tuneles = self.seleccion_tunel;
+        }
+        if self.seleccion_tunel >= self.desplazamiento_tuneles + altura {
+            self.desplazamiento_tuneles = self.seleccion_tunel + 1 - altura;
+        }
+        if self.desplazamiento_tuneles + altura > total {
+            self.desplazamiento_tuneles = total.saturating_sub(altura);
+        }
+    }
+
+    /// Teclas de la vista Túneles.
+    fn tecla_tuneles(&mut self, tecla: KeyEvent) {
+        let total = self.tuneles_visibles().len();
+        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        if self.filtro_tuneles_activo {
+            match tecla.code {
+                KeyCode::Esc => {
+                    self.filtro_tuneles.clear();
+                    self.filtro_tuneles_activo = false;
+                    self.seleccion_tunel = 0;
+                    self.desplazamiento_tuneles = 0;
+                    return;
+                }
+                KeyCode::Enter => {
+                    self.filtro_tuneles_activo = false;
+                    return;
+                }
+                KeyCode::Up => {
+                    self.seleccion_tunel = self.seleccion_tunel.saturating_sub(1);
+                    self.ajustar_tuneles(altura, total);
+                    return;
+                }
+                KeyCode::Down => {
+                    if total > 0 {
+                        self.seleccion_tunel = (self.seleccion_tunel + 1).min(total - 1);
+                    }
+                    self.ajustar_tuneles(altura, total);
+                    return;
+                }
+                _ => {
+                    if manejar_texto(&mut self.filtro_tuneles, tecla) {
+                        self.seleccion_tunel = 0;
+                        self.desplazamiento_tuneles = 0;
+                    }
+                    return;
+                }
+            }
+        }
+        match tecla.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.seleccion_tunel = self.seleccion_tunel.saturating_sub(1);
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if total > 0 {
+                    self.seleccion_tunel = (self.seleccion_tunel + 1).min(total - 1);
+                }
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::PageUp => {
+                self.seleccion_tunel = self.seleccion_tunel.saturating_sub(altura);
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::PageDown => {
+                self.seleccion_tunel = (self.seleccion_tunel + altura).min(total.saturating_sub(1));
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::Home => {
+                self.seleccion_tunel = 0;
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::End => {
+                self.seleccion_tunel = total.saturating_sub(1);
+                self.ajustar_tuneles(altura, total);
+            }
+            KeyCode::Char(' ') => self.alternar_tunel_seleccionado(),
+            KeyCode::Char('r') => self.relanzar_tunel_seleccionado(),
+            KeyCode::Char('n') => self.nuevo_tunel(),
+            KeyCode::Char('e') => self.editar_tunel_seleccionado(),
+            KeyCode::Char('x') => self.borrar_tunel_seleccionado(),
+            KeyCode::Char('a') => self.alternar_automatico_tunel(),
+            KeyCode::Enter => self.detalle_tunel(),
+            KeyCode::Char('/') => {
+                self.filtro_tuneles_activo = true;
+                self.filtro_tuneles.clear();
+                self.seleccion_tunel = 0;
+                self.desplazamiento_tuneles = 0;
+            }
+            KeyCode::Esc => {
+                if self.filtro_tuneles.is_empty() {
+                    self.volver_de_tuneles();
+                } else {
+                    self.filtro_tuneles.clear();
+                    self.seleccion_tunel = 0;
+                    self.desplazamiento_tuneles = 0;
+                }
+            }
+            KeyCode::Char('q') => self.volver_de_tuneles(),
+            KeyCode::Char('?') => self.ayuda = true,
+            _ => {}
+        }
+    }
+
+    /// `Espacio`: activa un inactivo, para lo que esté en marcha y descarta el
+    /// error de un caído (la fila vuelve a inactivo).
+    fn alternar_tunel_seleccionado(&mut self) {
+        let Some(tunel) = self.tunel_seleccionado().cloned() else {
+            return;
+        };
+        self.alternar_tunel(tunel.id);
+    }
+
+    /// Activa un túnel inactivo o para el que está en marcha. Parar corta las
+    /// conexiones abiertas, así que con alguna en curso se avisa antes.
+    fn alternar_tunel(&mut self, tunel_id: i64) {
+        if self.estado_de(tunel_id) == protocolo::EstadoTunelRemoto::Inactivo {
+            self.pedir_tunel(tunel_id, PeticionTunel::Activar);
+            return;
+        }
+        let conexiones = self
+            .tuneles_activos
+            .get(&tunel_id)
+            .map(|info| info.conexiones)
+            .unwrap_or(0);
+        if conexiones > 0 {
+            let nombre = self
+                .tuneles
+                .iter()
+                .find(|tunel| tunel.id == tunel_id)
+                .map(|tunel| tunel.nombre.clone())
+                .unwrap_or_default();
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "Parar túnel".to_string(),
+                lineas: vec![
+                    format!("«{nombre}» tiene {conexiones} conexión(es) abierta(s)."),
+                    "Se cortarán al pararlo. ¿Seguir?".to_string(),
+                ],
+                peligro: true,
+                accion: AccionDialogo::PararTunel(tunel_id),
+            });
+            return;
+        }
+        self.pedir_tunel(tunel_id, PeticionTunel::Parar);
+    }
+
+    /// `r`: relanza un túnel caído.
+    fn relanzar_tunel_seleccionado(&mut self) {
+        let Some(tunel) = self.tunel_seleccionado().cloned() else {
+            return;
+        };
+        if self.estado_de(tunel.id) != protocolo::EstadoTunelRemoto::Caido {
+            self.mensaje("ese túnel no está caído: espacio lo activa o lo para", true);
+            return;
+        }
+        self.pedir_tunel(tunel.id, PeticionTunel::Relanzar);
+    }
+
+    /// `n`: diálogo de túnel nuevo, con el host que esté seleccionado.
+    fn nuevo_tunel(&mut self) {
+        if self.hosts.is_empty() {
+            self.mensaje("no hay hosts: crea uno antes de definir un túnel", true);
+            return;
+        }
+        let host_id = self
+            .host_seleccionado()
+            .map(|host| host.id)
+            .or_else(|| self.hosts.first().map(|host| host.id));
+        self.dialogo = Some(Dialogo::Tunel {
+            estado: FormularioTunel::nuevo(&self.hosts, host_id),
+        });
+    }
+
+    /// Abre el formulario de un túnel ya definido (`e`).
+    fn abrir_formulario_tunel(&mut self, id: i64, relanzar_al_guardar: bool) {
+        let Some(tunel) = self.tuneles.iter().find(|tunel| tunel.id == id) else {
+            return;
+        };
+        let mut estado = FormularioTunel::desde(tunel, &self.hosts);
+        estado.relanzar_al_guardar = relanzar_al_guardar;
+        self.dialogo = Some(Dialogo::Tunel { estado });
+    }
+
+    /// `e`: si el túnel está en marcha hay que pararlo antes de editarlo.
+    fn editar_tunel_seleccionado(&mut self) {
+        if let Some(tunel) = self.tunel_seleccionado().cloned() {
+            self.editar_tunel(tunel);
+        }
+    }
+
+    /// Lo comparten la vista Túneles (`e`) y el bloque Túneles de la ficha.
+    fn editar_tunel(&mut self, tunel: Tunel) {
+        if self.estado_de(tunel.id).en_marcha() {
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "EDITAR TÚNEL".to_string(),
+                lineas: vec![
+                    format!(
+                        "«{}» está en marcha y hay que pararlo para editarlo.",
+                        tunel.nombre
+                    ),
+                    "Al guardar se ofrecerá volver a levantarlo.".to_string(),
+                ],
+                peligro: false,
+                accion: AccionDialogo::EditarTunelActivo(tunel.id),
+            });
+        } else {
+            self.abrir_formulario_tunel(tunel.id, false);
+        }
+    }
+
+    /// `x`: borra la fila; el servidor para el túnel si estaba vivo.
+    fn borrar_tunel_seleccionado(&mut self) {
+        if let Some(tunel) = self.tunel_seleccionado().cloned() {
+            self.confirmar_borrado_tunel(tunel);
+        }
+    }
+
+    /// Lo comparten la vista Túneles (`x`) y el bloque Túneles de la ficha.
+    fn confirmar_borrado_tunel(&mut self, tunel: Tunel) {
+        let mut lineas = vec![format!("¿Borrar el túnel «{}»?", tunel.nombre)];
+        match self.estado_de(tunel.id) {
+            protocolo::EstadoTunelRemoto::Inactivo => {}
+            protocolo::EstadoTunelRemoto::Caido => {
+                lineas.push("Está caído: se descartará su error.".to_string());
+            }
+            estado => lineas.push(format!("Está {}: se parará antes.", estado.texto())),
+        }
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "BORRAR TÚNEL".to_string(),
+            lineas,
+            peligro: true,
+            accion: AccionDialogo::BorrarTunel {
+                id: tunel.id,
+                host_id: tunel.host_id,
+            },
+        });
+    }
+
+    /// `a`: alterna el alta automática del túnel seleccionado.
+    fn alternar_automatico_tunel(&mut self) {
+        if let Some(tunel) = self.tunel_seleccionado().cloned() {
+            self.alternar_automatico_de(tunel);
+        }
+    }
+
+    /// Lo comparten la vista Túneles (`a`) y el bloque Túneles de la ficha.
+    fn alternar_automatico_de(&mut self, tunel: Tunel) {
+        let automatico = !tunel.automatico;
+        match self.almacen.alternar_tunel_automatico(tunel.id, automatico) {
+            Ok(()) => {
+                self.recargar_tuneles();
+                self.avisar_recarga_tuneles(tunel.host_id);
+                self.mensaje(
+                    format!(
+                        "«{}» {}",
+                        tunel.nombre,
+                        if automatico {
+                            "se levantará con la primera sesión"
+                        } else {
+                            "ya no se levanta solo"
+                        }
+                    ),
+                    false,
+                );
+            }
+            Err(error) => self.mensaje(error.to_string(), true),
+        }
+    }
+
+    /// `↵`: detalle del túnel seleccionado.
+    fn detalle_tunel(&mut self) {
+        let Some(tunel) = self.tunel_seleccionado().cloned() else {
+            return;
+        };
+        let info = self.tuneles_activos.get(&tunel.id).cloned();
+        let estado = info
+            .as_ref()
+            .map(|info| info.estado)
+            .unwrap_or(protocolo::EstadoTunelRemoto::Inactivo);
+        let mut lineas = vec![
+            format!("Host        {}", tunel.host_nombre),
+            format!(
+                "Tipo        {} · {}",
+                tunel.tipo.etiqueta(),
+                tunel.tipo.directiva()
+            ),
+            format!(
+                "Escucha     {}",
+                crate::ui::tuneles::tramo(&tunel, info.as_ref())
+            ),
+            format!(
+                "Estado      {}",
+                if info.is_some() {
+                    estado.texto().to_string()
+                } else {
+                    "inactivo (no está en el servidor)".to_string()
+                }
+            ),
+            format!(
+                "Origen      {}",
+                info.as_ref()
+                    .map(crate::ui::tuneles::texto_origen)
+                    .unwrap_or_else(|| "\u{2014}".to_string())
+            ),
+            format!("Automático  {}", if tunel.automatico { "sí" } else { "no" }),
+        ];
+        match info.as_ref().and_then(|info| info.desde) {
+            Some(desde) => lineas.push(format!(
+                "Desde       {} · {}",
+                crate::ui::tuneles::hora_de(desde),
+                crate::ui::sesion::formatear_duracion(
+                    (chrono::Utc::now().timestamp() - desde).max(0) as u64
+                )
+            )),
+            None => lineas.push("Desde       \u{2014}".to_string()),
+        }
+        if let Some(info) = &info {
+            lineas.push(format!(
+                "Conexiones  {} abiertas ({} aceptadas)",
+                info.conexiones, info.aceptadas
+            ));
+            lineas.push(format!(
+                "Tráfico     \u{2193} {}   \u{2191} {}",
+                crate::archivos::tamano_legible(info.bytes_bajados),
+                crate::archivos::tamano_legible(info.bytes_subidos)
+            ));
+            lineas.push(format!(
+                "Último error  {}",
+                info.ultimo_error.as_deref().unwrap_or("\u{2014}")
+            ));
+        }
+        if estado == protocolo::EstadoTunelRemoto::Caido {
+            lineas.push(String::new());
+            lineas.push("r relanzar   espacio descartar el error".to_string());
+        }
+        self.dialogo = Some(Dialogo::Detalle {
+            titulo: format!("TÚNEL · {}", tunel.nombre),
+            lineas,
+            tunel_caido: (estado == protocolo::EstadoTunelRemoto::Caido).then_some(tunel.id),
+        });
+    }
+
+    /// Guarda el formulario. Devuelve `false` si hay que dejarlo abierto.
+    fn guardar_tunel(&mut self, estado: &FormularioTunel) -> bool {
+        // Un puerto que no se pueda leer no se convierte en 0 a espaldas del
+        // usuario: el 0 significa «el que quede libre» y cambiaría el túnel.
+        if puerto(&estado.escucha_puerto.texto).is_none() {
+            self.mensaje(
+                "el puerto de la escucha tiene que estar entre 1 y 65535 (0 = el que quede libre)",
+                true,
+            );
+            return false;
+        }
+        if estado.tipo.lleva_destino() && !estado.destino_direccion.texto.trim().is_empty() {
+            match puerto(&estado.destino_puerto.texto) {
+                Some(puerto) if puerto > 0 => {}
+                _ => {
+                    self.mensaje(
+                        "el puerto del destino tiene que estar entre 1 y 65535",
+                        true,
+                    );
+                    return false;
+                }
+            }
+        }
+        let datos = estado.datos();
+        if let Err(motivo) = modelo::validar_tunel(&datos) {
+            self.mensaje(motivo, true);
+            return false;
+        }
+        let guardado = match estado.id {
+            Some(id) => self.almacen.actualizar_tunel(id, &datos).map(|()| id),
+            None => self.almacen.crear_tunel(&datos),
+        };
+        let id = match guardado {
+            Ok(id) => id,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return false;
+            }
+        };
+        self.recargar_tuneles();
+        self.avisar_recarga_tuneles(datos.host_id);
+        if estado.relanzar_al_guardar {
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "TÚNEL EDITADO".to_string(),
+                lineas: vec!["¿volver a levantarlo ahora?".to_string()],
+                peligro: false,
+                accion: AccionDialogo::ActivarTunel(id),
+            });
+        } else {
+            self.mensaje(format!("túnel «{}» guardado", datos.nombre), false);
+        }
+        true
     }
 
     // ------------------------------------------------------------- identidades
@@ -3484,6 +4688,7 @@ impl App {
                 ),
                 Err(error) => {
                     self.dialogo = Some(Dialogo::Detalle {
+                        tunel_caido: None,
                         titulo: "CLAVE PÚBLICA".to_string(),
                         lineas: vec![
                             format!("No se pudo copiar al portapapeles ({error})."),
@@ -3624,6 +4829,7 @@ impl App {
         self.mensaje(texto, clave.aviso_agente.is_some());
         if clave.solicito_copia && !clave.copiada {
             self.dialogo = Some(Dialogo::Detalle {
+                tunel_caido: None,
                 titulo: "CLAVE PÚBLICA".to_string(),
                 lineas: vec![
                     "No se pudo copiar al portapapeles; copia la línea a mano:".to_string(),
@@ -4096,6 +5302,7 @@ impl App {
             entrada.detalle.clone(),
         ];
         self.dialogo = Some(Dialogo::Detalle {
+            tunel_caido: None,
             titulo: "DETALLE DEL REGISTRO".to_string(),
             lineas,
         });
@@ -4239,7 +5446,7 @@ impl App {
                 return;
             }
             KeyCode::F(6) => {
-                self.mensaje("vista no disponible en esta fase", true);
+                self.ir_a_vista(Vista::Tuneles);
                 return;
             }
             KeyCode::Char('p') if tecla.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4258,6 +5465,7 @@ impl App {
             Vista::Sesiones => self.tecla_sesiones(tecla),
             Vista::Identidades => self.tecla_identidades(tecla),
             Vista::Registro => self.tecla_registro(tecla),
+            Vista::Tuneles => self.tecla_tuneles(tecla),
         }
     }
 
@@ -4806,11 +6014,31 @@ impl App {
                     self.dialogo = Some(Dialogo::ResumenImportacion { titulo, lineas });
                 }
             }
-            Dialogo::Detalle { titulo, lineas } => {
-                if !matches!(tecla.code, KeyCode::Enter | KeyCode::Esc) {
-                    self.dialogo = Some(Dialogo::Detalle { titulo, lineas });
+            Dialogo::Detalle {
+                titulo,
+                lineas,
+                tunel_caido,
+            } => match (tunel_caido, tecla.code) {
+                // Lo que el propio detalle anuncia: `r` relanza y `espacio`
+                // descarta el error del túnel caído.
+                (Some(id), KeyCode::Char('r')) => {
+                    self.dialogo = None;
+                    self.pedir_tunel(id, PeticionTunel::Relanzar);
                 }
-            }
+                (Some(id), KeyCode::Char(' ')) => {
+                    self.dialogo = None;
+                    self.pedir_tunel(id, PeticionTunel::Parar);
+                }
+                _ => {
+                    if !matches!(tecla.code, KeyCode::Enter | KeyCode::Esc) {
+                        self.dialogo = Some(Dialogo::Detalle {
+                            titulo,
+                            lineas,
+                            tunel_caido,
+                        });
+                    }
+                }
+            },
             Dialogo::GenerarClave { mut estado } => match estado.manejar_tecla(&tecla) {
                 AccionGeneracion::Cancelar => {}
                 AccionGeneracion::Generar => {
@@ -4821,6 +6049,34 @@ impl App {
                 AccionGeneracion::Nada => {
                     self.dialogo = Some(Dialogo::GenerarClave { estado });
                 }
+            },
+            Dialogo::Tunel { mut estado } => match estado.manejar_tecla(&tecla) {
+                AccionTunel::Cancelar => {
+                    // Editar un túnel en marcha lo para antes: si el usuario se
+                    // arrepiente, hay que decirle que se ha quedado parado y
+                    // ofrecerle volver a levantarlo.
+                    if estado.relanzar_al_guardar {
+                        if let Some(id) = estado.id {
+                            self.dialogo = Some(Dialogo::Confirmar {
+                                titulo: "Túnel parado".to_string(),
+                                lineas: vec![
+                                    "Se paró para editarlo y no se ha guardado nada.".to_string(),
+                                    "¿Volver a levantarlo?".to_string(),
+                                ],
+                                peligro: false,
+                                accion: AccionDialogo::ActivarTunel(id),
+                            });
+                        }
+                    }
+                }
+                // Si la validación falla, el diálogo sigue abierto para
+                // corregir el campo.
+                AccionTunel::Guardar => {
+                    if !self.guardar_tunel(&estado) {
+                        self.dialogo = Some(Dialogo::Tunel { estado });
+                    }
+                }
+                AccionTunel::Nada => self.dialogo = Some(Dialogo::Tunel { estado }),
             },
             Dialogo::FraseImportacion { ruta, mut campo } => match tecla.code {
                 KeyCode::Esc => {}
@@ -4914,6 +6170,10 @@ impl App {
                 } else {
                     self.mensaje("host borrado", false);
                     let _ = self.recargar_inventario();
+                    // Sus túneles caen en cascada en la tabla; el servidor los
+                    // para al enterarse (si no, seguirían escuchando).
+                    self.avisar_recarga_tuneles(id);
+                    self.recargar_tuneles();
                 }
             }
             AccionDialogo::BorrarGrupo(id) => match self.almacen.borrar_grupo(id) {
@@ -4983,6 +6243,24 @@ impl App {
                     .enviar(protocolo::MensajeCliente::CancelarTransferencia { id });
             }
             AccionDialogo::VolverDeArchivos => self.volver_de_archivos(),
+            AccionDialogo::ActivarTunel(id) => self.pedir_tunel(id, PeticionTunel::Activar),
+            AccionDialogo::PararTunel(id) => self.pedir_tunel(id, PeticionTunel::Parar),
+            AccionDialogo::EditarTunelActivo(id) => {
+                // Parar primero: los datos del formulario quedan fijados ahora.
+                self.pedir_tunel(id, PeticionTunel::Parar);
+                self.abrir_formulario_tunel(id, true);
+            }
+            AccionDialogo::BorrarTunel { id, host_id } => {
+                match self.almacen.borrar_tunel(id) {
+                    Ok(()) => {
+                        self.recargar_tuneles();
+                        // El servidor para el túnel si estaba vivo.
+                        self.avisar_recarga_tuneles(host_id);
+                        self.mensaje("túnel borrado", false);
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
             AccionDialogo::DescartarFicha => {
                 self.ficha = None;
                 self.vista = Vista::Hosts;
@@ -4994,6 +6272,7 @@ impl App {
                     Vista::Hosts => self.ir_a_hosts(),
                     Vista::Identidades => self.ir_a_identidades(),
                     Vista::Registro => self.ir_a_registro(),
+                    Vista::Tuneles => self.ir_a_tuneles(),
                     _ => self.vista = vista,
                 }
             }
@@ -5198,6 +6477,42 @@ fn acorta_huella(huella: &str) -> String {
     let sin_prefijo = huella.trim_start_matches("SHA256:");
     let recorte: String = sin_prefijo.chars().take(12).collect();
     format!("SHA256:{recorte}…")
+}
+
+/// Datos de túnel de una línea de `opciones_extra`, si es una directiva de
+/// reenvío que MAGI entiende (`None` en cualquier otro caso: comentario, línea
+/// vacía o forma que no se representa). El `host_id` lo fija quien la importa.
+fn reenvio_de_linea(linea: &str, numero: usize) -> Option<DatosTunel> {
+    let limpia = linea.trim();
+    if limpia.is_empty() || limpia.starts_with('#') {
+        return None;
+    }
+    let mut partes = limpia.splitn(2, char::is_whitespace);
+    let nombre = partes.next()?.to_string();
+    let valor = partes.next().unwrap_or_default().trim().to_string();
+    crate::sshconfig::tuneles::desde_directiva(&crate::sshconfig::parser::Directiva {
+        nombre,
+        valor,
+        linea: numero,
+    })
+}
+
+/// Valida que ninguna línea de `opciones_extra` sea un reenvío que MAGI ya sabe
+/// representar como túnel: esos van a `TUNELES`. Las formas que `ssh` admite y
+/// MAGI no representa (varios destinos en una directiva, reenvíos a un socket
+/// local) siguen siendo opciones extra legítimas, y rechazarlas dejaría hosts
+/// importados imposibles de guardar.
+fn validar_reenvios_gestionados(texto: &str) -> Result<(), String> {
+    for (indice, linea) in texto.lines().enumerate() {
+        if crate::sshconfig::tuneles::reenvio_gestionado(linea) {
+            let directiva = linea.split_whitespace().next().unwrap_or_default();
+            return Err(format!(
+                "línea {}: «{directiva}» ya la gestiona MAGI; usa los túneles de la ficha",
+                indice + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Instala el hook que restaura el terminal ante un panic.
@@ -5699,6 +7014,7 @@ impl App {
                     lineas.push(format!("Error       {error}"));
                 }
                 self.dialogo = Some(Dialogo::Detalle {
+                    tunel_caido: None,
                     titulo: format!("TRANSFERENCIA {}", fila.id),
                     lineas,
                 });
@@ -5923,6 +7239,7 @@ impl App {
             }
         ));
         self.dialogo = Some(Dialogo::Detalle {
+            tunel_caido: None,
             titulo: entrada.nombre.clone(),
             lineas,
         });
@@ -6803,5 +8120,36 @@ mod pruebas_alto_pty {
     fn en_ventanas_minimas_el_pty_nunca_queda_a_cero() {
         assert_eq!(alto_pty(4), 1);
         assert_eq!(alto_pty(0), 1);
+    }
+}
+
+#[cfg(test)]
+mod pruebas_reenvios {
+    use super::reenvio_de_linea;
+    use crate::modelo::TipoTunel;
+
+    #[test]
+    fn una_directiva_de_reenvio_da_los_datos_del_tunel() {
+        let datos = reenvio_de_linea("  LocalForward 5432 10.0.0.5:5432", 3).expect("local");
+        assert_eq!(datos.tipo, TipoTunel::Local);
+        assert_eq!(datos.escucha, "127.0.0.1:5432");
+        assert_eq!(datos.destino.as_deref(), Some("10.0.0.5:5432"));
+        assert!(datos.automatico);
+
+        let socks = reenvio_de_linea("DynamicForward [::1]:1080", 1).expect("dinámico");
+        assert_eq!(socks.tipo, TipoTunel::Dinamico);
+        assert_eq!(socks.escucha, "[::1]:1080");
+        assert_eq!(socks.destino, None);
+    }
+
+    /// Lo que no se entiende no se importa: la línea se queda en `opciones_extra`.
+    #[test]
+    fn lo_que_no_es_un_reenvio_utilizable_no_da_datos() {
+        assert!(reenvio_de_linea("", 1).is_none());
+        assert!(reenvio_de_linea("   ", 1).is_none());
+        assert!(reenvio_de_linea("# LocalForward 5432 10.0.0.5:5432", 1).is_none());
+        assert!(reenvio_de_linea("ForwardAgent yes", 1).is_none());
+        assert!(reenvio_de_linea("LocalForward 5432", 1).is_none());
+        assert!(reenvio_de_linea("LocalForward 70000 10.0.0.5:80", 1).is_none());
     }
 }

@@ -48,6 +48,8 @@ pub struct Glifos {
     pub desplegado: &'static str,
     pub salto: &'static str,
     pub marca: &'static str,
+    /// Marca de «este host tiene túneles activos».
+    pub tuneles: &'static str,
 }
 
 impl Glifos {
@@ -61,6 +63,7 @@ impl Glifos {
             desplegado: "▼",
             salto: "⤴",
             marca: "•",
+            tuneles: "⇅",
         }
     }
 
@@ -74,6 +77,8 @@ impl Glifos {
             desplegado: "v",
             salto: ">",
             marca: "*",
+            // `*` ya es «conectado»: los túneles usan otro carácter.
+            tuneles: "^",
         }
     }
 }

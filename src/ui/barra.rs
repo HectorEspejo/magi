@@ -117,6 +117,19 @@ fn atajos(app: &App) -> Line<'static> {
             ("^t", "probar conexión"),
             ("esc", "descartar"),
         ],
+        Vista::Tuneles => vec![
+            (super::tecla(tema, "↓↑", "j/k"), "mover"),
+            ("espacio", "activar/parar"),
+            ("n", "nuevo"),
+            ("e", "editar"),
+            ("x", "borrar"),
+            ("a", "auto"),
+            ("r", "relanzar"),
+            ("↵", "detalle"),
+            ("/", "filtrar"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
         Vista::Sesion => vec![],
         Vista::Sesiones => vec![],
     };
@@ -133,6 +146,20 @@ fn atajos(app: &App) -> Line<'static> {
         ));
         spans.push(Span::styled(
             format!(" {descripcion}"),
+            Style::default().fg(tema.paleta.texto),
+        ));
+    }
+    // Con el filtro activo la barra muestra la consulta que se está escribiendo.
+    if app.vista == Vista::Tuneles && app.filtro_tuneles_activo {
+        spans.push(Span::raw("   "));
+        spans.push(Span::styled(
+            "/ ".to_string(),
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!("{}▏", app.filtro_tuneles),
             Style::default().fg(tema.paleta.texto),
         ));
     }

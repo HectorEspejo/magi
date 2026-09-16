@@ -113,8 +113,13 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App) {
         };
         let nombre_max = (area.width as usize).saturating_sub(12);
         let nombre = recortar(&host.nombre, nombre_max.max(4));
-        let relleno = (area.width as usize).saturating_sub(10 + nombre.chars().count());
-        let mut linea = Line::from(vec![
+        // El glifo de túneles activos ocupa sitio y se descuenta del relleno.
+        let tuneles = super::hosts::tuneles_activos_de_host(app, host.id);
+        let glifo_tuneles = (tuneles > 0).then(|| format!("{} ", tema.glifos.tuneles));
+        let relleno = (area.width as usize).saturating_sub(
+            10 + nombre.chars().count() + glifo_tuneles.as_ref().map_or(0, |g| g.chars().count()),
+        );
+        let mut spans = vec![
             Span::raw("  "),
             Span::styled(
                 format!("{glifo} "),
@@ -122,8 +127,15 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App) {
             ),
             Span::styled(format!("{:<8}", palabra), Style::default().fg(color)),
             Span::styled(nombre, Style::default().fg(tema.paleta.texto)),
-            Span::raw(" ".repeat(relleno.min(20))),
-        ]);
+        ];
+        if let Some(glifo_tuneles) = glifo_tuneles {
+            spans.push(Span::styled(
+                glifo_tuneles,
+                Style::default().fg(tema.paleta.acento),
+            ));
+        }
+        spans.push(Span::raw(" ".repeat(relleno.min(20))));
+        let mut linea = Line::from(spans);
         if seleccionado {
             linea = linea.style(
                 Style::default()

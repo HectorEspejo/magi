@@ -7,6 +7,9 @@ use ratatui::Frame;
 use crate::app::{App, Fila};
 use crate::modelo::UltimoEstado;
 
+/// Ancho de la columna del nombre, sin contar el separador.
+const ANCHO_NOMBRE: usize = 26;
+
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let tema = &app.tema;
     let titulo = "MAGI · HOSTS".to_string();
@@ -121,15 +124,12 @@ fn construir_lineas(app: &App) -> Vec<Line<'static>> {
                         format!("{glifo} "),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        formato_columna(&host.nombre, 26),
-                        Style::default().fg(tema.paleta.texto),
-                    ),
-                    Span::styled(
-                        formato_columna(&host.direccion, 20),
-                        Style::default().fg(tema.paleta.inactivo),
-                    ),
                 ];
+                spans.extend(columna_nombre(app, host.id, &host.nombre));
+                spans.push(Span::styled(
+                    formato_columna(&host.direccion, 20),
+                    Style::default().fg(tema.paleta.inactivo),
+                ));
                 if app.columna_etiquetas {
                     spans.push(Span::styled(
                         host.etiquetas.join(" "),
@@ -200,11 +200,38 @@ fn formato_columna(texto: &str, ancho: usize) -> String {
     format!("{texto:<ancho$} ")
 }
 
+/// Columna del nombre: siempre el mismo ancho. Con túneles activos el glifo
+/// `⇅` va pegado al nombre y el relleno se acorta lo mismo, de modo que las
+/// columnas de la derecha no se desplazan.
+fn columna_nombre(app: &App, host_id: i64, nombre: &str) -> Vec<Span<'static>> {
+    let tema = &app.tema;
+    let estilo = Style::default().fg(tema.paleta.texto);
+    if tuneles_activos_de_host(app, host_id) == 0 {
+        return vec![Span::styled(formato_columna(nombre, ANCHO_NOMBRE), estilo)];
+    }
+    vec![
+        Span::styled(formato_columna(nombre, ANCHO_NOMBRE - 2), estilo),
+        Span::styled(
+            format!("{} ", tema.glifos.tuneles),
+            Style::default().fg(tema.paleta.acento),
+        ),
+    ]
+}
+
 /// Cuántas sesiones vivas hay al host (pestañas en el servidor).
 pub fn sesiones_del_host(app: &App, host_id: i64) -> usize {
     app.pestanas
         .iter()
         .filter(|pestaña| pestaña.host_id == host_id && pestaña.viva())
+        .count()
+}
+
+/// Cuántos túneles del host están en marcha ahora mismo (lo que difunde el
+/// servidor: activando, activo o parando).
+pub fn tuneles_activos_de_host(app: &App, host_id: i64) -> usize {
+    app.tuneles_activos
+        .values()
+        .filter(|info| info.host_id == host_id && info.estado.en_marcha())
         .count()
 }
 
