@@ -118,6 +118,19 @@ pub fn difundir_lista(estado: &mut EstadoServidor) {
     );
 }
 
+/// Pestañas vivas de un host: las que están abiertas o abriéndose. Es lo que
+/// cuenta para el ciclo automático de los túneles, que **no** cuenta los
+/// túneles ni el canal SFTP (ese va aparte).
+pub fn canales_de_pestana(estado: &EstadoServidor, host_id: i64) -> usize {
+    // Las caídas siguen contando: la pestaña está ahí y se puede reconectar,
+    // así que el túnel no tiene por qué caerse con ella.
+    estado
+        .sesiones
+        .values()
+        .filter(|sesion| sesion.host_id == host_id)
+        .count()
+}
+
 /// Nombre de pestaña para una sesión nueva al host: `host` si no hay otra
 /// sesión viva, `host (n)` con el menor n ≥ 2 libre en caso contrario.
 pub fn nombre_de_pestaña(sesiones: &HashMap<u32, Sesion>, host: &Host) -> String {
@@ -169,6 +182,9 @@ pub struct DatosApertura {
     pub solicitante: u32,
     /// Es una reconexión: el id y el nombre ya existen.
     pub reconexion: bool,
+    /// Registro de reenvíos remotos del servidor: la conexión de una pestaña
+    /// también puede recibir canales `forwarded-tcpip` de sus túneles.
+    pub reenvios: Arc<crate::conexion::reenvios::Reenvios>,
 }
 
 /// Lanza la tarea de una sesión: abre la conexión (flujo de la Fase 1 con los
@@ -332,6 +348,7 @@ async fn abrir_conexion(
         tx: tx_eventos.clone(),
         interactivo: true,
         fuente_contrasena: FuenteContrasena::Solicitante,
+        reenvios: Some(datos.reenvios.clone()),
     };
     let transporte = conectar_cadena(&cadena, &contexto)
         .await
@@ -708,8 +725,10 @@ async fn procesar_datos(
 
 /// `exit` del remoto o cierre desde una ventana: la sesión se elimina.
 async fn cerrada(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32, motivo: &str) {
+    let mut host_id = None;
     let mut estado_bloqueado = estado.lock().await;
     if let Some(sesion) = estado_bloqueado.sesiones.remove(&sesion_id) {
+        host_id = Some(sesion.host_id);
         let bd = estado_bloqueado.bd.clone();
         let _ = bd.send(super::OrdenBd::Anotar {
             tipo: crate::registro::SESION_CERRADA.to_string(),
@@ -718,30 +737,43 @@ async fn cerrada(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u3
             detalle: motivo.to_string(),
             resultado: crate::modelo::ResultadoRegistro::Ok,
         });
-        if sesion.handle.is_some() {
-            estado_bloqueado.pool.liberar(sesion.host_id);
+        if let Some(handle) = sesion.handle {
+            // Por identidad: la entrada del pool puede ser ya otra conexión.
+            estado_bloqueado.pool.liberar_si_es(sesion.host_id, &handle);
         }
     }
     estado_bloqueado.pendientes.remove(&sesion_id);
     difundir_lista(&mut estado_bloqueado);
+    drop(estado_bloqueado);
+    if let Some(host_id) = host_id {
+        // Si era la última pestaña o canal de ese host, sus túneles automáticos
+        // se paran con ella.
+        super::tuneles::canales_cambiaron(estado, host_id).await;
+    }
 }
 
 /// Red caída o EOF inesperado: la sesión se conserva hasta reconectar o cerrar.
 async fn caida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32, motivo: &str) {
     let mut estado_bloqueado = estado.lock().await;
-    let (host_id, ids) = {
+    let (host_id, ids, handle) = {
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             estado_bloqueado.pendientes.remove(&sesion_id);
             return;
         };
         sesion.estado = EstadoSesionRemota::Caida;
         sesion.motivo = Some(motivo.to_string());
-        sesion.handle = None;
         (
             sesion.host_id,
             sesion.adjuntos.keys().copied().collect::<Vec<u32>>(),
+            sesion.handle.take(),
         )
     };
+    // La conexión se cayó: si estaba en el pool, su canal deja de contar ahora
+    // mismo. Si no, la entrada quedaría viva para siempre y `revisar_pool` no
+    // la recogería nunca (solo mira las que no tienen canales).
+    if let Some(handle) = handle {
+        estado_bloqueado.pool.liberar_si_es(host_id, &handle);
+    }
     let aviso = MensajeServidor::Estado {
         sesion_id,
         estado: EstadoSesionRemota::Caida,

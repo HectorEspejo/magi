@@ -9,10 +9,16 @@ use std::time::{Duration, Instant};
 
 use russh::client::Handle;
 use russh::Disconnect;
+use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::conexion::cliente::Cliente;
 use crate::conexion::salto::Transporte;
+use crate::conexion::EventoConexion;
+use crate::config::Rutas;
+use crate::modelo::Host;
+
+use super::EstadoServidor;
 
 /// Gracia de una conexión del pool sin canales antes de cerrarla.
 pub const GRACIA_SIN_CANALES: Duration = Duration::from_secs(30);
@@ -129,6 +135,90 @@ impl Pool {
             .drain()
             .map(|(_, entrada)| (entrada.handle, entrada.saltos))
             .collect()
+    }
+}
+
+/// Conexión para abrir un canal nuevo de este host: la del pool si la hay (el
+/// canal cuenta como suyo, así que el pool no la cerrará mientras viva) o una
+/// recién abierta con el flujo de la Fase 3, que dialoga con el solicitante.
+///
+/// Con `multiplexar` la conexión nueva queda en el pool para el siguiente
+/// canal; sin él, se devuelve como propia y la cierra quien la pidió. Lo
+/// comparten los canales SFTP, los túneles y las pestañas que multiplexan.
+pub async fn conexion_para_canal(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    host: &Host,
+    todos_los_hosts: &HashMap<i64, Host>,
+    rutas: &Rutas,
+    id_solicitud: u32,
+    solicitante: u32,
+) -> Result<(Arc<Handle<Cliente>>, Option<Transporte>), String> {
+    let handle_del_pool = {
+        let mut estado_bloqueado = estado.lock().await;
+        estado_bloqueado.pool.reutilizar(host.id)
+    };
+    if let Some(handle) = handle_del_pool {
+        return Ok((handle, None));
+    }
+
+    let reenvios = estado.lock().await.reenvios.clone();
+    let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
+    // El puente traduce los diálogos (huella, frase, contraseña) al solicitante
+    // y se deja vivo: el handler de russh conserva un clon del canal de eventos
+    // mientras la conexión viva, así que muere solo cuando la conexión cae.
+    tokio::spawn(crate::servidor::sesiones::puente_eventos(
+        estado.clone(),
+        id_solicitud,
+        solicitante,
+        rx_eventos,
+    ));
+    let cadena = crate::conexion::salto::construir_cadena(host, todos_los_hosts)
+        .map_err(|error| error.to_string())?;
+    let contexto = crate::conexion::cliente::Contexto {
+        known_hosts: rutas.fichero_known_hosts(),
+        dir_ssh: rutas.dir_ssh(),
+        hogar: rutas.hogar.clone(),
+        usuario_local: crate::conexion::usuario_local(),
+        tx: tx_eventos.clone(),
+        interactivo: true,
+        fuente_contrasena: crate::conexion::FuenteContrasena::Solicitante,
+        reenvios: Some(reenvios),
+    };
+    let transporte = crate::conexion::salto::conectar_cadena(&cadena, &contexto)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !host.multiplexar {
+        return Ok((transporte.handle.clone(), Some(transporte)));
+    }
+    let handle = transporte.handle.clone();
+    let desplazada = estado.lock().await.pool.guardar(host.id, transporte);
+    // Si el pool ya tenía otra conexión para este host, se quedó fuera al
+    // sustituirla: se cierra aquí, que nadie más lo va a hacer.
+    if let Some((handle_viejo, saltos_viejos)) = desplazada {
+        desconectar(handle_viejo, saltos_viejos).await;
+    }
+    Ok((handle, None))
+}
+
+/// Suelta lo que se hubiera tomado para un canal: la conexión propia se cierra
+/// y la del pool se libera por identidad (nunca a ciegas).
+pub async fn soltar(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    host_id: i64,
+    handle: &Arc<Handle<Cliente>>,
+    propia: Option<Transporte>,
+) {
+    match propia {
+        Some(transporte) => {
+            desconectar(
+                transporte.handle,
+                transporte.saltos.into_iter().map(Arc::new).collect(),
+            )
+            .await;
+        }
+        None => {
+            estado.lock().await.pool.liberar_si_es(host_id, handle);
+        }
     }
 }
 

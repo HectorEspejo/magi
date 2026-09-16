@@ -1,5 +1,5 @@
 use magi::almacen::Almacen;
-use magi::modelo::{DatosHost, IdentidadRef, Origen, UltimoEstado};
+use magi::modelo::{DatosHost, DatosTunel, IdentidadRef, Origen, TipoTunel, UltimoEstado};
 
 fn datos(nombre: &str) -> DatosHost {
     DatosHost {
@@ -32,6 +32,7 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         "SONDEOS",
         "IDENTIDADES",
         "REGISTRO",
+        "TUNELES",
     ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
@@ -67,7 +68,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
@@ -75,6 +76,10 @@ fn migracion_desde_fase1_conserva_los_datos() {
     assert_eq!(
         hosts[0].sftp_dir_local, None,
         "la migración 3 deja los directorios nulos"
+    );
+    assert!(
+        almacen.listar_tuneles().unwrap().is_empty(),
+        "la migración 4 estrena TUNELES vacía"
     );
     assert!(almacen.listar_identidades(true).unwrap().is_empty());
 }
@@ -374,4 +379,226 @@ fn fijar_salto_y_opciones_extra_acumulan() {
         almacen.obtener_host(id).unwrap().opciones_extra,
         "ProxyJump antiguo\nForwardAgent yes"
     );
+}
+
+// ---------------------------------------------------------------- túneles
+
+fn tunel_de(host_id: i64, nombre: &str, tipo: TipoTunel, escucha: &str) -> DatosTunel {
+    DatosTunel {
+        host_id,
+        nombre: nombre.to_string(),
+        tipo,
+        escucha: escucha.to_string(),
+        destino: if tipo.lleva_destino() {
+            Some("10.0.0.5:5432".to_string())
+        } else {
+            None
+        },
+        automatico: false,
+    }
+}
+
+/// Los túneles de un host caen con él (ON DELETE CASCADE) y su nombre es único
+/// por host.
+#[test]
+fn los_tuneles_caen_con_su_host_y_el_nombre_no_se_repite() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let id = almacen
+        .crear_host(&datos("con-tuneles"), Origen::Manual)
+        .unwrap();
+    let otro = almacen.crear_host(&datos("otro"), Origen::Manual).unwrap();
+    almacen
+        .crear_tunel(&tunel_de(id, "pg-prod", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+    almacen
+        .crear_tunel(&tunel_de(
+            id,
+            "webhook",
+            TipoTunel::Remoto,
+            "127.0.0.1:9000",
+        ))
+        .unwrap();
+    assert_eq!(almacen.tuneles_de_host(id).unwrap().len(), 2);
+
+    // El mismo nombre en otro host sí vale: se es único por host.
+    almacen
+        .crear_tunel(&tunel_de(
+            otro,
+            "pg-prod",
+            TipoTunel::Local,
+            "127.0.0.1:6543",
+        ))
+        .unwrap();
+
+    // El mismo nombre en el mismo host, no.
+    let repetido =
+        almacen.crear_tunel(&tunel_de(id, "pg-prod", TipoTunel::Local, "127.0.0.1:7777"));
+    assert!(
+        repetido.unwrap_err().to_string().contains("nombre"),
+        "el error debe hablar del nombre"
+    );
+
+    almacen.borrar_host(id).unwrap();
+    assert!(almacen.tuneles_de_host(id).unwrap().is_empty());
+    assert_eq!(almacen.tuneles_de_host(otro).unwrap().len(), 1);
+}
+
+/// Dos túneles del mismo tipo con la misma escucha se pisan: en local y
+/// dinámico en cualquier host (la escucha es de esta máquina) y en remoto solo
+/// en el mismo host (la escucha es del host).
+#[test]
+fn dos_tuneles_no_pueden_escuchar_lo_mismo() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+    almacen
+        .crear_tunel(&tunel_de(uno, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+
+    // Local: choca aunque sea otro host.
+    assert!(almacen
+        .crear_tunel(&tunel_de(dos, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .is_err());
+    // Otro tipo y otro puerto, adelante.
+    almacen
+        .crear_tunel(&tunel_de(
+            dos,
+            "socks",
+            TipoTunel::Dinamico,
+            "127.0.0.1:1080",
+        ))
+        .unwrap();
+    assert!(almacen
+        .crear_tunel(&tunel_de(
+            uno,
+            "socks",
+            TipoTunel::Dinamico,
+            "127.0.0.1:1080"
+        ))
+        .is_err());
+
+    // Remoto: el mismo puerto en hosts distintos no choca (son máquinas
+    // distintas), pero sí en el mismo host.
+    almacen
+        .crear_tunel(&tunel_de(
+            uno,
+            "webhook",
+            TipoTunel::Remoto,
+            "127.0.0.1:9000",
+        ))
+        .unwrap();
+    almacen
+        .crear_tunel(&tunel_de(
+            dos,
+            "webhook",
+            TipoTunel::Remoto,
+            "127.0.0.1:9000",
+        ))
+        .unwrap();
+    assert!(almacen
+        .crear_tunel(&tunel_de(
+            uno,
+            "webhook-2",
+            TipoTunel::Remoto,
+            "127.0.0.1:9000"
+        ))
+        .is_err());
+
+    // Editar sin cambiar la escucha no choca consigo mismo.
+    let tunel = almacen
+        .tunel_por_nombre(uno, "webhook")
+        .unwrap()
+        .expect("el túnel existe");
+    let mut datos_tunel = tunel_de(uno, "webhook", TipoTunel::Remoto, "127.0.0.1:9000");
+    datos_tunel.automatico = true;
+    almacen.actualizar_tunel(tunel.id, &datos_tunel).unwrap();
+    assert!(almacen.obtener_tunel(tunel.id).unwrap().automatico);
+}
+
+/// La validación en código: nombre, tipo, escucha y destino obligatorio.
+#[test]
+fn los_tuneles_se_validan_en_codigo() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("host"), Origen::Manual).unwrap();
+
+    let mut malo = tunel_de(host, "con espacio", TipoTunel::Local, "127.0.0.1:5432");
+    assert!(almacen.crear_tunel(&malo).is_err());
+
+    malo = tunel_de(host, "sin-puerto", TipoTunel::Local, "127.0.0.1");
+    assert!(almacen.crear_tunel(&malo).is_err());
+
+    malo = tunel_de(host, "sin-destino", TipoTunel::Local, "127.0.0.1:5432");
+    malo.destino = None;
+    assert!(almacen.crear_tunel(&malo).is_err());
+
+    // El dinámico no lleva destino, y con el 0 se pide un puerto libre.
+    let dinamico = tunel_de(host, "socks", TipoTunel::Dinamico, "127.0.0.1:0");
+    let id = almacen.crear_tunel(&dinamico).unwrap();
+    let guardado = almacen.obtener_tunel(id).unwrap();
+    assert_eq!(guardado.destino, None);
+    assert_eq!(guardado.escucha, "127.0.0.1:0");
+    assert_eq!(guardado.tipo, TipoTunel::Dinamico);
+
+    // La escucha se guarda en su forma canónica, con corchetes para IPv6.
+    let v6 = almacen
+        .crear_tunel(&tunel_de(host, "v6", TipoTunel::Local, "[::1]:5433"))
+        .unwrap();
+    assert_eq!(almacen.obtener_tunel(v6).unwrap().escucha, "[::1]:5433");
+}
+
+/// El puerto 0 es «el que quede libre»: dos túneles así no se pisan, y el
+/// mismo puerto con distinto tipo tampoco es un duplicado.
+#[test]
+fn el_puerto_cero_y_los_tipos_distintos_no_chocan() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("host"), Origen::Manual).unwrap();
+    let otro = almacen.crear_host(&datos("otro"), Origen::Manual).unwrap();
+
+    // Dos locales con el puerto 0: cada uno recibirá uno libre distinto.
+    almacen
+        .crear_tunel(&tunel_de(
+            host,
+            "libre-uno",
+            TipoTunel::Local,
+            "127.0.0.1:0",
+        ))
+        .unwrap();
+    almacen
+        .crear_tunel(&tunel_de(
+            otro,
+            "libre-dos",
+            TipoTunel::Local,
+            "127.0.0.1:0",
+        ))
+        .unwrap();
+
+    // Mismo puerto con tipos distintos: uno escucha en local y el otro pide el
+    // reenvío al host, así que no se pisan.
+    almacen
+        .crear_tunel(&tunel_de(
+            host,
+            "local-8080",
+            TipoTunel::Local,
+            "127.0.0.1:8080",
+        ))
+        .unwrap();
+    almacen
+        .crear_tunel(&tunel_de(
+            host,
+            "remoto-8080",
+            TipoTunel::Remoto,
+            "127.0.0.1:8080",
+        ))
+        .unwrap();
+    almacen
+        .crear_tunel(&tunel_de(
+            otro,
+            "socks-8080",
+            TipoTunel::Dinamico,
+            "127.0.0.1:8080",
+        ))
+        .unwrap();
+
+    assert_eq!(almacen.tuneles_de_host(host).unwrap().len(), 3);
+    assert_eq!(almacen.tuneles_de_host(otro).unwrap().len(), 2);
 }

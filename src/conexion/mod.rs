@@ -9,6 +9,7 @@ use crate::modelo::{EstadoSesion, Host};
 
 pub mod cliente;
 pub mod huellas;
+pub mod reenvios;
 pub mod salto;
 pub mod terminal;
 

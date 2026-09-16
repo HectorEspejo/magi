@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use crate::almacen::{grupos, hosts};
+use crate::almacen::{grupos, hosts, tuneles};
 use crate::ficheros::{copia_con_fecha, escribir_atomico};
-use crate::modelo::Host;
+use crate::modelo::{Host, Tunel};
 
 #[derive(Debug, Clone)]
 pub struct Resultado {
@@ -26,7 +26,8 @@ pub fn exportar(conexion: &Connection, dir_ssh: &Path) -> Result<Resultado> {
     }
     let hosts = hosts::listar(conexion)?;
     let grupos = grupos::listar(conexion)?;
-    let texto = generar_texto(&hosts, &grupos);
+    let tuneles = tuneles::por_host(conexion)?;
+    let texto = generar_texto(&hosts, &grupos, &tuneles);
     let ruta = dir_ssh.join("magi_config");
     escribir_atomico(&ruta, texto.as_bytes(), 0o600)?;
     let include_presente = comprobar_include(&dir_ssh.join("config"), &ruta);
@@ -37,7 +38,11 @@ pub fn exportar(conexion: &Connection, dir_ssh: &Path) -> Result<Resultado> {
     })
 }
 
-pub fn generar_texto(hosts: &[Host], grupos: &[crate::modelo::Grupo]) -> String {
+pub fn generar_texto(
+    hosts: &[Host],
+    grupos: &[crate::modelo::Grupo],
+    tuneles: &HashMap<i64, Vec<Tunel>>,
+) -> String {
     let orden: HashMap<i64, i64> = grupos.iter().map(|grupo| (grupo.id, grupo.orden)).collect();
     let mut ordenados = hosts.to_vec();
     ordenados.sort_by_key(|host| {
@@ -64,13 +69,16 @@ pub fn generar_texto(hosts: &[Host], grupos: &[crate::modelo::Grupo]) -> String 
             }
             grupo_actual = Some(grupo);
         }
-        texto.push_str(&bloque(host));
+        texto.push_str(&bloque(
+            host,
+            tuneles.get(&host.id).map(Vec::as_slice).unwrap_or_default(),
+        ));
         texto.push('\n');
     }
     texto
 }
 
-fn bloque(host: &Host) -> String {
+fn bloque(host: &Host, tuneles: &[Tunel]) -> String {
     let mut lineas = vec![format!("Host {}", host.nombre)];
     lineas.push(format!("    HostName {}", host.direccion));
     lineas.push(format!("    Port {}", host.puerto));
@@ -92,6 +100,20 @@ fn bloque(host: &Host) -> String {
     }
     if let Some(segundos) = host.keepalive_seg {
         lineas.push(format!("    ServerAliveInterval {segundos}"));
+    }
+    // Los reenvíos, por nombre (la lista ya viene ordenada), antes de las
+    // opciones libres: así `ssh <host>` fuera de MAGI los sigue teniendo. Lo
+    // que `ssh` no sabría leer (un local con puerto 0, por ejemplo) se deja
+    // comentado: decirlo es mejor que perdérselo, y una línea inválida aquí
+    // rompería el `ssh` del usuario para todos los hosts.
+    for tunel in tuneles {
+        match super::tuneles::a_directiva(tunel) {
+            Some(directiva) => lineas.push(format!("    {directiva}")),
+            None => lineas.push(format!(
+                "    # {} no se puede escribir en ssh_config (solo vale al vuelo en MAGI)",
+                tunel.nombre
+            )),
+        }
     }
     for extra in host.opciones_extra.lines() {
         let extra = extra.trim();

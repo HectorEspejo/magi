@@ -257,6 +257,12 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
     } else {
         pestaña.identidad.clone()
     };
+    let activos = super::hosts::tuneles_activos_de_host(app, pestaña.host_id);
+    let tuneles = if activos > 0 {
+        format!(" · túneles {activos}")
+    } else {
+        String::new()
+    };
     let mut tamano = String::new();
     if pestaña.cols_remoto > 0 {
         tamano = format!(" · {}×{}", pestaña.cols_remoto, pestaña.filas_remoto);
@@ -278,7 +284,7 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
         ),
         Span::styled(
             format!(
-                "{}/{} · {} · conectado {} · {}{}{} · {} ventanas · ",
+                "{}/{} · {} · conectado {} · {}{}{}{} · {} ventanas · ",
                 indice + 1,
                 app.pestanas.len(),
                 pestaña.host_nombre,
@@ -286,6 +292,7 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
                 identidad,
                 tamano,
                 carga,
+                tuneles,
                 pestaña.ventanas
             ),
             Style::default().fg(tema.paleta.texto),

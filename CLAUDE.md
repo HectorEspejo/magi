@@ -3,7 +3,7 @@
 ## Contexto
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con app Android prevista. Cliente: 4d3 (producto propio).
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (fijado, compatible con russh), globset, filetime.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 
 ## Documentación del proyecto
@@ -103,6 +103,24 @@ coméntalo con el desarrollador.
   en curso por host; nunca preguntes desde el servidor: el cliente decide
   conflictos y avisos antes de `Transferir` y tú aplicas la política. Ninguna
   ruta pasa por un shell.
+- Toda espera de red en el servidor lleva plazo (10 s DNS/TCP/saludos de
+  subsistema, 60 s por bloque de transferencia); solo los diálogos con el
+  usuario esperan 5 min. `request_subsystem` devuelve `Ok` aunque el host
+  diga que no: envuélvelo en el plazo.
+- Un diálogo lleva fijados los datos sobre los que actúa (rutas, ids) y no
+  relee el estado al confirmar; descarta respuestas de peticiones que ya no
+  están en vuelo. Libera cada recurso del pool por identidad y en todas las
+  ramas de error.
+- Antes de cerrar una fase, pasa una revisión adversarial sobre el código
+  nuevo (servidor y cliente por separado) buscando pérdida de datos, fugas de
+  recursos, esperas sin plazo y estado leído a destiempo; corrige lo que
+  encuentres y añade test de regresión a lo que sea pérdida de datos. Anota
+  el resultado en el informe de implementación.
+- Túneles (`src/servidor/tuneles.rs`): el CRUD de `TUNELES` lo hace el cliente;
+  el servidor solo lee la tabla y ejecuta. Un túnel activo cuenta como canal
+  del pool pero no como pestaña ni SFTP para el ciclo automático. Todo lo que
+  escuche en local va en `127.0.0.1` salvo aviso explícito; los canales
+  `forwarded-tcpip` con clave no registrada se rechazan.
 - Tests aislados: `directories` resuelve el home por uid, así que fija
   `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_RUNTIME_DIR`,
   no solo `HOME`.

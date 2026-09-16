@@ -3,7 +3,12 @@ use rusqlite::Connection;
 
 /// Migraciones numeradas y aplicadas por `PRAGMA user_version`. Nunca se
 /// modifica una migración ya publicada: se añade otra al final.
-pub const MIGRACIONES: &[&str] = &[MIGRACION_1_INICIAL, MIGRACION_2_FLOTA, MIGRACION_3_ARCHIVOS];
+pub const MIGRACIONES: &[&str] = &[
+    MIGRACION_1_INICIAL,
+    MIGRACION_2_FLOTA,
+    MIGRACION_3_ARCHIVOS,
+    MIGRACION_4_TUNELES,
+];
 
 const MIGRACION_1_INICIAL: &str = r#"
 CREATE TABLE GRUPOS (
@@ -107,6 +112,26 @@ CREATE INDEX idx_registro_tipo ON REGISTRO(tipo);
 const MIGRACION_3_ARCHIVOS: &str = r#"
 ALTER TABLE HOSTS ADD COLUMN sftp_dir_local TEXT;
 ALTER TABLE HOSTS ADD COLUMN sftp_dir_remoto TEXT;
+"#;
+
+/// Fase 5: túneles SSH. El nombre es único por host; `tipo` se valida en
+/// código, no con `CHECK`. El estado en vivo no se persiste: vive en el
+/// servidor de sesiones.
+const MIGRACION_4_TUNELES: &str = r#"
+CREATE TABLE TUNELES (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id        INTEGER NOT NULL REFERENCES HOSTS(id) ON DELETE CASCADE,
+    nombre         TEXT    NOT NULL,
+    tipo           TEXT    NOT NULL,
+    escucha        TEXT    NOT NULL,
+    destino        TEXT,
+    automatico     INTEGER NOT NULL DEFAULT 0,
+    creado_en      TEXT    NOT NULL,
+    actualizado_en TEXT    NOT NULL,
+    UNIQUE(host_id, nombre)
+);
+
+CREATE INDEX idx_tuneles_host ON TUNELES(host_id);
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {

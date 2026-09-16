@@ -177,6 +177,177 @@ impl Default for DatosHost {
     }
 }
 
+// ---------------------------------------------------------------- túneles
+
+/// Los tres reenvíos de ssh: `-L`, `-R` y `-D`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipoTunel {
+    /// `-L`: MAGI escucha en local y el host abre el destino.
+    Local,
+    /// `-R`: el host escucha en `escucha` y MAGI abre el destino en local.
+    Remoto,
+    /// `-D`: proxy SOCKS5 que escucha en local.
+    Dinamico,
+}
+
+impl TipoTunel {
+    /// Valor que se guarda en `TUNELES.tipo` (sin `CHECK`, se valida aquí).
+    pub fn como_texto(self) -> &'static str {
+        match self {
+            TipoTunel::Local => "local",
+            TipoTunel::Remoto => "remoto",
+            TipoTunel::Dinamico => "dinamico",
+        }
+    }
+
+    pub fn desde_texto(texto: &str) -> Option<Self> {
+        match texto {
+            "local" => Some(TipoTunel::Local),
+            "remoto" => Some(TipoTunel::Remoto),
+            "dinamico" => Some(TipoTunel::Dinamico),
+            _ => None,
+        }
+    }
+
+    /// Etiqueta para la interfaz (con tilde).
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            TipoTunel::Local => "local",
+            TipoTunel::Remoto => "remoto",
+            TipoTunel::Dinamico => "dinámico",
+        }
+    }
+
+    /// Directiva de ssh_config equivalente.
+    pub fn directiva(self) -> &'static str {
+        match self {
+            TipoTunel::Local => "LocalForward",
+            TipoTunel::Remoto => "RemoteForward",
+            TipoTunel::Dinamico => "DynamicForward",
+        }
+    }
+
+    /// ¿Abre conexiones salientes hacia un destino fijo?
+    pub fn lleva_destino(self) -> bool {
+        !matches!(self, TipoTunel::Dinamico)
+    }
+}
+
+/// Túnel del inventario, con el nombre del host ya resuelto.
+#[derive(Debug, Clone)]
+pub struct Tunel {
+    pub id: i64,
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub nombre: String,
+    pub tipo: TipoTunel,
+    /// `dirección:puerto` (IPv6 entre corchetes).
+    pub escucha: String,
+    /// `host:puerto`; nulo en dinámico.
+    pub destino: Option<String>,
+    pub automatico: bool,
+    pub creado_en: String,
+    pub actualizado_en: String,
+}
+
+/// Datos editables de un túnel (diálogo), sin id ni marcas de tiempo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatosTunel {
+    pub host_id: i64,
+    pub nombre: String,
+    pub tipo: TipoTunel,
+    pub escucha: String,
+    pub destino: Option<String>,
+    pub automatico: bool,
+}
+
+/// Dirección y puerto de una escucha o un destino. El puerto 0 significa «el
+/// que asigne el sistema» (como `ssh -L 0:`), útil sobre todo en remoto.
+pub fn partir_direccion_puerto(texto: &str) -> Option<(String, u16)> {
+    let texto = texto.trim();
+    let (direccion, puerto) = if let Some(resto) = texto.strip_prefix('[') {
+        // IPv6 entre corchetes: `[::1]:1080`.
+        let (dentro, resto) = resto.split_once(']')?;
+        (dentro, resto.strip_prefix(':')?)
+    } else {
+        texto.rsplit_once(':')?
+    };
+    let direccion = direccion.trim();
+    if direccion.is_empty() || direccion.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let puerto: u16 = puerto.trim().parse().ok()?;
+    Some((direccion.to_string(), puerto))
+}
+
+/// Junta dirección y puerto en la forma canónica `dirección:puerto`, con los
+/// corchetes que necesita IPv6.
+pub fn juntar_direccion_puerto(direccion: &str, puerto: u16) -> String {
+    let direccion = direccion.trim();
+    if direccion.contains(':') && !direccion.starts_with('[') {
+        format!("[{direccion}]:{puerto}")
+    } else {
+        format!("{direccion}:{puerto}")
+    }
+}
+
+/// Valida un túnel entero. Devuelve el primer error legible.
+pub fn validar_tunel(datos: &DatosTunel) -> Result<(), String> {
+    validar_nombre(&datos.nombre)?;
+    if datos.host_id <= 0 {
+        return Err("el túnel necesita un host".to_string());
+    }
+    let Some((direccion, _puerto)) = partir_direccion_puerto(&datos.escucha) else {
+        return Err("la escucha debe ser «dirección:puerto»".to_string());
+    };
+    if direccion.is_empty() {
+        return Err("la escucha necesita una dirección".to_string());
+    }
+    if datos.tipo.lleva_destino() {
+        let Some(destino) = datos.destino.as_deref() else {
+            return Err("el destino es obligatorio en los túneles local y remoto".to_string());
+        };
+        if partir_direccion_puerto(destino).is_none() {
+            return Err("el destino debe ser «host:puerto»".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Aviso en ámbar del diálogo de túnel, si la escucha lo merece. En un reenvío
+/// remoto pueden coincidir los dos (puerto privilegiado y escucha abierta), así
+/// que se juntan.
+pub fn aviso_escucha(tipo: TipoTunel, escucha: &str) -> Option<String> {
+    let (_, puerto) = partir_direccion_puerto(escucha)?;
+    let expuesta = escucha_expuesta(escucha);
+    let mut avisos: Vec<String> = Vec::new();
+    if tipo == TipoTunel::Remoto {
+        if puerto != 0 && puerto < 1024 {
+            avisos.push(format!(
+                "el puerto {puerto} es privilegiado: el host lo rechazará sin root"
+            ));
+        }
+        if expuesta {
+            avisos.push("el host solo lo expondrá si tiene GatewayPorts".to_string());
+        }
+    } else if expuesta {
+        avisos.push("cualquier equipo de tu red podrá usar este túnel".to_string());
+    }
+    if avisos.is_empty() {
+        return None;
+    }
+    Some(avisos.join(" · "))
+}
+
+/// ¿Acepta esta escucha cualquier origen? `ssh` escribe «cualquiera» de tres
+/// formas (`0.0.0.0`, `::` y `*`), así que las tres cuentan como expuestas.
+pub fn escucha_expuesta(escucha: &str) -> bool {
+    match partir_direccion_puerto(escucha) {
+        Some((direccion, _)) => direccion == "0.0.0.0" || direccion == "::" || direccion == "*",
+        None => false,
+    }
+}
+
 /// Resultado de un sondeo de flota.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResultadoSondeo {
@@ -503,6 +674,13 @@ pub fn servicios_de(host: &Host) -> Vec<String> {
 }
 
 /// Directivas que MAGI gestiona y que no pueden duplicarse en opciones extra.
+///
+/// Los reenvíos (`LocalForward`, `RemoteForward`, `DynamicForward`) no están
+/// aquí: desde la Fase 5 viven en `TUNELES`, pero solo se rechazan los que MAGI
+/// sabe representar —de eso se encarga `sshconfig::tuneles::reenvio_gestionado`
+/// en la validación de la ficha—, porque `ssh` admite formas que MAGI no
+/// representa (varios destinos en una directiva, reenvíos a un socket local) y
+/// esas siguen siendo opciones extra legítimas.
 const DIRECTIVAS_GESTIONADAS: [&str; 7] = [
     "hostname",
     "port",
@@ -682,6 +860,32 @@ mod pruebas {
         assert!(validar_opciones_extra("HostName otro").is_err());
         assert!(validar_opciones_extra("User root").is_err());
         assert!(validar_opciones_extra("ControlPersist 10m").is_ok());
+        // Los reenvíos ya no se rechazan aquí: solo los que MAGI sabe
+        // representar, y de eso decide `sshconfig::tuneles::reenvio_gestionado`.
+        assert!(validar_opciones_extra("LocalForward 5432 10.0.0.5:5432").is_ok());
+    }
+
+    #[test]
+    fn los_avisos_de_escucha_cubren_las_formas_de_ssh() {
+        // Las tres formas de «cualquiera» que admite `ssh` avisan.
+        assert!(aviso_escucha(TipoTunel::Local, "0.0.0.0:8080")
+            .unwrap_or_default()
+            .contains("cualquier equipo"));
+        assert!(aviso_escucha(TipoTunel::Local, "[::]:8080")
+            .unwrap_or_default()
+            .contains("cualquier equipo"));
+        assert!(aviso_escucha(TipoTunel::Local, "*:8080")
+            .unwrap_or_default()
+            .contains("cualquier equipo"));
+        assert!(aviso_escucha(TipoTunel::Local, "127.0.0.1:8080").is_none());
+
+        // En remoto, el puerto privilegiado y la escucha abierta se dicen los dos.
+        let remoto = aviso_escucha(TipoTunel::Remoto, "0.0.0.0:80").unwrap_or_default();
+        assert!(remoto.contains("privilegiado"), "{remoto}");
+        assert!(remoto.contains("GatewayPorts"), "{remoto}");
+        assert!(aviso_escucha(TipoTunel::Remoto, "127.0.0.1:9000").is_none());
+        // El puerto 0 (el que elija el host) no es privilegiado.
+        assert!(aviso_escucha(TipoTunel::Remoto, "127.0.0.1:0").is_none());
     }
 
     #[test]

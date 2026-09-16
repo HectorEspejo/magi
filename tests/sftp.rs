@@ -251,7 +251,10 @@ async fn montar_con(sftp: bool, por_contrasena: bool) -> Option<Montaje> {
         .unwrap();
     let puerto_ssh = escucha.local_addr().unwrap().port();
     let tarea_ssh = tokio::spawn(async move {
-        let mut servidor = ServidorSesion { sftp };
+        let mut servidor = ServidorSesion {
+            sftp,
+            ..Default::default()
+        };
         let _ = russh::server::Server::run_on_socket(&mut servidor, config, &escucha).await;
     });
 

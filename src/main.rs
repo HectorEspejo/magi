@@ -1,12 +1,23 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
+use tokio::io::AsyncWriteExt as _;
+use tokio::net::UnixStream;
+use tokio_stream::StreamExt as _;
+use tokio_util::codec::FramedRead;
 
 use magi::almacen;
 use magi::almacen::Almacen;
 use magi::app;
+use magi::cliente;
 use magi::config::{Config, Rutas};
 use magi::flota::{self, PeticionSondeo};
-use magi::modelo::{Host, ResultadoRegistro, ResultadoSondeo, Sondeo};
+use magi::modelo::{Host, ResultadoRegistro, ResultadoSondeo, Sondeo, Tunel};
+use magi::protocolo::{
+    self, EstadoTunelRemoto, InfoTunel, MensajeCliente, MensajeServidor, VERSION_PROTOCOLO,
+};
 use magi::registro;
 use magi::servidor;
 use magi::sshconfig;
@@ -53,6 +64,31 @@ enum Comando {
     },
     /// Abre la TUI con una sesión nueva al host indicado.
     Conectar { host: String },
+    /// Activa o para un túnel del host indicado.
+    Tunel {
+        #[command(subcommand)]
+        comando: ComandoTunel,
+    },
+    /// Lista los túneles definidos y activos.
+    Tuneles,
+}
+
+#[derive(Subcommand)]
+enum ComandoTunel {
+    /// Levanta el túnel sobre el servidor de sesiones.
+    Activar {
+        /// Nombre del host en el inventario.
+        host: String,
+        /// Nombre del túnel en la ficha del host.
+        nombre: String,
+    },
+    /// Para el túnel y cierra lo que estaba escuchando.
+    Parar {
+        /// Nombre del host en el inventario.
+        host: String,
+        /// Nombre del túnel en la ficha del host.
+        nombre: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -155,6 +191,22 @@ fn main() -> anyhow::Result<()> {
             })?;
             std::process::exit(codigo);
         }
+        Some(Comando::Tunel { comando }) => {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("creando el runtime de tokio")?;
+            let codigo = runtime.block_on(tunel_cli(&rutas, comando))?;
+            std::process::exit(codigo);
+        }
+        Some(Comando::Tuneles) => {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("creando el runtime de tokio")?;
+            let codigo = runtime.block_on(tuneles_cli(&rutas))?;
+            std::process::exit(codigo);
+        }
         Some(Comando::Conectar { host }) => {
             let almacen = Almacen::abrir(&rutas.base_datos())?;
             let existente = almacen::hosts::por_nombre(almacen.conexion(), &host)?;
@@ -221,6 +273,11 @@ fn importar(almacen: &Almacen, rutas: &Rutas, ruta: &std::path::Path) -> anyhow:
         println!("  · {}: {}", omitido.descripcion, omitido.motivo);
     }
     for aviso in &analisis.avisos {
+        println!("  · aviso: {aviso}");
+    }
+    // Reenvíos que no se pudieron convertir en túnel y se quedaron en opciones
+    // extra: el usuario tiene que saberlo, no quedarse solo con el log.
+    for aviso in &resumen.avisos {
         println!("  · aviso: {aviso}");
     }
     if !conflictos.is_empty() {
@@ -422,6 +479,374 @@ fn sondear(
         );
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- túneles
+
+/// Desenlace de la espera de `ActivarTunel`/`PararTunel`.
+enum DesenlaceTunel {
+    /// El servidor hizo lo pedido. El texto es el estado que la difusión ya
+    /// refleja, para colgarlo de la línea de éxito; vacío si aún no lo refleja.
+    Hecho(String),
+    /// El servidor rechazó la orden, con el motivo.
+    Rechazado(String),
+    /// El host necesita una huella, una frase o una contraseña y esta orden
+    /// no tiene ventana que preguntarlas.
+    SinCredenciales,
+}
+
+/// `magi tunel activar|parar <host> <nombre>`: levanta o para un túnel del
+/// inventario sobre el servidor de sesiones (lo autolanza si no está). No
+/// dialoga nunca: si el host pide credenciales, avisa y sale con error.
+async fn tunel_cli(rutas: &Rutas, comando: ComandoTunel) -> anyhow::Result<i32> {
+    let (host, nombre, activar) = match comando {
+        ComandoTunel::Activar { host, nombre } => (host, nombre, true),
+        ComandoTunel::Parar { host, nombre } => (host, nombre, false),
+    };
+    let Some(tunel_id) = tunel_definido(rutas, &host, &nombre)? else {
+        return Ok(1);
+    };
+    let Some(mut stream) = conectar_servidor(rutas, true).await? else {
+        eprintln!(
+            "no hay servidor de sesiones en marcha ni se pudo arrancar uno ({}).",
+            servidor::ruta_socket(rutas).display()
+        );
+        return Ok(1);
+    };
+    escribir(&mut stream, &saludo()).await?;
+    let peticion_id = 1_u64;
+    let peticion = if activar {
+        MensajeCliente::ActivarTunel {
+            tunel_id,
+            peticion_id,
+        }
+    } else {
+        MensajeCliente::PararTunel {
+            tunel_id,
+            peticion_id,
+        }
+    };
+    escribir(&mut stream, &peticion).await?;
+    let desenlace = tokio::time::timeout(
+        Duration::from_secs(15),
+        esperar_tunel(&mut stream, tunel_id, peticion_id, activar),
+    )
+    .await;
+    // Cerrar el socket al salir: el servidor lo nota y no deja un cliente
+    // colgado esperando respuestas que ya nadie lee.
+    let _ = stream.shutdown().await;
+    match desenlace {
+        Ok(Ok(DesenlaceTunel::Hecho(sufijo))) => {
+            let verbo = if activar { "activado" } else { "parado" };
+            println!("Túnel «{nombre}» {verbo}{sufijo}.");
+            Ok(0)
+        }
+        Ok(Ok(DesenlaceTunel::Rechazado(motivo))) => {
+            eprintln!("{motivo}");
+            Ok(1)
+        }
+        Ok(Ok(DesenlaceTunel::SinCredenciales)) => {
+            eprintln!(
+                "«{host}» necesita credenciales y esta orden no puede preguntarlas: abre una sesión desde la TUI primero."
+            );
+            Ok(1)
+        }
+        Ok(Err(motivo)) => {
+            eprintln!("{motivo}");
+            Ok(1)
+        }
+        Err(_) => {
+            eprintln!("el servidor no contestó en 15 s");
+            Ok(1)
+        }
+    }
+}
+
+/// Espera el desenlace de la petición: `Hecho`, `Error` o un diálogo de
+/// credenciales que aquí no se puede atender. La difusión `Tuneles` y
+/// `Bienvenida` se guardan para confirmar el estado final; cualquier otro
+/// mensaje se ignora.
+async fn esperar_tunel(
+    stream: &mut UnixStream,
+    tunel_id: i64,
+    peticion_id: u64,
+    activar: bool,
+) -> anyhow::Result<DesenlaceTunel> {
+    let mut ultima: Option<Vec<InfoTunel>> = None;
+    let mut lector = FramedRead::new(&mut *stream, protocolo::codec());
+    loop {
+        let linea = match lector.next().await {
+            Some(Ok(linea)) => linea,
+            Some(Err(error)) => anyhow::bail!("respuesta no válida del servidor: {error}"),
+            None => anyhow::bail!("el servidor cerró la conexión"),
+        };
+        let mensaje: MensajeServidor = match protocolo::decodificar(&linea) {
+            Ok(mensaje) => mensaje,
+            Err(motivo) => anyhow::bail!("{motivo}"),
+        };
+        match mensaje {
+            MensajeServidor::Bienvenida { tuneles, .. } => ultima = Some(tuneles),
+            MensajeServidor::Tuneles { lista } => ultima = Some(lista),
+            MensajeServidor::Hecho { peticion_id: id } if id == peticion_id => {
+                return Ok(DesenlaceTunel::Hecho(sufijo_estado(
+                    ultima.as_deref(),
+                    tunel_id,
+                    activar,
+                )));
+            }
+            MensajeServidor::Error {
+                mensaje,
+                peticion_id: Some(id),
+            } if id == peticion_id => return Ok(DesenlaceTunel::Rechazado(mensaje)),
+            MensajeServidor::PideContrasena { .. }
+            | MensajeServidor::PideFrase { .. }
+            | MensajeServidor::HuellaDesconocida { .. }
+            | MensajeServidor::HuellaCambiada { .. } => return Ok(DesenlaceTunel::SinCredenciales),
+            MensajeServidor::VersionIncompatible { version } => {
+                anyhow::bail!(
+                    "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Sufijo de la línea de éxito con el estado que la difusión ya refleja: al
+/// activar, el estado y la escucha de verdad (que es la útil si se pidió el
+/// puerto 0). Si la difusión todavía no lo refleja, no se añade nada.
+fn sufijo_estado(ultima: Option<&[InfoTunel]>, tunel_id: i64, activar: bool) -> String {
+    if !activar {
+        return String::new();
+    }
+    let Some(info) = ultima.and_then(|lista| lista.iter().find(|info| info.tunel_id == tunel_id))
+    else {
+        return String::new();
+    };
+    if !info.estado.en_marcha() {
+        return String::new();
+    }
+    format!(" · {} en {}", info.estado.texto(), info.escucha_mostrada())
+}
+
+/// `magi tuneles`: los túneles del inventario, cruzados por `tunel_id` con el
+/// estado que difunde el servidor. Sin servidor se listan como inactivos.
+async fn tuneles_cli(rutas: &Rutas) -> anyhow::Result<i32> {
+    let definidos = listar_definidos(rutas)?;
+    let mut estados: HashMap<i64, InfoTunel> = HashMap::new();
+    let mut codigo = 0;
+    match conectar_servidor(rutas, false).await? {
+        Some(mut stream) => {
+            escribir(&mut stream, &saludo()).await?;
+            let lista = leer_tuneles(&mut stream).await;
+            let _ = stream.shutdown().await;
+            match lista {
+                Ok(Some(lista)) => {
+                    for info in lista {
+                        estados.insert(info.tunel_id, info);
+                    }
+                }
+                Ok(None) => {
+                    eprintln!("el servidor no envió la lista de túneles en 2 s");
+                    codigo = 1;
+                }
+                Err(motivo) => {
+                    eprintln!("{motivo}");
+                    codigo = 1;
+                }
+            }
+        }
+        None => {
+            println!("No hay servidor de sesiones en marcha: los túneles no están levantados.");
+            codigo = 1;
+        }
+    }
+    imprime_tuneles(&definidos, &estados);
+    Ok(codigo)
+}
+
+/// Tabla de túneles: estado del servidor cuando lo hay y, si no, la fila del
+/// inventario como inactiva. Los caídos dejan su último error al pie.
+fn imprime_tuneles(definidos: &[Tunel], estados: &HashMap<i64, InfoTunel>) {
+    if definidos.is_empty() {
+        println!("No hay túneles definidos.");
+        return;
+    }
+    let activos = definidos
+        .iter()
+        .filter(|fila| {
+            estados
+                .get(&fila.id)
+                .is_some_and(|info| info.estado.en_marcha())
+        })
+        .count();
+    println!(
+        "Túneles: {} definidos · {} activos",
+        definidos.len(),
+        activos
+    );
+    println!(
+        "{:<6} {:<10} {:<10} {:<20} {:<20} {:<12} {:<8} TRÁFICO",
+        "ID", "ESTADO", "TIPO", "ESCUCHA", "→ DESTINO", "HOST", "CONEX."
+    );
+    for fila in definidos {
+        let info = estados.get(&fila.id);
+        let estado = info
+            .map(|info| info.estado.texto())
+            .unwrap_or(EstadoTunelRemoto::Inactivo.texto());
+        let escucha = info
+            .map(|info| info.escucha_mostrada())
+            .unwrap_or(&fila.escucha);
+        let conexiones = match info {
+            Some(info) => format!("{} ({})", info.conexiones, info.aceptadas),
+            None => "—".to_string(),
+        };
+        let trafico = match info {
+            Some(info) => format!(
+                "↓ {} ↑ {}",
+                magi::archivos::tamano_legible(info.bytes_bajados),
+                magi::archivos::tamano_legible(info.bytes_subidos)
+            ),
+            None => "—".to_string(),
+        };
+        let destino = fila.destino.as_deref().unwrap_or("(socks5)");
+        println!(
+            "{:<6} {:<10} {:<10} {:<20} {:<20} {:<12} {:<8} {}",
+            fila.id,
+            estado,
+            fila.tipo.etiqueta(),
+            recortar(escucha, 20),
+            format!("→ {}", recortar(destino, 18)),
+            recortar(&fila.host_nombre, 12),
+            conexiones,
+            trafico,
+        );
+    }
+    for fila in definidos {
+        let Some(error) = estados
+            .get(&fila.id)
+            .filter(|info| info.estado == EstadoTunelRemoto::Caido)
+            .and_then(|info| info.ultimo_error.as_deref())
+        else {
+            continue;
+        };
+        println!(
+            "Último fallo: {} · {} — {error}",
+            fila.host_nombre, fila.nombre
+        );
+    }
+}
+
+/// Recorta un texto al ancho de una columna, con puntos suspensivos.
+fn recortar(texto: &str, ancho: usize) -> String {
+    if texto.chars().count() <= ancho {
+        return texto.to_string();
+    }
+    let corte: String = texto.chars().take(ancho.saturating_sub(1)).collect();
+    format!("{corte}…")
+}
+
+/// Pide la lista de túneles al servidor ya saludado: llega en la `Bienvenida`
+/// o en la difusión `Tuneles`. Devuelve `None` si no llega en 2 s.
+async fn leer_tuneles(stream: &mut UnixStream) -> anyhow::Result<Option<Vec<InfoTunel>>> {
+    let futura = async {
+        let mut lector = FramedRead::new(&mut *stream, protocolo::codec());
+        loop {
+            let linea = match lector.next().await {
+                Some(Ok(linea)) => linea,
+                Some(Err(error)) => anyhow::bail!("respuesta no válida del servidor: {error}"),
+                None => anyhow::bail!("el servidor cerró la conexión"),
+            };
+            let mensaje: MensajeServidor = match protocolo::decodificar(&linea) {
+                Ok(mensaje) => mensaje,
+                Err(motivo) => anyhow::bail!("{motivo}"),
+            };
+            match mensaje {
+                MensajeServidor::Bienvenida { tuneles, .. } => return Ok(Some(tuneles)),
+                MensajeServidor::Tuneles { lista } => return Ok(Some(lista)),
+                MensajeServidor::VersionIncompatible { version } => {
+                    anyhow::bail!(
+                        "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                    );
+                }
+                _ => {}
+            }
+        }
+    };
+    match tokio::time::timeout(Duration::from_secs(2), futura).await {
+        Ok(resultado) => resultado,
+        Err(_) => Ok(None),
+    }
+}
+
+/// Conecta con el socket del servidor de sesiones. Con `autolanzar` lo arranca
+/// desacoplado (como la TUI) si no está en marcha. Devuelve `None` si no hay
+/// servidor al que hablar; el motivo lo imprime quien llama.
+async fn conectar_servidor(rutas: &Rutas, autolanzar: bool) -> anyhow::Result<Option<UnixStream>> {
+    let ruta = servidor::ruta_socket(rutas);
+    if let Ok(stream) = UnixStream::connect(&ruta).await {
+        return Ok(Some(stream));
+    }
+    if !autolanzar {
+        return Ok(None);
+    }
+    cliente::lanzar_servidor(rutas);
+    if !cliente::esperar_socket(&ruta, Duration::from_secs(5)).await {
+        return Ok(None);
+    }
+    match UnixStream::connect(&ruta).await {
+        Ok(stream) => Ok(Some(stream)),
+        Err(error) => {
+            eprintln!("no se pudo conectar con el servidor de sesiones: {error}");
+            Ok(None)
+        }
+    }
+}
+
+/// Saludo de protocolo de cualquier cliente.
+fn saludo() -> MensajeCliente {
+    MensajeCliente::Hola {
+        version: VERSION_PROTOCOLO,
+        pid: std::process::id(),
+    }
+}
+
+/// Escribe un mensaje en el socket como una línea JSON.
+async fn escribir(stream: &mut UnixStream, mensaje: &MensajeCliente) -> anyhow::Result<()> {
+    let linea = protocolo::codificar(mensaje).context("serializando un mensaje")?;
+    stream.write_all(linea.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+/// Id de la fila de `TUNELES` que pide la orden; `None` con el motivo ya
+/// impreso si no existe el host o el túnel.
+fn tunel_definido(rutas: &Rutas, host: &str, nombre: &str) -> anyhow::Result<Option<i64>> {
+    let almacen = Almacen::abrir(&rutas.base_datos())?;
+    let id = match almacen::hosts::por_nombre(almacen.conexion(), host)? {
+        None => {
+            eprintln!("no existe el host «{host}»");
+            None
+        }
+        Some(fila) => match almacen.tunel_por_nombre(fila.id, nombre)? {
+            None => {
+                eprintln!("el host «{host}» no tiene un túnel «{nombre}»");
+                None
+            }
+            Some(tunel) => Some(tunel.id),
+        },
+    };
+    almacen.cerrar()?;
+    Ok(id)
+}
+
+/// Túneles del inventario, de todos los hosts y por nombre de host.
+fn listar_definidos(rutas: &Rutas) -> anyhow::Result<Vec<Tunel>> {
+    let almacen = Almacen::abrir(&rutas.base_datos())?;
+    let tuneles = almacen.listar_tuneles()?;
+    almacen.cerrar()?;
+    Ok(tuneles)
 }
 
 fn iniciar_log(

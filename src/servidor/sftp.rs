@@ -182,6 +182,9 @@ pub async fn asegurar(
             );
             estado_bloqueado.aperturas_sftp.remove(&id_solicitud);
             info!(host = %host.nombre, dir = %dir_inicio, "canal SFTP abierto");
+            drop(estado_bloqueado);
+            // El host estrena canal: es el momento de sus túneles automáticos.
+            super::tuneles::canales_cambiaron(estado, host_id).await;
             Ok((sesion, dir_inicio))
         }
         Err(motivo) => {
@@ -230,6 +233,9 @@ pub async fn perdido(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, host_id: 
             .liberar_si_es(host_id, &canal.handle);
     }
     super::transferencias::caida(estado, host_id).await;
+    // Sin canal SFTP: si no le queda ninguna pestaña, sus túneles automáticos
+    // se paran.
+    super::tuneles::canales_cambiaron(estado, host_id).await;
 }
 
 /// Conecta (reutilizando el pool si se puede) y abre el subsistema `sftp`.
@@ -257,6 +263,7 @@ async fn abrir(
             Some(handle) => (handle, None),
             None => {
                 drop(estado_bloqueado);
+                let reenvios = estado.lock().await.reenvios.clone();
                 let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
                 // El puente traduce los diálogos al solicitante; se deja vivo
                 // porque el handler de russh conserva un clon del canal
@@ -277,6 +284,9 @@ async fn abrir(
                     tx: tx_eventos.clone(),
                     interactivo: true,
                     fuente_contrasena: FuenteContrasena::Solicitante,
+                    // La conexión de un canal SFTP puede sostener túneles
+                    // remotos del mismo host, así que también registra aquí.
+                    reenvios: Some(reenvios),
                 };
                 let transporte = conectar_cadena(&cadena, &contexto)
                     .await
@@ -398,7 +408,11 @@ pub async fn revisar(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
             info!(host = %canal.host_nombre, "cerrando el canal SFTP inactivo");
             let _ = canal.sesion.close().await;
             let handle = canal.handle.clone();
-            liberar(&estado, canal.host_id, &handle, canal.propia).await;
+            let host_id = canal.host_id;
+            liberar(&estado, host_id, &handle, canal.propia).await;
+            // Un canal SFTP que se cierra por inactividad es un canal menos para
+            // el ciclo automático de los túneles del host.
+            super::tuneles::canales_cambiaron(&estado, host_id).await;
         }
     }
 }
@@ -417,6 +431,7 @@ pub async fn cerrar(
             .pool
             .liberar_si_es(host_id, &canal.handle);
     }
+    super::tuneles::canales_cambiaron(estado, host_id).await;
     Some(canal)
 }
 

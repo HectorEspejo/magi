@@ -9,7 +9,9 @@ pub mod conexiones;
 pub mod difusion;
 pub mod sesiones;
 pub mod sftp;
+pub mod socks5;
 pub mod transferencias;
+pub mod tuneles;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,6 +90,16 @@ pub struct EstadoServidor {
     pub difusion_cola: difusion::DifusionCola,
     /// Aviso al supervisor de la cola de que hay algo que despachar.
     pub tx_cola: Option<mpsc::UnboundedSender<()>>,
+    /// Túneles levantados, por id de `TUNELES`.
+    pub tuneles: HashMap<i64, tuneles::TunelActivo>,
+    /// Cerrojo de apertura por host: dos túneles del mismo host que se activan
+    /// a la vez comparten una única conexión.
+    pub tuneles_cerrojos: HashMap<i64, Arc<tokio::sync::Mutex<()>>>,
+    /// Reenvíos remotos registrados, compartidos con los handlers de russh.
+    pub reenvios: Arc<crate::conexion::reenvios::Reenvios>,
+    /// Túneles automáticos que el usuario paró a mano: no se vuelven a levantar
+    /// hasta que el host se quede sin pestañas ni SFTP (el siguiente ciclo).
+    pub tuneles_parados: std::collections::HashSet<(i64, i64)>,
 }
 
 /// Ruta del socket del servidor.
@@ -164,6 +176,10 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         transferencias: transferencias::Cola::default(),
         difusion_cola: difusion::DifusionCola::default(),
         tx_cola: None,
+        tuneles: HashMap::new(),
+        tuneles_cerrojos: HashMap::new(),
+        reenvios: Arc::new(crate::conexion::reenvios::Reenvios::default()),
+        tuneles_parados: std::collections::HashSet::new(),
     }));
 
     let (tx_cola, rx_cola) = mpsc::unbounded_channel::<()>();
@@ -188,6 +204,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(sftp::revisar(estado.clone()));
     tokio::spawn(revisar_cola(estado.clone()));
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
+    tokio::spawn(tuneles::revisar(estado.clone()));
 
     loop {
         tokio::select! {
@@ -268,7 +285,8 @@ fn ejecutar_orden_bd(conexion: &rusqlite::Connection, orden: OrdenBd) -> Result<
 
 /// Apaga el servidor si no hay clientes ni sesiones durante la gracia. Las
 /// transferencias en curso cuentan: cerrar la última ventana no puede dejar a
-/// medias una copia que el usuario encargó.
+/// medias una copia que el usuario encargó. Y un túnel levantado también:
+/// apagarse lo tiraría sin que nadie lo haya pedido.
 async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     let gracia = Duration::from_secs(estado.lock().await.gracia);
     loop {
@@ -277,7 +295,8 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
             let mut estado_bloqueado = estado.lock().await;
             let ocupado = !estado_bloqueado.clientes.is_empty()
                 || !estado_bloqueado.sesiones.is_empty()
-                || estado_bloqueado.transferencias.hay_vivas();
+                || estado_bloqueado.transferencias.hay_vivas()
+                || tuneles::hay_activos(&estado_bloqueado);
             if !ocupado {
                 match estado_bloqueado.vacio_desde {
                     None => {
@@ -351,6 +370,9 @@ async fn revisar_pool(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
 
 /// Apagado inmediato con limpieza: cierra sesiones y clientes y señaliza.
 async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
+    // Los túneles se paran antes de cerrar nada: su registro de cierre lleva
+    // los totales y el pool se libera por identidad.
+    tuneles::parar_todos(estado, "el servidor se apaga").await;
     let mut estado_bloqueado = estado.lock().await;
     for (_, sesion) in estado_bloqueado.sesiones.drain() {
         let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
@@ -482,6 +504,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         clientes: estado_bloqueado.clientes.len() as u32,
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
         transferencias: estado_bloqueado.transferencias.info(),
+        tuneles: tuneles::lista(&estado_bloqueado),
     };
     difusion::enviar(cliente, mensaje);
 }
@@ -569,6 +592,43 @@ async fn manejar_mensaje(
         }
         MensajeCliente::Ejecutar { host_id, comando } => {
             ejecutar(estado, cliente_id, host_id, &comando).await;
+        }
+        // Un túnel puede tardar en levantarse (abrir la conexión, pedir el
+        // reenvío, los diálogos de siempre), así que va a una tarea propia: el
+        // bucle de lectura de este cliente no puede quedarse esperando.
+        MensajeCliente::ActivarTunel {
+            tunel_id,
+            peticion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                activar_tunel(&estado_tarea, cliente_id, tunel_id, peticion_id).await;
+            });
+        }
+        MensajeCliente::PararTunel {
+            tunel_id,
+            peticion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                parar_tunel(&estado_tarea, cliente_id, tunel_id, peticion_id).await;
+            });
+        }
+        MensajeCliente::RelanzarTunel {
+            tunel_id,
+            peticion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                relanzar_tunel(&estado_tarea, cliente_id, tunel_id, peticion_id).await;
+            });
+        }
+        MensajeCliente::RecargarTuneles { host_id } => {
+            // Parar túneles habla con el host (cancelar reenvíos) y espera a las
+            // copias: mejor en su tarea que en el bucle de lectura de este
+            // cliente.
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move { tuneles::recargar(&estado_tarea, host_id).await });
         }
         // Las operaciones de archivos van a una tarea propia: la apertura de
         // un canal puede tardar (diálogos, red) y el bucle de lectura de este
@@ -741,9 +801,11 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
         })
         .map(|(id, _)| *id)
         .collect();
+    let mut hosts_sin_canal: Vec<i64> = Vec::new();
     for sesion_id in caidas {
         estado_bloqueado.pendientes.remove(&sesion_id);
         if let Some(sesion) = estado_bloqueado.sesiones.remove(&sesion_id) {
+            hosts_sin_canal.push(sesion.host_id);
             let bd = estado_bloqueado.bd.clone();
             let _ = bd.send(OrdenBd::Anotar {
                 tipo: crate::registro::CONEXION_FALLIDA.to_string(),
@@ -754,8 +816,29 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
             });
         }
     }
+    // Túneles que esta ventana estaba levantando: sin ella no hay quien
+    // conteste a los diálogos, así que se cancelan en vez de quedarse en
+    // «activando» hasta que venza el plazo.
+    let activando: Vec<i64> = estado_bloqueado
+        .tuneles
+        .values()
+        .filter(|activo| {
+            activo.solicitante == cliente_id
+                && activo.estado == crate::protocolo::EstadoTunelRemoto::Activando
+        })
+        .map(|activo| activo.tunel_id)
+        .collect();
     estado_bloqueado.clientes.remove(&cliente_id);
     difundir_lista(&mut estado_bloqueado);
+    drop(estado_bloqueado);
+    for tunel_id in activando {
+        tuneles::caido_por_solicitante(estado, tunel_id, "la ventana que lo pidió se cerró").await;
+    }
+    // Las pestañas de la ventana que se va sueltan su canal: si eran el último
+    // del host, sus túneles automáticos se paran.
+    for host_id in hosts_sin_canal {
+        tuneles::canales_cambiaron(estado, host_id).await;
+    }
 }
 
 // ---------------------------------------------------------------- sesiones
@@ -832,6 +915,7 @@ async fn abrir_sesion(
         },
     );
     estado_bloqueado.vacio_desde = None;
+    let reenvios = estado_bloqueado.reenvios.clone();
     let datos = sesiones::DatosApertura {
         host,
         todos_los_hosts,
@@ -842,9 +926,13 @@ async fn abrir_sesion(
         sesion_id,
         solicitante: cliente_id,
         reconexion: false,
+        reenvios,
     };
     sesiones::lanzar(estado.clone(), datos, rx_comandos);
     sesiones::difundir_lista(&mut estado_bloqueado);
+    // El host estrena canal: es el momento de levantar sus túneles automáticos.
+    drop(estado_bloqueado);
+    tuneles::canales_cambiaron(estado, host_id).await;
 }
 
 /// Recalcula el tamaño de la sesión y lo aplica si cambió.
@@ -990,6 +1078,10 @@ async fn cerrar_sesion(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_
                 },
             });
             sesiones::difundir_lista(&mut estado_bloqueado);
+            drop(estado_bloqueado);
+            // Se ha ido una pestaña: si era la última de ese host, sus túneles
+            // automáticos se paran.
+            tuneles::canales_cambiaron(estado, host_id).await;
         }
         crate::protocolo::EstadoSesionRemota::Abierta => {
             let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
@@ -1085,6 +1177,7 @@ async fn reconectar(
             sesion.pantalla = pantalla.clone();
         }
     }
+    let reenvios = estado.lock().await.reenvios.clone();
     let datos = sesiones::DatosApertura {
         host,
         todos_los_hosts,
@@ -1095,6 +1188,7 @@ async fn reconectar(
         sesion_id,
         solicitante: cliente_id,
         reconexion: true,
+        reenvios,
     };
     sesiones::lanzar(estado.clone(), datos, rx_comandos);
     sesiones::difundir_lista(&mut *estado.lock().await);
@@ -1139,7 +1233,10 @@ async fn ejecutar(
     };
     let resultado = ejecutar_en_handle(&handle, comando).await;
     if del_pool {
-        estado.lock().await.pool.liberar(host_id);
+        // Por identidad: entremedias el pool puede tener ya otra conexión de
+        // este host (una pestaña nueva, por ejemplo) y el canal contado es el
+        // de esta.
+        estado.lock().await.pool.liberar_si_es(host_id, &handle);
     }
     let estado_bloqueado = estado.lock().await;
     if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
@@ -1216,6 +1313,67 @@ async fn responder_error(
         },
     )
     .await;
+}
+
+// ---------------------------------------------------------------- túneles
+
+/// `ActivarTunel`: levanta el túnel y contesta `Hecho` o `Error`. El estado va
+/// aparte, por la difusión `Tuneles`.
+async fn activar_tunel(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    tunel_id: i64,
+    peticion_id: u64,
+) {
+    let solicitante = cliente_id;
+    match tuneles::activar(
+        estado,
+        tunel_id,
+        crate::protocolo::OrigenTunel::Manual,
+        solicitante,
+    )
+    .await
+    {
+        Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
+        Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
+    }
+}
+
+/// `PararTunel`: para el túnel. Sobre uno caído, descarta el error.
+async fn parar_tunel(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    tunel_id: i64,
+    peticion_id: u64,
+) {
+    let caido = {
+        let estado_bloqueado = estado.lock().await;
+        estado_bloqueado
+            .tuneles
+            .get(&tunel_id)
+            .is_some_and(|activo| activo.estado == crate::protocolo::EstadoTunelRemoto::Caido)
+    };
+    if caido {
+        tuneles::descartar(estado, tunel_id).await;
+    } else {
+        tuneles::parar(estado, tunel_id, "parado a mano", true)
+            .await
+            .ok();
+    }
+    responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
+}
+
+/// `RelanzarTunel`: vuelve a levantar un túnel caído, con los contadores a cero.
+async fn relanzar_tunel(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    tunel_id: i64,
+    peticion_id: u64,
+) {
+    match tuneles::relanzar(estado, tunel_id, cliente_id).await {
+        Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
+        Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
+    }
 }
 
 /// `AbrirSftp`: deja el canal listo y contesta con el directorio de inicio del
@@ -1511,6 +1669,50 @@ fn imprime_cola(transferencias: &[crate::protocolo::InfoTransferencia]) {
     }
 }
 
+/// Túneles activos con su escucha, destino, host, conexiones y tráfico.
+fn imprime_tuneles(tuneles: &[crate::protocolo::InfoTunel]) {
+    let activos: Vec<crate::protocolo::InfoTunel> = tuneles
+        .iter()
+        .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
+        .cloned()
+        .collect();
+    if activos.is_empty() {
+        println!("Sin túneles activos.");
+        return;
+    }
+    println!("Túneles activos: {}", activos.len());
+    println!(
+        "{:<8} {:<10} {:<7} {:<22} {:<22} {:<8} {:<9} TRÁFICO",
+        "ID", "ESTADO", "TIPO", "ESCUCHA", "DESTINO", "HOST", "CONEX."
+    );
+    for tunel in &activos {
+        let destino = tunel
+            .destino
+            .clone()
+            .unwrap_or_else(|| "(socks5)".to_string());
+        println!(
+            "{:<8} {:<10} {:<7} {:<22} {:<22} {:<8} {:<9} ↓ {} ↑ {}",
+            tunel.tunel_id,
+            tunel.estado.texto(),
+            tunel.tipo,
+            recortar_texto(tunel.escucha_mostrada(), 22),
+            recortar_texto(&destino, 22),
+            recortar_texto(&tunel.host_nombre, 8),
+            format!("{} ({})", tunel.conexiones, tunel.aceptadas),
+            crate::archivos::tamano_legible(tunel.bytes_bajados),
+            crate::archivos::tamano_legible(tunel.bytes_subidos),
+        );
+    }
+    if let Some(caido) = activos
+        .iter()
+        .find(|tunel| tunel.estado == crate::protocolo::EstadoTunelRemoto::Caido)
+    {
+        if let Some(error) = &caido.ultimo_error {
+            println!("Último fallo: {} · {error}", caido.nombre);
+        }
+    }
+}
+
 /// Recorta un texto a un ancho, con puntos suspensivos si sobra.
 fn recortar_texto(texto: &str, ancho: usize) -> String {
     if texto.chars().count() <= ancho {
@@ -1542,6 +1744,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             clientes,
             sesiones,
             transferencias,
+            tuneles,
             ..
         } => {
             println!(
@@ -1570,6 +1773,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                 }
             }
             imprime_cola(&transferencias);
+            imprime_tuneles(&tuneles);
             Ok(0)
         }
         MensajeServidor::VersionIncompatible { version } => {
@@ -1604,8 +1808,16 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
         }
     };
     saludo_y_envio(&mut stream).await?;
-    let cuantas = match leer_respuesta(&mut stream).await? {
-        MensajeServidor::Bienvenida { sesiones, .. } => sesiones.len(),
+    let (cuantas, tuneles_vivos) = match leer_respuesta(&mut stream).await? {
+        MensajeServidor::Bienvenida {
+            sesiones, tuneles, ..
+        } => (
+            sesiones.len(),
+            tuneles
+                .iter()
+                .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
+                .count(),
+        ),
         MensajeServidor::VersionIncompatible { version } => {
             println!(
                 "El servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}; no se puede parar con este comando."
@@ -1617,8 +1829,12 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             return Ok(1);
         }
     };
-    if cuantas > 0 && !si {
-        print!("Hay {cuantas} sesión(es) abierta(s). ¿Cerrarlas y apagar el servidor? [s/N] ");
+    if (cuantas > 0 || tuneles_vivos > 0) && !si {
+        let mut aviso = format!("Hay {cuantas} sesión(es) abierta(s)");
+        if tuneles_vivos > 0 {
+            aviso.push_str(&format!(" y {tuneles_vivos} túnel(es) levantado(s)"));
+        }
+        print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
         use std::io::Write as _;
         std::io::stdout().flush().ok();
         let mut respuesta = String::new();

@@ -668,7 +668,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
                 tema,
             );
         }
-        Dialogo::Detalle { titulo, lineas } => {
+        Dialogo::Detalle { titulo, lineas, .. } => {
             let alto = lineas.len() as u16 + 4;
             let recta = centrar(area, 74, alto);
             let mut contenido: Vec<Line> = lineas.iter().map(|texto| linea(texto)).collect();
@@ -850,6 +850,191 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
                 ]),
             ];
             modal(marco, recta, "GENERAR CLAVE", contenido, false, tema);
+        }
+        Dialogo::Tunel { estado } => {
+            use crate::app::CampoTunel;
+            use crate::modelo::TipoTunel;
+            let activo = |campo: CampoTunel| estado.foco == campo;
+            let estilo = |campo: CampoTunel| {
+                let base = Style::default().fg(tema.paleta.texto);
+                if activo(campo) {
+                    base.fg(tema.paleta.acento).add_modifier(Modifier::BOLD)
+                } else {
+                    base
+                }
+            };
+            let etiqueta = |campo: CampoTunel, texto: &str| {
+                Span::styled(
+                    format!("{texto:<11}"),
+                    Style::default().fg(if activo(campo) {
+                        tema.paleta.acento
+                    } else {
+                        tema.paleta.inactivo
+                    }),
+                )
+            };
+            let corchete =
+                |texto: &'static str| Span::styled(texto, Style::default().fg(tema.paleta.acento));
+            let deshabilitado = !estado.tipo.lleva_destino();
+            let estilo_destino = |campo: CampoTunel| {
+                if deshabilitado {
+                    Style::default().fg(tema.paleta.inactivo)
+                } else {
+                    estilo(campo)
+                }
+            };
+            let mut contenido = Vec::new();
+
+            // Host: desplegable, con su lista desplegada debajo si está abierto.
+            let valor_host = if estado.host.opciones.is_empty() {
+                "(no hay hosts)".to_string()
+            } else {
+                format!("{} \u{25be}", estado.host.etiqueta_seleccionada())
+            };
+            contenido.push(Line::from(vec![
+                etiqueta(CampoTunel::Host, "Host"),
+                corchete("[ "),
+                Span::styled(
+                    format!("{valor_host:<34}"),
+                    if estado.host.abierto {
+                        Style::default()
+                            .bg(tema.paleta.acento)
+                            .fg(tema.paleta.fondo)
+                    } else {
+                        estilo(CampoTunel::Host)
+                    },
+                ),
+                corchete(" ]"),
+            ]));
+            if estado.host.abierto {
+                let filtradas = estado.host.filtradas();
+                for (posicion, indice) in filtradas.iter().take(6).enumerate() {
+                    let opcion = &estado.host.opciones[*indice];
+                    let resaltada = posicion == estado.host.resaltado;
+                    contenido.push(Line::from(Span::styled(
+                        format!(
+                            "  {} {}",
+                            if resaltada { "\u{25b8}" } else { " " },
+                            opcion.etiqueta
+                        ),
+                        if resaltada {
+                            Style::default()
+                                .bg(tema.paleta.acento)
+                                .fg(tema.paleta.fondo)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(tema.paleta.texto)
+                        },
+                    )));
+                }
+                if filtradas.len() > 6 {
+                    contenido.push(Line::from(Span::styled(
+                        format!("    … {} más", filtradas.len() - 6),
+                        Style::default().fg(tema.paleta.inactivo),
+                    )));
+                }
+                contenido.push(Line::from(Span::styled(
+                    format!("  filtro: {}", estado.host.filtro.texto),
+                    Style::default().fg(tema.paleta.inactivo),
+                )));
+            }
+
+            contenido.push(Line::from(vec![
+                etiqueta(CampoTunel::Nombre, "Nombre"),
+                corchete("[ "),
+                estado
+                    .nombre
+                    .span(activo(CampoTunel::Nombre), estilo(CampoTunel::Nombre)),
+                corchete(" ]"),
+            ]));
+            let marca = |elegido: bool| if elegido { "(•)" } else { "( )" };
+            contenido.push(Line::from(vec![
+                etiqueta(CampoTunel::Tipo, "Tipo"),
+                Span::styled(
+                    format!(
+                        "{} local   {} remoto   {} dinámico",
+                        marca(estado.tipo == TipoTunel::Local),
+                        marca(estado.tipo == TipoTunel::Remoto),
+                        marca(estado.tipo == TipoTunel::Dinamico),
+                    ),
+                    estilo(CampoTunel::Tipo),
+                ),
+            ]));
+            contenido.push(Line::from(vec![
+                etiqueta(CampoTunel::EscuchaDireccion, "Escucha"),
+                corchete("[ "),
+                estado.escucha_direccion.span(
+                    activo(CampoTunel::EscuchaDireccion),
+                    estilo(CampoTunel::EscuchaDireccion),
+                ),
+                corchete(" ] : [ "),
+                estado.escucha_puerto.span(
+                    activo(CampoTunel::EscuchaPuerto),
+                    estilo(CampoTunel::EscuchaPuerto),
+                ),
+                corchete(" ]"),
+                Span::styled(
+                    "   puerto 0: el que asigne el sistema",
+                    Style::default().fg(tema.paleta.inactivo),
+                ),
+            ]));
+            let mut spans_destino = vec![
+                etiqueta(CampoTunel::DestinoDireccion, "Destino"),
+                corchete("[ "),
+                estado.destino_direccion.span(
+                    activo(CampoTunel::DestinoDireccion) && !deshabilitado,
+                    estilo_destino(CampoTunel::DestinoDireccion),
+                ),
+                corchete(" ] : [ "),
+                estado.destino_puerto.span(
+                    activo(CampoTunel::DestinoPuerto) && !deshabilitado,
+                    estilo_destino(CampoTunel::DestinoPuerto),
+                ),
+                corchete(" ]"),
+            ];
+            if deshabilitado {
+                spans_destino.push(Span::styled(
+                    "   no se usa en dinámico",
+                    Style::default().fg(tema.paleta.inactivo),
+                ));
+            }
+            contenido.push(Line::from(spans_destino));
+            contenido.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(
+                        "{} automático: se levanta con la primera sesión",
+                        crate::ui::componentes::casilla(estado.automatico)
+                    ),
+                    estilo(CampoTunel::Automatico),
+                ),
+            ]));
+            if let Some(aviso) = estado.aviso() {
+                contenido.push(Line::from(Span::styled(
+                    format!("  {aviso}"),
+                    Style::default().fg(tema.paleta.acento),
+                )));
+            }
+            contenido.push(Line::from(""));
+            contenido.push(Line::from(vec![
+                atajo("^s", tema),
+                span_texto(" guardar   "),
+                atajo("⇥", tema),
+                span_texto(" campo   "),
+                atajo("↵", tema),
+                span_texto(" desplegable   "),
+                atajo("esc", tema),
+                span_texto(" cancelar"),
+            ]));
+
+            let alto = contenido.len() as u16 + 4;
+            let recta = centrar(area, 78, alto);
+            let titulo = if estado.id.is_some() {
+                "EDITAR TÚNEL"
+            } else {
+                "TÚNEL NUEVO"
+            };
+            modal(marco, recta, titulo, contenido, false, tema);
         }
         Dialogo::FraseImportacion { campo, .. } => {
             let recta = centrar(area, 60, 9);

@@ -13,6 +13,7 @@ pub mod registro;
 pub mod sesion;
 pub mod sesiones;
 pub mod transferencias;
+pub mod tuneles;
 
 use std::io::{self, Stdout};
 
@@ -46,6 +47,8 @@ pub enum Vista {
     Archivos,
     /// Cola de transferencias ampliada.
     Transferencias,
+    /// Vista Túneles (F5): reenvíos definidos y su estado en vivo.
+    Tuneles,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -78,6 +81,7 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         Vista::Registro => registro::dibujar(marco, trozos[0], app),
         Vista::Archivos => archivos::dibujar(marco, trozos[0], app),
         Vista::Transferencias => transferencias::dibujar(marco, trozos[0], app),
+        Vista::Tuneles => tuneles::dibujar(marco, trozos[0], app),
     }
     barra::dibujar(marco, trozos[1], app);
     if let Some(dialogo) = &app.dialogo {
