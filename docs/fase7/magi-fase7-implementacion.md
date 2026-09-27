@@ -2,7 +2,7 @@
 
 ## Informe de Implementación
 
-**Última actualización:** 27 de septiembre de 2026 (sesión 1: S1 y S2 cerrados, S3 en curso)
+**Última actualización:** 27 de septiembre de 2026 (sesión 1: fase cerrada, 46/46; pendiente la validación manual)
 
 ---
 
@@ -13,8 +13,9 @@ La fase se desarrolla en la rama `fase7-fix_redimensionado_ventana`, con un comm
 | Sprint | Commit | Contenido |
 |---|---|---|
 | S1 | `8dd98fb` | Diagnóstico de los dos fallos con tests en rojo, arreglo del servidor y del hilo de teclas, tubería única de tamaño (`Geometria`), extremo a extremo |
-| S2 | (este) | Disposición adaptable: `ui/disposicion.rs`, aviso de tamaño, todas las vistas y diálogos, instantáneas |
-| S3 | — | Instantáneas, secuencias, revisión adversarial y cierre |
+| S2 | `6c42856` | Disposición adaptable: `ui/disposicion.rs`, aviso de tamaño, todas las vistas y diálogos, instantáneas |
+| S3 | `ab7e82e` | Barrido sin pánico, secuencias de cambio, revisión adversarial con sus arreglos, README |
+| Cierre | (este) | Checklist e informe |
 
 ### Diagnóstico de R36 (primer paso de la fase)
 
@@ -70,7 +71,7 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   - `tamano_minimo` es el mínimo por componente de los adjuntos y, sin adjuntos, conserva el
     último.
   - `ventana_minima`: la ventana que impone las columnas; a igualdad, la de menos filas y
-    después el id menor.
+    después el id menor. En S3 pasa a calcularse para cada ventana (ver «S3»).
   - `aplicar_tamano(estado, sesion, avisar_a)`:
     - es el único punto que envía `AplicarTamano` (`window_change` y parser);
     - difunde `Redimensionada` cuando cambia el tamaño o la ventana que lo impone;
@@ -122,7 +123,8 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   - `Disposicion` del último pintado.
 - **`src/ui/aviso_tamano.rs`**
   - Aviso centrado «ventana demasiado pequeña · actual · mínimo».
-  - «(Vista necesita W×H)» cuando lo que se muestra es el mínimo global.
+  - «(Vista necesita W×H)»: en S2 solo cuando lo que se muestra es el mínimo global; desde S3,
+    siempre.
   - Tres niveles: con borde, sin borde y solo `MAGI c×f` por debajo de 20×3.
 - **`ui::dibujar` devuelve la `Disposicion`.**
   - Cada vista recibe `&mut Disposicion` y registra la ventana de sus listas.
@@ -131,8 +133,10 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   - Desaparecen `terminal_alto` y todas las funciones `alto_lista`/`alto_panel`/`alturas_*`.
   - `PgUp`/`PgDn` avanzan una página visible, no 10 fijo.
 - **Con el aviso visible**
-  - Solo pasan `q`, `F1`-`F8` y `Ctrl+P`; en la ficha, `q` equivale a `Esc`.
-  - `Esc` pasa también si hay una deliberación tapada, para poder cancelarla.
+  - Solo pasan `q`, `F1`-`F8` y `Ctrl+P`. En la ficha, `q` equivale a `Esc`, salvo con cambios
+    sin guardar (S3).
+  - Con una deliberación tapada por el aviso solo pasa `Esc`, para cancelarla, también en
+    Sesión (S3).
   - En Sesión todo sigue yendo al remoto.
   - Diálogos, paleta y ayuda se pintan encima del aviso y conservan sus teclas.
 - **`Tema.glifos`** amplía sus glifos (selección, relleno, puntos, ×, ·, ↵, ⇥, líneas, ↑↓) con su equivalente ASCII.
@@ -177,6 +181,55 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
 - Los tres degradadores ASCII duplicados se unifican en `disposicion::texto_ascii`.
 - Las pruebas ASCII de todos los grupos incluyen ya la barra inferior.
 
+### S3 — Pruebas, revisión y cierre
+
+**Pruebas de pintado**
+- `tests/redimensionado/barrido.rs`: todas las vistas, la paleta, la ayuda, el diálogo MAGI,
+  EJECUTAR, el formulario, el visor de Resultados y las 17 variantes de diálogo pasan por la
+  rejilla de anchos {1, 2, 19, 20, 39, 40, 59, 60, 79, 80, 99, 100, 200} × altos {1, 2, 3, 7, 8,
+  11, 12, 19, 20, 23, 24, 60}. En cada tamaño se comprueba que no hay pánico, que el pintado
+  tiene el tamaño nuevo y que toda lista deja la selección a la vista y sin huecos. Se hace en
+  Unicode y en ASCII.
+- `tests/redimensionado/secuencias.rs`: 200×60 → 80×24 → 40×12 → 200×60 con:
+  - Hosts con 50 hosts más, la selección en la fila 30 y un filtro;
+  - Flota con el detalle a la vista en estrecho;
+  - Archivos con marcados y el panel remoto activo;
+  - una entrada de texto a medio escribir.
+
+  En cada paso se comprueba el estado y al final hay una instantánea.
+- En total, 178 pruebas en `tests/redimensionado.rs` y 128 instantáneas en `tests/snapshots/`.
+
+**Revisión adversarial de cierre** (obligatoria, servidor y cliente por separado)
+- Un workflow con cinco revisores: servidor, tubería y estado del cliente, y tres bloques de UI.
+  Cada hallazgo lo verificaron tres escépticos con enfoques distintos (trazar el código,
+  reproducirlo, contrastarlo con la especificación); se confirmaba con al menos 2 de 3.
+- Resultado: 19 hallazgos, **14 confirmados y corregidos**, 5 refutados.
+
+| # | Zona | Hallazgo | Arreglo |
+|---|---|---|---|
+| 1 | servidor | Una sola `ventana_minima` para todas: con una ventana que impone las columnas y otra las filas, la de más filas se veía «(mín. esta ventana)» | `ventana_minima_para(adjuntos, tamaño, destino)`: cada adjunto recibe la ventana que explica su propio relleno. `Redimensionada` se envía por ventana y cambia solo lo que cambia. Pruebas unitarias y `cada_ventana_sabe_quien_explica_su_relleno` |
+| 2 | cliente | `Redimensionada` se aplicaba al parser en el bucle de la App, después de datos que el remoto ya había pintado a ese tamaño (pantalla corrupta al crecer) | La tarea de lectura aplica el tamaño en orden con los datos (`Pantallas::redimensionar`) y reenvía el mensaje a la App |
+| 3 | servidor | `PantallaCompleta` declaraba el tamaño de la sesión y no el del parser del que sale el volcado (sesión caída, o `AplicarTamano` en cola) | El volcado lleva el tamaño del parser, leído bajo el mismo cerrojo |
+| 4 | pruebas | `ac_dos_ventanas_la_pequena_se_cierra` aceptaba el `Redimensionada` del primer `Adjuntar` | Se vacía `vistos` antes de cerrar la ventana |
+| 5 | cliente | En Sesión, con el aviso tapando la deliberación, Ctrl+K ejecutaba el plan sin que se viera el diálogo | Con una deliberación tapada solo pasa `Esc`, también en Sesión. Prueba de regresión |
+| 6 | cliente | La paleta encogida a la línea de la consulta ejecutaba con `↵` una entrada que no se veía | `↵` solo ejecuta si la selección estaba a la vista en el último pintado. Prueba |
+| 7 | cliente | Un redimensionado de ida y vuelta dentro de la agrupación dejaba restos: no había `clear` ni repintado | `Geometria::vencido` devuelve `Vencido::Repintar`: una limpieza y un repintado, sin `Redimensionar`. Pruebas |
+| 8 | UI | El aviso no decía qué exigía el mínimo si se cumplía el global (por ejemplo, el diálogo MAGI tapado) | El aviso dice siempre «(X necesita W×H)» |
+| 9 | UI (pérdida de datos) | Con el aviso, una «q» tecleada a ciegas en la ficha con cambios se volvía `Esc`, y una «s» o un `↵` detrás descartaban los cambios | Con cambios sin guardar, `q` se ignora; salir sigue siendo posible con `F1`-`F8`, que confirman. **Prueba de regresión, roja con el código anterior** |
+| 10 | UI | Transferencias no limitaba el ancho a ≥ 200×60 | `limitar_ancho(ANCHO_MAX_DETALLE)`, como las demás tablas |
+| 11 | UI | La pregunta de contraseña o frase ocultaba el host al desplazarse hasta el campo | El host va en el título («CONTRASEÑA · host»). Los formularios muestran la posición sin flechas, porque ↑↓ no los desplazan. Prueba a 40×8 |
+| 12 | UI | En Túnel y Generar clave, el aviso de 0.0.0.0, el de clave sin frase y las casillas que aplica `^s` no se veían en su mínimo | Pasan al pie fijo del diálogo. Pruebas a 50×12 y 60×12 con el foco en todos los campos |
+| 13 | UI | Formulario de snippet bajo: la opción resaltada del desplegable quedaba fuera y la pregunta de descartar no se pintaba | Con poco hueco se quitan antes las marcas «más» y el filtro que la resaltada; con una fila manda el pie. Prueba |
+| 14 | UI | `modal()` (EJECUTAR, formulario, deliberación) no degradaba a ASCII («», ¿) | Título y contenido pasan por `linea_ascii`. Prueba |
+
+- **Refutados** (sin cambio):
+  - tamaños enormes que tumbarían el servidor por memoria: vt100 acota y el cliente sanea;
+  - el arreglo no llegaría con un servidor anterior vivo: misma semántica, sin cambio de
+    protocolo, y el servidor se relanza con cada versión;
+  - teclas perdidas durante los 50 ms de agrupación: se procesan igual;
+  - datos sin degradar en Archivos y Transferencias en ASCII;
+  - un duplicado del hallazgo 5.
+
 ## Desviaciones respecto a la especificación (qué y por qué)
 
 - **Mínimo de Sesión 40×8 por debajo del global 40×12.** Decisión del desarrollador: el
@@ -192,8 +245,17 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   Hacen falta para que `tests/redimensionado.rs` ejerza el bucle real.
 - **Detalle plegado de Snippets con `i` y no con `↵`** (checklist: «se abre con `↵`»): en Snippets `↵` ejecuta. En Identidades `↵` estaba libre y se usa.
 - **Aviso de tamaño.**
-  - Los diálogos, la paleta y la ayuda se pintan encima del aviso y conservan sus teclas: una pregunta del servidor nunca queda bloqueada.
-  - Con el aviso y una deliberación abierta, `Esc` también pasa, para cancelarla.
+  - Los diálogos, la paleta y la ayuda se pintan encima del aviso y conservan sus teclas: una
+    pregunta del servidor nunca queda bloqueada. La paleta no ejecuta una entrada que no se ve.
+  - Con una deliberación tapada por el aviso solo pasa `Esc`, que la cancela, también en
+    Sesión, donde el resto de teclas va al remoto.
+  - En la ficha con cambios sin guardar, la `q` del aviso se ignora; con la ficha limpia
+    equivale a `Esc`.
+  - El aviso dice siempre qué vista o diálogo exige el mínimo, también cuando se muestra el
+    propio (la maqueta solo lo enseñaba con el global).
+- **Un tamaño igual al ya aplicado no hace nada**, salvo si la ráfaga pasó por otro tamaño (ida
+  y vuelta): entonces se limpia y se repinta una vez, sin `Redimensionar`. El terminal ya había
+  truncado lo pintado.
 - **Sesiones no tiene dirección ni usuario·puerto.** Oculta por prioridad sus propias columnas:
   - HOST por debajo de 60 columnas;
   - IDENTIDAD y VENT. por debajo de 80;
@@ -213,18 +275,30 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
 - **Diálogos y ayuda.** El indicador «↑↓ i/n» va en el borde inferior del recuadro. «↑↓ PgUp PgDn desplazar diálogos» se añade al final de la ayuda de todas las vistas.
 - **Mejoras en el servidor fuera del arreglo estricto:**
   - `Redimensionada` a la ventana que se adjunta aunque el tamaño no cambie;
-  - difusión cuando cambia solo la ventana que impone el mínimo;
-  - nuevo criterio de `ventana_minima`.
+  - `ventana_minima` calculada para cada ventana (la que explica su relleno) y enviada por
+    ventana;
+  - el volcado de `PantallaCompleta` declara el tamaño de su parser.
 
   Son necesarias para el ítem «La ventana mayor rellena con `░`… en cada cambio». Sin
   mensajes nuevos.
 
 ## Estructura de archivos creada/modificada
 
+- **S3, nuevos:** `tests/redimensionado/{barrido,secuencias,revision}.rs` y 4 instantáneas de
+  secuencias.
+- **S3, modificados:**
+  - `src/servidor/{mod,sesiones}.rs`: `ventana_minima_para`, `Redimensionada` por ventana,
+    tamaño del volcado.
+  - `src/cliente/{mod,pantallas}.rs`: tamaño aplicado en la tarea de lectura.
+  - `src/app.rs`: filtro del aviso, `q` en la ficha, paleta y repintado de ida y vuelta.
+  - `src/app/geometria.rs`: `Vencido`.
+  - `src/ui/{aviso_tamano,dialogos,formulario_snippet,transferencias}.rs`.
+  - `README.md`: sección «Tamaño de la terminal», atajos y pruebas.
+
 - **S2, nuevos:**
   - `src/ui/disposicion.rs`, `src/ui/aviso_tamano.rs`
   - `tests/redimensionado/{semilla,vistas_a…vistas_g}.rs`
-  - `tests/snapshots/` (148 instantáneas)
+  - `tests/snapshots/` (124 instantáneas)
 - **S2, modificados:**
   - todas las vistas de `src/ui/` y `src/tema.rs`;
   - `src/app.rs`: disposición del último pintado, sincronización, teclas de página, filtro del aviso, desplazamiento de modales, `Tab` de Flota, detalle de Identidades y `?` en más vistas;
@@ -260,8 +334,34 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
 - **Riesgo aceptado:** si entra otro SIGWINCH entre `aplicar_tamano` y el `draw`, ratatui
   vuelve a limpiar. Es inherente a `Viewport::Fullscreen`, y el `Resize` que llega después
   lo corrige.
+- **Instantáneas deterministas sin reloj inyectable.** El plan preveía un `App.reloj`, pero
+  basta con esto:
+  - las fechas absolutas de la semilla son fijas y las pruebas corren con `TZ=UTC`;
+  - las relativas se siembran respecto a la hora real, lejos de los redondeos;
+  - un filtro de insta cambia «hace N s» por un texto del mismo ancho;
+  - la ruta temporal tiene longitud fija (`/tmp/magiXXXXXX`).
+
+  Así la App no cambia para las pruebas.
+- **Reparto de S2 en siete grupos en paralelo** (worktrees aislados, con ficheros disjuntos y un
+  revisor por grupo), integrados aquí sin conflictos. Los pendientes cruzados que anotaron (`?`
+  en más vistas, degradadores ASCII duplicados, rejilla de EJECUTAR) se resolvieron al integrar.
+- **Un solo degradador ASCII** (`disposicion::texto_ascii`). Conserva letras con tilde y quita
+  `¿`/`¡`, porque se lee mejor «Seguro?» que «?Seguro?». El criterio de las pruebas ASCII es
+  `c.is_ascii() || c.is_alphabetic()`.
 
 ## Funcionalidades del checklist completadas (copiando su texto exacto)
+
+46 de 46.
+
+**S3**
+- `tests/redimensionado.rs` con `TestBackend`: todas las vistas y diálogos pintan sin panic a 40×12, 80×24 y 200×60
+- Instantáneas `insta` de cada vista a los tres tamaños, revisadas y guardadas en `tests/snapshots/`
+- Secuencias de cambio (200×60 → 80×24 → 40×12 → 200×60) con estado coherente: selección visible, filtro y marcados conservados, diálogo abierto recolocado
+- Toda vista nueva que se añada en el futuro debe incluirse en estas pruebas (anotado en `CLAUDE.md`)
+- `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` limpios
+- `cargo test` verde, incluidas las instantáneas
+- Revisión adversarial del código tocado antes de cerrar, con resultado en el informe de implementación
+- README: comportamiento al redimensionar, modo estrecho, tamaños mínimos
 
 **S2**
 - `ui/disposicion.rs` con los puntos de corte (estrecho < 100 columnas, columnas mínimas < 80, bajo < 20 filas), `ModoAncho {Normal, Estrecho, Minimo}` y los mínimos por vista
@@ -307,8 +407,14 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
 
 ## Pendientes y bloqueos
 
-- **Queda S3:** barrido sin pánico de todas las vistas y diálogos, secuencias de cambio
-  comunes, revisión adversarial de cierre y README.
+- **La fase está completa en código y pruebas: 46/46.**
+- **Menores que quedan fuera del checklist:**
+  - `tests/pool.rs::sigterm_para_el_servidor_limpio` falló una vez con varios worktrees
+    compilando y probando a la vez. Pasó al repetir y pasa en todas las ejecuciones completas
+    de esta sesión. Parece sensible a la carga de la máquina.
+  - La pista de Sesión «N sesiones: usa ‹ › o la lista» nombra marcas, no teclas (viene de la
+    Fase 3).
+  - La barra del modo prefijo no enseña `f archivos` (viene de la Fase 4).
 - **Menores anotados por los grupos, fuera del checklist:**
   - En ASCII, Túneles pinta `o` tanto para «activando/parando» como para «inactivo»; el texto
     los distingue.
@@ -321,9 +427,13 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   - zoom de Alacritty con `stty size` en una pestaña;
   - `htop` al crecer y al encoger;
   - dos ventanas en la misma pestaña;
-  - redimensionar con `less` abierto y volver.
+  - redimensionar con `less` abierto y volver;
+  - el aviso por debajo del mínimo;
+  - `MAGI_ASCII=1`.
 
   Si el fallo 1 se reproduce sin haber usado el visor, la causa no está localizada.
+- **Las instantáneas solo recogen símbolos, no colores.** El resaltado de la selección y los
+  colores del tema se comprueban a mano.
 
 ## Ejecución y pruebas (cómo arrancar, migrar y testear)
 
@@ -333,5 +443,11 @@ localizada. Queda anotado en «Pendientes y bloqueos» para la validación manua
   - `remoto`: servidor y host SSH de pruebas.
   - `tuberia`: App de prueba con `TestBackend`.
   - `extremo`: App real contra el servidor en proceso.
+  - `vistas_a`…`vistas_g`: disposición e instantáneas por vista.
+  - `barrido` y `secuencias`: rejilla de tamaños y cambios de modo.
+  - `revision`: regresiones de la revisión adversarial.
+- Instantáneas: tras un cambio visual deliberado, regenerar con
+  `INSTA_UPDATE=always cargo test --test redimensionado` y revisar con
+  `git diff tests/snapshots` o `cargo insta review`.
 - Tests unitarios: `cargo test --lib app::teclado app::geometria servidor::sesiones`.
 - Antes de cada commit: `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check`.
