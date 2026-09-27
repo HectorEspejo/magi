@@ -5,6 +5,6 @@ source: tests/redimensionado/arnes.rs
 │                                     │
 │     ✕ ventana demasiado pequeña     │
 │         39×7 · mínimo 40×8          │
-│                                     │
+│       (Sesión necesita 40×8)        │
 │                                     │
 └─────────────────────────────────────┘

@@ -7,6 +7,8 @@ mod comun;
 
 #[path = "redimensionado/arnes.rs"]
 mod arnes;
+#[path = "redimensionado/barrido.rs"]
+mod barrido;
 #[path = "redimensionado/extremo.rs"]
 mod extremo;
 #[path = "redimensionado/tuberia.rs"]
@@ -28,5 +30,9 @@ mod vistas_g;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;
+#[path = "redimensionado/revision.rs"]
+mod revision;
+#[path = "redimensionado/secuencias.rs"]
+mod secuencias;
 #[path = "redimensionado/semilla.rs"]
 mod semilla;

@@ -153,7 +153,7 @@ fn ejecuciones(sembrado: &Sembrado) -> Vec<InfoEjecucion> {
 }
 
 /// Resultados abierta a 80×24 (F8 → t) con las doce ejecuciones.
-fn abrir_resultados(tema: Tema) -> (AppPrueba, Sembrado) {
+pub(crate) fn abrir_resultados(tema: Tema) -> (AppPrueba, Sembrado) {
     let (mut prueba, sembrado) = AppPrueba::con_semilla_y_tema(80, 24, tema);
     prueba.tecla(KeyCode::F(8));
     prueba.tecla(KeyCode::Char('t'));
@@ -206,7 +206,7 @@ fn rechaza(detalle: &str) -> Veredicto {
 
 /// La deliberación de la maqueta §6.5: tres hosts de producción, el backup
 /// de hetzner-02 de hace 31 h (bloqueada).
-fn deliberacion_maqueta(sembrado: &Sembrado) -> DeliberacionAbierta {
+pub(crate) fn deliberacion_maqueta(sembrado: &Sembrado) -> DeliberacionAbierta {
     let id = |nombre: &str| sembrado.host(nombre);
     let filas = vec![
         ComprobacionesHost {
@@ -240,7 +240,7 @@ fn deliberacion_maqueta(sembrado: &Sembrado) -> DeliberacionAbierta {
 }
 
 /// Una deliberación de `cuantos` hosts, todos aprobados.
-fn deliberacion_larga(cuantos: i64) -> DeliberacionAbierta {
+pub(crate) fn deliberacion_larga(cuantos: i64) -> DeliberacionAbierta {
     let nombres: Vec<(i64, String)> = (1..=cuantos).map(|i| (i, format!("web-{i:02}"))).collect();
     let referencias: Vec<(i64, &str)> = nombres.iter().map(|(i, n)| (*i, n.as_str())).collect();
     let filas = nombres
@@ -287,7 +287,7 @@ fn seleccionar_snippet(prueba: &mut AppPrueba, nombre: &str) {
 }
 
 /// EJECUTAR abierto a 80×24 con ↵ sobre `snippet`.
-fn abrir_ejecutar(tema: Tema, snippet: &str) -> AppPrueba {
+pub(crate) fn abrir_ejecutar(tema: Tema, snippet: &str) -> AppPrueba {
     let (mut prueba, _) = AppPrueba::con_semilla_y_tema(80, 24, tema);
     seleccionar_snippet(&mut prueba, snippet);
     prueba.tecla(KeyCode::Enter);
@@ -300,7 +300,7 @@ fn abrir_ejecutar(tema: Tema, snippet: &str) -> AppPrueba {
 }
 
 /// El formulario de snippet nuevo (F8 → n) abierto a 80×24.
-fn abrir_formulario(tema: Tema) -> AppPrueba {
+pub(crate) fn abrir_formulario(tema: Tema) -> AppPrueba {
     let (mut prueba, _) = AppPrueba::con_semilla_y_tema(80, 24, tema);
     prueba.tecla(KeyCode::F(8));
     prueba.tecla(KeyCode::Char('n'));

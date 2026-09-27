@@ -118,7 +118,7 @@ fn detalle_largo() -> Dialogo {
 
 /// Abre un diálogo sin camino de teclas sencillo y lo pinta, como haría el
 /// bucle antes de la siguiente tecla.
-fn abrir_dialogo(prueba: &mut AppPrueba, dialogo: Dialogo) {
+pub(crate) fn abrir_dialogo(prueba: &mut AppPrueba, dialogo: Dialogo) {
     prueba.app.abrir_dialogo(dialogo);
     prueba.paso_en(std::time::Instant::now());
 }
@@ -668,11 +668,13 @@ fn la_ayuda_trae_las_teclas_nuevas() {
 }
 
 /// Crea un diálogo nuevo (los diálogos no son `Clone`).
-type FabricaDialogo = Box<dyn Fn() -> Dialogo>;
+pub(crate) type FabricaDialogo = Box<dyn Fn() -> Dialogo>;
 
 /// Todas las variantes de diálogo que pinta `dialogos.rs`, con el principio
 /// del título de su recuadro.
-fn todos_los_dialogos(hosts: Vec<magi::modelo::Host>) -> Vec<(&'static str, FabricaDialogo)> {
+pub(crate) fn todos_los_dialogos(
+    hosts: Vec<magi::modelo::Host>,
+) -> Vec<(&'static str, FabricaDialogo)> {
     vec![
         ("DETALLE DEL REGISTRO", Box::new(detalle_largo)),
         (
@@ -824,7 +826,7 @@ fn todos_los_dialogos(hosts: Vec<magi::modelo::Host>) -> Vec<(&'static str, Fabr
     ]
 }
 
-fn hosts_de_la_semilla() -> Vec<magi::modelo::Host> {
+pub(crate) fn hosts_de_la_semilla() -> Vec<magi::modelo::Host> {
     let (prueba, _) = AppPrueba::con_semilla(80, 24);
     prueba.app.hosts.clone()
 }

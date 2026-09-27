@@ -1213,7 +1213,7 @@ async fn abrir_sesion(
             reconectando: false,
             comandos_iniciales: comandos_iniciales.clone(),
             tamano,
-            ventana_minima: None,
+            ventana_minima: HashMap::new(),
             pantalla: pantalla.clone(),
             tx_comandos,
         },
@@ -1255,33 +1255,39 @@ async fn aplicar_tamano(
         return;
     };
     let nuevo = sesiones::tamano_minimo(&sesion.adjuntos, sesion.tamano);
-    let minima = sesiones::ventana_minima(&sesion.adjuntos);
-    let destinatarios: Vec<u32> = if nuevo != sesion.tamano || minima != sesion.ventana_minima {
-        if nuevo != sesion.tamano {
-            sesion.tamano = nuevo;
-            let _ = sesion
-                .tx_comandos
-                .send(ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas));
+    let cambia_tamano = nuevo != sesion.tamano;
+    if cambia_tamano {
+        sesion.tamano = nuevo;
+        let _ = sesion
+            .tx_comandos
+            .send(ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas));
+    }
+    // Cada adjunto recibe quién explica su relleno: con el tamaño nuevo todos;
+    // si no, los que cambian de ventana mínima y la que se acaba de adjuntar.
+    let mut envios: Vec<(u32, Option<u32>)> = Vec::new();
+    for cliente_id in sesion.adjuntos.keys().copied() {
+        let minima = sesiones::ventana_minima_para(&sesion.adjuntos, nuevo, cliente_id);
+        let anterior = sesion.ventana_minima.insert(cliente_id, minima);
+        if cambia_tamano || anterior != Some(minima) || avisar_a == Some(cliente_id) {
+            envios.push((cliente_id, minima));
         }
-        sesion.ventana_minima = minima;
-        sesion.adjuntos.keys().copied().collect()
-    } else if let Some(cliente_id) =
-        avisar_a.filter(|cliente_id| sesion.adjuntos.contains_key(cliente_id))
-    {
-        vec![cliente_id]
-    } else {
-        return;
-    };
-    difusion::difundir_a_adjuntos(
-        &estado_bloqueado.clientes,
-        &destinatarios,
-        MensajeServidor::Redimensionada {
-            sesion_id,
-            cols: nuevo.cols,
-            filas: nuevo.filas,
-            ventana_minima: minima,
-        },
-    );
+    }
+    sesion
+        .ventana_minima
+        .retain(|cliente_id, _| sesion.adjuntos.contains_key(cliente_id));
+    for (cliente_id, minima) in envios {
+        if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+            difusion::enviar(
+                cliente,
+                MensajeServidor::Redimensionada {
+                    sesion_id,
+                    cols: nuevo.cols,
+                    filas: nuevo.filas,
+                    ventana_minima: minima,
+                },
+            );
+        }
+    }
 }
 
 async fn adjuntar(
@@ -1301,18 +1307,21 @@ async fn adjuntar(
         };
         sesion.adjuntos.insert(cliente_id, tamano);
         sesion.actividad_no_vista = false;
+        // El volcado declara el tamaño del parser del que sale, no el de la
+        // sesión: pueden diferir (sesión caída, o un AplicarTamano aún en
+        // cola) y el cliente partiría las líneas. El Redimensionada que va
+        // detrás lo lleva después al tamaño vigente.
+        let tamano_sesion = (sesion.tamano.cols, sesion.tamano.filas);
         sesion
             .pantalla
             .lock()
-            .map(|parser| parser.screen().contents_formatted())
-            .unwrap_or_default()
+            .map(|parser| {
+                let (filas, cols) = parser.screen().size();
+                (parser.screen().contents_formatted(), (cols, filas))
+            })
+            .unwrap_or((Vec::new(), tamano_sesion))
     };
-    let (cols, filas) = {
-        let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
-            return;
-        };
-        (sesion.tamano.cols, sesion.tamano.filas)
-    };
+    let (volcado, (cols, filas)) = volcado;
     if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
         difusion::enviar(
             cliente,

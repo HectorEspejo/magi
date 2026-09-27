@@ -145,7 +145,7 @@ fn abrir_archivos_con(prueba: &mut AppPrueba, sembrado: &Sembrado, entradas: Vec
     );
 }
 
-fn abrir_archivos(prueba: &mut AppPrueba, sembrado: &Sembrado) {
+pub(crate) fn abrir_archivos(prueba: &mut AppPrueba, sembrado: &Sembrado) {
     abrir_archivos_con(prueba, sembrado, entradas_remotas());
 }
 

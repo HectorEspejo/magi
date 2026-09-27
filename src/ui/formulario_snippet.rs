@@ -74,6 +74,11 @@ impl Pintor<'_> {
     /// filas: si no cabe todo, el cuerpo se desplaza hasta el campo con el
     /// foco, nunca el pie.
     fn lineas(&self, alto: usize) -> Vec<Line<'static>> {
+        // Con una sola fila manda el pie: lleva las teclas y la pregunta de
+        // descartar, que no puede quedar sin pintar.
+        if alto < 2 {
+            return vec![self.linea_pie()];
+        }
         let pie = vec![self.linea_error(), self.linea_pie()];
         let hueco = alto.saturating_sub(pie.len());
         let desplegable = self.lineas_desplegable(hueco);
@@ -432,15 +437,18 @@ impl Pintor<'_> {
 
     /// El desplegable de hosts, en línea bajo el campo, como en el diálogo de
     /// túnel: opciones filtradas con ventana sobre la resaltada y el filtro.
-    /// Con poco `hueco` (las filas del cuerpo) se ven menos opciones: las
-    /// dos marcas de «más», el filtro y el campo caben con ellas, así que la
-    /// resaltada y el filtro quedan siempre a la vista.
+    /// Con poco `hueco` (las filas del cuerpo) se ven menos opciones; si ni
+    /// así caben el campo, las dos marcas de «más» y el filtro, se quitan
+    /// antes las marcas y después el filtro: la opción resaltada (la que
+    /// añade `↵`) queda siempre a la vista.
     fn lineas_desplegable(&self, hueco_cuerpo: usize) -> Vec<Line<'static>> {
         let desplegable = self.formulario.desplegable_hosts();
         if !desplegable.abierto {
             return Vec::new();
         }
         let opciones_visibles = OPCIONES_VISIBLES.min(hueco_cuerpo.saturating_sub(4)).max(1);
+        let con_marcas = hueco_cuerpo >= 5;
+        let con_filtro = hueco_cuerpo >= 2;
         let sangria = " ".repeat(ANCHO_ETIQUETA);
         let hueco = self.ancho.saturating_sub(ANCHO_ETIQUETA + 4);
         let recorte = self.recorte();
@@ -453,7 +461,7 @@ impl Pintor<'_> {
             )));
         }
         let primera = ventana(desplegable.resaltado, opciones_visibles);
-        if primera > 0 {
+        if primera > 0 && con_marcas {
             lineas.push(Line::from(Span::styled(
                 format!("{sangria}    {recorte} {primera} más arriba"),
                 self.estilo_inactivo(),
@@ -495,11 +503,14 @@ impl Pintor<'_> {
             lineas.push(Line::from(spans));
         }
         let debajo = filtradas.len().saturating_sub(primera + opciones_visibles);
-        if debajo > 0 {
+        if debajo > 0 && con_marcas {
             lineas.push(Line::from(Span::styled(
                 format!("{sangria}    {recorte} {debajo} más"),
                 self.estilo_inactivo(),
             )));
+        }
+        if !con_filtro {
+            return lineas;
         }
         lineas.push(Line::from(vec![
             Span::styled(format!("{sangria}  filtro: "), self.estilo_inactivo()),

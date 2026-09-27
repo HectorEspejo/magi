@@ -67,6 +67,19 @@ impl Pantallas {
             .remove(&sesion_id);
     }
 
+    /// Cambia el tamaño del parser de una pestaña (lo hace la tarea de lectura
+    /// al llegar `Redimensionada`, antes de los datos que el remoto pinte ya
+    /// con el tamaño nuevo).
+    pub fn redimensionar(&self, sesion_id: u32, filas: u16, cols: u16) {
+        let pantalla = {
+            let guardia = self.interno.lock().expect("pantallas del cliente");
+            guardia.get(&sesion_id).cloned()
+        };
+        if let Some(pantalla) = pantalla {
+            crate::conexion::terminal::redimensionar(&pantalla, filas, cols);
+        }
+    }
+
     /// Alimenta el parser de una pestaña con datos del remoto.
     pub fn procesar(&self, sesion_id: u32, bytes: &[u8]) {
         let pantalla = {

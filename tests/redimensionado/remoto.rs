@@ -142,7 +142,9 @@ async fn ac_dos_ventanas_la_pequena_se_cierra() {
         MensajeServidor::Redimensionada { ventana_minima: Some(id), .. } if id == id_segunda
     ));
 
-    // Se cierra la segunda ventana: el remoto vuelve a las 200 columnas.
+    // Se cierra la segunda ventana: el remoto vuelve a las 200 columnas. Lo ya
+    // visto se olvida para exigir la difusión nueva, no la del primer Adjuntar.
+    esc.vistos.clear();
     drop(segunda);
     let tamanos = esperar_tamanos(&mut esc, 4).await;
     assert_eq!(&tamanos[2..], &[(100, 26), (200, 46)]);
@@ -210,4 +212,50 @@ async fn la_ventana_que_se_adjunta_sabe_el_tamano_vigente() {
         "llegó {aviso:?}"
     );
     assert_eq!(esc.observado.tamanos(), vec![(100, 26)]);
+}
+
+/// Pestaña compartida en la que una ventana impone las columnas y la otra las
+/// filas: cada una recibe como «mínima» la que explica su propio relleno.
+#[tokio::test]
+async fn cada_ventana_sabe_quien_explica_su_relleno() {
+    let mut esc = escenario(OpcionesEscenario::default()).await;
+    let host = esc.hosts[0];
+    let sesion = esc.abrir_sesion(host).await;
+    let mut segunda = esc.otra_ventana().await;
+    adjuntar(&mut esc, sesion, 200, 30).await;
+    esperar_tamanos(&mut esc, 1).await;
+    esc.vistos.clear();
+    segunda
+        .enviar(&MensajeCliente::Adjuntar {
+            sesion_id: sesion,
+            cols: 120,
+            filas: 46,
+        })
+        .await;
+    assert_eq!(esperar_tamanos(&mut esc, 2).await[1], (120, 30));
+    // A la primera le sobran columnas: las impone la segunda.
+    let id_segunda = segunda.cliente_id;
+    let aviso = redimensionada(&mut esc, 120, 30).await;
+    assert!(
+        matches!(aviso, MensajeServidor::Redimensionada { ventana_minima: Some(id), .. } if id == id_segunda),
+        "{aviso:?}"
+    );
+    // A la segunda le sobran filas: las impone la primera.
+    let id_primera = esc.cliente_id;
+    let aviso = segunda
+        .esperar(|mensaje| {
+            matches!(
+                mensaje,
+                MensajeServidor::Redimensionada {
+                    cols: 120,
+                    filas: 30,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert!(
+        matches!(aviso, MensajeServidor::Redimensionada { ventana_minima: Some(id), .. } if id == id_primera),
+        "{aviso:?}"
+    );
 }

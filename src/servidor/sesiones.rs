@@ -106,8 +106,10 @@ pub struct Sesion {
     pub comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     /// Tamaño vigente (último aplicado al remoto).
     pub tamano: Tamano,
-    /// Ventana que impone ese tamaño, tal como se difundió la última vez.
-    pub ventana_minima: Option<u32>,
+    /// Ventana que explica el relleno de cada adjunto, tal como se le envió la
+    /// última vez (una pestaña compartida puede tener las columnas impuestas
+    /// por una ventana y las filas por otra).
+    pub ventana_minima: HashMap<u32, Option<u32>>,
     /// Pantalla del servidor de la sesión (volcado al adjuntar).
     pub pantalla: Pantalla,
     pub tx_comandos: mpsc::UnboundedSender<ComandoSesion>,
@@ -209,14 +211,36 @@ pub fn tamano_minimo(adjuntos: &HashMap<u32, Tamano>, actual: Tamano) -> Tamano 
         .unwrap_or(actual)
 }
 
-/// Ventana que impone el tamaño: la de menos columnas; a igualdad, la de menos
-/// filas y después la de id menor. Si una ventana da a la vez el mínimo de
-/// columnas y de filas, es ella.
-pub fn ventana_minima(adjuntos: &HashMap<u32, Tamano>) -> Option<u32> {
-    adjuntos
-        .iter()
-        .min_by_key(|(cliente_id, tamano)| (tamano.cols, tamano.filas, **cliente_id))
-        .map(|(cliente_id, _)| *cliente_id)
+/// Ventana que explica el relleno de `destino`: si le sobran columnas, la
+/// que impone las columnas; si solo le sobran filas, la que impone las filas;
+/// a igualdad, la de id menor. Si no le sobra nada, es ella misma (el aviso
+/// «mín. esta ventana» solo se pinta cuando hay relleno).
+pub fn ventana_minima_para(
+    adjuntos: &HashMap<u32, Tamano>,
+    tamano: Tamano,
+    destino: u32,
+) -> Option<u32> {
+    let propio = adjuntos.get(&destino)?;
+    let impone = |columnas: bool| {
+        adjuntos
+            .iter()
+            .filter(|(_, otro)| {
+                if columnas {
+                    otro.cols == tamano.cols
+                } else {
+                    otro.filas == tamano.filas
+                }
+            })
+            .map(|(cliente_id, _)| *cliente_id)
+            .min()
+    };
+    if propio.cols > tamano.cols {
+        impone(true)
+    } else if propio.filas > tamano.filas {
+        impone(false)
+    } else {
+        Some(destino)
+    }
 }
 
 // ---------------------------------------------------------------- apertura
@@ -960,7 +984,10 @@ mod pruebas {
             tamano_minimo(&HashMap::new(), tamano(100, 26)),
             tamano(100, 26)
         );
-        assert_eq!(ventana_minima(&HashMap::new()), None);
+        assert_eq!(
+            ventana_minima_para(&HashMap::new(), tamano(100, 26), 1),
+            None
+        );
     }
 
     #[test]
@@ -968,10 +995,27 @@ mod pruebas {
         let mut adjuntos = HashMap::new();
         adjuntos.insert(1, tamano(200, 30));
         adjuntos.insert(2, tamano(120, 46));
-        assert_eq!(tamano_minimo(&adjuntos, tamano(10, 10)), tamano(120, 30));
-        // Impone las columnas la ventana 2.
-        assert_eq!(ventana_minima(&adjuntos), Some(2));
-        adjuntos.insert(2, tamano(200, 30));
-        assert_eq!(ventana_minima(&adjuntos), Some(1), "empate: id menor");
+        let minimo = tamano_minimo(&adjuntos, tamano(10, 10));
+        assert_eq!(minimo, tamano(120, 30));
+        // A la 1 le sobran columnas (las impone la 2); a la 2, filas (las
+        // impone la 1): cada una ve la otra.
+        assert_eq!(ventana_minima_para(&adjuntos, minimo, 1), Some(2));
+        assert_eq!(ventana_minima_para(&adjuntos, minimo, 2), Some(1));
+    }
+
+    #[test]
+    fn la_ventana_que_impone_todo_se_ve_a_si_misma() {
+        let mut adjuntos = HashMap::new();
+        adjuntos.insert(1, tamano(200, 46));
+        adjuntos.insert(2, tamano(100, 26));
+        let minimo = tamano_minimo(&adjuntos, tamano(10, 10));
+        assert_eq!(ventana_minima_para(&adjuntos, minimo, 1), Some(2));
+        assert_eq!(ventana_minima_para(&adjuntos, minimo, 2), Some(2));
+        adjuntos.insert(3, tamano(100, 26));
+        assert_eq!(
+            ventana_minima_para(&adjuntos, minimo, 1),
+            Some(2),
+            "empate: id menor"
+        );
     }
 }

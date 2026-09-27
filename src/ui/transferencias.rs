@@ -94,6 +94,13 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
     }
     let interior = marco_bloque.inner(area);
     marco.render_widget(marco_bloque, area);
+    // En ventanas muy grandes la tabla y el detalle tienen ancho máximo y van
+    // centrados, como en las demás vistas de tabla.
+    let interior = if disposicion::es_grande(disp.area) {
+        disposicion::limitar_ancho(interior, disposicion::ANCHO_MAX_DETALLE)
+    } else {
+        interior
+    };
 
     let zonas = Layout::default()
         .direction(Direction::Vertical)

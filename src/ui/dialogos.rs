@@ -373,10 +373,12 @@ pub fn dibujar(
                 &[("↵", "aceptar"), ("esc", "cancelar la apertura")],
                 tema,
             )];
+            // El host va también en el título: con poco alto el cuerpo se
+            // desplaza hasta el campo y el título es lo único que queda.
             mostrar(
                 60,
                 Hoja::nueva(
-                    "FRASE DE LA CLAVE",
+                    format!("FRASE DE LA CLAVE · {host}"),
                     cuerpo_frase(host, *intento, campo, tema),
                     pie,
                 )
@@ -393,7 +395,7 @@ pub fn dibujar(
             mostrar(
                 60,
                 Hoja::nueva(
-                    "FRASE DE LA CLAVE",
+                    format!("FRASE DE LA CLAVE · {host}"),
                     cuerpo_frase(host, *intento, campo, tema),
                     pie,
                 )
@@ -427,7 +429,10 @@ pub fn dibujar(
                 ],
                 tema,
             )];
-            mostrar(64, Hoja::nueva("CONTRASEÑA", cuerpo, pie).foco(foco));
+            mostrar(
+                64,
+                Hoja::nueva(format!("CONTRASEÑA · {host}"), cuerpo, pie).foco(foco),
+            );
         }
         Dialogo::MenuGrupo { seleccion } => {
             let opciones = [
@@ -646,8 +651,10 @@ pub fn dibujar(
             mostrar(70, Hoja::nueva("EXPORTAR REGISTRO", cuerpo, pie).foco(foco));
         }
         Dialogo::GenerarClave { estado } => {
-            let (cuerpo, foco) = cuerpo_generacion(estado, tema);
-            let pie = vec![teclas(
+            // Las casillas y el aviso de la frase van en el pie fijo: `^s` los
+            // aplica, así que se ven siempre aunque el cuerpo se desplace.
+            let (cuerpo, mut pie, foco) = cuerpo_generacion(estado, tema);
+            pie.push(teclas(
                 &[
                     ("^s", "generar"),
                     ("⇥", "campo"),
@@ -655,13 +662,25 @@ pub fn dibujar(
                     ("esc", "cancelar"),
                 ],
                 tema,
-            )];
+            ));
             mostrar(74, Hoja::nueva("GENERAR CLAVE", cuerpo, pie).foco(foco));
         }
         Dialogo::Tunel { estado } => {
             let (_, ancho_texto) = medidas(area, ANCHO_TUNEL);
             let (cuerpo, foco) = cuerpo_tunel(estado, tema, ancho_texto);
-            let pie = vec![teclas(
+            // El aviso (escucha fuera de 127.0.0.1…) va en el pie fijo: `^s`
+            // guarda con él, así que se ve siempre.
+            let mut pie: Vec<Line<'static>> = estado
+                .aviso()
+                .map(|aviso| {
+                    Line::from(Span::styled(
+                        aviso.to_string(),
+                        Style::default().fg(tema.paleta.acento),
+                    ))
+                })
+                .into_iter()
+                .collect();
+            pie.push(teclas(
                 &[
                     ("^s", "guardar"),
                     ("⇥", "campo"),
@@ -669,7 +688,7 @@ pub fn dibujar(
                     ("esc", "cancelar"),
                 ],
                 tema,
-            )];
+            ));
             let titulo = if estado.id.is_some() {
                 "EDITAR TÚNEL"
             } else {
@@ -731,10 +750,12 @@ pub fn dibujar(
 }
 
 /// Cuerpo del diálogo GENERAR CLAVE y la línea del campo con foco.
+/// Cuerpo del diálogo de generar clave (los campos), las líneas del pie que
+/// `^s` aplica (casillas y aviso de la frase) y la línea con foco.
 fn cuerpo_generacion(
     estado: &crate::app::EstadoGeneracion,
     tema: &Tema,
-) -> (Vec<Line<'static>>, usize) {
+) -> (Vec<Line<'static>>, Vec<Line<'static>>, usize) {
     use crate::app::CampoGeneracion;
     let activo = |campo: CampoGeneracion| estado.campo == campo;
     let estilo = |campo: CampoGeneracion| {
@@ -807,8 +828,21 @@ fn cuerpo_generacion(
             Span::styled(repetir_visible, estilo(CampoGeneracion::Repetir)),
             corchete(" ]"),
         ]),
+    ];
+    let pie = vec![
+        Line::from(Span::styled(
+            if estado.frase.texto.is_empty() {
+                "sin frase: la clave quedará sin cifrar en ~/.ssh"
+            } else {
+                "la frase cifra la clave en formato OpenSSH"
+            },
+            Style::default().fg(if estado.frase.texto.is_empty() {
+                tema.paleta.acento
+            } else {
+                tema.paleta.inactivo
+            }),
+        )),
         Line::from(vec![
-            Span::raw("  "),
             Span::styled(
                 format!(
                     "{} añadir al agente",
@@ -825,25 +859,17 @@ fn cuerpo_generacion(
                 estilo(CampoGeneracion::Copiar),
             ),
         ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            if estado.frase.texto.is_empty() {
-                "  sin frase: la clave quedará sin cifrar en ~/.ssh"
-            } else {
-                "  la frase cifra la clave en formato OpenSSH"
-            },
-            Style::default().fg(tema.paleta.inactivo),
-        )),
     ];
+    // Las casillas están en el pie, siempre a la vista: con el foco en ellas
+    // el cuerpo se queda en su último campo.
     let foco = match estado.campo {
         CampoGeneracion::Fichero => 0,
         CampoGeneracion::Tipo => 1,
         CampoGeneracion::Comentario => 2,
         CampoGeneracion::Frase => 3,
-        CampoGeneracion::Repetir => 4,
-        CampoGeneracion::Agente | CampoGeneracion::Copiar => 5,
+        CampoGeneracion::Repetir | CampoGeneracion::Agente | CampoGeneracion::Copiar => 4,
     };
-    (cuerpo, foco)
+    (cuerpo, pie, foco)
 }
 
 /// Ancho deseado del diálogo de túnel.
@@ -1046,12 +1072,6 @@ fn cuerpo_tunel(
             estilo(CampoTunel::Automatico),
         ),
     ]));
-    if let Some(aviso) = estado.aviso() {
-        cuerpo.push(Line::from(Span::styled(
-            format!("  {aviso}"),
-            Style::default().fg(tema.paleta.acento),
-        )));
-    }
     let foco = foco_desplegable.unwrap_or_else(|| {
         lineas_campo
             .iter()
@@ -1206,7 +1226,13 @@ impl Hoja {
         if total > filas && filas > 0 {
             bloque = bloque.title_bottom(
                 Line::from(Span::styled(
-                    indicador(inicio, filas, total, tema.ascii),
+                    // En los formularios el cuerpo sigue al foco y ↑↓ no
+                    // desplazan: solo se dice que hay más.
+                    if self.foco.is_some() {
+                        posicion(inicio, filas, total)
+                    } else {
+                        indicador(inicio, filas, total, tema.ascii)
+                    },
                     Style::default().fg(color),
                 ))
                 .right_aligned(),
@@ -1243,6 +1269,12 @@ pub(crate) fn indicador(inicio: usize, filas: usize, total: usize, ascii: bool) 
     let flechas = if ascii { "^v" } else { "↑↓" };
     let posiciones = total.saturating_sub(filas) + 1;
     format!(" {flechas} {}/{posiciones} ", inicio + 1)
+}
+
+/// `i/n` sin flechas: la posición en un cuerpo que sigue al foco.
+pub(crate) fn posicion(inicio: usize, filas: usize, total: usize) -> String {
+    let posiciones = total.saturating_sub(filas) + 1;
+    format!(" {}/{posiciones} ", inicio + 1)
 }
 
 /// Margen horizontal y ancho del texto de una hoja de `ancho` deseado en
@@ -1459,7 +1491,7 @@ pub(crate) fn modal(
         .border_set(tema.bordes())
         .border_style(Style::default().fg(color))
         .title(Span::styled(
-            format!(" {titulo} "),
+            format!(" {} ", texto_de(titulo, tema.ascii)),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     let interior = bloque.inner(recta);
@@ -1470,6 +1502,13 @@ pub(crate) fn modal(
         y: interior.y + 1,
         width: interior.width.saturating_sub(4),
         height: interior.height.saturating_sub(2),
+    };
+    // Lo que traen hecho EJECUTAR, el formulario y la deliberación (errores
+    // con «», la pregunta con ¿, datos de los hosts) se degrada como en Hoja.
+    let contenido = if tema.ascii {
+        contenido.into_iter().map(linea_ascii).collect()
+    } else {
+        contenido
     };
     marco.render_widget(Paragraph::new(contenido), area_texto);
 }

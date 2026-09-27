@@ -58,8 +58,8 @@ pub fn dibujar(marco: &mut Frame, area: Rect, tema: &Tema, minimo: &Minimo) {
     marco.render_widget(Paragraph::new(lineas).alignment(Alignment::Center), zona);
 }
 
-/// Las líneas del aviso: el aviso, «actual · mínimo» y, si el mínimo que se
-/// muestra es el global, qué vista necesita más.
+/// Las líneas del aviso: el aviso, «actual · mínimo» (el global si no se
+/// llega a él) y qué vista o diálogo exige el suyo.
 pub fn textos(tema: &Tema, actual: Tamano, minimo: &Minimo) -> Vec<String> {
     let ascii = tema.ascii;
     let punto = if ascii { "-" } else { "·" };
@@ -80,13 +80,13 @@ pub fn textos(tema: &Tema, actual: Tamano, minimo: &Minimo) -> Vec<String> {
             mostrado.texto(ascii)
         ),
     ];
-    if mostrado != minimo.tamano {
-        textos.push(format!(
-            "({} necesita {})",
-            minimo.exige,
-            minimo.tamano.texto(ascii)
-        ));
-    }
+    // Siempre se dice qué lo exige: la vista o, con una deliberación abierta,
+    // el diálogo MAGI (que queda tapado por el aviso).
+    textos.push(format!(
+        "({} necesita {})",
+        minimo.exige,
+        minimo.tamano.texto(ascii)
+    ));
     textos
 }
 
@@ -188,7 +188,7 @@ mod pruebas {
             &minimo_de(Vista::Archivos, false),
         );
         assert_eq!(textos[1], "45×20 · mínimo 50×14");
-        assert_eq!(textos.len(), 2);
+        assert_eq!(textos[2], "(Archivos necesita 50×14)");
         let pintado = pintar(45, 20, Vista::Archivos, &tema);
         assert!(pintado.contains("mínimo 50×14"), "{pintado}");
     }
@@ -198,6 +198,8 @@ mod pruebas {
         let tema = Tema::respaldo();
         let textos = textos(&tema, Tamano::new(30, 6), &minimo_de(Vista::Sesion, false));
         assert_eq!(textos[1], "30×6 · mínimo 40×8");
+        let magi = super::textos(&tema, Tamano::new(45, 20), &minimo_de(Vista::Hosts, true));
+        assert_eq!(magi[2], "(diálogo MAGI necesita 50×12)");
     }
 
     #[test]

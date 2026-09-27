@@ -4,7 +4,9 @@
 //! cuando pasan 50 ms sin más eventos se aplica solo el último (un `clear` y un
 //! `Redimensionar` por tamaño aplicado, aunque una animación de Hyprland mande
 //! treinta). Mientras hay un tamaño pendiente, el bucle se despierta cada
-//! ≤ 16 ms sin esperar a una tecla. Un tamaño igual al aplicado no hace nada.
+//! ≤ 16 ms sin esperar a una tecla. Un tamaño igual al aplicado no hace nada,
+//! salvo si la ráfaga pasó por otro tamaño (ida y vuelta): entonces el
+//! terminal ya truncó y volvió a crecer, y hace falta repintarlo entero.
 
 use std::time::{Duration, Instant};
 
@@ -14,11 +16,23 @@ pub const AGRUPACION: Duration = Duration::from_millis(50);
 /// Cada cuánto se despierta el bucle mientras hay un tamaño pendiente.
 pub const TICK_PENDIENTE: Duration = Duration::from_millis(16);
 
+/// Qué hacer con la ráfaga agrupada cuando vence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vencido {
+    /// Un tamaño nuevo: terminal, disposición y remoto.
+    Aplicar((u16, u16)),
+    /// Se volvió al tamaño aplicado pasando por otros: solo limpiar y
+    /// repintar (el remoto no cambia).
+    Repintar,
+}
+
 /// Tamaño aplicado, pendiente y hora del último evento.
 #[derive(Debug, Clone)]
 pub struct Geometria {
     aplicado: (u16, u16),
     pendiente: Option<(u16, u16)>,
+    /// La ráfaga en curso pasó por un tamaño distinto del aplicado.
+    movida: bool,
     ultimo_evento: Instant,
     aplicados: u64,
 }
@@ -28,6 +42,7 @@ impl Geometria {
         Self {
             aplicado: inicial,
             pendiente: None,
+            movida: false,
             ultimo_evento: ahora,
             aplicados: 0,
         }
@@ -35,30 +50,40 @@ impl Geometria {
 
     /// Llega un `Resize`: pasa a ser el pendiente y el reloj vuelve a cero.
     pub fn registrar(&mut self, tamano: (u16, u16), ahora: Instant) {
+        self.movida |= tamano != self.aplicado;
         self.pendiente = Some(tamano);
         self.ultimo_evento = ahora;
     }
 
-    /// El tamaño que toca aplicar, si ya pasó la agrupación. Lo consume: si
-    /// es igual al aplicado se descarta y devuelve `None`.
-    pub fn vencido(&mut self, ahora: Instant) -> Option<(u16, u16)> {
+    /// Lo que toca hacer si ya pasó la agrupación. Consume el pendiente: si
+    /// es igual al aplicado y la ráfaga no pasó por otro tamaño, nada.
+    pub fn vencido(&mut self, ahora: Instant) -> Option<Vencido> {
         let tamano = self.pendiente?;
         if ahora.saturating_duration_since(self.ultimo_evento) < AGRUPACION {
             return None;
         }
         self.pendiente = None;
-        (tamano != self.aplicado).then_some(tamano)
+        let movida = std::mem::take(&mut self.movida);
+        if tamano != self.aplicado {
+            Some(Vencido::Aplicar(tamano))
+        } else if movida {
+            Some(Vencido::Repintar)
+        } else {
+            None
+        }
     }
 
     /// El tamaño ya está aplicado (terminal, disposición y remoto).
     pub fn confirmar(&mut self, tamano: (u16, u16)) {
         self.aplicado = tamano;
+        self.movida = false;
         self.aplicados += 1;
     }
 
     /// Olvida el pendiente (al volver de una suspensión se lee el real).
     pub fn descartar_pendiente(&mut self) {
         self.pendiente = None;
+        self.movida = false;
     }
 
     /// Cuánto puede dormir el bucle: `None` sin pendiente (hasta el próximo
@@ -101,7 +126,10 @@ mod pruebas {
             assert_eq!(geo.vencido(ultimo), None);
         }
         assert_eq!(geo.vencido(ultimo + MS * 49), None);
-        assert_eq!(geo.vencido(ultimo + MS * 50), Some((109, 33)));
+        assert_eq!(
+            geo.vencido(ultimo + MS * 50),
+            Some(Vencido::Aplicar((109, 33)))
+        );
         geo.confirmar((109, 33));
         assert_eq!(geo.vencido(ultimo + MS * 100), None);
         assert_eq!(geo.aplicados(), 1);
@@ -115,6 +143,21 @@ mod pruebas {
         assert_eq!(geo.vencido(t0 + AGRUPACION), None);
         assert_eq!(geo.pendiente(), None, "se consume aunque no se aplique");
         assert_eq!(geo.aplicados(), 0);
+    }
+
+    /// Ida y vuelta dentro de la agrupación: el terminal truncó y volvió a
+    /// crecer, así que se repinta entero, sin aplicar tamaño ni avisar al remoto.
+    #[test]
+    fn una_ida_y_vuelta_pide_repintar() {
+        let t0 = Instant::now();
+        let mut geo = Geometria::nueva((120, 40), t0);
+        geo.registrar((90, 30), t0);
+        geo.registrar((120, 40), t0 + MS * 10);
+        assert_eq!(geo.vencido(t0 + MS * 60), Some(Vencido::Repintar));
+        assert_eq!(geo.aplicados(), 0);
+        // La siguiente ráfaga empieza limpia.
+        geo.registrar((120, 40), t0 + MS * 100);
+        assert_eq!(geo.vencido(t0 + MS * 200), None);
     }
 
     #[test]

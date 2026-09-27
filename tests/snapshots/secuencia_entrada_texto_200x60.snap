@@ -1,13 +1,39 @@
 ---
 source: tests/redimensionado/arnes.rs
 ---
-┌ TRANSFERENCIAS · 1 en curso · 2 en cola ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                           ESTADO    DIRECCIÓN ORIGEN → DESTINO                                                               PROGRESO                                                │
-│                                       ▸ ◐ en curso  ↑ subida  /home/hector/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py          78 %  1.1 MB                                           │
-│                                         ○ en cola   ↑ subida  /home/hector/cooperapp/static → hetzner-01:/var/www/cooperapp/static             0 %  0 B                                              │
-│                                         ○ en cola   ↓ bajada  /var/log/nginx/access.log → hetzner-01:/home/hector/access.log                   0 %  0 B                                              │
-│                                         ● hecha     ↑ subida  /home/hector/cooperapp/config.yaml → hetzner-01:/var/www/cooperapp/config.yaml 100 %  2 kB                                             │
-│                                         ✕ error     ↓ bajada  /root/backup.tgz → hetzner-02:/home/hector/backup.tgz                          permiso denegado                                        │
+┌ MAGI · HOSTS ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts ─┐
+│▸ ▼ produccion                                                     (3)                                                                                                                                │
+│    ○ hetzner-01                 10.0.1.11            root       22                                                                                                                                   │
+│    ○ hetzner-02                 10.0.1.12            deploy     2222                                                                                                                                 │
+│    ○ vps-openclaw               203.0.113.40         admin      22                                                                                                                                   │
+│  ▼ casa                                                           (2)                                                                                                                                │
+│    ○ dgx-spark                  192.168.1.30         hector     22                                                                                                                                   │
+│    ○ mac-mini-m1                192.168.1.20         hector     22                                                                                                                                   │
+│  ▼ sin grupo                                                      (2)                                                                                                                                │
+│    ○ backup-nas                 192.168.1.40         backup     22                                                                                                                                   │
+│    ○ rincon-dev                 dev.rincon.example   hector     2200                                                                                                                                 │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                       ┌ NUEVO GRUPO ─────────────────────────────────────────┐                                                                       │
+│                                                                       │                                                      │                                                                       │
+│                                                                       │  Nombre: [ servidores-oficina┃ ]                     │                                                                       │
+│                                                                       │                                                      │                                                                       │
+│                                                                       │  ↵ aceptar   esc cancelar                            │                                                                       │
+│                                                                       │                                                      │                                                                       │
+│                                                                       └──────────────────────────────────────────────────────┘                                                                       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -33,31 +59,5 @@ source: tests/redimensionado/arnes.rs
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────                                       │
-│                                         /home/hector/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py                                                                                       │
-│                                         1.1 MB de 1.4 MB · 0 fichero(s)                                                                                                                              │
-│                                         ahora: main.py                                                                                                                                               │
-└ 5 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- ↓↑ mover  x cancelar  C limpiar  ↵ detalle  q volver  ? ayuda
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

@@ -5,9 +5,9 @@ source: tests/redimensionado/arnes.rs
 │                                      │
 │                                      │
 │                                      │
-│                                      │
 │      ✕ ventana demasiado pequeña     │
 │         40×12 · mínimo 50×14         │
+│        (Ficha necesita 50×14)        │
 │                                      │
 │                                      │
 │                                      │

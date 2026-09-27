@@ -2289,8 +2289,16 @@ impl App {
         B: Backend,
         B::Error: Send + Sync + 'static,
     {
-        if let Some(tamano) = self.geometria.vencido(ahora) {
-            self.aplicar_tamano(terminal, tamano)?;
+        match self.geometria.vencido(ahora) {
+            Some(geometria::Vencido::Aplicar(tamano)) => self.aplicar_tamano(terminal, tamano)?,
+            // Ida y vuelta al mismo tamaño: el terminal truncó lo pintado y lo
+            // volvió a crecer en blanco; el búfer anterior no lo sabe.
+            Some(geometria::Vencido::Repintar) => {
+                terminal.clear()?;
+                self.sucio = true;
+                self.pintar(terminal)?;
+            }
+            None => {}
         }
         if self.sucio && self.geometria.pendiente().is_none() {
             self.pintar(terminal)?;
@@ -4943,11 +4951,18 @@ impl App {
     fn tecla_paleta(&mut self, tecla: KeyEvent) {
         // Página: las entradas que se vieron en el último pintado.
         let pagina = self.disposicion.filas(Lista::Paleta);
+        let ventana = self.disposicion.lista(Lista::Paleta);
         let Some(paleta) = &mut self.paleta else {
             return;
         };
         match tecla.code {
             KeyCode::Esc => self.paleta = None,
+            // Solo se ejecuta la entrada seleccionada si se veía: con la
+            // paleta encogida a la línea de la consulta no hay nada a la vista.
+            KeyCode::Enter
+                if !ventana.is_some_and(|ventana| {
+                    (ventana.inicio..ventana.inicio + ventana.filas).contains(&paleta.seleccion)
+                }) => {}
             KeyCode::Enter => {
                 let accion = paleta.entrada_seleccionada().map(|entrada| &entrada.accion);
                 match accion {
@@ -6772,19 +6787,31 @@ impl App {
         // Por debajo del mínimo se ve el aviso en lugar de la vista: solo
         // valen `q`, `F1`-`F8` y `Ctrl+P` (en Sesión todo va al remoto). Los
         // diálogos, la paleta y la ayuda se pintan encima y ya se han atendido.
-        let tecla = if self.disposicion.aviso && self.vista != Vista::Sesion {
+        // Una deliberación tapada por el aviso solo se puede cancelar con
+        // `Esc`, también en Sesión: cualquier otra tecla iría a un diálogo que
+        // no se ve (y `Ctrl+K` ejecuta).
+        let tecla = if self.disposicion.aviso && self.deliberacion.is_some() {
+            if tecla.code != KeyCode::Esc {
+                return;
+            }
+            tecla
+        } else if self.disposicion.aviso && self.vista != Vista::Sesion {
             let permitida = match tecla.code {
                 KeyCode::Char('q') | KeyCode::F(1..=8) => true,
                 KeyCode::Char('p') => tecla.modifiers.contains(KeyModifiers::CONTROL),
-                // La deliberación tapada por el aviso se puede cancelar.
-                KeyCode::Esc => self.deliberacion.is_some(),
                 _ => false,
             };
             if !permitida {
                 return;
             }
-            // En la ficha `q` es un carácter: con el aviso significa salir.
             if self.vista == Vista::Ficha && tecla.code == KeyCode::Char('q') {
+                // En la ficha `q` es un carácter: con el aviso significa salir,
+                // salvo con cambios sin guardar, que se perderían con una `s`
+                // o un `↵` tecleados a ciegas en la confirmación. Para salir
+                // con cambios quedan `F1`-`F8`, que confirman igual.
+                if self.ficha.as_ref().is_some_and(|ficha| ficha.sucio()) {
+                    return;
+                }
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
             } else {
                 tecla

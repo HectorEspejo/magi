@@ -374,6 +374,13 @@ async fn tarea_lectura(
                         pantallas.volcar(sesion_id, filas, cols, &bytes);
                         let _ = tx_eventos.send(crate::app::Evento::Pantallas(vec![sesion_id]));
                     }
+                    // El tamaño nuevo se aplica aquí, en orden con los datos:
+                    // lo que el remoto pinte después ya llega con ese tamaño.
+                    // La App recibe el mensaje igualmente (barra y relleno).
+                    Ok(mensaje @ MensajeServidor::Redimensionada { sesion_id, cols, filas, .. }) => {
+                        pantallas.redimensionar(sesion_id, filas, cols);
+                        let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
+                    }
                     Ok(mensaje) => {
                         // La respuesta de una petición esperable va a quien la
                         // espera; si ya no espera (plazo vencido), se tira: no
