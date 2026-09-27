@@ -9,14 +9,18 @@ use crate::ui::Vista;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     let linea = if let Some(version) = app.servidor_incompatible {
+        let pid = app
+            .pid_incompatible
+            .map(|pid| format!(", pid {pid}"))
+            .unwrap_or_default();
         let texto = if version < crate::protocolo::VERSION_PROTOCOLO {
             format!(
-                " {} servidor de una versión anterior (protocolo {version}): «magi servidor parar» y volver a abrir",
+                " {} servidor de una versión anterior (protocolo {version}{pid}): «magi servidor parar» y volver a abrir",
                 app.tema.glifos.error
             )
         } else {
             format!(
-                " {} el servidor habla el protocolo {version}, más nuevo que el {} de esta MAGI",
+                " {} el servidor habla el protocolo {version}{pid}, más nuevo que el {} de esta MAGI",
                 app.tema.glifos.error,
                 crate::protocolo::VERSION_PROTOCOLO
             )

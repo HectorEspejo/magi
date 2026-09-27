@@ -23,7 +23,14 @@ use crate::archivos::Entrada;
 /// v3 (Fase 5): túneles. El cliente hace el CRUD de `TUNELES` y el servidor
 /// los ejecuta; `Tuneles{lista}` difunde la lista completa (definidos y su
 /// estado en vivo) y `Bienvenida` la lleva para que una ventana nueva la vea.
-pub const VERSION_PROTOCOLO: u32 = 3;
+///
+/// v4 (Fase 6): corrección 3b del pool y snippets. `Ejecutar` y sus respuestas
+/// llevan `peticion_id` (dos sondeos al mismo host ya no se cruzan);
+/// `VersionIncompatible` lleva el pid del servidor; `PideLlavero` pide al
+/// solicitante una contraseña que solo puede salir de su llavero (nunca de un
+/// diálogo); `Cerrar` cancela también los diálogos pendientes de aperturas que
+/// no son sesiones (SFTP, túneles, ejecuciones).
+pub const VERSION_PROTOCOLO: u32 = 4;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -411,9 +418,12 @@ pub enum MensajeCliente {
         contrasena: Secreto,
         recordar: bool,
     },
+    /// Ejecuta un comando en la conexión viva del host (sondeo de Flota).
+    /// Responde `Ejecutado` o `SinSesion` con el mismo `peticion_id`.
     Ejecutar {
         host_id: i64,
         comando: String,
+        peticion_id: u64,
     },
     /// Abre (o reutiliza) el canal SFTP del host. Responde `SftpAbierto` o
     /// `Error`; si no hay conexión viva, la abre con los diálogos de siempre.
@@ -513,6 +523,10 @@ pub enum MensajeServidor {
     },
     VersionIncompatible {
         version: u32,
+        /// Pid del servidor, para poder pararlo desde un MAGI de otra versión.
+        /// Un servidor anterior a la v4 no lo envía.
+        #[serde(default)]
+        pid: Option<u32>,
     },
     Sesiones {
         lista: Vec<InfoSesion>,
@@ -565,13 +579,24 @@ pub enum MensajeServidor {
         intento: u8,
         recordar_por_defecto: bool,
     },
+    /// La conexión de una operación automática (una ejecución, un túnel)
+    /// autentica con la contraseña del llavero: el solicitante contesta con
+    /// `Contrasena` si la tiene guardada o con `Cerrar` si no. Nunca abre un
+    /// diálogo.
+    PideLlavero {
+        sesion_id: u32,
+        host: String,
+        usuario: String,
+    },
     Ejecutado {
         host_id: i64,
+        peticion_id: u64,
         salida: String,
         codigo: i32,
     },
     SinSesion {
         host_id: i64,
+        peticion_id: u64,
     },
     /// Canal SFTP listo. `dir_inicio` es el directorio de inicio del usuario
     /// remoto (el que se usa si el host no tiene guardado el suyo).
@@ -685,6 +710,7 @@ mod pruebas {
         ida_y_vuelta_cliente(MensajeCliente::Ejecutar {
             host_id: 7,
             comando: "uptime".to_string(),
+            peticion_id: 1 << 48,
         });
         ida_y_vuelta_cliente(MensajeCliente::Listar);
         ida_y_vuelta_cliente(MensajeCliente::Parar);
@@ -820,8 +846,21 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_tres() {
-        assert_eq!(VERSION_PROTOCOLO, 3);
+    fn la_version_del_protocolo_es_la_cuatro() {
+        assert_eq!(VERSION_PROTOCOLO, 4);
+    }
+
+    /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
+    #[test]
+    fn version_incompatible_sin_pid_se_lee_como_ninguno() {
+        let linea = r#"{"tipo":"VersionIncompatible","version":3}"#;
+        assert_eq!(
+            decodificar::<MensajeServidor>(linea).unwrap(),
+            MensajeServidor::VersionIncompatible {
+                version: 3,
+                pid: None,
+            }
+        );
     }
 
     /// Los mensajes de túneles hacen ida y vuelta por los dos sentidos.
@@ -917,7 +956,10 @@ mod pruebas {
             transferencias: Vec::new(),
             tuneles: Vec::new(),
         });
-        ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible { version: 99 });
+        ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible {
+            version: 99,
+            pid: Some(4321),
+        });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });
         ida_y_vuelta_servidor(MensajeServidor::PantallaCompleta {
             sesion_id: 1,
@@ -964,12 +1006,21 @@ mod pruebas {
             intento: 1,
             recordar_por_defecto: true,
         });
+        ida_y_vuelta_servidor(MensajeServidor::PideLlavero {
+            sesion_id: 9,
+            host: "hetzner-01".to_string(),
+            usuario: "hector".to_string(),
+        });
         ida_y_vuelta_servidor(MensajeServidor::Ejecutado {
             host_id: 7,
+            peticion_id: 1 << 48,
             salida: "load average".to_string(),
             codigo: 0,
         });
-        ida_y_vuelta_servidor(MensajeServidor::SinSesion { host_id: 7 });
+        ida_y_vuelta_servidor(MensajeServidor::SinSesion {
+            host_id: 7,
+            peticion_id: 1 << 48,
+        });
         ida_y_vuelta_servidor(MensajeServidor::Error {
             mensaje: "mensaje desconocido".to_string(),
             peticion_id: None,

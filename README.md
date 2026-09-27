@@ -57,11 +57,22 @@ un socket Unix en `$XDG_RUNTIME_DIR/magi/servidor.sock` (macOS:
   ventanas adjuntas.
 - Varios terminales comparten el servidor; el diálogo de huella, frase o
   contraseña lo recibe solo la ventana que pidió la conexión.
-- Hosts con `multiplexar` reutilizan la conexión entre pestañas sin
-  reautenticar; la conexión libre se cierra tras 30 s sin canales.
+- Cada host tiene como mucho **una conexión compartida** en el servidor. El
+  SFTP, los túneles, el sondeo por la conexión viva y las ejecuciones de
+  snippets la usan siempre; las pestañas, solo si el host tiene
+  `multiplexar`: entonces una segunda pestaña abre un canal nuevo sin
+  reautenticar ni volver a preguntar la huella. Sin `multiplexar`, cada
+  pestaña abre su propia conexión, que se cierra con ella. Abrir una pestaña
+  nunca tumba un túnel ni el SFTP del host, y dos aperturas simultáneas del
+  mismo host esperan una a la otra en vez de abrir dos conexiones. La
+  conexión compartida se cierra tras 30 s sin canales.
 - Sin clientes, sesiones, transferencias ni túneles levantados durante 10 s el
   servidor se apaga solo (`[servidor] gracia_apagado_seg`). Si muere, las
   ventanas lo detectan y ofrecen relanzarlo.
+- `SIGTERM` para el servidor igual que `magi servidor parar`: cierra sesiones
+  y túneles anotándolo y borra socket y lock. Si el servidor en marcha es de
+  otra versión (tras actualizar MAGI), `magi servidor parar` muestra su pid y
+  le envía `SIGTERM` tras confirmar (`--si` no pregunta).
 - El sondeo de Flota, con sesión viva, ejecuta el script sobre esa conexión;
   sin ella cae a su conexión efímera.
 - El log del servidor va en `~/.local/state/magi/logs/servidor.log.<fecha>`;

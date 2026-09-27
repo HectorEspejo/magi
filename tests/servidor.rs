@@ -59,8 +59,10 @@ async fn una_version_distinta_no_coopera() {
     // La versión que viaja es la **del servidor**, que es lo que permite al
     // cliente decir si el viejo es él o el servidor.
     match respuesta {
-        MensajeServidor::VersionIncompatible { version } => {
+        MensajeServidor::VersionIncompatible { version, pid } => {
             assert_eq!(version, VERSION_PROTOCOLO);
+            // Y su pid, para que un MAGI de otra versión pueda pararlo (3b).
+            assert_eq!(pid, Some(std::process::id()));
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
     }
@@ -87,8 +89,30 @@ async fn un_cliente_de_la_version_dos_no_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 2).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version } => {
+        MensajeServidor::VersionIncompatible { version, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
+        }
+        otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
+}
+
+/// Un cliente de la versión 3 (la de la Fase 5) no coopera con este servidor
+/// v4: `Ejecutar` y sus respuestas llevan `peticion_id` y hay mensajes nuevos.
+/// El rechazo lleva el pid del servidor.
+#[tokio::test]
+async fn un_cliente_de_la_version_tres_no_coopera() {
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    let tarea = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    let mut lector = cliente(&servidor::ruta_socket(&rutas), 3).await;
+    let respuesta: MensajeServidor = siguiente(&mut lector).await;
+    match respuesta {
+        MensajeServidor::VersionIncompatible { version, pid } => {
+            assert_eq!(version, VERSION_PROTOCOLO);
+            assert_eq!(pid, Some(std::process::id()));
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
     }
@@ -107,7 +131,7 @@ async fn un_cliente_de_la_version_anterior_tampoco_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 1).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version } => {
+        MensajeServidor::VersionIncompatible { version, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),

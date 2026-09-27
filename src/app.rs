@@ -1236,6 +1236,8 @@ pub struct App {
     /// El servidor habla otra versión de protocolo.
     /// Versión del servidor cuando habla otra distinta de la nuestra.
     pub servidor_incompatible: Option<u32>,
+    /// Pid del servidor de otra versión, para decir a quién hay que parar.
+    pub pid_incompatible: Option<u32>,
     /// El servidor ha caído (pendiente del diálogo de relanzado).
     pub servidor_caido: bool,
     /// Sesiones que el servidor perdió al caer (para el diálogo).
@@ -1363,6 +1365,7 @@ impl App {
             pestana_activa: None,
             servidor: cliente::Cliente::sin_servidor(),
             servidor_incompatible: None,
+            pid_incompatible: None,
             servidor_caido: false,
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
@@ -1445,8 +1448,9 @@ impl App {
                 app.servidor = servidor;
                 app.servidor_desde = Some(Instant::now());
             }
-            Err(cliente::FalloConexion::VersionIncompatible { version }) => {
+            Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
                 app.servidor_incompatible = Some(version);
+                app.pid_incompatible = pid;
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
                 app.mensaje(motivo, true);
@@ -2061,6 +2065,11 @@ impl App {
                     responder,
                 });
             }
+            // Solo lo emiten las conexiones automáticas del servidor; una
+            // conexión de la TUI nunca lo pide. Por si acaso, «no la tengo».
+            EventoConexion::PideContrasenaLlavero { responder, .. } => {
+                let _ = responder.send(None);
+            }
             EventoConexion::ContrasenaGuardada {
                 host_id,
                 ok,
@@ -2385,6 +2394,13 @@ impl App {
                 self.error_de_archivos(mensaje, peticion_id);
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
+            protocolo::MensajeServidor::PideLlavero {
+                sesion_id,
+                host,
+                usuario,
+            } => {
+                self.responder_con_llavero(sesion_id, host, usuario);
+            }
             protocolo::MensajeServidor::SftpAbierto {
                 host_id,
                 dir_inicio,
@@ -2443,6 +2459,29 @@ impl App {
         }
     }
 
+    /// Una conexión automática del servidor (una ejecución) pide la
+    /// contraseña del llavero: se contesta sin diálogo, desde una tarea (el
+    /// llavero puede tardar), con la contraseña o con `Cerrar` si no la hay.
+    fn responder_con_llavero(&mut self, sesion_id: u32, host: String, usuario: String) {
+        let servidor = self.servidor.clone();
+        self.runtime.spawn(async move {
+            let encontrada = tokio::task::spawn_blocking(move || {
+                crate::llavero::recuperar(&host, &usuario).ok().flatten()
+            })
+            .await
+            .ok()
+            .flatten();
+            match encontrada {
+                Some(contrasena) => servidor.enviar(protocolo::MensajeCliente::Contrasena {
+                    sesion_id,
+                    contrasena: protocolo::Secreto::nuevo(contrasena.as_str()),
+                    recordar: false,
+                }),
+                None => servidor.enviar(protocolo::MensajeCliente::Cerrar { sesion_id }),
+            }
+        });
+    }
+
     /// Contraseña del llavero para una sesión que la pide; devuelve si se ha
     /// enviado (sin diálogo).
     fn intentar_llavero(&mut self, sesion_id: u32, host: &str) -> bool {
@@ -2452,7 +2491,9 @@ impl App {
         if ficha.identidad_ref != IdentidadRef::ContrasenaLlavero {
             return false;
         }
-        let usuario = ficha.usuario.clone().unwrap_or_default();
+        // El mismo usuario con el que se guardó: el de la ficha o, sin él, el
+        // local (como hace la conexión al autenticar).
+        let usuario = ficha.usuario.clone().unwrap_or_else(usuario_local);
         let Ok(Some(contrasena)) = crate::llavero::recuperar(host, &usuario) else {
             return false;
         };

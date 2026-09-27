@@ -63,7 +63,8 @@ pub async fn sondear(peticion: &PeticionSondeo, registro: &RegistroSesiones) -> 
 
 /// Sondeo con sesión viva: pide `Ejecutar` al servidor (sobre la conexión del
 /// pool o de cualquier sesión abierta); con `SinSesion` cae a la conexión
-/// efímera de la Fase 2.
+/// efímera de la Fase 2. El juicio es el de la vía efímera: vale la salida,
+/// no el código (el script puede terminar en ≠ 0 en un host sin `/proc`).
 pub async fn sondear_via_servidor(
     peticion: &PeticionSondeo,
     cliente: &crate::cliente::Cliente,
@@ -71,13 +72,21 @@ pub async fn sondear_via_servidor(
     let inicio = Instant::now();
     let mut sondeo = Sondeo::vacio(peticion.host.id);
     let comando = comando_de_sondeo(&peticion.servicios);
-    match cliente.ejecutar(peticion.host.id, &comando).await {
+    let respuesta = tokio::time::timeout(
+        Duration::from_secs(TIMEOUT_SEG),
+        cliente.ejecutar(peticion.host.id, &comando),
+    )
+    .await;
+    // Sin respuesta a tiempo es lo mismo que sin sesión: la conexión viva
+    // puede estar medio muerta y la efímera funcionar.
+    let respuesta = respuesta.unwrap_or(crate::cliente::ResultadoEjecutar::SinSesion);
+    match respuesta {
         crate::cliente::ResultadoEjecutar::Salida { salida, codigo } => {
-            if codigo == 0 && !salida.trim().is_empty() {
+            if !salida.trim().is_empty() {
                 rellenar(&mut sondeo, parser::parsear(&salida));
             } else {
                 sondeo.resultado = ResultadoSondeo::Error;
-                sondeo.error = Some(format!("el sondeo devolvió el código {codigo}"));
+                sondeo.error = Some(format!("el sondeo no devolvió nada (código {codigo})"));
             }
         }
         crate::cliente::ResultadoEjecutar::SinSesion => {

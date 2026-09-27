@@ -1,6 +1,7 @@
 //! Cliente del servidor de sesiones: conexión al socket con autolanzado del
 //! servidor (`setsid`), saludo versionado, tarea de lectura que convierte
-//! mensajes en eventos de la UI, tarea de escritura y puente para `Ejecutar`.
+//! mensajes en eventos de la UI, tarea de escritura y peticiones con respuesta
+//! esperable (`Ejecutar` y las que vengan), casadas por `peticion_id`.
 
 pub mod pantallas;
 pub mod ventana;
@@ -8,13 +9,14 @@ pub mod ventana;
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use futures_util::SinkExt as _;
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{info, warn};
@@ -33,14 +35,51 @@ pub enum ResultadoEjecutar {
     SinSesion,
 }
 
+/// Primer `peticion_id` de las peticiones esperables (`Cliente::peticion`).
+/// Cada subsistema tiene su rango (T39): Archivos empieza en 0, los túneles en
+/// 2^40 y las ejecuciones en 2^44; nadie más usa de 2^48 en adelante.
+pub const RANGO_ESPERAS: u64 = 1 << 48;
+
+/// Por qué no llegó la respuesta de una petición.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FalloPeticion {
+    /// No hay servidor al que enviarla (caído o de otra versión).
+    SinServidor,
+    /// El servidor se cayó con la petición en vuelo.
+    ServidorCaido,
+}
+
+/// Peticiones en vuelo por `peticion_id`. `None` tras el EOF del socket: una
+/// petición que llegue después falla al momento en vez de esperar a nadie.
+type Esperas = Arc<std::sync::Mutex<Option<HashMap<u64, oneshot::Sender<MensajeServidor>>>>>;
+
 /// Conexión del cliente con el servidor de sesiones.
 #[derive(Clone)]
 pub struct Cliente {
     pub tx: mpsc::UnboundedSender<MensajeCliente>,
-    esperas: Arc<Mutex<HashMap<i64, Vec<oneshot::Sender<ResultadoEjecutar>>>>>,
+    /// Peticiones en vuelo que esperan su respuesta, por `peticion_id`.
+    esperas: Esperas,
+    siguiente_peticion: Arc<AtomicU64>,
     /// Registro de pantallas compartido con la tarea de lectura: es el que
     /// pinta la UI, de modo que los datos del remoto acaban en su parser.
     pantallas: pantallas::Pantallas,
+}
+
+/// Quita la espera de una petición cuando quien la hizo deja de esperar (plazo
+/// vencido, tarea abortada): si no, el mapa crecería con cada una.
+struct GuardiaEspera {
+    esperas: Esperas,
+    peticion_id: u64,
+}
+
+impl Drop for GuardiaEspera {
+    fn drop(&mut self) {
+        if let Ok(mut esperas) = self.esperas.lock() {
+            if let Some(esperas) = esperas.as_mut() {
+                esperas.remove(&self.peticion_id);
+            }
+        }
+    }
 }
 
 impl Default for Cliente {
@@ -54,10 +93,18 @@ impl Cliente {
     /// descartan sin error.
     pub fn sin_servidor() -> Self {
         let (tx, _rx) = mpsc::unbounded_channel();
+        Self::con_canal(tx, pantallas::Pantallas::default())
+    }
+
+    fn con_canal(
+        tx: mpsc::UnboundedSender<MensajeCliente>,
+        pantallas: pantallas::Pantallas,
+    ) -> Self {
         Self {
             tx,
-            esperas: Arc::new(Mutex::new(HashMap::new())),
-            pantallas: pantallas::Pantallas::default(),
+            esperas: Arc::new(std::sync::Mutex::new(Some(HashMap::new()))),
+            siguiente_peticion: Arc::new(AtomicU64::new(RANGO_ESPERAS)),
+            pantallas,
         }
     }
 
@@ -70,31 +117,78 @@ impl Cliente {
         let _ = self.tx.send(mensaje);
     }
 
+    /// Envía una petición con un `peticion_id` propio y espera su respuesta
+    /// (la que lleve ese id: `Ejecutado`, `SinSesion`, `Error`…). El plazo lo
+    /// pone quien llama; si deja de esperar, la respuesta tardía se descarta.
+    pub async fn peticion(
+        &self,
+        construir: impl FnOnce(u64) -> MensajeCliente,
+    ) -> Result<MensajeServidor, FalloPeticion> {
+        let peticion_id = self.siguiente_peticion.fetch_add(1, Ordering::Relaxed);
+        let (tx_respuesta, respuesta) = oneshot::channel();
+        {
+            let Ok(mut esperas) = self.esperas.lock() else {
+                return Err(FalloPeticion::ServidorCaido);
+            };
+            match esperas.as_mut() {
+                Some(esperas) => {
+                    esperas.insert(peticion_id, tx_respuesta);
+                }
+                None => return Err(FalloPeticion::ServidorCaido),
+            }
+        }
+        let _guardia = GuardiaEspera {
+            esperas: self.esperas.clone(),
+            peticion_id,
+        };
+        if self.tx.send(construir(peticion_id)).is_err() {
+            return Err(FalloPeticion::SinServidor);
+        }
+        respuesta.await.map_err(|_| FalloPeticion::ServidorCaido)
+    }
+
     /// Pide al servidor ejecutar un comando en la conexión viva del host
     /// (sondeo). Con `SinSesion` el llamador cae a su conexión efímera.
     pub async fn ejecutar(&self, host_id: i64, comando: &str) -> ResultadoEjecutar {
-        let (tx_respuesta, respuesta) = oneshot::channel();
-        {
-            let mut esperas = self.esperas.lock().await;
-            esperas.entry(host_id).or_default().push(tx_respuesta);
-        }
-        self.enviar(MensajeCliente::Ejecutar {
-            host_id,
-            comando: comando.to_string(),
-        });
-        match respuesta.await {
-            Ok(resultado) => resultado,
-            Err(_) => ResultadoEjecutar::SinSesion,
+        let respuesta = self
+            .peticion(|peticion_id| MensajeCliente::Ejecutar {
+                host_id,
+                comando: comando.to_string(),
+                peticion_id,
+            })
+            .await;
+        match respuesta {
+            Ok(MensajeServidor::Ejecutado { salida, codigo, .. }) => {
+                ResultadoEjecutar::Salida { salida, codigo }
+            }
+            _ => ResultadoEjecutar::SinSesion,
         }
     }
+}
+
+/// `peticion_id` de una respuesta a una petición esperable, si lo es.
+fn peticion_de_respuesta(mensaje: &MensajeServidor) -> Option<u64> {
+    let peticion_id = match mensaje {
+        MensajeServidor::Ejecutado { peticion_id, .. }
+        | MensajeServidor::SinSesion { peticion_id, .. }
+        | MensajeServidor::Hecho { peticion_id }
+        | MensajeServidor::DirListado { peticion_id, .. } => *peticion_id,
+        MensajeServidor::Error {
+            peticion_id: Some(peticion_id),
+            ..
+        } => *peticion_id,
+        _ => return None,
+    };
+    (peticion_id >= RANGO_ESPERAS).then_some(peticion_id)
 }
 
 /// Conecta con el servidor, lanzándolo si no está; errores legibles.
 #[derive(Debug)]
 pub enum FalloConexion {
     /// El servidor habla otra versión de protocolo: la TUI arranca sin
-    /// sesiones y lo explica en la barra. Lleva la versión **del servidor**.
-    VersionIncompatible { version: u32 },
+    /// sesiones y lo explica en la barra. Lleva la versión **del servidor** y
+    /// su pid (del mensaje o, si es antiguo, del socket).
+    VersionIncompatible { version: u32, pid: Option<u32> },
     /// No hay manera de llegar a un servidor.
     Inaccesible(String),
 }
@@ -160,6 +254,7 @@ async fn saludar(
     stream: UnixStream,
     tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
 ) -> Result<Cliente, FalloConexion> {
+    let pid_par = servidor::pid_del_par(&stream);
     let (lectura, escritura) = stream.into_split();
     let mut salida = FramedWrite::new(escritura, crate::protocolo::codec());
     let saludo = MensajeCliente::Hola {
@@ -202,11 +297,7 @@ async fn saludar(
             // Tareas de lectura y escritura sobre el socket ya saludado.
             let (tx_mensajes, rx_mensajes) = mpsc::unbounded_channel();
             let pantallas = pantallas::Pantallas::default();
-            let cliente = Cliente {
-                tx: tx_mensajes,
-                esperas: Arc::new(Mutex::new(HashMap::new())),
-                pantallas: pantallas.clone(),
-            };
+            let cliente = Cliente::con_canal(tx_mensajes, pantallas.clone());
             tokio::spawn(tarea_escritura(rx_mensajes, salida));
             tokio::spawn(tarea_lectura(
                 entrada,
@@ -216,8 +307,11 @@ async fn saludar(
             ));
             Ok(cliente)
         }
-        MensajeServidor::VersionIncompatible { version } => {
-            Err(FalloConexion::VersionIncompatible { version })
+        MensajeServidor::VersionIncompatible { version, pid } => {
+            Err(FalloConexion::VersionIncompatible {
+                version,
+                pid: pid.or(pid_par),
+            })
         }
         otro => Err(FalloConexion::Inaccesible(format!(
             "respuesta inesperada al saludo: {otro:?}"
@@ -245,7 +339,7 @@ async fn tarea_escritura(
 async fn tarea_lectura(
     mut entrada: FramedRead<tokio::net::unix::OwnedReadHalf, crate::protocolo::LinesCodec>,
     tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
-    esperas: Arc<Mutex<HashMap<i64, Vec<oneshot::Sender<ResultadoEjecutar>>>>>,
+    esperas: Esperas,
     pantallas: pantallas::Pantallas,
 ) {
     let mut sucias: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -268,13 +362,21 @@ async fn tarea_lectura(
                         pantallas.volcar(sesion_id, filas, cols, &bytes);
                         let _ = tx_eventos.send(crate::app::Evento::Pantallas(vec![sesion_id]));
                     }
-                    Ok(MensajeServidor::Ejecutado { host_id, salida, codigo }) => {
-                        resolver(esperas.clone(), host_id, ResultadoEjecutar::Salida { salida, codigo }).await;
-                    }
-                    Ok(MensajeServidor::SinSesion { host_id }) => {
-                        resolver(esperas.clone(), host_id, ResultadoEjecutar::SinSesion).await;
-                    }
                     Ok(mensaje) => {
+                        // La respuesta de una petición esperable va a quien la
+                        // espera; si ya no espera (plazo vencido), se tira: no
+                        // es de nadie más.
+                        if let Some(peticion_id) = peticion_de_respuesta(&mensaje) {
+                            let espera = esperas.lock().ok().and_then(|mut esperas| {
+                                esperas
+                                    .as_mut()
+                                    .and_then(|esperas| esperas.remove(&peticion_id))
+                            });
+                            if let Some(espera) = espera {
+                                let _ = espera.send(mensaje);
+                            }
+                            continue;
+                        }
                         let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
                     }
                     Err(motivo) => {
@@ -286,24 +388,16 @@ async fn tarea_lectura(
                         ));
                     }
                 },
-                // EOF del socket sin Adios: el servidor ha caído.
+                // EOF del socket sin Adios: el servidor ha caído. Quien
+                // esperaba una respuesta deja de esperar.
                 _ => {
+                    if let Ok(mut esperas) = esperas.lock() {
+                        *esperas = None;
+                    }
                     let _ = tx_eventos.send(crate::app::Evento::ServidorCaido);
                     return;
                 }
             },
-        }
-    }
-}
-
-async fn resolver(
-    esperas: Arc<Mutex<HashMap<i64, Vec<oneshot::Sender<ResultadoEjecutar>>>>>,
-    host_id: i64,
-    resultado: ResultadoEjecutar,
-) {
-    if let Some(listos) = esperas.lock().await.remove(&host_id) {
-        for listo in listos {
-            let _ = listo.send(resultado.clone());
         }
     }
 }
@@ -360,7 +454,7 @@ pub fn lanzar_servidor(rutas: &Rutas) {
 }
 
 /// ¿Está libre el lock del servidor? Un fichero que no existe es libre.
-fn lock_libre(ruta: &std::path::Path) -> bool {
+pub(crate) fn lock_libre(ruta: &std::path::Path) -> bool {
     match std::fs::OpenOptions::new().read(true).open(ruta) {
         Err(_) => true,
         Ok(fichero) => {
@@ -391,19 +485,83 @@ pub async fn esperar_socket(ruta: &std::path::Path, plazo: Duration) -> bool {
 /// Comprueba la conexión y devuelve el error legible para mensajes.
 pub fn describe_fallo(fallo: &FalloConexion) -> String {
     match fallo {
-        FalloConexion::VersionIncompatible { version } => {
+        FalloConexion::VersionIncompatible { version, pid } => {
+            let pid = pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default();
             if *version < crate::protocolo::VERSION_PROTOCOLO {
                 format!(
-                    "el servidor habla el protocolo {version} y esta MAGI el {}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
+                    "el servidor{pid} habla el protocolo {version} y esta MAGI el {}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
                     crate::protocolo::VERSION_PROTOCOLO
                 )
             } else {
                 format!(
-                    "el servidor habla el protocolo {version}, más nuevo que el {} de esta MAGI",
+                    "el servidor{pid} habla el protocolo {version}, más nuevo que el {} de esta MAGI",
                     crate::protocolo::VERSION_PROTOCOLO
                 )
             }
         }
         FalloConexion::Inaccesible(motivo) => motivo.clone(),
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    /// Sin servidor, una petición falla al momento en vez de esperar.
+    #[tokio::test]
+    async fn sin_servidor_una_peticion_falla_al_momento() {
+        let cliente = Cliente::sin_servidor();
+        let respuesta = cliente
+            .peticion(|peticion_id| MensajeCliente::Ejecutar {
+                host_id: 1,
+                comando: "true".to_string(),
+                peticion_id,
+            })
+            .await;
+        assert_eq!(respuesta.unwrap_err(), FalloPeticion::SinServidor);
+    }
+
+    /// Tras el EOF del socket (esperas cerradas), una petición nueva no se
+    /// queda esperando una respuesta que no va a llegar.
+    #[tokio::test]
+    async fn tras_el_eof_una_peticion_falla_al_momento() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let cliente = Cliente::con_canal(tx, pantallas::Pantallas::default());
+        *cliente.esperas.lock().unwrap() = None;
+        let respuesta = tokio::time::timeout(
+            Duration::from_secs(1),
+            cliente.peticion(|peticion_id| MensajeCliente::Ejecutar {
+                host_id: 1,
+                comando: "true".to_string(),
+                peticion_id,
+            }),
+        )
+        .await
+        .expect("la petición se quedó esperando");
+        assert_eq!(respuesta.unwrap_err(), FalloPeticion::ServidorCaido);
+    }
+
+    /// Una espera abandonada (plazo vencido) no se queda en el mapa.
+    #[tokio::test]
+    async fn una_espera_abandonada_se_retira() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let cliente = Cliente::con_canal(tx, pantallas::Pantallas::default());
+        let _ = tokio::time::timeout(
+            Duration::from_millis(20),
+            cliente.peticion(|peticion_id| MensajeCliente::Ejecutar {
+                host_id: 1,
+                comando: "true".to_string(),
+                peticion_id,
+            }),
+        )
+        .await;
+        let pendientes = cliente
+            .esperas
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(HashMap::len)
+            .unwrap_or_default();
+        assert_eq!(pendientes, 0);
     }
 }

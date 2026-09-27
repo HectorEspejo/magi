@@ -313,6 +313,11 @@ pub async fn encolar(
 
     let id = {
         let mut estado_bloqueado = estado.lock().await;
+        // Mirado en el mismo bloqueo que la inserción: una transferencia que
+        // entrara tras `abortar_todas` moriría a medias al salir el proceso.
+        if estado_bloqueado.apagando {
+            return Err(super::conexiones::APAGANDO.to_string());
+        }
         let id = estado_bloqueado.transferencias.encolar(
             host_id,
             host_nombre,

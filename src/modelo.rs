@@ -765,36 +765,38 @@ pub fn fecha_ahora_epoca() -> i64 {
     chrono::Local::now().timestamp()
 }
 
+/// Host de ejemplo para las pruebas unitarias de todo el crate.
+#[cfg(test)]
+pub(crate) fn host_de_prueba() -> Host {
+    Host {
+        id: 1,
+        nombre: "Producción-Web".to_string(),
+        grupo_id: None,
+        direccion: "10.0.0.1".to_string(),
+        puerto: 22,
+        usuario: Some("Héctor".to_string()),
+        identidad_ref: IdentidadRef::Auto,
+        salto_host_id: None,
+        multiplexar: false,
+        keepalive_seg: Some(30),
+        opciones_extra: String::new(),
+        servicios: String::new(),
+        origen: Origen::Manual,
+        ultimo_estado: None,
+        ultima_conexion_en: None,
+        creado_en: String::new(),
+        actualizado_en: String::new(),
+        etiquetas: vec!["web".to_string(), "crítico".to_string()],
+        grupo_nombre: Some("4d3 · producción".to_string()),
+        salto_nombre: None,
+        sftp_dir_local: None,
+        sftp_dir_remoto: None,
+    }
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
-
-    fn host_de_prueba() -> Host {
-        Host {
-            id: 1,
-            nombre: "Producción-Web".to_string(),
-            grupo_id: None,
-            direccion: "10.0.0.1".to_string(),
-            puerto: 22,
-            usuario: Some("Héctor".to_string()),
-            identidad_ref: IdentidadRef::Auto,
-            salto_host_id: None,
-            multiplexar: false,
-            keepalive_seg: Some(30),
-            opciones_extra: String::new(),
-            servicios: String::new(),
-            origen: Origen::Manual,
-            ultimo_estado: None,
-            ultima_conexion_en: None,
-            creado_en: String::new(),
-            actualizado_en: String::new(),
-            etiquetas: vec!["web".to_string(), "crítico".to_string()],
-            grupo_nombre: Some("4d3 · producción".to_string()),
-            salto_nombre: None,
-            sftp_dir_local: None,
-            sftp_dir_remoto: None,
-        }
-    }
 
     #[test]
     fn el_filtro_ignora_mayusculas_y_acentos() {

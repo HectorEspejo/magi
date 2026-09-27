@@ -79,6 +79,14 @@ pub enum EventoConexion {
         recordar_por_defecto: bool,
         responder: oneshot::Sender<Option<(Zeroizing<String>, bool)>>,
     },
+    /// Conexión automática (ejecución, túnel automático) de un host con
+    /// contraseña en el llavero: el solicitante la resuelve desde su llavero,
+    /// sin diálogo. `None` si no la tiene.
+    PideContrasenaLlavero {
+        host: String,
+        usuario: String,
+        responder: oneshot::Sender<Option<Zeroizing<String>>>,
+    },
     /// Resultado de intentar guardar la contraseña en el llavero.
     ContrasenaGuardada {
         host_id: i64,
@@ -134,6 +142,10 @@ pub enum FuenteContrasena {
     /// La aporta el cliente solicitante por el protocolo (sesiones del
     /// servidor); el servidor jamás toca el llavero.
     Solicitante,
+    /// Conexiones automáticas del servidor (ejecuciones de snippets): el
+    /// solicitante la saca de su llavero, sin diálogo; si no la tiene, la
+    /// conexión falla con instrucción.
+    SolicitanteLlavero,
 }
 
 /// Lanza la tarea tokio de la sesión y devuelve el canal de comandos.

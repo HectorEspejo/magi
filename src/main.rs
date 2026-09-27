@@ -602,9 +602,10 @@ async fn esperar_tunel(
             | MensajeServidor::PideFrase { .. }
             | MensajeServidor::HuellaDesconocida { .. }
             | MensajeServidor::HuellaCambiada { .. } => return Ok(DesenlaceTunel::SinCredenciales),
-            MensajeServidor::VersionIncompatible { version } => {
+            MensajeServidor::VersionIncompatible { version, pid } => {
                 anyhow::bail!(
-                    "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                    "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
+                    pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
                 );
             }
             _ => {}
@@ -764,9 +765,10 @@ async fn leer_tuneles(stream: &mut UnixStream) -> anyhow::Result<Option<Vec<Info
             match mensaje {
                 MensajeServidor::Bienvenida { tuneles, .. } => return Ok(Some(tuneles)),
                 MensajeServidor::Tuneles { lista } => return Ok(Some(lista)),
-                MensajeServidor::VersionIncompatible { version } => {
+                MensajeServidor::VersionIncompatible { version, pid } => {
                     anyhow::bail!(
-                        "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                        "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
+                        pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
                     );
                 }
                 _ => {}
