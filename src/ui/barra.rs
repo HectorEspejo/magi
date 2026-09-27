@@ -134,6 +134,16 @@ fn atajos(app: &App) -> Line<'static> {
             ("?", "ayuda"),
             ("q", "volver"),
         ],
+        Vista::Snippets => vec![
+            ("↵", "ejecutar"),
+            ("a", "en todos"),
+            ("p", "en pestaña"),
+            ("n e x", "nuevo · editar · borrar"),
+            ("/", "buscar"),
+            ("t", "resultados"),
+            ("?", "ayuda"),
+        ],
+        Vista::Resultados => vec![("?", "ayuda"), ("q", "volver")],
         Vista::Sesion => vec![],
         Vista::Sesiones => vec![],
     };

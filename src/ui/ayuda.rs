@@ -150,6 +150,22 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 ("F6", "volver a Túneles"),
             ],
         ),
+        Vista::Snippets => (
+            "AYUDA · SNIPPETS",
+            vec![
+                ("↑ ↓ / j k", "mover la selección"),
+                ("↵", "ejecutar: hosts, variables y parar al fallo"),
+                ("a", "ejecutar en todos los destinos"),
+                ("p", "abrir en pestaña (una por host)"),
+                ("n", "nuevo snippet"),
+                ("e", "editar"),
+                ("x", "borrar (confirma)"),
+                ("/", "filtrar por nombre, comando o etiqueta"),
+                ("t", "ir a Resultados"),
+                ("q", "volver"),
+            ],
+        ),
+        Vista::Resultados => ("AYUDA · RESULTADOS", vec![("q / esc", "volver a Snippets")]),
         Vista::Flota => (
             "AYUDA · FLOTA",
             vec![

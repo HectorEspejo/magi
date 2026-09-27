@@ -8,6 +8,7 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_2_FLOTA,
     MIGRACION_3_ARCHIVOS,
     MIGRACION_4_TUNELES,
+    MIGRACION_5_SNIPPETS,
 ];
 
 const MIGRACION_1_INICIAL: &str = r#"
@@ -132,6 +133,72 @@ CREATE TABLE TUNELES (
 );
 
 CREATE INDEX idx_tuneles_host ON TUNELES(host_id);
+"#;
+
+/// Fase 6: snippets, verificaciones previas por host y deliberaciones MAGI.
+/// Los destinos van por nombre de etiqueta (un snippet sobrevive a que la
+/// etiqueta se quede sin hosts) o por host suelto (en cascada). Exactamente
+/// uno de los dos se valida en código; los índices únicos parciales solo
+/// impiden repetir un destino. Sin `CHECK` sobre enumeraciones.
+const MIGRACION_5_SNIPPETS: &str = r#"
+CREATE TABLE SNIPPETS (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre         TEXT    NOT NULL UNIQUE,
+    comando        TEXT    NOT NULL,
+    descripcion    TEXT    NOT NULL DEFAULT '',
+    etiquetas      TEXT    NOT NULL DEFAULT '',
+    critico        INTEGER NOT NULL DEFAULT 0,
+    timeout_seg    INTEGER NOT NULL DEFAULT 60,
+    parar_al_fallo INTEGER NOT NULL DEFAULT 0,
+    usado_veces    INTEGER NOT NULL DEFAULT 0,
+    ultimo_uso_en  TEXT,
+    creado_en      TEXT    NOT NULL,
+    actualizado_en TEXT    NOT NULL
+);
+
+CREATE TABLE SNIPPET_DESTINOS (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    snippet_id INTEGER NOT NULL REFERENCES SNIPPETS(id) ON DELETE CASCADE,
+    etiqueta   TEXT,
+    host_id    INTEGER REFERENCES HOSTS(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_snippet_destinos_snippet ON SNIPPET_DESTINOS(snippet_id);
+CREATE INDEX idx_snippet_destinos_host ON SNIPPET_DESTINOS(host_id);
+CREATE UNIQUE INDEX idx_snippet_destinos_etiqueta
+    ON SNIPPET_DESTINOS(snippet_id, etiqueta) WHERE etiqueta IS NOT NULL;
+CREATE UNIQUE INDEX idx_snippet_destinos_host_unico
+    ON SNIPPET_DESTINOS(snippet_id, host_id) WHERE host_id IS NOT NULL;
+
+CREATE TABLE VERIFICACIONES_HOST (
+    host_id        INTEGER PRIMARY KEY REFERENCES HOSTS(id) ON DELETE CASCADE,
+    salud          INTEGER NOT NULL DEFAULT 0,
+    backup         INTEGER NOT NULL DEFAULT 0,
+    backup_ruta    TEXT,
+    backup_patron  TEXT,
+    tests          INTEGER NOT NULL DEFAULT 0,
+    tests_comando  TEXT,
+    actualizado_en TEXT    NOT NULL
+);
+
+CREATE TABLE DELIBERACIONES (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha               TEXT    NOT NULL,
+    snippet_id          INTEGER REFERENCES SNIPPETS(id) ON DELETE SET NULL,
+    accion              TEXT    NOT NULL,
+    hosts_json          TEXT    NOT NULL,
+    comprobaciones_json TEXT    NOT NULL,
+    resultado           TEXT    NOT NULL,
+    bloqueada           INTEGER NOT NULL DEFAULT 0,
+    motivo              TEXT,
+    usuario             TEXT    NOT NULL,
+    ejecucion_resultado TEXT
+);
+
+CREATE INDEX idx_deliberaciones_fecha ON DELIBERACIONES(fecha);
+
+ALTER TABLE HOSTS ADD COLUMN snippet_al_conectar_id INTEGER
+    REFERENCES SNIPPETS(id) ON DELETE SET NULL;
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {

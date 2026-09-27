@@ -29,6 +29,13 @@ use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::Vista;
 
+pub mod formulario_snippet;
+mod resultados;
+mod snippets;
+
+pub use resultados::EstadoResultados;
+pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
+
 /// Entradas que carga cada página de la vista Registro.
 pub const REGISTRO_PAGINA: i64 = 200;
 
@@ -929,6 +936,8 @@ pub enum AccionDialogo {
         id: i64,
         host_id: i64,
     },
+    /// Acciones confirmadas de la vista Snippets (Fase 6).
+    Snippets(AccionSnippets),
 }
 
 pub enum EntradaTextoAccion {
@@ -950,6 +959,8 @@ pub enum EntradaTextoAccion {
 }
 
 pub enum Dialogo {
+    /// Diálogos de la vista Snippets (formulario; en S2, EJECUTAR).
+    Snippets(DialogoSnippets),
     Confirmar {
         titulo: String,
         lineas: Vec<String>,
@@ -1157,6 +1168,8 @@ pub enum AccionPaleta {
     IrATuneles,
     /// Abrir el diálogo de túnel nuevo.
     NuevoTunel,
+    /// Entradas de la vista Snippets (Fase 6).
+    Snippets(AccionPaletaSnippets),
 }
 
 pub struct PaletaCmd {
@@ -1316,6 +1329,10 @@ pub struct App {
     /// Operaciones de túnel en vuelo, por `peticion_id`.
     peticiones_tunel: HashMap<u64, PeticionTunel>,
     siguiente_peticion_tunel: u64,
+    /// Vista Snippets (F8, Fase 6).
+    pub snippets: EstadoSnippets,
+    /// Vista Resultados (subvista de F8).
+    pub resultados: EstadoResultados,
 }
 
 impl App {
@@ -1420,9 +1437,12 @@ impl App {
             // empieza en 0, así que el de túneles arranca muy por encima para
             // que no puedan confundirse nunca (nadie llega a 2^40 peticiones).
             siguiente_peticion_tunel: 1 << 40,
+            snippets: EstadoSnippets::default(),
+            resultados: EstadoResultados::default(),
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
+        app.recargar_snippets();
         if let Some(aviso) = aviso_inicial {
             app.mensaje(aviso, true);
         }
@@ -3336,6 +3356,7 @@ impl App {
             salto_nombre: None,
             sftp_dir_local: None,
             sftp_dir_remoto: None,
+            snippet_al_conectar_id: None,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);
@@ -3639,6 +3660,7 @@ impl App {
             categoria: "túneles",
             accion: AccionPaleta::NuevoTunel,
         });
+        entradas.extend(self.entradas_paleta_snippets());
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
             categoria: "acción",
@@ -3887,6 +3909,11 @@ impl App {
                         self.ir_a_vista(Vista::Tuneles);
                         self.nuevo_tunel();
                     }
+                    Some(AccionPaleta::Snippets(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_snippets(accion);
+                    }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
                         let sesiones = self.pestanas.len();
@@ -3983,6 +4010,8 @@ impl App {
             // necesita saber con qué host.
             Vista::Archivos | Vista::Transferencias => self.abrir_archivos(None),
             Vista::Tuneles => self.ir_a_tuneles(),
+            Vista::Snippets => self.ir_a_snippets(),
+            Vista::Resultados => self.ir_a_resultados(),
         }
     }
 
@@ -5490,6 +5519,10 @@ impl App {
                 self.ir_a_vista(Vista::Tuneles);
                 return;
             }
+            KeyCode::F(8) => {
+                self.ir_a_vista(Vista::Snippets);
+                return;
+            }
             KeyCode::Char('p') if tecla.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.abrir_paleta();
                 return;
@@ -5507,6 +5540,8 @@ impl App {
             Vista::Identidades => self.tecla_identidades(tecla),
             Vista::Registro => self.tecla_registro(tecla),
             Vista::Tuneles => self.tecla_tuneles(tecla),
+            Vista::Snippets => self.tecla_snippets(tecla),
+            Vista::Resultados => self.tecla_resultados(tecla),
         }
     }
 
@@ -5592,6 +5627,7 @@ impl App {
             return;
         };
         match dialogo {
+            Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Conflicto {
                 nombre,
                 es_dir,
@@ -6205,6 +6241,7 @@ impl App {
     fn ejecutar_accion(&mut self, accion: AccionDialogo) {
         match accion {
             AccionDialogo::Nada => {}
+            AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::BorrarHost(id) => {
                 if let Err(error) = self.almacen.borrar_host(id) {
                     self.mensaje(error.to_string(), true);
@@ -6314,6 +6351,8 @@ impl App {
                     Vista::Identidades => self.ir_a_identidades(),
                     Vista::Registro => self.ir_a_registro(),
                     Vista::Tuneles => self.ir_a_tuneles(),
+                    Vista::Snippets => self.ir_a_snippets(),
+                    Vista::Resultados => self.ir_a_resultados(),
                     _ => self.vista = vista,
                 }
             }

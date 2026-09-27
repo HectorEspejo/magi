@@ -101,6 +101,7 @@ fn host_de_prueba(puerto: u16) -> Host {
         salto_nombre: None,
         sftp_dir_local: None,
         sftp_dir_remoto: None,
+        snippet_al_conectar_id: None,
     }
 }
 

@@ -101,6 +101,71 @@ pub struct SeccionFlota {
     /// Segundos entre auto-refrescos; 0 = desactivado y mínimo 15.
     pub auto_refresco_seg: u64,
     pub umbrales: crate::flota::estado::Umbrales,
+    /// `[flota.atajos]`: tecla (una letra) → nombre de snippet, sobre el host
+    /// seleccionado en Flota.
+    pub atajos: std::collections::BTreeMap<String, String>,
+}
+
+/// Teclas que ya usa la vista Flota: un atajo no puede quitárselas.
+pub const TECLAS_DE_FLOTA: &[char] = &['s', 'j', 'k', 'r', 'R', '/', 'e', 'a', '?', 'q', '!'];
+
+/// Valida `[flota.atajos]` contra las teclas de Flota y los snippets que
+/// existen. Devuelve los atajos válidos (tecla, snippet) y un aviso por cada
+/// uno que se ignora.
+pub fn validar_atajos(
+    atajos: &std::collections::BTreeMap<String, String>,
+    snippets: &[String],
+) -> (Vec<(char, String)>, Vec<String>) {
+    let mut validos = Vec::new();
+    let mut avisos = Vec::new();
+    for (tecla, snippet) in atajos {
+        let mut caracteres = tecla.chars();
+        let (Some(caracter), None) = (caracteres.next(), caracteres.next()) else {
+            avisos.push(format!("atajo «{tecla}» ignorado: debe ser una sola tecla"));
+            continue;
+        };
+        if caracter.is_control() || caracter.is_whitespace() {
+            avisos.push(format!("atajo «{tecla}» ignorado: no es una tecla válida"));
+            continue;
+        }
+        if TECLAS_DE_FLOTA.contains(&caracter) {
+            avisos.push(format!("atajo «{tecla}» ignorado: Flota ya usa esa tecla"));
+            continue;
+        }
+        if !snippets.iter().any(|nombre| nombre == snippet) {
+            avisos.push(format!(
+                "atajo «{tecla}» ignorado: no existe el snippet «{snippet}»"
+            ));
+            continue;
+        }
+        validos.push((caracter, snippet.clone()));
+    }
+    (validos, avisos)
+}
+
+/// Sección `[deliberacion]` de `config.toml` (deliberación MAGI, Fase 6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionDeliberacion {
+    /// BALTHASAR-2: antigüedad máxima del último backup.
+    pub backup_horas: u64,
+    /// MELCHIOR-1: antigüedad máxima del último sondeo antes de sondear.
+    pub salud_max_min: u64,
+    /// Plazo de cada comprobación, medido desde el inicio.
+    pub limite_seg: u64,
+    /// Caracteres mínimos del motivo de un forzado.
+    pub motivo_min: usize,
+}
+
+impl Default for SeccionDeliberacion {
+    fn default() -> Self {
+        Self {
+            backup_horas: 24,
+            salud_max_min: 5,
+            limite_seg: 2,
+            motivo_min: 10,
+        }
+    }
 }
 
 /// Sección `[terminal]` de `config.toml`: comando para lanzar una ventana
@@ -202,6 +267,8 @@ pub struct Config {
     pub servidor: SeccionServidor,
     /// Vista Archivos: `[archivos] avisar`, `mostrar_ocultos`, `pager`.
     pub archivos: SeccionArchivos,
+    /// Deliberación MAGI: `[deliberacion]` plazos y mínimos.
+    pub deliberacion: SeccionDeliberacion,
 }
 
 impl Default for Config {
@@ -215,6 +282,7 @@ impl Default for Config {
             terminal: SeccionTerminal::default(),
             servidor: SeccionServidor::default(),
             archivos: SeccionArchivos::default(),
+            deliberacion: SeccionDeliberacion::default(),
         }
     }
 }
@@ -249,5 +317,64 @@ impl Config {
     pub fn guardar(&self, ruta: &Path) -> Result<()> {
         let texto = toml::to_string_pretty(self).context("serializando config.toml")?;
         escribir_atomico(ruta, texto.as_bytes(), 0o600)
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn las_secciones_de_la_fase_6_se_leen_y_tienen_defectos() {
+        let config: Config = toml::from_str(
+            r#"
+[flota.atajos]
+u = "uptime"
+N = "reiniciar nginx"
+
+[deliberacion]
+backup_horas = 48
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.flota.atajos.get("u").map(String::as_str),
+            Some("uptime")
+        );
+        assert_eq!(config.deliberacion.backup_horas, 48);
+        assert_eq!(config.deliberacion.salud_max_min, 5);
+        assert_eq!(config.deliberacion.limite_seg, 2);
+        assert_eq!(config.deliberacion.motivo_min, 10);
+        let vacia = Config::default();
+        assert!(vacia.flota.atajos.is_empty());
+    }
+
+    #[test]
+    fn los_atajos_invalidos_se_ignoran_con_aviso() {
+        let atajos: std::collections::BTreeMap<String, String> = [
+            ("u", "uptime"),
+            ("r", "uptime"),
+            ("xy", "uptime"),
+            ("N", "reiniciar nginx"),
+            ("z", "no existe"),
+        ]
+        .into_iter()
+        .map(|(tecla, snippet)| (tecla.to_string(), snippet.to_string()))
+        .collect();
+        let (validos, avisos) = validar_atajos(
+            &atajos,
+            &["uptime".to_string(), "reiniciar nginx".to_string()],
+        );
+        assert_eq!(
+            validos,
+            vec![
+                ('N', "reiniciar nginx".to_string()),
+                ('u', "uptime".to_string())
+            ]
+        );
+        assert_eq!(avisos.len(), 3, "{avisos:?}");
+        assert!(avisos.iter().any(|aviso| aviso.contains("Flota ya usa")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("una sola tecla")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("no existe")));
     }
 }

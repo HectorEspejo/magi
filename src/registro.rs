@@ -35,8 +35,17 @@ pub const TUNEL_ABIERTO: &str = "tunel_abierto";
 pub const TUNEL_CERRADO: &str = "tunel_cerrado";
 /// Fase 5: un túnel no llega a levantarse (bind ocupado, host que rechaza).
 pub const TUNEL_FALLIDO: &str = "tunel_fallido";
+/// Fase 6: un snippet terminó en un host (código, duración y bytes; nunca la
+/// salida) o se escribió en una pestaña.
+pub const SNIPPET_EJECUTADO: &str = "snippet_ejecutado";
+/// Fase 6: una ejecución deliberada con consenso terminó.
+pub const DELIBERACION_APROBADA: &str = "deliberacion_aprobada";
+/// Fase 6: una ejecución forzada (con motivo) terminó.
+pub const DELIBERACION_FORZADA: &str = "deliberacion_forzada";
+/// Fase 6: el usuario canceló una deliberación.
+pub const DELIBERACION_CANCELADA: &str = "deliberacion_cancelada";
 
-pub const TIPOS: [&str; 21] = [
+pub const TIPOS: [&str; 25] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -58,10 +67,14 @@ pub const TIPOS: [&str; 21] = [
     TUNEL_ABIERTO,
     TUNEL_CERRADO,
     TUNEL_FALLIDO,
+    SNIPPET_EJECUTADO,
+    DELIBERACION_APROBADA,
+    DELIBERACION_FORZADA,
+    DELIBERACION_CANCELADA,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
-pub const FILTROS: [(&str, &[&str]); 7] = [
+pub const FILTROS: [(&str, &[&str]); 8] = [
     ("todos", &[]),
     (
         "conexiones",
@@ -86,6 +99,15 @@ pub const FILTROS: [(&str, &[&str]); 7] = [
     ("importación", &[IMPORTACION, EXPORTACION]),
     ("sondeos", &[SONDEO_FALLIDO, SONDEO_RECUPERADO]),
     ("archivos", &[TRANSFERENCIA, BORRADO_REMOTO]),
+    (
+        "snippets",
+        &[
+            SNIPPET_EJECUTADO,
+            DELIBERACION_APROBADA,
+            DELIBERACION_FORZADA,
+            DELIBERACION_CANCELADA,
+        ],
+    ),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -209,6 +231,7 @@ mod pruebas {
             "importación",
             "sondeos",
             "archivos",
+            "snippets",
             "todos",
         ] {
             filtro.ciclo_tipo();

@@ -139,6 +139,8 @@ pub struct Host {
     /// Último directorio remoto usado en la vista Archivos (F4); nulo es el
     /// directorio de inicio del usuario remoto.
     pub sftp_dir_remoto: Option<String>,
+    /// Snippet que se escribe en cada pestaña nueva o reconectada (Fase 6).
+    pub snippet_al_conectar_id: Option<i64>,
 }
 
 /// Datos editables de un host (ficha), sin id ni marcas de tiempo.
@@ -791,6 +793,7 @@ pub(crate) fn host_de_prueba() -> Host {
         salto_nombre: None,
         sftp_dir_local: None,
         sftp_dir_remoto: None,
+        snippet_al_conectar_id: None,
     }
 }
 
