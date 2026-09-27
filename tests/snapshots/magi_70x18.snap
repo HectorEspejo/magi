@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ───────────────────────────────────────────────┐
+│▸ actualizar paquetes  web            → 3 hosts  CRÍTICO            │
+│  espacio en disco     hetzner-01 +1  → 2 hosts                     │
+│  reiniciar nginx      web            → 3 hosts  CRÍTICO            │
+│                                                                    │
+│       ┌ DELIBERACIÓN MAGI ─ reiniciar nginx → 3 ───────────┐       │
+│       │               M-1 salud   B-2 backup  C-3 tests    │       │
+│       │ hetzner-01    ✓ NOMINAL   ✓ 3 h       ✓ verde      │       │
+│       │ hetzner-02    ✓ NOMINAL   ✕ 31 h      ✓ verde      │       │
+│       │ vps-openclaw  ✓ NOMINAL   —           —            │       │
+│       │ CONSENSO 6/7 ████████░░  ▸ BLOQUEADO               │       │
+│       │ f forzar  esc cancelar  ? ayuda             ↑↓ 1/3 │       │
+│       └────────────────────────────────────────────────────┘       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└ i detalle ─────────────────────────────────────────────────────────┘
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más

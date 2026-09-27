@@ -5,13 +5,18 @@
 //! Nada del snippet llega a la terminal sin sanear: el comando y los defectos
 //! de las variables pueden llevar cualquier carácter salvo el nulo, y una
 //! secuencia de escape pintada tal cual la interpretaría la terminal.
+//!
+//! Disposición adaptable (Fase 7): columnas por prioridad (el nombre y la
+//! marca de crítico no se ocultan; el destino resumido cae el primero) y
+//! panel inferior plegado con la vista baja. Aquí `↵` ejecuta, así que el
+//! detalle plegado se abre con `i`.
 
 use std::collections::HashMap;
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
@@ -22,6 +27,10 @@ use crate::snippets::salida::{sanear_linea, texto_limpio};
 use crate::snippets::{motivos_deliberacion, resolver, resumen_destino, Destino, Snippet};
 use crate::ui::archivos::acortar;
 use crate::ui::bloque;
+use crate::ui::disposicion::{self, Columna, Disposicion, Lista, VentanaLista};
+use crate::ui::tuneles::{
+    estilo_fila, marco_detalle, prefijo, repartir_vista, texto_plegado, Tabla, ANCHO_PREFIJO,
+};
 
 /// Filas del panel inferior, bordes incluidos: hasta tres del comando y una
 /// por destinos, variables, confirmación y uso.
@@ -30,70 +39,62 @@ pub const ALTO_DETALLE: u16 = 9;
 /// Líneas del comando que enseña el panel.
 const LINEAS_COMANDO: usize = 3;
 
+/// Líneas del comando que enseña el diálogo de detalle (`i`).
+const LINEAS_COMANDO_DIALOGO: usize = 12;
+
+/// Ancho útil de las líneas del diálogo de detalle (74 de ancho menos bordes
+/// y márgenes): el modal no parte las líneas largas.
+const ANCHO_DIALOGO: usize = 68;
+
 /// Ancho de la columna de rótulos del panel («Confirmación» y aire).
 const ANCHO_ROTULO: usize = 14;
 
-/// Ancho de la marca «CRÍTICO» con su separación.
-const ANCHO_CRITICO: usize = 9;
-
-/// Filas útiles de la lista: la terminal menos la barra de abajo, el panel
-/// inferior (que monta sobre el borde de abajo), el borde de arriba y la
-/// línea del filtro (se cuenta siempre, aunque no se vea). Lo comparte
-/// `app::snippets` para mover la selección con la misma altura con la que se
-/// pinta.
-pub fn alto_lista(terminal_alto: u16) -> usize {
-    terminal_alto
-        .saturating_sub(1 + ALTO_DETALLE + 1 + 1)
-        .max(1) as usize
-}
+/// Ancho de la marca «CRÍTICO».
+const ANCHO_CRITICO: u16 = 7;
 
 /// Una fila de la lista con lo que se calcula una vez por dibujo.
 struct Fila<'a> {
     snippet: &'a Snippet,
     nombre: String,
     resumen: String,
+    /// «→ 3 hosts».
     hosts: String,
     resueltos: usize,
 }
 
-/// Anchos de las columnas, calculados sobre todas las filas visibles para
-/// que no bailen al desplazarse.
-struct Anchos {
-    nombre: usize,
-    resumen: usize,
-    hosts: usize,
-}
-
-pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
+pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
+    let ascii = tema.ascii;
+    let punto = tema.glifos.punto_medio;
     let visibles = app.snippets_visibles();
     let total = app.snippets.lista.len();
-    // Con el filtro, cuántos se ven de cuántos hay (el borde de abajo lo
-    // tapa el panel inferior).
+    // Con el filtro, cuántos se ven de cuántos hay.
     let titulo = if visibles.len() == total {
-        format!("MAGI · SNIPPETS · {total}")
+        format!("MAGI {punto} SNIPPETS {punto} {total}")
     } else {
-        format!("MAGI · SNIPPETS · {} de {total}", visibles.len())
+        format!(
+            "MAGI {punto} SNIPPETS {punto} {} de {total}",
+            visibles.len()
+        )
     };
     let marco_bloque = bloque(&titulo, tema);
     let interior = marco_bloque.inner(area);
-    marco.render_widget(marco_bloque, area);
     if interior.height == 0 {
+        marco.render_widget(marco_bloque, area);
         return;
     }
 
-    // El panel inferior monta sobre el borde de abajo del bloque, como el de
-    // Túneles; con la terminal muy baja no se pinta.
     let seleccionado = visibles.get(app.snippets.seleccion).copied();
-    let con_detalle = seleccionado.is_some() && area.height >= ALTO_DETALLE + 4;
-    let zona = if con_detalle {
-        Rect {
-            height: area.height.saturating_sub(ALTO_DETALLE + 1),
-            ..interior
-        }
+    let (zona, detalle) = repartir_vista(interior, ALTO_DETALLE, disp);
+    let marco_bloque = if detalle.is_none() && seleccionado.is_some() {
+        marco_bloque.title_bottom(Span::styled(
+            format!(" {} ", texto_plegado(tema, "i")),
+            Style::default().fg(tema.paleta.inactivo),
+        ))
     } else {
-        interior
+        marco_bloque
     };
+    marco.render_widget(marco_bloque, area);
 
     let con_filtro = app.snippets.filtro_activo || !app.snippets.filtro.is_empty();
     let trozos = Layout::default()
@@ -118,7 +119,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                filtro,
+                disposicion::adaptar(&filtro, ascii),
                 Style::default()
                     .fg(tema.paleta.texto)
                     .add_modifier(Modifier::BOLD),
@@ -163,20 +164,34 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
     }
 
     if lista.height > 0 {
-        dibujar_lista(marco, lista, app, &visibles);
+        dibujar_lista(marco, lista, app, &visibles, disp);
     }
-    if let Some(snippet) = seleccionado.filter(|_| con_detalle) {
-        let detalle = Rect {
-            y: area.y + area.height - ALTO_DETALLE,
-            height: ALTO_DETALLE,
-            ..area
-        };
+    if let (Some(detalle), Some(snippet)) = (detalle, seleccionado) {
         dibujar_detalle(marco, detalle, app, snippet);
     }
 }
 
-fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App, visibles: &[&Snippet]) {
+/// Columnas: nombre, destino resumido, «→ N hosts» y la marca de crítico. El
+/// nombre (que pide su largo, hasta 24) y la marca no se ocultan; antes de
+/// recortar el nombre cae el destino resumido.
+fn columnas(minimo_nombre: u16, ancho_resumen: u16, ancho_hosts: u16) -> [Columna; 4] {
+    [
+        Columna::flexible(minimo_nombre, 1),
+        Columna::fija(ancho_resumen, 3),
+        Columna::fija(ancho_hosts, 2),
+        Columna::fija(ANCHO_CRITICO, 1),
+    ]
+}
+
+fn dibujar_lista(
+    marco: &mut Frame,
+    area: Rect,
+    app: &App,
+    visibles: &[&Snippet],
+    disp: &mut Disposicion,
+) {
     let tema = &app.tema;
+    let ascii = tema.ascii;
     let flecha = crate::ui::tecla(tema, "→", "->");
     let filas: Vec<Fila> = visibles
         .iter()
@@ -190,132 +205,87 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App, visibles: &[&Snippet]
                     resueltos,
                     app.hosts.len(),
                 )),
-                hosts: texto_hosts(resueltos),
+                hosts: format!("{flecha} {}", texto_hosts(resueltos)),
                 resueltos,
             }
         })
         .collect();
 
-    let ancho = area.width as usize;
-    let resumen = filas
-        .iter()
-        .map(|fila| fila.resumen.chars().count())
-        .max()
-        .unwrap_or(1)
-        .clamp(1, 20);
-    let hosts = filas
-        .iter()
-        .map(|fila| fila.hosts.chars().count())
-        .max()
-        .unwrap_or(1);
-    // Sangría y marca (4), separación (2), «resumen → N hosts» y «CRÍTICO».
-    let fijos = 4 + 2 + resumen + flecha.chars().count() + 2 + hosts + ANCHO_CRITICO;
-    let nombre_max = filas
-        .iter()
-        .map(|fila| fila.nombre.chars().count())
-        .max()
-        .unwrap_or(8);
-    let anchos = Anchos {
-        nombre: nombre_max.min(ancho.saturating_sub(fijos)).max(8),
-        resumen,
-        hosts,
-    };
+    // Anchos sobre todas las filas, para que no bailen al desplazarse.
+    let largo =
+        |medida: fn(&Fila) -> usize| -> u16 { filas.iter().map(medida).max().unwrap_or(1) as u16 };
+    let largo_nombre = largo(|fila| fila.nombre.chars().count()).max(8);
+    let ancho_resumen = largo(|fila| fila.resumen.chars().count()).clamp(1, 20);
+    let ancho_hosts = largo(|fila| fila.hosts.chars().count());
+    let columnas = columnas(largo_nombre.min(24), ancho_resumen, ancho_hosts);
+    let naturales = [largo_nombre, ancho_resumen, ancho_hosts, ANCHO_CRITICO];
+    let tabla = Tabla::nueva(
+        area.width.saturating_sub(ANCHO_PREFIJO),
+        &columnas,
+        &naturales,
+    );
 
     // La selección siempre a la vista, aunque el desplazamiento guardado se
     // calculara con otra altura.
     let altura = area.height as usize;
     let seleccion = app.snippets.seleccion;
-    let mut inicio = app.snippets.desplazamiento;
-    if seleccion < inicio {
-        inicio = seleccion;
-    }
-    if seleccion >= inicio + altura {
-        inicio = seleccion + 1 - altura;
-    }
-    inicio = inicio.min(filas.len().saturating_sub(altura));
+    let inicio = disposicion::ventana(app.snippets.desplazamiento, seleccion, altura, filas.len());
+    disp.registrar(
+        Lista::Snippets,
+        VentanaLista {
+            inicio,
+            filas: altura,
+            total: filas.len(),
+        },
+    );
 
     let lineas: Vec<Line> = filas
         .iter()
         .enumerate()
         .skip(inicio)
         .take(altura)
-        .map(|(posicion, fila)| linea_de(fila, posicion == seleccion, &anchos, flecha, app))
+        .map(|(posicion, fila)| {
+            let seleccionada = posicion == seleccion;
+            let base = estilo_fila(tema, seleccionada);
+            // Sobre la fila seleccionada todo va con el color de la selección.
+            let (estilo_destino, estilo_critico) = if seleccionada {
+                (base, base)
+            } else {
+                let destino = if fila.resueltos == 0 {
+                    tema.paleta.inactivo
+                } else {
+                    tema.paleta.texto
+                };
+                (
+                    Style::default().fg(destino),
+                    Style::default()
+                        .fg(tema.paleta.critico)
+                        .add_modifier(Modifier::BOLD),
+                )
+            };
+            tabla.linea(
+                prefijo(seleccionada, tema),
+                vec![
+                    (fila.nombre.clone(), base),
+                    (fila.resumen.clone(), estilo_destino),
+                    (fila.hosts.clone(), estilo_destino),
+                    (
+                        if fila.snippet.critico { "CRÍTICO" } else { "" }.to_string(),
+                        estilo_critico,
+                    ),
+                ],
+                base,
+                ascii,
+            )
+        })
         .collect();
     marco.render_widget(Paragraph::new(lineas), area);
 }
 
-fn linea_de(
-    fila: &Fila,
-    seleccionada: bool,
-    anchos: &Anchos,
-    flecha: &str,
-    app: &App,
-) -> Line<'static> {
-    let tema = &app.tema;
-    let seleccion = Style::default()
-        .bg(tema.paleta.acento)
-        .fg(tema.paleta.fondo)
-        .add_modifier(Modifier::BOLD);
-    // Sobre la fila seleccionada todo va con el color de la selección.
-    let (estilo_nombre, estilo_destino, estilo_critico) = if seleccionada {
-        (seleccion, seleccion, seleccion)
-    } else {
-        let destino = if fila.resueltos == 0 {
-            tema.paleta.inactivo
-        } else {
-            tema.paleta.texto
-        };
-        (
-            Style::default().fg(tema.paleta.texto),
-            Style::default().fg(destino),
-            Style::default()
-                .fg(tema.paleta.critico)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let marca = if seleccionada {
-        crate::ui::tecla(tema, "▸", ">")
-    } else {
-        " "
-    };
-    Line::from(vec![
-        Span::styled(
-            format!(
-                "  {marca} {nombre:<ancho$}  ",
-                nombre = acortar(&fila.nombre, anchos.nombre),
-                ancho = anchos.nombre,
-            ),
-            estilo_nombre,
-        ),
-        Span::styled(
-            format!(
-                "{resumen:<ancho_resumen$} {flecha} {hosts:<ancho_hosts$}  ",
-                resumen = acortar(&fila.resumen, anchos.resumen),
-                ancho_resumen = anchos.resumen,
-                hosts = fila.hosts,
-                ancho_hosts = anchos.hosts,
-            ),
-            estilo_destino,
-        ),
-        Span::styled(
-            format!(
-                "{:<ancho$}",
-                if fila.snippet.critico { "CRÍTICO" } else { "" },
-                ancho = ANCHO_CRITICO - 2,
-            ),
-            estilo_critico,
-        ),
-    ])
-}
-
 fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, snippet: &Snippet) {
     let tema = &app.tema;
-    let bloque = Block::default()
-        .borders(Borders::ALL)
-        .border_set(tema.bordes())
-        .border_style(Style::default().fg(tema.paleta.inactivo));
-    let interior = bloque.inner(area);
-    marco.render_widget(bloque, area);
+    let ascii = tema.ascii;
+    let interior = marco_detalle(marco, area, tema);
     if interior.height == 0 {
         return;
     }
@@ -324,6 +294,11 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, snippet: &Snippet) 
     let filas = interior.height as usize;
     let estilo_rotulo = Style::default().fg(tema.paleta.inactivo);
     let estilo_valor = Style::default().fg(tema.paleta.texto);
+    // Todo pasa a ASCII si toca y se vuelve a recortar: la conversión puede
+    // alargar un texto (`→` pasa a `->`).
+    let recorte = |texto: &str, ancho: usize| {
+        disposicion::recortar(&disposicion::adaptar(texto, ascii), ancho, ascii)
+    };
 
     // Destinos, variables, confirmación y uso llevan una fila cada uno; el
     // comando se queda con lo que sobre (hasta tres) y, si aún sobra, hay
@@ -337,14 +312,22 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, snippet: &Snippet) 
     let sobrantes = filas.saturating_sub(comando.len() + fijas);
     let mut lineas: Vec<Line> = comando
         .into_iter()
-        .map(|linea| Line::from(Span::styled(format!("  {linea}"), estilo_valor)))
+        .map(|linea| {
+            Line::from(Span::styled(
+                format!("  {}", recorte(&linea, ancho)),
+                estilo_valor,
+            ))
+        })
         .collect();
     if sobrantes > 0 {
         lineas.push(Line::from(""));
     }
 
     let resueltos = resolver(&snippet.destinos, &app.hosts, &app.grupos);
-    let destinos = texto_destinos(&snippet.destinos, &app.hosts, &app.grupos);
+    let destinos = disposicion::adaptar(
+        &texto_destinos(&snippet.destinos, &app.hosts, &app.grupos),
+        ascii,
+    );
     let filas_destinos = 1 + sobrantes.saturating_sub(1);
     for (indice, trozo) in recortar_en_lineas(&destinos, ancho_valor, filas_destinos)
         .into_iter()
@@ -353,14 +336,14 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, snippet: &Snippet) 
         let rotulo = if indice == 0 { "Destinos" } else { "" };
         lineas.push(Line::from(vec![
             Span::styled(format!("  {rotulo:<ANCHO_ROTULO$}"), estilo_rotulo),
-            Span::styled(trozo, estilo_valor),
+            Span::styled(recorte(&trozo, ancho_valor), estilo_valor),
         ]));
     }
 
     lineas.push(Line::from(vec![
         Span::styled(format!("  {:<ANCHO_ROTULO$}", "Variables"), estilo_rotulo),
         Span::styled(
-            acortar(&texto_variables(&snippet.comando), ancho_valor),
+            recorte(&texto_variables(&snippet.comando), ancho_valor),
             estilo_valor,
         ),
     ]));
@@ -377,15 +360,71 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, snippet: &Snippet) 
             format!("  {:<ANCHO_ROTULO$}", "Confirmación"),
             estilo_rotulo,
         ),
-        Span::styled(acortar(&confirmacion, ancho_valor), estilo_confirmacion),
+        Span::styled(recorte(&confirmacion, ancho_valor), estilo_confirmacion),
     ]));
 
     lineas.push(Line::from(Span::styled(
-        format!("  {}", acortar(&texto_uso(snippet), ancho)),
+        format!("  {}", recorte(&texto_uso(snippet), ancho)),
         estilo_rotulo,
     )));
 
     marco.render_widget(Paragraph::new(lineas), interior);
+}
+
+/// Título del diálogo de detalle (`i`).
+pub fn titulo_detalle(snippet: &Snippet, ascii: bool) -> String {
+    disposicion::adaptar(&format!("SNIPPET · {}", limpio(&snippet.nombre)), ascii)
+}
+
+/// Líneas del diálogo de detalle (`i`): las columnas de la lista y todo lo
+/// del panel inferior, con más líneas del comando y los valores partidos a lo
+/// ancho del diálogo (que no parte líneas).
+pub fn lineas_detalle(app: &App, snippet: &Snippet, ascii: bool) -> Vec<String> {
+    let resueltos = resolver(&snippet.destinos, &app.hosts, &app.grupos);
+    let mut cabecera = format!(
+        "{} → {}",
+        limpio(&resumen_destino(
+            &snippet.destinos,
+            resueltos.len(),
+            app.hosts.len()
+        )),
+        texto_hosts(resueltos.len())
+    );
+    if snippet.critico {
+        cabecera.push_str(" · CRÍTICO");
+    }
+    let mut lineas = vec![cabecera, String::new()];
+    lineas.extend(
+        lineas_comando(&snippet.comando, LINEAS_COMANDO_DIALOGO, ANCHO_DIALOGO - 2)
+            .into_iter()
+            .map(|linea| format!("  {linea}")),
+    );
+    lineas.push(String::new());
+    let campos = [
+        (
+            "Destinos",
+            texto_destinos(&snippet.destinos, &app.hosts, &app.grupos),
+        ),
+        ("Variables", texto_variables(&snippet.comando)),
+        (
+            "Confirmación",
+            texto_confirmacion(snippet.critico, &resueltos, &app.snippets.verificaciones),
+        ),
+    ];
+    for (rotulo, valor) in campos {
+        for (indice, trozo) in partir(&valor, ANCHO_DIALOGO - ANCHO_ROTULO)
+            .into_iter()
+            .enumerate()
+        {
+            let rotulo = if indice == 0 { rotulo } else { "" };
+            lineas.push(format!("{rotulo:<ANCHO_ROTULO$}{trozo}"));
+        }
+    }
+    lineas.push(texto_uso(snippet));
+    lineas
+        .into_iter()
+        .map(|linea| disposicion::adaptar(&linea, ascii))
+        .collect()
 }
 
 /// Texto de la confirmación cuando no hay que deliberar.
@@ -529,7 +568,7 @@ fn lineas_comando(comando: &str, maximo: usize, ancho: usize) -> Vec<String> {
 
 /// Parte un texto en como mucho `maximo` líneas de `ancho`; lo que no quepa
 /// se recorta con «…» en la última.
-fn recortar_en_lineas(texto: &str, ancho: usize, maximo: usize) -> Vec<String> {
+pub fn recortar_en_lineas(texto: &str, ancho: usize, maximo: usize) -> Vec<String> {
     let maximo = maximo.max(1);
     let mut lineas = partir(texto, ancho);
     if lineas.len() > maximo {
@@ -751,12 +790,6 @@ mod pruebas {
         assert_eq!(lineas[0], "a b");
         assert!(lineas[1].ends_with('…'), "{lineas:?}");
         assert_eq!(recortar_en_lineas("corto", 20, 1), vec!["corto"]);
-    }
-
-    #[test]
-    fn el_alto_de_la_lista_descuenta_barra_panel_y_filtro() {
-        assert_eq!(alto_lista(24), 12);
-        assert_eq!(alto_lista(5), 1);
     }
 
     #[test]

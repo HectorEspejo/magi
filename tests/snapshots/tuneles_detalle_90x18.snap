@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ TÚNELES · 4 · 2 activos ───────────────────────────────────────────────────────────────┐
+│     TI┌ TÚNEL · grafana ───────────────────────────────────────────────────────┐       │
+│  ●  lo│  Host        hetzner-02                                                │       │
+│▸ ✕  lo│  Tipo        local · LocalForward                                      │       │
+│  ◐  re│  Escucha     127.0.0.1:3000 → 10.0.1.50:3000                           │       │
+│  ○  di│  Estado      caído                                                     │       │
+│       │  Origen      manual (ventana 1)                                        │       │
+│       │  Automático  no                                                        │       │
+│       │  Desde       —                                                         │       │
+│       │  Conexiones  0 abiertas (0 aceptadas)                                  │       │
+│       │  Tráfico     ↓ 0 B   ↑ 0 B                                             │       │
+│       │  Último error  connect: conexión rechazada por 10.0.1.50:3000          │       │
+│       │                                                                        │       │
+│       │  r relanzar   espacio descartar el error                               │       │
+│       │                                                                        │       │
+│       │  ↵ / esc cerrar                                                        │       │
+└ 4 · ↵ └────────────────────────────────────────────────────────────────────────┘───────┘
+ espacio activar/parar  n nuevo  e editar  x borrar  a auto  ↵ detalle  / filtrar  ? más

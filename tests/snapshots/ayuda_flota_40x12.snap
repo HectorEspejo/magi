@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ AYUDA · FLOTA ─────────────────────┐│
+││ ↑ ↓ / j k     mover la selección   ││
+││ ↵             conectar con el host ││
+││ r             sondear el host      ││
+││               seleccionado         ││
+││ R             sondear todos los    ││
+││               visibles             ││
+││                                    ││
+││ esc o ? para cerrar                ││
+└└─────────────────────────── ↑↓ 1/15 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

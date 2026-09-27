@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::deliberacion::estado::{consenso, AccionMaquina, Consenso, MaquinaDeliberacion};
 use crate::deliberacion::salud::{self, DecisionSalud};
@@ -23,6 +23,7 @@ use crate::deliberacion::{
 use crate::modelo::{Host, ResultadoRegistro};
 use crate::protocolo::DeliberacionLanzada;
 use crate::snippets::MotivoDeliberacion;
+use crate::ui::disposicion::Lista;
 
 use super::lanzar::PlanEjecucion;
 use super::{App, Evento};
@@ -57,6 +58,9 @@ pub struct DeliberacionAbierta {
     pub maquina: MaquinaDeliberacion,
     /// Fila seleccionada (`↑` `↓` recorren los hosts si no caben).
     pub seleccion: usize,
+    /// Primera fila de hosts visible en el último pintado (el diálogo la
+    /// recalcula en cada pintado a partir de esta y de la selección).
+    pub desplazamiento: usize,
     pub backup_horas: u64,
     pub inicio: Instant,
     _tareas: TareasComprobacion,
@@ -126,6 +130,12 @@ fn saneado(veredicto: Veredicto) -> Veredicto {
         },
         otro => otro,
     }
+}
+
+/// Mueve la fila seleccionada `paso` filas, sin salirse de la tabla.
+fn mover_seleccion(abierta: &mut DeliberacionAbierta, paso: i64) {
+    let ultima = abierta.filas.len().saturating_sub(1) as i64;
+    abierta.seleccion = (abierta.seleccion as i64 + paso).clamp(0, ultima) as usize;
 }
 
 fn rechazo(detalle: &str) -> Celda {
@@ -248,6 +258,7 @@ impl App {
             filas,
             maquina: MaquinaDeliberacion::nueva(limites.motivo_min),
             seleccion: 0,
+            desplazamiento: 0,
             backup_horas: limites.backup_horas,
             inicio: Instant::now(),
             _tareas: TareasComprobacion(tareas),
@@ -277,19 +288,33 @@ impl App {
         abierta.resolver();
     }
 
-    /// Teclas con la deliberación abierta: solo `Ctrl+K` ejecuta.
+    /// Teclas con la deliberación abierta: solo `Ctrl+K` ejecuta. `↑` `↓`
+    /// recorren los hosts y `PgUp` `PgDn` los pasan de página en página
+    /// (las filas que se ven en el último pintado).
     pub(super) fn tecla_deliberacion(&mut self, tecla: KeyEvent) {
+        let ventana = self.disposicion.lista(Lista::DeliberacionHosts);
+        let pagina = self.disposicion.filas(Lista::DeliberacionHosts) as i64;
         let Some(abierta) = self.deliberacion.as_mut() else {
             return;
         };
+        // Las teclas parten de lo que se ve: el pintado pudo mover la ventana
+        // (otro tamaño de terminal).
+        if let Some(ventana) = ventana {
+            abierta.desplazamiento = ventana.inicio;
+        }
+        let pagina = match tecla.code {
+            KeyCode::PageUp => Some(-pagina),
+            KeyCode::PageDown => Some(pagina),
+            _ => None,
+        };
+        if let Some(paso) = pagina {
+            mover_seleccion(abierta, paso);
+            return;
+        }
         match abierta.maquina.pulsar(&tecla) {
             AccionMaquina::Nada => {}
             AccionMaquina::Ayuda => self.ayuda = true,
-            AccionMaquina::Mover(paso) => {
-                let ultima = abierta.filas.len().saturating_sub(1) as i64;
-                abierta.seleccion =
-                    (abierta.seleccion as i64 + i64::from(paso)).clamp(0, ultima) as usize;
-            }
+            AccionMaquina::Mover(paso) => mover_seleccion(abierta, i64::from(paso)),
             AccionMaquina::Cancelar => self.cancelar_deliberacion(),
             AccionMaquina::Ejecutar { forzada, motivo } => {
                 self.confirmar_deliberacion(forzada, motivo)
@@ -376,9 +401,10 @@ impl App {
     }
 }
 
-#[cfg(test)]
 impl DeliberacionAbierta {
-    /// Una deliberación sin tareas, para probar el diálogo.
+    /// Una deliberación sin tareas, para probar el diálogo (también desde
+    /// las pruebas de `tests/`).
+    #[doc(hidden)]
     pub fn de_prueba(
         plan: PlanEjecucion,
         filas: Vec<ComprobacionesHost>,
@@ -391,6 +417,7 @@ impl DeliberacionAbierta {
             filas,
             maquina: MaquinaDeliberacion::nueva(motivo_min),
             seleccion: 0,
+            desplazamiento: 0,
             backup_horas: 24,
             inicio: Instant::now(),
             _tareas: TareasComprobacion(Vec::new()),

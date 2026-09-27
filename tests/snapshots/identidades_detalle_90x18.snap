@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · IDENTIDADES ────────────────────────────────────────────────────────────────────┐
+│  ALIAS┌ IDENTIDAD · trabajo ───────────────────────────────────────────────────┐       │
+│▸ traba│                                                                        │       │
+│  yubik│  trabajo                                                               │       │
+│       │                                                                        │       │
+│       │  Tipo      ssh-ed25519                                                 │       │
+│       │  Origen    fichero                                                     │       │
+│       │  Usada en  —                                                           │       │
+│       │  Huella    SHA256:Ab3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9           │       │
+│       │  Vista     01/09/26 · sin uso                                          │       │
+│       │  Fichero   ~/.ssh/id_ed25519                                           │       │
+│       │  Hosts     —                                                           │       │
+│       │            no encontrada en el último escaneo                          │       │
+│       │                                                                        │       │
+│       │  ↵ / esc cerrar                                                        │       │
+│       │                                                                        │       │
+└ ↵ deta└────────────────────────────────────────────────────────────────────────┘ave(s) ┘
+ n generar  i importar  c copiar pública  e alias  x revocar  q salir  ↵ detalle  ? más

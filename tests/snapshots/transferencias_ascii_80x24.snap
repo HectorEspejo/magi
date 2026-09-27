@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
++ TRANSFERENCIAS - 1 en curso - 2 en cola -------------------------------------+
+|    ESTADO    DIRECCIÓN ORIGEN -> DESTINO                     PROGRESO        |
+|> o en curso  ^ subida  main.py -> hetzner-01:main.py          78 %  1.1 MB   |
+|  o en cola   ^ subida  static -> hetzner-01:static             0 %  0 B      |
+|  o en cola   v bajada  access.log -> hetzner-01:access.log     0 %  0 B      |
+|  * hecha     ^ subida  config.yaml -> hetzner-01:config.yaml 100 %  2 kB     |
+|  x error     v bajada  backup.tgz -> hetzner-02:backup.tgz   permiso denegado|
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|------------------------------------------------------------------------------|
+|  /home/hector/cooperapp/main.py -> hetzner-01:/var/www/cooperapp/main.py     |
+|  1.1 MB de 1.4 MB - 0 fichero(s)                                             |
+|  ahora: main.py                                                              |
++ 5 ---------------------------------------------------------------------------+
+ j/k mover  x cancelar  C limpiar  enter detalle  q volver  ? ayuda

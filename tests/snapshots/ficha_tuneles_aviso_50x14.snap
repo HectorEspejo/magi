@@ -1,0 +1,17 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · HOST · hetzner-01 · editar · #1 ────────┐
+│      [  ]                                     ↑│
+│  [ ] tests en verde                            │
+│      comando                                   │
+│      [  ]                                      │
+│                                                │
+│  TÚNELES n nuevo · e editar · x borrar · a au… │
+│  ▸   [ ] local    127.0.0.1:6003 → 1…  extra-3 │
+│    ✕ hay 1 reenvío en opciones extra · i impor…│
+│┌ SERVICIOS ───────────┐┌ OPCIONES EXTRA ──────┐│
+││                      ││LocalForward 5555 10.…││
+│└──────────────────────┘└──────────────────────┘│
+└────────────────────────────────────────────────┘
+ ⇥ campo  ^s guardar  esc descartar

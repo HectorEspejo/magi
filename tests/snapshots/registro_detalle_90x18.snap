@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · REGISTRO ───────────────────────────────────────────────────────────────────────┐
+│▸ 15/09 15:41:02  deliberacion_forzada  —           ok     reiniciar nginx → 3 hosts: b…│
+│  15/09┌ DETALLE DEL REGISTRO ──────────────────────────────────────────────────┐o 0    │
+│  15/09│                                                                        │2      │
+│  15/09│  Fecha:     2026-09-15 15:41:02                                        │       │
+│  15/09│  Tipo:      deliberacion_forzada                                       │kB)    │
+│  15/09│  Host:      —                                                          │ve ed2…│
+│       │  Identidad: —                                                          │       │
+│       │  Resultado: ok                                                         │       │
+│       │                                                                        │       │
+│       │  reiniciar nginx → 3 hosts: backup de hace 31 h                        │       │
+│       │                                                                        │       │
+│       │  ↵ / esc cerrar                                                        │       │
+│       │                                                                        │       │
+│       └────────────────────────────────────────────────────────────────────────┘       │
+│                                                                                        │
+└ ↵ detalle ──────────────────────────────────────────────────────────6 entradas · todos ┘
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda

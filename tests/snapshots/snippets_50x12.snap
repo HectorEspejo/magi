@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ───────────────────────────┐
+│▸ actualizar paquetes         → 3 hosts  CRÍTICO│
+│  espacio en disco            → 2 hosts         │
+│  reiniciar nginx             → 3 hosts  CRÍTICO│
+│                                                │
+│                                                │
+│                                                │
+│                                                │
+│                                                │
+│                                                │
+└ i detalle ─────────────────────────────────────┘
+ ↵ ejecutar  a en todos  / buscar  ? más

@@ -1,0 +1,14 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+ MAGI · SESIÓN ─────── mac-mini-m1 (2) ─
+‹ ● 10 │ ▸● 11 mac-mini-m1 (… │ ● 12 │ +
+root@hetzner-01:~# htop
+  (htop repintado a 40x8)
+█
+
+
+
+
+
+ ● 11/12 · mac-mini-m1 · 18 m · ^] ?

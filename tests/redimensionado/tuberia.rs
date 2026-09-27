@@ -290,6 +290,7 @@ fn por_debajo_del_minimo_de_sesion_el_remoto_sigue_recibiendo_su_tamano() {
     prueba.enviados();
     prueba.redimensionar(30, 6);
     assert_eq!(prueba.redimensionares(), vec![(1, 30, 2)]);
+    assert!(prueba.texto().contains("mínimo 40×8"), "{}", prueba.texto());
     prueba.redimensionar(1, 1);
     assert_eq!(prueba.redimensionares(), vec![(1, 2, 1)]);
     prueba.tecla(KeyCode::Char('l'));

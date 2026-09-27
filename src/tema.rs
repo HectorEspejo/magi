@@ -50,6 +50,25 @@ pub struct Glifos {
     pub marca: &'static str,
     /// Marca de «este host tiene túneles activos».
     pub tuneles: &'static str,
+    /// Fila seleccionada en listas y tablas.
+    pub seleccion: &'static str,
+    /// Relleno de la zona que no cubre el remoto (pestaña compartida).
+    pub relleno: &'static str,
+    /// Marca de texto recortado.
+    pub puntos: &'static str,
+    /// Separador de medidas (`80×24`).
+    pub por: &'static str,
+    /// Separador de datos en una línea (`a · b`).
+    pub punto_medio: &'static str,
+    /// Teclas: intro y tabulador.
+    pub intro: &'static str,
+    pub tab: &'static str,
+    /// Línea horizontal y separador vertical dentro de paneles.
+    pub linea: &'static str,
+    pub separador: &'static str,
+    /// Indicador de «hay más arriba/abajo» en listas con desplazamiento.
+    pub arriba: &'static str,
+    pub abajo: &'static str,
 }
 
 impl Glifos {
@@ -64,6 +83,17 @@ impl Glifos {
             salto: "⤴",
             marca: "•",
             tuneles: "⇅",
+            seleccion: "▸",
+            relleno: "░",
+            puntos: "…",
+            por: "×",
+            punto_medio: "·",
+            intro: "↵",
+            tab: "⇥",
+            linea: "─",
+            separador: "│",
+            arriba: "↑",
+            abajo: "↓",
         }
     }
 
@@ -79,6 +109,17 @@ impl Glifos {
             marca: "*",
             // `*` ya es «conectado»: los túneles usan otro carácter.
             tuneles: "^",
+            seleccion: ">",
+            relleno: ".",
+            puntos: "~",
+            por: "x",
+            punto_medio: "-",
+            intro: "enter",
+            tab: "tab",
+            linea: "-",
+            separador: "|",
+            arriba: "^",
+            abajo: "v",
         }
     }
 }

@@ -23,7 +23,8 @@ use crate::protocolo::{
 };
 use crate::snippets::salida::{fichero_de_salida, lineas_limpias, ruta_por_defecto, ParteSalida};
 use crate::ui::componentes::CampoTexto;
-use crate::ui::resultados::{alturas_paneles, alturas_visor, pantalla, sin_marcas};
+use crate::ui::disposicion::{Lista, VentanaLista};
+use crate::ui::resultados::{pantalla, sin_marcas};
 use crate::ui::snippets::{limpio, partir, texto_hosts};
 use crate::ui::Vista;
 
@@ -973,17 +974,64 @@ impl App {
         self.ficha = None;
     }
 
-    /// Filas de cada panel del visor con la terminal de ahora.
+    /// Filas de cada flujo del visor en el último pintado.
     fn altos_visor(&self) -> [usize; 2] {
-        alturas_visor(self.terminal_alto())
+        [
+            self.disposicion.filas(Lista::VisorSalida),
+            self.disposicion.filas(Lista::VisorErrores),
+        ]
+    }
+
+    /// Los desplazamientos guardados pasan a ser los del último pintado
+    /// (pudo hacerse con otro alto): así las teclas parten de lo que se ve.
+    /// Solo si lo pintado sigue siendo la misma lista (mismo total): entre
+    /// el pintado y la tecla pudo abrirse otro visor o llegar otra difusión,
+    /// y su inicio no vale para la de ahora.
+    pub(super) fn sincronizar_resultados(&mut self) {
+        let ventana = |lista| self.disposicion.lista(lista);
+        let (ejecuciones, hosts) = (
+            ventana(Lista::ResultadosEjecuciones),
+            ventana(Lista::ResultadosHosts),
+        );
+        let flujos = [ventana(Lista::VisorSalida), ventana(Lista::VisorErrores)];
+        let estado = &mut self.resultados;
+        let misma = |ventana: Option<VentanaLista>, total: usize| {
+            ventana
+                .filter(|ventana| ventana.total == total)
+                .map(|ventana| ventana.inicio)
+        };
+        match estado.visor.as_mut() {
+            Some(visor) => {
+                for (indice, ventana) in flujos.into_iter().enumerate() {
+                    if let Some(inicio) = misma(ventana, visor.lineas[indice].len()) {
+                        visor.desplazamiento[indice] = inicio;
+                    }
+                }
+            }
+            None => {
+                if let Some(inicio) = misma(ejecuciones, estado.ejecuciones.len()) {
+                    estado.desplazamiento_ejecuciones = inicio;
+                }
+                let total_hosts = estado
+                    .ejecucion_seleccionada()
+                    .map_or(0, |ejecucion| ejecucion.hosts.len());
+                if let Some(inicio) = misma(hosts, total_hosts) {
+                    estado.desplazamiento_hosts = inicio;
+                }
+            }
+        }
     }
 
     pub(super) fn tecla_resultados(&mut self, tecla: KeyEvent) {
+        self.sincronizar_resultados();
         if self.resultados.visor.is_some() {
             self.tecla_visor(tecla);
             return;
         }
-        let alturas = alturas_paneles(self.terminal_alto(), self.resultados.ejecuciones.len());
+        let alturas = (
+            self.disposicion.filas(Lista::ResultadosEjecuciones),
+            self.disposicion.filas(Lista::ResultadosHosts),
+        );
         let altura = if self.resultados.panel_hosts() {
             alturas.1
         } else {

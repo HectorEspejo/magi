@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · REGISTRO ───────────────────────────────────────────────────────────────────────┐
+│▸ 15/09 15:41:02  deliberacion_forzada  —           ok     reiniciar nginx → 3 hosts: b…│
+│  15/09 12:03:09  snippet_ejecutado     hetzner-02  ok     reiniciar nginx: código 0    │
+│  15/09 11:25:44  tunel_abierto         hetzner-01  ok     postgres 127.0.0.1:5432      │
+│  15/09 10:02:17  sondeo_fallido        rincon-dev  error  conexión rechazada           │
+│  15/09 09:40:51  transferencia         hetzner-02  ok     subida de main.py (14 kB)    │
+│  15/09 09:12:03  conexion_abierta      hetzner-01  ok     sesión abierta con clave ed2…│
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└ ↵ detalle ──────────────────────────────────────────────────────────6 entradas · todos ┘
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda

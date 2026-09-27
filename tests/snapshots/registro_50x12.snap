@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · REGISTRO ───────────────────────────────┐
+│▸ 15/09 15:41:02  deliberacion_forzada  ok      │
+│  15/09 12:03:09  snippet_ejecutado     ok      │
+│  15/09 11:25:44  tunel_abierto         ok      │
+│  15/09 10:02:17  sondeo_fallido        error   │
+│  15/09 09:40:51  transferencia         ok      │
+│  15/09 09:12:03  conexion_abierta      ok      │
+│                                                │
+│                                                │
+│                                                │
+└ ↵ detalle ──────────────────6 entradas · todos ┘
+ ↵ detalle  / filtrar  t tipo  x exportar  ? más

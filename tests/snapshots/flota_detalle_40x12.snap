@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│  DETALLE                    ⇥ lista  │
+│  hetzner-01                          │
+│  10.0.1.11:22                        │
+│  CARGA █░░░░░░░░░░░░░░░░  0.4/8      │
+│  MEM   ████████░░░░░░░░░  45 %       │
+│  DSK   ██████░░░░░░░░░░░  38 %       │
+│  NET   ↓ —  ↑ —                      │
+│  UP    12 d 01 h                     │
+│  sondeado hace NN s · NOMINAL        │
+└──────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ lista  ? más

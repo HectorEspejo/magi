@@ -1,0 +1,17 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ ARCHIVOS ────── local ⇄ hetzner-01 ─ [local] ⇥ ┐
+│┌ AVISO ───────────────────────────────────────┐│
+││                                              ││
+││  Vas a subir ficheros que coinciden con los …││
+││                                              ││
+││    id_a  (7 B),  →  hetzner-01:/var/www/coop…││
+││    id_b  (7 B),  →  hetzner-01:/var/www/coop…││
+││    y 5 más                                   ││
+││                                              ││
+││  Suelen contener secretos. ¿Subirlos igualme…││
+││  s subir      esc cancelar (recomendado)     ││
+│└──────────────────────────────────────────────┘│
+└────────────────────────────────────────────────┘
+ ⇥ remoto  ↵ abrir  c copiar  m mover  ? más

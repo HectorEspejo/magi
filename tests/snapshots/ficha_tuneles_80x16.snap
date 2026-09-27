@@ -1,0 +1,19 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────────────────────────┐
+│      ruta                                                                   ↑│
+│      [  ]                                                                    │
+│      patrón  (< 24 h)                                                        │
+│      [  ]                                                                    │
+│  [ ] tests en verde                                                          │
+│      comando                                                                 │
+│      [  ]                                                                    │
+│                                                                              │
+│  TÚNELES                        n nuevo · e editar · x borrar · a automático │
+│  ▸   [a] local    127.0.0.1:5432 → 127.0.0.1:5432                    postgres│
+│┌ SERVICIOS ──────────────────────────┐┌ OPCIONES EXTRA ─────────────────────┐│
+││                                     ││                                     ││
+│└─────────────────────────────────────┘└─────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · HOSTS ────────────── 7 hosts ─┐
+│  ▼ produccion               (3)      │
+│┌ BORRAR HOST ───────────────────────┐│
+││                                    ││
+││ ¿Borrar el host «hetzner-01»?      ││
+││                                    ││
+││ s confirmar   n / esc cancelar     ││
+││                                    ││
+│└────────────────────────────────────┘│
+│    ○ backup-nas                      │
+└──────────────────────────────────────┘
+ ↵ conectar  e editar  / filtrar  ? más

@@ -1,0 +1,26 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+ MAGI · SESIÓN ──────────────────────────────────────────────────── rincon-dev ─
+ ● 1 │ ◐ 2 │ ▸✕ 3 rincon-dev │ +
+
+
+
+
+
+
+                ┌ SESIÓN CAÍDA ────────────────────────────────┐
+                │                                              │
+                │ ✕ Sesión caída hace 2 h 00 m                 │
+                │ conexión cerrada por el remoto               │
+                │                                              │
+                │ Ctrl+] r  reconectar        Ctrl+] x  cerrar │
+                └──────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ ✕ 3/3 · rincon-dev · 2 h 00 m · clave · 1 ventana · ^] ?

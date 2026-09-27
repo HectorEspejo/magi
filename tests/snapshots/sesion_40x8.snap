@@ -1,0 +1,10 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+ MAGI · SESIÓN ──────────── hetzner-01 ─
+▸● 1 hetzner-01 │ ◐ 2 │ ✕ 3 │ +
+root@hetzner-01:~# htop
+  (htop repintado a 40x4)
+█
+
+ ● 1/3 · hetzner-01 · 18 m · ^] ?

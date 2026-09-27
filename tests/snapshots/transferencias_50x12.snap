@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ TRANSFERENCIAS · 1 en curso · 2 en cola ───────┐
+│    DIRECCIÓN ORIGEN → DESTINO    PROGRESO      │
+│▸ ◐ ↑ subida  main.py → hetzner-…  78 %  1.1 MB │
+│  ○ ↑ subida  static → hetzner-01   0 %  0 B    │
+│  ○ ↓ bajada  access.log → hetzn…   0 %  0 B    │
+│  ● ↑ subida  config.yaml → hetz… 100 %  2 kB   │
+│  ✕ ↓ bajada  backup.tgz → hetzn… permiso deneg…│
+│                                                │
+│                                                │
+│                                                │
+└ 5 ────────────────────────────────── ↵ detalle ┘
+ x cancelar  C limpiar  ↵ detalle  ? más

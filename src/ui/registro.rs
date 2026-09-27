@@ -1,4 +1,11 @@
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+//! Vista Registro (F7): la tabla de `REGISTRO` con el detalle de la entrada
+//! seleccionada al pie.
+//!
+//! Disposición adaptable (Fase 7): columnas por prioridad (fecha, tipo y
+//! resultado no se ocultan; el host y el detalle caen antes) y detalle
+//! inferior plegado con la vista baja (`↵` abre el detalle completo).
+
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -6,15 +13,29 @@ use ratatui::Frame;
 
 use crate::app::App;
 use crate::modelo::{EntradaRegistro, ResultadoRegistro};
+use crate::ui::disposicion::{self, Columna, Disposicion, Lista, VentanaLista};
+use crate::ui::snippets::recortar_en_lineas;
+use crate::ui::tuneles::{
+    estilo_fila, marco_detalle, prefijo, repartir_vista, texto_plegado, Tabla, ANCHO_PREFIJO,
+};
 
-pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
+/// Filas del detalle inferior, bordes incluidos: la cabecera de la entrada y
+/// hasta dos del detalle.
+pub const ALTO_DETALLE: u16 = 5;
+
+/// Ancho de la fecha corta (`15/09 15:41:02`).
+const ANCHO_FECHA: u16 = 14;
+
+pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
+    let ascii = tema.ascii;
+    let punto = tema.glifos.punto_medio;
     let estado = &app.registro;
     let bloque = Block::default()
         .borders(Borders::ALL)
         .border_set(tema.bordes())
         .title(Span::styled(
-            " MAGI · REGISTRO ",
+            format!(" MAGI {punto} REGISTRO "),
             Style::default()
                 .fg(tema.paleta.acento)
                 .add_modifier(Modifier::BOLD),
@@ -22,7 +43,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
         .title_bottom(
             Line::from(Span::styled(
                 format!(
-                    "{} entradas · {} ",
+                    "{} entradas {punto} {} ",
                     estado.total,
                     estado.filtro.etiqueta_tipo()
                 ),
@@ -31,40 +52,112 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
             .alignment(Alignment::Right),
         );
     let interior = bloque.inner(area);
-    marco.render_widget(bloque, area);
     if interior.height == 0 {
+        marco.render_widget(bloque, area);
         return;
     }
-    let mut restricciones = Vec::new();
-    if estado.texto_activo {
-        restricciones.push(Constraint::Length(1));
-    }
-    restricciones.push(Constraint::Min(3));
-    restricciones.push(Constraint::Length(3));
-    let trozos = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(restricciones)
-        .split(interior);
-    let mut indice = 0;
-    if estado.texto_activo {
+    let (mut zona, detalle) = repartir_vista(interior, ALTO_DETALLE, disp);
+    let bloque = if detalle.is_none() && estado.entrada_seleccionada().is_some() {
+        bloque.title_bottom(Span::styled(
+            format!(" {} ", texto_plegado(tema, tema.glifos.intro)),
+            Style::default().fg(tema.paleta.inactivo),
+        ))
+    } else {
+        bloque
+    };
+    marco.render_widget(bloque, area);
+
+    if estado.texto_activo && zona.height > 0 {
+        let campo = estado
+            .campo
+            .span(true, Style::default().fg(tema.paleta.texto));
         let linea = Line::from(vec![
             Span::styled("/ ", Style::default().fg(tema.paleta.acento)),
-            estado
-                .campo
-                .span(true, Style::default().fg(tema.paleta.texto)),
+            Span::styled(disposicion::adaptar(&campo.content, ascii), campo.style),
             Span::styled(
-                "  ↵ aplicar · esc limpiar",
+                disposicion::adaptar(
+                    &format!("  {} aplicar {punto} esc limpiar", tema.glifos.intro),
+                    ascii,
+                ),
                 Style::default().fg(tema.paleta.inactivo),
             ),
         ]);
-        marco.render_widget(Paragraph::new(linea), trozos[indice]);
-        indice += 1;
+        marco.render_widget(Paragraph::new(linea), Rect { height: 1, ..zona });
+        zona = Rect {
+            y: zona.y + 1,
+            height: zona.height - 1,
+            ..zona
+        };
     }
-    let listado = trozos[indice];
-    let detalle = trozos[indice + 1];
 
-    let altura = listado.height as usize;
-    let inicio = inicio_visible(estado.seleccion, altura);
+    dibujar_tabla(marco, zona, app, disp);
+    if let (Some(detalle), Some(entrada)) = (detalle, estado.entrada_seleccionada()) {
+        dibujar_detalle(marco, detalle, app, entrada);
+    }
+}
+
+/// Columnas: fecha, tipo, host, resultado y detalle. Fecha, tipo y resultado
+/// (el estado) no se ocultan; primero cae el detalle, luego el host.
+fn columnas(ancho_tipo: u16, ancho_host: u16) -> [Columna; 5] {
+    [
+        Columna::fija(ANCHO_FECHA, 1),
+        Columna::fija(ancho_tipo, 1),
+        Columna::fija(ancho_host, 2),
+        Columna::fija(5, 1),
+        Columna::flexible(12, 3),
+    ]
+}
+
+fn dibujar_tabla(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+    let tema = &app.tema;
+    let ascii = tema.ascii;
+    let estado = &app.registro;
+    let altura = usize::from(area.height);
+    let total = estado.entradas.len();
+    let inicio = disposicion::ventana(estado.desplazamiento, estado.seleccion, altura, total);
+    disp.registrar(
+        Lista::Registro,
+        VentanaLista {
+            inicio,
+            filas: altura,
+            total,
+        },
+    );
+    if altura == 0 {
+        return;
+    }
+    if total == 0 {
+        marco.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  registro vacío",
+                Style::default().fg(tema.paleta.inactivo),
+            ))),
+            area,
+        );
+        return;
+    }
+
+    let largo = |texto: fn(&EntradaRegistro) -> usize| -> u16 {
+        estado.entradas.iter().map(texto).max().unwrap_or(0) as u16
+    };
+    let ancho_tipo = largo(|entrada| entrada.tipo.chars().count()).clamp(8, 22);
+    let ancho_host = largo(|entrada| {
+        entrada
+            .host_nombre
+            .as_deref()
+            .map(|host| host.chars().count())
+            .unwrap_or(1)
+    })
+    .clamp(4, 18);
+    let ancho_detalle = largo(|entrada| entrada.detalle.chars().count()).max(12);
+    let columnas = columnas(ancho_tipo, ancho_host);
+    let naturales = [ANCHO_FECHA, ancho_tipo, ancho_host, 5, ancho_detalle];
+    let tabla = Tabla::nueva(
+        area.width.saturating_sub(ANCHO_PREFIJO),
+        &columnas,
+        &naturales,
+    );
+
     let lineas: Vec<Line> = estado
         .entradas
         .iter()
@@ -72,139 +165,100 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
         .skip(inicio)
         .take(altura)
         .map(|(posicion, entrada)| {
-            linea_entrada(
-                entrada,
-                posicion == estado.seleccion,
-                tema,
-                listado.width as usize,
+            let seleccionada = posicion == estado.seleccion;
+            let base = estilo_fila(tema, seleccionada);
+            let color = |color| {
+                if seleccionada {
+                    base
+                } else {
+                    Style::default().fg(color)
+                }
+            };
+            let color_resultado = match entrada.resultado {
+                ResultadoRegistro::Ok => tema.paleta.inactivo,
+                ResultadoRegistro::Error => tema.paleta.critico,
+            };
+            tabla.linea(
+                prefijo(seleccionada, tema),
+                vec![
+                    (formatear_fecha(&entrada.fecha), color(tema.paleta.texto)),
+                    (una_linea(&entrada.tipo), color(tema.paleta.acento)),
+                    (host_de(entrada), color(tema.paleta.texto)),
+                    (
+                        entrada.resultado.como_texto().to_string(),
+                        color(color_resultado),
+                    ),
+                    (una_linea(&entrada.detalle), color(tema.paleta.inactivo)),
+                ],
+                base,
+                ascii,
             )
         })
         .collect();
-    let lineas = if lineas.is_empty() {
-        vec![Line::from(Span::styled(
-            "  registro vacío",
-            Style::default().fg(tema.paleta.inactivo),
-        ))]
-    } else {
-        lineas
-    };
-    marco.render_widget(Paragraph::new(lineas), listado);
-
-    if detalle.height > 0 {
-        let contenido = match estado.entrada_seleccionada() {
-            Some(entrada) => vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {} ", entrada.tipo),
-                        Style::default()
-                            .fg(tema.paleta.acento)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(
-                            "{} · {} · {}",
-                            entrada.host_nombre.as_deref().unwrap_or("—"),
-                            formatear_fecha(&entrada.fecha),
-                            entrada.resultado.como_texto()
-                        ),
-                        Style::default().fg(tema.paleta.texto),
-                    ),
-                ]),
-                Line::from(Span::styled(
-                    format!("   {}", entrada.detalle),
-                    Style::default().fg(tema.paleta.inactivo),
-                )),
-            ],
-            None => vec![Line::from(Span::styled(
-                "  sin selección",
-                Style::default().fg(tema.paleta.inactivo),
-            ))],
-        };
-        marco.render_widget(
-            Paragraph::new(contenido).wrap(ratatui::widgets::Wrap { trim: true }),
-            detalle,
-        );
-    }
+    marco.render_widget(Paragraph::new(lineas), area);
 }
 
-fn inicio_visible(seleccion: usize, altura: usize) -> usize {
-    if altura == 0 {
-        return 0;
+fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, entrada: &EntradaRegistro) {
+    let tema = &app.tema;
+    let ascii = tema.ascii;
+    let interior = marco_detalle(marco, area, tema);
+    if interior.height == 0 {
+        return;
     }
-    (seleccion + 1).saturating_sub(altura)
-}
-
-fn linea_entrada(
-    entrada: &EntradaRegistro,
-    seleccionada: bool,
-    tema: &crate::tema::Tema,
-    ancho: usize,
-) -> Line<'static> {
-    let color_resultado = match entrada.resultado {
-        ResultadoRegistro::Ok => tema.paleta.inactivo,
-        ResultadoRegistro::Error => tema.paleta.critico,
-    };
-    let host = entrada
-        .host_nombre
-        .clone()
-        .unwrap_or_else(|| "—".to_string());
-    let mut linea = Line::from(vec![
+    let ancho = usize::from(interior.width.saturating_sub(2));
+    let tipo = disposicion::recortar(
+        &disposicion::adaptar(&una_linea(&entrada.tipo), ascii),
+        ancho,
+        ascii,
+    );
+    let resto = disposicion::adaptar(
+        &format!(
+            "  {} · {} · {}",
+            host_de(entrada),
+            formatear_fecha(&entrada.fecha),
+            entrada.resultado.como_texto()
+        ),
+        ascii,
+    );
+    let resto = disposicion::recortar(&resto, ancho.saturating_sub(tipo.chars().count()), ascii);
+    let mut lineas = vec![Line::from(vec![
         Span::raw(" "),
         Span::styled(
-            formato_columna(&formatear_fecha(&entrada.fecha), 17),
-            Style::default().fg(tema.paleta.texto),
-        ),
-        Span::styled(
-            // 22: el tipo más largo (`deliberacion_cancelada`) cabe entero.
-            formato_columna(&entrada.tipo, 22),
-            Style::default().fg(tema.paleta.acento),
-        ),
-        Span::styled(
-            formato_columna(&host, 18),
-            Style::default().fg(tema.paleta.texto),
-        ),
-        Span::styled(
-            entrada.resultado.como_texto().to_string(),
-            Style::default().fg(color_resultado),
-        ),
-    ]);
-    if seleccionada {
-        linea = linea.style(
+            tipo,
             Style::default()
-                .bg(tema.paleta.acento)
-                .fg(tema.paleta.fondo)
+                .fg(tema.paleta.acento)
                 .add_modifier(Modifier::BOLD),
-        );
-    } else if ancho > 72 {
-        linea.spans.push(Span::styled(
-            format!(
-                "   {}",
-                recortar(&entrada.detalle, ancho.saturating_sub(64))
-            ),
+        ),
+        Span::styled(resto, Style::default().fg(tema.paleta.texto)),
+    ])];
+    let filas_detalle = usize::from(interior.height).saturating_sub(1).max(1);
+    // La marca de corte de `recortar_en_lineas` también pasa a ASCII.
+    for trozo in recortar_en_lineas(
+        &disposicion::adaptar(&una_linea(&entrada.detalle), ascii),
+        ancho,
+        filas_detalle,
+    ) {
+        lineas.push(Line::from(Span::styled(
+            format!(" {}", disposicion::adaptar(&trozo, ascii)),
             Style::default().fg(tema.paleta.inactivo),
-        ));
+        )));
     }
-    linea
+    marco.render_widget(Paragraph::new(lineas), interior);
 }
 
-fn recortar(texto: &str, ancho: usize) -> String {
-    let limpia = texto.replace('\n', " ");
-    if limpia.chars().count() > ancho {
-        let recorte: String = limpia.chars().take(ancho.saturating_sub(1)).collect();
-        format!("{recorte}…")
-    } else {
-        limpia
-    }
+/// El detalle en una sola línea, sin secuencias de escape ni caracteres de
+/// control (los saltos pasan a espacios).
+fn una_linea(texto: &str) -> String {
+    crate::ui::snippets::limpio(texto)
 }
 
-fn formato_columna(texto: &str, ancho: usize) -> String {
-    let texto = if texto.chars().count() > ancho {
-        let recortado: String = texto.chars().take(ancho.saturating_sub(1)).collect();
-        format!("{recortado}…")
-    } else {
-        texto.to_string()
-    };
-    format!("{texto:<ancho$} ")
+/// Host de la entrada saneado, o «—» si no tiene.
+fn host_de(entrada: &EntradaRegistro) -> String {
+    entrada
+        .host_nombre
+        .as_deref()
+        .map(una_linea)
+        .unwrap_or_else(|| "—".to_string())
 }
 
 /// Fecha de una entrada en corto (`15/09 15:41:02`), o la original si falla.

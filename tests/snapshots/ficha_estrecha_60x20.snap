@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────┐
+│ IDENTIFICACIÓN                                           │
+│  Nombre                                                  │
+│  [ hetzner-01┃ ]                                         │
+│  Dirección                                               │
+│  [ 10.0.1.11 ]                                           │
+│  Puerto                                                  │
+│  [ 22 ]                                                  │
+│  Grupo                                                   │
+│  [ produccion                 ▾ ]                        │
+│  Etiquetas                                               │
+│  [ web ]                                                 │
+│                                                         ↓│
+│  TÚNELES                                         n nuevo │
+│      [a] local    127.0.0.1:5432 → 127.0.0.1:5…  postgres│
+│┌ SERVICIOS ────────────────┐┌ OPCIONES EXTRA ───────────┐│
+││                           ││                           ││
+│└───────────────────────────┘└───────────────────────────┘│
+└──────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  ^s guardar  esc descartar

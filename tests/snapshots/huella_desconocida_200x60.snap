@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.168.1.40:22                                                                                                                     │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │   ┌ HUELLA DESCONOCIDA ────────────────────────────────────────────┐                                                                  │
+│                                                              │   │                                                                │                                                                  │
+│                                                              │   │  Host: hetzner-01                                              │                                                                  │
+│                                                              │   │  Tipo:  ssh-ed25519                                            │                                                                  │
+│                                                              │   │  Huella: SHA256:Ab3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9     │                                                                  │
+│                                                              │   │                                                                │                                                                  │
+│                                                              │   │  La huella no está en known_hosts. Comprueba que es la         │                                                                  │
+│                                                              │   │  correcta.                                                     │                                                                  │
+│                                                              │   │                                                                │                                                                  │
+│                                                              │   │  a aceptar y añadir   x cancelar la apertura                   │                                                                  │
+│                                                              │   │                                                                │                                                                  │
+│                                                              │   └────────────────────────────────────────────────────────────────┘                                                                  │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

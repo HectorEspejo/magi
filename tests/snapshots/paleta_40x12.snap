@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ PALETA · ^p ───────────────────────┐│
+││  ❯ ┃                               ││
+││ ▸ conectar · backup-nas            ││
+││   editar host · backup-nas         ││
+││   sftp · backup-nas                ││
+││   conectar · dgx-spark             ││
+││   editar host · dgx-spark          ││
+││   sftp · dgx-spark                 ││
+││   conectar · hetzner-01            ││
+└└─────────────────────────── ↑↓ 1/56 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

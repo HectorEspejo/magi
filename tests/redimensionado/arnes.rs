@@ -107,20 +107,78 @@ pub struct AppPrueba {
     pub _entorno: comun::Entorno,
 }
 
+/// Las fechas absolutas se pintan en hora local: todas las pruebas en UTC.
+fn fijar_zona_horaria() {
+    static UNA_VEZ: std::sync::Once = std::sync::Once::new();
+    UNA_VEZ.call_once(|| std::env::set_var("TZ", "UTC"));
+}
+
+/// Entorno aislado con una ruta de longitud fija (`/tmp/magiXXXXXX`): la ruta
+/// sale en algunas vistas y no debe mover las columnas de una máquina a otra.
+pub fn entorno_fijo() -> comun::Entorno {
+    let temporal = tempfile::Builder::new()
+        .prefix("magi")
+        .rand_bytes(6)
+        .tempdir_in("/tmp")
+        .expect("directorio temporal");
+    let raiz = temporal.path().to_path_buf();
+    let mut config = magi::config::Config::default();
+    config.servidor.gracia_apagado_seg = 1;
+    comun::Entorno {
+        _temporal: temporal,
+        rutas: magi::config::Rutas {
+            datos: raiz.join("datos"),
+            config: raiz.join("config"),
+            estado: raiz.join("estado"),
+            hogar: raiz.join("hogar"),
+            runtime: raiz.join("runtime"),
+        },
+        config,
+    }
+}
+
+/// Tema ASCII degradado (`MAGI_ASCII=1`).
+pub fn tema_ascii() -> Tema {
+    let mut tema = Tema::respaldo();
+    tema.ascii = true;
+    tema.glifos = magi::tema::Glifos::ascii();
+    tema
+}
+
 impl AppPrueba {
     pub fn nueva(cols: u16, filas: u16) -> Self {
         Self::con_entorno(comun::entorno(), cols, filas)
     }
 
-    pub fn con_entorno(entorno: comun::Entorno, cols: u16, filas: u16) -> Self {
-        let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
-        let (mut app, enviados) = App::de_prueba(
-            entorno.rutas.clone(),
-            entorno.config.clone(),
-            Tema::respaldo(),
-            almacen,
+    /// App con los datos de la semilla (hosts, sondeos, túneles…).
+    pub fn con_semilla(cols: u16, filas: u16) -> (Self, crate::semilla::Sembrado) {
+        Self::con_semilla_y_tema(cols, filas, Tema::respaldo())
+    }
+
+    pub fn con_semilla_y_tema(
+        cols: u16,
+        filas: u16,
+        tema: Tema,
+    ) -> (Self, crate::semilla::Sembrado) {
+        fijar_zona_horaria();
+        let entorno = entorno_fijo();
+        let sembrado = crate::semilla::sembrar(&entorno.rutas);
+        (
+            Self::con_entorno_y_tema(entorno, cols, filas, tema),
+            sembrado,
         )
-        .expect("app de prueba");
+    }
+
+    pub fn con_entorno(entorno: comun::Entorno, cols: u16, filas: u16) -> Self {
+        Self::con_entorno_y_tema(entorno, cols, filas, Tema::respaldo())
+    }
+
+    pub fn con_entorno_y_tema(entorno: comun::Entorno, cols: u16, filas: u16, tema: Tema) -> Self {
+        fijar_zona_horaria();
+        let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+        let (mut app, enviados) =
+            App::de_prueba(entorno.rutas.clone(), entorno.config.clone(), tema, almacen)
+                .expect("app de prueba");
         let mut terminal = Terminal::new(BackendContador::new(cols, filas)).expect("terminal");
         app.iniciar_pintado(&mut terminal).expect("primer pintado");
         Self {
@@ -200,6 +258,63 @@ impl AppPrueba {
     /// Texto pintado, una línea por fila.
     pub fn texto(&self) -> String {
         texto_de(&self.terminal.backend().interior)
+    }
+
+    /// Compara lo pintado con la instantánea `nombre` de `tests/snapshots/`.
+    /// Las rutas temporales se sustituyen por `[tmp]`.
+    pub fn instantanea(&self, nombre: &str) {
+        let texto = self.texto();
+        let mut ajustes = insta::Settings::clone_current();
+        ajustes.set_snapshot_path("../snapshots");
+        ajustes.set_prepend_module_to_snapshot(false);
+        ajustes.set_omit_expression(true);
+        ajustes.add_filter(r"/tmp/magi[A-Za-z0-9]{6}", "[tmp]");
+        // Antigüedades relativas a la hora real: mismo ancho, sin el número.
+        ajustes.add_filter(r"hace \d\d s", "hace NN s");
+        ajustes.add_filter(r"hace \d s", "hace N s");
+        ajustes.bind(|| insta::assert_snapshot!(nombre, texto));
+    }
+
+    /// Redimensiona y comprueba lo que toda vista debe cumplir: sin pánico,
+    /// pintado al tamaño nuevo y la selección de las listas a la vista.
+    pub fn pasar_por(&mut self, cols: u16, filas: u16) {
+        self.redimensionar(cols, filas);
+        assert_eq!(self.tamano_pintado(), (cols, filas));
+        self.comprobar_listas();
+    }
+
+    /// Toda lista pintada deja su selección a la vista y no tiene huecos al
+    /// final.
+    pub fn comprobar_listas(&self) {
+        use magi::ui::disposicion::Lista;
+        let disposicion = self.app.disposicion();
+        for lista in [
+            Lista::Hosts,
+            Lista::Flota,
+            Lista::Sesiones,
+            Lista::Identidades,
+            Lista::Registro,
+            Lista::ArchivosLocal,
+            Lista::ArchivosRemoto,
+            Lista::Transferencias,
+            Lista::Tuneles,
+            Lista::Snippets,
+            Lista::Paleta,
+            Lista::ResultadosEjecuciones,
+            Lista::ResultadosHosts,
+            Lista::VisorSalida,
+            Lista::VisorErrores,
+            Lista::DeliberacionHosts,
+            Lista::Modal,
+            Lista::Ayuda,
+        ] {
+            if let Some(ventana) = disposicion.lista(lista) {
+                assert!(
+                    ventana.inicio <= ventana.total.saturating_sub(ventana.filas),
+                    "{lista:?} con hueco al final: {ventana:?}"
+                );
+            }
+        }
     }
 
     /// Da al cliente la bienvenida del servidor con estas sesiones abiertas.

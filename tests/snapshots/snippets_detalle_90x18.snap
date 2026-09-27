@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ───────────────────────────────────────────────────────────────────┐
+│▸ actualizar paquetes  web            → 3 hosts  CRÍTICO                                │
+│  espac┌ SNIPPET · actualizar paquetes ─────────────────────────────────────────┐       │
+│  reini│                                                                        │       │
+│       │  web → 3 hosts · CRÍTICO                                               │       │
+│       │                                                                        │       │
+│       │    sudo apt update && sudo apt -y upgrade                              │       │
+│       │                                                                        │       │
+│       │  Destinos      etiqueta «web»: hetzner-01, hetzner-02, vps-openclaw    │       │
+│       │  Variables     ninguna                                                 │       │
+│       │  Confirmación  requiere deliberación MAGI (crítico, 3 hosts)           │       │
+│       │  Timeout 60 s · usado 0 veces · última nunca                           │       │
+│       │                                                                        │       │
+│       │  ↵ / esc cerrar                                                        │       │
+│       │                                                                        │       │
+│       └────────────────────────────────────────────────────────────────────────┘       │
+└ i detalle ─────────────────────────────────────────────────────────────────────────────┘
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  i detalle  ? más

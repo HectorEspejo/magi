@@ -3,6 +3,11 @@
 //! ventana que sigue al cursor, el desplegable de hosts en línea, la vista
 //! previa de los destinos resueltos, las variables detectadas, el error y el
 //! pie. Todo texto que viene del usuario o de la base se sanea al pintar.
+//!
+//! Disposición (Fase 7): el modal encoge con la terminal (nunca se sale de
+//! ella); si el formulario no cabe entero, el cuerpo se desplaza para que el
+//! campo con el foco quede siempre a la vista, y el error y el pie no se
+//! pierden nunca. El pie enseña los atajos por prioridad.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -14,6 +19,8 @@ use crate::app::App;
 use crate::tema::Tema;
 use crate::ui::componentes::{casilla, estilo_campo, CampoTexto};
 use crate::ui::dialogos::{atajo, modal};
+use crate::ui::disposicion::Atajo;
+use crate::ui::ejecutar::{marca_cursor, marca_recorte, pie_por_prioridad, ventana_foco};
 use crate::ui::{centrar, tecla};
 
 /// Tamaño del modal (se encoge si la terminal no da para tanto).
@@ -24,12 +31,11 @@ const ANCHO_ETIQUETA: usize = 14;
 /// Filas del comando: las que quepan, entre estas dos.
 const FILAS_COMANDO_MIN: usize = 1;
 const FILAS_COMANDO_MAX: usize = 7;
-/// Opciones del desplegable de hosts visibles a la vez.
+/// Opciones del desplegable de hosts visibles a la vez, como mucho (con poco
+/// alto, menos).
 const OPCIONES_VISIBLES: usize = 5;
 /// Ancho del campo del timeout.
 const ANCHO_TIMEOUT: usize = 6;
-/// Marca del cursor, la misma que `CampoTexto::span`.
-const CURSOR: char = '\u{2503}';
 /// Sustituto visible de un carácter de control.
 const SUSTITUTO: char = '\u{FFFD}';
 
@@ -51,6 +57,7 @@ fn dibujar_con_tema(marco: &mut Frame, area: Rect, tema: &Tema, formulario: &For
     let titulo = acortar(
         &sanear(&formulario.titulo()),
         (recta.width as usize).saturating_sub(6),
+        tema.ascii,
     );
     modal(marco, recta, &titulo, contenido, false, tema);
 }
@@ -64,29 +71,47 @@ struct Pintor<'a> {
 
 impl Pintor<'_> {
     /// Todas las líneas, con el error y el pie siempre en las dos últimas
-    /// filas: si no cabe todo, se recorta el cuerpo, no el pie.
+    /// filas: si no cabe todo, el cuerpo se desplaza hasta el campo con el
+    /// foco, nunca el pie.
     fn lineas(&self, alto: usize) -> Vec<Line<'static>> {
         let pie = vec![self.linea_error(), self.linea_pie()];
-        let desplegable = self.lineas_desplegable();
+        let hueco = alto.saturating_sub(pie.len());
+        let desplegable = self.lineas_desplegable(hueco);
         // Filas del cuerpo que no son del comando ni del desplegable.
         const FIJAS: usize = 13;
         let filas_comando = alto
             .saturating_sub(FIJAS + desplegable.len() + pie.len())
             .clamp(FILAS_COMANDO_MIN, FILAS_COMANDO_MAX);
+        let foco = self.formulario.foco();
+        // Fin del tramo del cuerpo con el foco: lo que tiene que verse.
+        let mut hasta = 0;
 
         let mut cuerpo =
             vec![self.linea_texto("Nombre", CampoSnippet::Nombre, self.formulario.nombre())];
-        cuerpo.extend(self.lineas_comando(filas_comando));
+        if foco == CampoSnippet::Nombre {
+            hasta = cuerpo.len();
+        }
+        let (comando, fila_cursor) = self.lineas_comando(filas_comando);
+        if foco == CampoSnippet::Comando {
+            hasta = cuerpo.len() + fila_cursor + 1;
+        }
+        cuerpo.extend(comando);
         cuerpo.push(self.linea_texto(
             "Descripción",
             CampoSnippet::Descripcion,
             self.formulario.descripcion(),
         ));
+        if foco == CampoSnippet::Descripcion {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.linea_texto(
             "Etiquetas",
             CampoSnippet::Etiquetas,
             self.formulario.etiquetas(),
         ));
+        if foco == CampoSnippet::Etiquetas {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.cabecera_destinos());
         cuerpo.push(self.linea_texto(
             "  etiquetas",
@@ -94,22 +119,36 @@ impl Pintor<'_> {
             self.formulario.destinos_etiqueta(),
         ));
         cuerpo.push(self.linea_sugerencias());
+        if foco == CampoSnippet::DestinosEtiqueta {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.linea_hosts());
         cuerpo.extend(desplegable);
+        if foco == CampoSnippet::DestinosHost {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.linea_casilla(
             "Crítico",
             CampoSnippet::Critico,
             self.formulario.critico(),
             "siempre pide la deliberación MAGI",
         ));
+        if foco == CampoSnippet::Critico {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.linea_timeout());
+        if foco == CampoSnippet::Timeout {
+            hasta = cuerpo.len();
+        }
         cuerpo.push(self.linea_casilla(
             "Parar",
             CampoSnippet::PararAlFallo,
             self.formulario.parar_al_fallo(),
             "al primer fallo",
         ));
-        let hueco = alto.saturating_sub(pie.len());
+        if foco == CampoSnippet::PararAlFallo {
+            hasta = cuerpo.len();
+        }
         // La línea en blanco antes de la vista previa es lo primero que
         // sobra si la terminal no da para todo.
         if cuerpo.len() + 3 <= hueco {
@@ -117,16 +156,31 @@ impl Pintor<'_> {
         }
         cuerpo.push(self.linea_vista_previa());
         cuerpo.push(self.linea_variables());
-        cuerpo.truncate(hueco);
-        while cuerpo.len() < hueco {
-            cuerpo.push(Line::from(""));
+        let inicio = ventana_foco(cuerpo.len(), hueco, hasta);
+        let mut visibles: Vec<Line<'static>> =
+            cuerpo.into_iter().skip(inicio).take(hueco).collect();
+        while visibles.len() < hueco {
+            visibles.push(Line::from(""));
         }
-        cuerpo.extend(pie);
-        cuerpo
+        visibles.extend(pie);
+        visibles
     }
 
     fn activo(&self, campo: CampoSnippet) -> bool {
         self.formulario.foco() == campo
+    }
+
+    fn ascii(&self) -> bool {
+        self.tema.ascii
+    }
+
+    fn acortar(&self, texto: &str, ancho: usize) -> String {
+        acortar(texto, ancho, self.ascii())
+    }
+
+    /// Marca de lo que queda fuera por un lado (`…`; en ASCII, `~`).
+    fn recorte(&self) -> char {
+        marca_recorte(self.ascii())
     }
 
     fn estilo_inactivo(&self) -> Style {
@@ -172,7 +226,7 @@ impl Pintor<'_> {
             self.etiqueta(etiqueta, activo),
             self.corchete("[ "),
             Span::styled(
-                campo_visible(texto, activo, self.ancho_valor()),
+                campo_visible(texto, activo, self.ancho_valor(), self.ascii()),
                 estilo_campo(self.tema, activo),
             ),
             self.corchete(" ]"),
@@ -180,8 +234,9 @@ impl Pintor<'_> {
     }
 
     /// El comando en `filas` filas: activo, la ventana sigue a la fila y a la
-    /// columna del cursor; inactivo, se ve desde el principio.
-    fn lineas_comando(&self, filas: usize) -> Vec<Line<'static>> {
+    /// columna del cursor; inactivo, se ve desde el principio. Devuelve
+    /// también la fila (entre las pintadas) en la que está el cursor.
+    fn lineas_comando(&self, filas: usize) -> (Vec<Line<'static>>, usize) {
         let area = self.formulario.comando();
         let activo = self.activo(CampoSnippet::Comando);
         let total = area.lineas.len();
@@ -196,7 +251,7 @@ impl Pintor<'_> {
         };
         let barra = tecla(self.tema, "\u{2502} ", "| ");
         let estilo = estilo_campo(self.tema, activo);
-        (0..filas)
+        let lineas = (0..filas)
             .map(|posicion| {
                 let indice = primera + posicion;
                 let etiqueta = match posicion {
@@ -214,7 +269,13 @@ impl Pintor<'_> {
                 let texto = match area.lineas.get(indice) {
                     Some(linea) => {
                         let cursor = (activo && indice == area.fila).then_some(area.columna);
-                        recortar(&caracteres_saneados(linea), cursor, desde, ancho)
+                        recortar(
+                            &caracteres_saneados(linea),
+                            cursor,
+                            desde,
+                            ancho,
+                            self.ascii(),
+                        )
                     }
                     None => String::new(),
                 };
@@ -224,7 +285,15 @@ impl Pintor<'_> {
                     Span::styled(texto, estilo),
                 ])
             })
-            .collect()
+            .collect();
+        let fila_cursor = if activo {
+            area.fila
+                .saturating_sub(primera)
+                .min(filas.saturating_sub(1))
+        } else {
+            0
+        };
+        (lineas, fila_cursor)
     }
 
     fn cabecera_destinos(&self) -> Line<'static> {
@@ -235,7 +304,7 @@ impl Pintor<'_> {
         Line::from(vec![
             self.etiqueta("Destinos", activo),
             Span::styled(
-                acortar(
+                self.acortar(
                     "etiquetas de host y hosts sueltos (al menos uno)",
                     self.ancho.saturating_sub(ANCHO_ETIQUETA),
                 ),
@@ -263,7 +332,7 @@ impl Pintor<'_> {
             };
             return Line::from(vec![
                 sangria,
-                Span::styled(acortar(aviso, hueco), self.estilo_inactivo()),
+                Span::styled(self.acortar(aviso, hueco), self.estilo_inactivo()),
             ]);
         }
         let elegida = self.formulario.indice_sugerencia();
@@ -275,7 +344,10 @@ impl Pintor<'_> {
         let (inicio, fin) = tramo_visible(&anchos, elegida, hueco);
         let mut spans = vec![sangria];
         if inicio > 0 {
-            spans.push(Span::styled("… ", self.estilo_inactivo()));
+            spans.push(Span::styled(
+                format!("{} ", self.recorte()),
+                self.estilo_inactivo(),
+            ));
         }
         for (indice, texto) in textos.iter().enumerate().take(fin).skip(inicio) {
             let estilo = if indice == elegida {
@@ -289,7 +361,10 @@ impl Pintor<'_> {
             spans.push(Span::styled(format!(" {texto} "), estilo));
         }
         if fin < textos.len() {
-            spans.push(Span::styled(" …", self.estilo_inactivo()));
+            spans.push(Span::styled(
+                format!(" {}", self.recorte()),
+                self.estilo_inactivo(),
+            ));
         }
         Line::from(spans)
     }
@@ -305,13 +380,13 @@ impl Pintor<'_> {
         let mut usado = 0;
         if elegidos.is_empty() {
             let texto = if self.formulario.desplegable_hosts().opciones.is_empty() {
-                " ninguno (no hay hosts en el inventario)"
+                " ninguno (no hay hosts en el inventario)".to_string()
             } else if activo {
-                " ninguno: ↵ para añadir"
+                format!(" ninguno: {} para añadir", self.tema.glifos.intro)
             } else {
-                " ninguno"
+                " ninguno".to_string()
             };
-            let texto = acortar(texto, hueco);
+            let texto = self.acortar(&texto, hueco);
             usado = texto.chars().count();
             spans.push(Span::styled(texto, self.estilo_inactivo()));
         } else {
@@ -319,7 +394,7 @@ impl Pintor<'_> {
             // Nombres recortados a lo que quepa en el campo.
             let nombres: Vec<String> = elegidos
                 .iter()
-                .map(|(_, nombre)| acortar(&sanear(nombre), hueco.saturating_sub(6).max(1)))
+                .map(|(_, nombre)| self.acortar(&sanear(nombre), hueco.saturating_sub(6).max(1)))
                 .collect();
             let anchos: Vec<usize> = nombres
                 .iter()
@@ -327,7 +402,10 @@ impl Pintor<'_> {
                 .collect();
             let (inicio, fin) = tramo_visible(&anchos, marcado, hueco);
             if inicio > 0 {
-                spans.push(Span::styled(" …", self.estilo_inactivo()));
+                spans.push(Span::styled(
+                    format!(" {}", self.recorte()),
+                    self.estilo_inactivo(),
+                ));
                 usado += 2;
             }
             for (indice, nombre) in nombres.iter().enumerate().take(fin).skip(inicio) {
@@ -340,7 +418,10 @@ impl Pintor<'_> {
                 usado += anchos[indice];
             }
             if fin < nombres.len() {
-                spans.push(Span::styled(" …", self.estilo_inactivo()));
+                spans.push(Span::styled(
+                    format!(" {}", self.recorte()),
+                    self.estilo_inactivo(),
+                ));
                 usado += 2;
             }
         }
@@ -351,13 +432,18 @@ impl Pintor<'_> {
 
     /// El desplegable de hosts, en línea bajo el campo, como en el diálogo de
     /// túnel: opciones filtradas con ventana sobre la resaltada y el filtro.
-    fn lineas_desplegable(&self) -> Vec<Line<'static>> {
+    /// Con poco `hueco` (las filas del cuerpo) se ven menos opciones: las
+    /// dos marcas de «más», el filtro y el campo caben con ellas, así que la
+    /// resaltada y el filtro quedan siempre a la vista.
+    fn lineas_desplegable(&self, hueco_cuerpo: usize) -> Vec<Line<'static>> {
         let desplegable = self.formulario.desplegable_hosts();
         if !desplegable.abierto {
             return Vec::new();
         }
+        let opciones_visibles = OPCIONES_VISIBLES.min(hueco_cuerpo.saturating_sub(4)).max(1);
         let sangria = " ".repeat(ANCHO_ETIQUETA);
         let hueco = self.ancho.saturating_sub(ANCHO_ETIQUETA + 4);
+        let recorte = self.recorte();
         let filtradas = desplegable.filtradas();
         let mut lineas = Vec::new();
         if filtradas.is_empty() {
@@ -366,10 +452,10 @@ impl Pintor<'_> {
                 self.estilo_inactivo(),
             )));
         }
-        let primera = ventana(desplegable.resaltado, OPCIONES_VISIBLES);
+        let primera = ventana(desplegable.resaltado, opciones_visibles);
         if primera > 0 {
             lineas.push(Line::from(Span::styled(
-                format!("{sangria}    … {} más arriba", primera),
+                format!("{sangria}    {recorte} {primera} más arriba"),
                 self.estilo_inactivo(),
             )));
         }
@@ -377,7 +463,7 @@ impl Pintor<'_> {
             .iter()
             .enumerate()
             .skip(primera)
-            .take(OPCIONES_VISIBLES)
+            .take(opciones_visibles)
         {
             let Some(opcion) = desplegable.opciones.get(*indice) else {
                 continue;
@@ -395,7 +481,7 @@ impl Pintor<'_> {
             let mut spans = vec![Span::styled(
                 format!(
                     "{sangria}  {marca} {}",
-                    acortar(&sanear(&opcion.etiqueta), hueco)
+                    self.acortar(&sanear(&opcion.etiqueta), hueco)
                 ),
                 if resaltada {
                     self.estilo_resaltado()
@@ -408,17 +494,22 @@ impl Pintor<'_> {
             }
             lineas.push(Line::from(spans));
         }
-        let debajo = filtradas.len().saturating_sub(primera + OPCIONES_VISIBLES);
+        let debajo = filtradas.len().saturating_sub(primera + opciones_visibles);
         if debajo > 0 {
             lineas.push(Line::from(Span::styled(
-                format!("{sangria}    … {debajo} más"),
+                format!("{sangria}    {recorte} {debajo} más"),
                 self.estilo_inactivo(),
             )));
         }
         lineas.push(Line::from(vec![
             Span::styled(format!("{sangria}  filtro: "), self.estilo_inactivo()),
             Span::styled(
-                campo_visible(&desplegable.filtro, true, hueco.saturating_sub(8)),
+                campo_visible(
+                    &desplegable.filtro,
+                    true,
+                    hueco.saturating_sub(8),
+                    self.ascii(),
+                ),
                 Style::default().fg(self.tema.paleta.texto),
             ),
         ]));
@@ -439,7 +530,7 @@ impl Pintor<'_> {
             Span::styled(
                 format!(
                     " {}",
-                    acortar(texto, self.ancho.saturating_sub(ANCHO_ETIQUETA + 4))
+                    self.acortar(texto, self.ancho.saturating_sub(ANCHO_ETIQUETA + 4))
                 ),
                 Style::default().fg(self.tema.paleta.texto),
             ),
@@ -448,22 +539,28 @@ impl Pintor<'_> {
 
     fn linea_timeout(&self) -> Line<'static> {
         let activo = self.activo(CampoSnippet::Timeout);
+        let rango = format!(
+            " segundos ({}-{})",
+            crate::snippets::TIMEOUT_MIN,
+            crate::snippets::TIMEOUT_MAX
+        );
+        let resto = self
+            .ancho
+            .saturating_sub(ANCHO_ETIQUETA + ANCHO_TIMEOUT + 4);
         Line::from(vec![
             self.etiqueta("Timeout", activo),
             self.corchete("[ "),
             Span::styled(
-                campo_visible(self.formulario.timeout(), activo, ANCHO_TIMEOUT),
+                campo_visible(
+                    self.formulario.timeout(),
+                    activo,
+                    ANCHO_TIMEOUT,
+                    self.ascii(),
+                ),
                 estilo_campo(self.tema, activo),
             ),
             self.corchete(" ]"),
-            Span::styled(
-                format!(
-                    " segundos ({}-{})",
-                    crate::snippets::TIMEOUT_MIN,
-                    crate::snippets::TIMEOUT_MAX
-                ),
-                self.estilo_inactivo(),
-            ),
+            Span::styled(self.acortar(&rango, resto), self.estilo_inactivo()),
         ])
     }
 
@@ -471,17 +568,18 @@ impl Pintor<'_> {
     /// a ninguno (se puede guardar igual).
     fn linea_vista_previa(&self) -> Line<'static> {
         let flecha = tecla(self.tema, "\u{2192}", "->");
+        let punto = self.tema.glifos.punto_medio;
         match self.formulario.vista_previa() {
             VistaPreviaDestinos::SinDestinos => Line::from(Span::styled(
-                acortar(
+                self.acortar(
                     &format!("{flecha} sin destinos: añade una etiqueta de host o un host"),
                     self.ancho,
                 ),
                 self.estilo_inactivo(),
             )),
             VistaPreviaDestinos::Hosts(nombres) if nombres.is_empty() => Line::from(Span::styled(
-                acortar(
-                    &format!("{flecha} 0 hosts · no apunta a ningún host: se puede guardar"),
+                self.acortar(
+                    &format!("{flecha} 0 hosts {punto} no apunta a ningún host: se puede guardar"),
                     self.ancho,
                 ),
                 Style::default().fg(self.tema.paleta.acento),
@@ -493,8 +591,11 @@ impl Pintor<'_> {
                     if nombres.len() == 1 { "host" } else { "hosts" }
                 );
                 let nombres: Vec<String> = nombres.iter().map(|nombre| sanear(nombre)).collect();
-                let lista =
-                    lista_recortada(&nombres, self.ancho.saturating_sub(cabeza.chars().count()));
+                let lista = lista_recortada(
+                    &nombres,
+                    self.ancho.saturating_sub(cabeza.chars().count()),
+                    self.ascii(),
+                );
                 Line::from(vec![
                     Span::styled(cabeza, Style::default().fg(self.tema.paleta.acento)),
                     Span::styled(lista, Style::default().fg(self.tema.paleta.texto)),
@@ -523,7 +624,11 @@ impl Pintor<'_> {
         Line::from(vec![
             Span::styled(cabeza, self.estilo_inactivo()),
             Span::styled(
-                lista_recortada(&textos, self.ancho.saturating_sub(cabeza.chars().count())),
+                lista_recortada(
+                    &textos,
+                    self.ancho.saturating_sub(cabeza.chars().count()),
+                    self.ascii(),
+                ),
                 Style::default().fg(self.tema.paleta.texto),
             ),
         ])
@@ -532,7 +637,7 @@ impl Pintor<'_> {
     fn linea_error(&self) -> Line<'static> {
         match &self.formulario.error {
             Some(error) => Line::from(Span::styled(
-                acortar(
+                self.acortar(
                     &format!("{} {}", self.tema.glifos.error, sanear(error)),
                     self.ancho,
                 ),
@@ -544,8 +649,9 @@ impl Pintor<'_> {
         }
     }
 
-    /// Pie: atajos generales a la izquierda y los del campo con el foco a la
-    /// derecha; con la pregunta de descarte, solo la pregunta.
+    /// Pie: atajos generales por prioridad a la izquierda y, si queda sitio,
+    /// los del campo con el foco a la derecha; con la pregunta de descarte,
+    /// solo la pregunta.
     fn linea_pie(&self) -> Line<'static> {
         let tema = self.tema;
         if self.formulario.confirmando_descarte() {
@@ -561,41 +667,46 @@ impl Pintor<'_> {
                 atajo("n", tema),
             ]);
         }
-        let tabulador = tecla(tema, "\u{21e5}", "tab");
-        let mut spans = vec![
-            atajo("^s", tema),
-            Span::raw(" guardar · "),
-            atajo(tabulador, tema),
-            Span::raw(" campo · "),
-            atajo("esc", tema),
-            Span::raw(" cancelar"),
+        let atajos = [
+            Atajo::new("^s", "guardar", 1),
+            Atajo::new(tema.glifos.tab, "campo", 2),
+            Atajo::new("esc", "cancelar", 1),
         ];
-        let usado: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-        let pista = acortar(&self.pista(), self.ancho.saturating_sub(usado + 3));
-        if !pista.is_empty() {
+        let mut linea = pie_por_prioridad(&atajos, self.ancho, tema);
+        let usado: usize = linea
+            .spans
+            .iter()
+            .map(|span| span.content.chars().count())
+            .sum();
+        let pista = self.pista();
+        // La pista entera o nada: recortada no se entiende.
+        if !pista.is_empty() && usado + 3 + pista.chars().count() <= self.ancho {
             let relleno = self.ancho.saturating_sub(usado + pista.chars().count());
-            spans.push(Span::raw(" ".repeat(relleno)));
-            spans.push(Span::styled(pista, self.estilo_inactivo()));
+            linea.spans.push(Span::raw(" ".repeat(relleno)));
+            linea
+                .spans
+                .push(Span::styled(pista, self.estilo_inactivo()));
         }
-        Line::from(spans)
+        linea
     }
 
     /// Teclas propias del campo con el foco.
     fn pista(&self) -> String {
         let tema = self.tema;
-        let intro = tecla(tema, "↵", "enter");
+        let intro = tema.glifos.intro;
+        let punto = tema.glifos.punto_medio;
         match self.formulario.foco() {
             CampoSnippet::Comando => format!("{intro} nueva línea"),
             CampoSnippet::DestinosEtiqueta => format!(
-                "{intro} {} acepta · {} elige",
+                "{intro} {} acepta {punto} {} elige",
                 tecla(tema, "→", "->"),
                 tecla(tema, "↑↓", "arriba/abajo")
             ),
             CampoSnippet::DestinosHost if self.formulario.desplegable_hosts().abierto => {
-                format!("{intro} añade · esc cierra")
+                format!("{intro} añade {punto} esc cierra")
             }
             CampoSnippet::DestinosHost => format!(
-                "{intro} añadir · {} marcar · x quitar",
+                "{intro} añadir {punto} {} marcar {punto} x quitar",
                 tecla(tema, "←→", "izq/der")
             ),
             CampoSnippet::Critico | CampoSnippet::PararAlFallo => "espacio marca".to_string(),
@@ -640,44 +751,52 @@ fn ventana(cursor: usize, filas: usize) -> usize {
 
 /// Valor de un campo de una línea saneado, con el cursor si está activo y
 /// recortado a `ancho` columnas de forma que el cursor quede a la vista.
-fn campo_visible(campo: &CampoTexto, activo: bool, ancho: usize) -> String {
+fn campo_visible(campo: &CampoTexto, activo: bool, ancho: usize, ascii: bool) -> String {
     let caracteres = caracteres_saneados(&campo.texto);
     let cursor = activo.then_some(campo.cursor.min(caracteres.len()));
     let desde = cursor.map_or(0, |cursor| (cursor + 1).saturating_sub(ancho));
-    recortar(&caracteres, cursor, desde, ancho)
+    recortar(&caracteres, cursor, desde, ancho, ascii)
 }
 
 /// Los caracteres desde la columna `desde`, con la marca del cursor si hay y
-/// rellenos o recortados a `ancho`. Un `…` marca lo que queda fuera por cada
-/// lado (salvo donde está el cursor).
-fn recortar(caracteres: &[char], cursor: Option<usize>, desde: usize, ancho: usize) -> String {
+/// rellenos o recortados a `ancho`. Un `…` (`~` en ASCII) marca lo que queda
+/// fuera por cada lado (salvo donde está el cursor).
+fn recortar(
+    caracteres: &[char],
+    cursor: Option<usize>,
+    desde: usize,
+    ancho: usize,
+    ascii: bool,
+) -> String {
     if ancho == 0 {
         return String::new();
     }
+    let marca = marca_cursor(ascii);
+    let recorte = marca_recorte(ascii);
     let cursor = cursor.map(|cursor| cursor.min(caracteres.len()));
     let mut visible: Vec<char> = Vec::with_capacity(ancho + 1);
     for (indice, caracter) in caracteres.iter().enumerate().skip(desde) {
         if cursor == Some(indice) {
-            visible.push(CURSOR);
+            visible.push(marca);
         }
         visible.push(*caracter);
     }
     if cursor == Some(caracteres.len()) && caracteres.len() >= desde {
-        visible.push(CURSOR);
+        visible.push(marca);
     }
     if visible.len() > ancho {
         visible.truncate(ancho);
         if let Some(ultimo) = visible.last_mut() {
-            if *ultimo != CURSOR {
-                *ultimo = '…';
+            if *ultimo != marca {
+                *ultimo = recorte;
             }
         }
     }
     if desde > 0 && !caracteres.is_empty() {
         match visible.first_mut() {
-            Some(primero) if *primero != CURSOR => *primero = '…',
+            Some(primero) if *primero != marca => *primero = recorte,
             Some(_) => {}
-            None => visible.push('…'),
+            None => visible.push(recorte),
         }
     }
     let mut texto: String = visible.iter().collect();
@@ -708,7 +827,7 @@ fn tramo_visible(anchos: &[usize], elegido: usize, hueco: usize) -> (usize, usiz
 }
 
 /// «a, b, c…» recortada a `ancho` columnas.
-fn lista_recortada(elementos: &[String], ancho: usize) -> String {
+fn lista_recortada(elementos: &[String], ancho: usize, ascii: bool) -> String {
     let mut texto = String::new();
     for (indice, elemento) in elementos.iter().enumerate() {
         let separador = if indice == 0 { "" } else { ", " };
@@ -718,9 +837,9 @@ fn lista_recortada(elementos: &[String], ancho: usize) -> String {
         let reserva = if queda { 1 } else { 0 };
         if texto.chars().count() + siguiente.chars().count() + reserva > ancho {
             if texto.is_empty() {
-                return acortar(elemento, ancho);
+                return acortar(elemento, ancho, ascii);
             }
-            texto.push('…');
+            texto.push(marca_recorte(ascii));
             return texto;
         }
         texto.push_str(&siguiente);
@@ -728,15 +847,8 @@ fn lista_recortada(elementos: &[String], ancho: usize) -> String {
     texto
 }
 
-fn acortar(texto: &str, ancho: usize) -> String {
-    if texto.chars().count() <= ancho {
-        return texto.to_string();
-    }
-    if ancho == 0 {
-        return String::new();
-    }
-    let recortado: String = texto.chars().take(ancho - 1).collect();
-    format!("{recortado}…")
+fn acortar(texto: &str, ancho: usize, ascii: bool) -> String {
+    crate::ui::disposicion::recortar(texto, ancho, ascii)
 }
 
 #[cfg(test)]
@@ -808,13 +920,13 @@ mod pruebas {
     fn recortar_deja_el_cursor_a_la_vista() {
         let texto: Vec<char> = "abcdefghij".chars().collect();
         // Cabe entero: relleno a la derecha.
-        assert_eq!(recortar(&texto[..3], Some(3), 0, 6), "abc\u{2503}  ");
+        assert_eq!(recortar(&texto[..3], Some(3), 0, 6, false), "abc\u{2503}  ");
         // Cursor al final de un texto largo: se ve el final.
         let desde = (10 + 1) - 5;
-        assert_eq!(recortar(&texto, Some(10), desde, 5), "…hij\u{2503}");
+        assert_eq!(recortar(&texto, Some(10), desde, 5, false), "…hij\u{2503}");
         // Sin cursor: se corta a la derecha con «…».
-        assert_eq!(recortar(&texto, None, 0, 5), "abcd…");
-        assert_eq!(recortar(&texto, None, 0, 0), "");
+        assert_eq!(recortar(&texto, None, 0, 5, false), "abcd…");
+        assert_eq!(recortar(&texto, None, 0, 0, false), "");
     }
 
     #[test]
@@ -832,8 +944,8 @@ mod pruebas {
             .iter()
             .map(|n| n.to_string())
             .collect();
-        assert_eq!(lista_recortada(&nombres, 40), "alfa, beta, gamma");
-        assert_eq!(lista_recortada(&nombres, 12), "alfa, beta…");
+        assert_eq!(lista_recortada(&nombres, 40, false), "alfa, beta, gamma");
+        assert_eq!(lista_recortada(&nombres, 12, false), "alfa, beta…");
     }
 
     #[test]
@@ -878,5 +990,86 @@ mod pruebas {
         assert!(todo.contains("2 hosts: alfa, beta"), "{todo}");
         assert!(todo.contains("variables: ninguna"), "{todo}");
         assert!(todo.contains("^s guardar"), "{todo}");
+    }
+
+    /// Fase 7: con el desplegable de hosts abierto en una terminal baja, la
+    /// opción resaltada y el filtro se ven siempre (antes, a 50×12 y a 60×14
+    /// se veía el final del desplegable y la resaltada quedaba fuera).
+    #[test]
+    fn en_pequeno_el_desplegable_deja_a_la_vista_la_resaltada_y_el_filtro() {
+        let hosts: Vec<crate::modelo::Host> = (1..=7)
+            .map(|id| host(id, &format!("host-{id}"), &[]))
+            .collect();
+        let mut formulario = FormularioSnippet::nuevo(&hosts, &[]);
+        for _ in 0..5 {
+            formulario.manejar_tecla(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        assert_eq!(formulario.foco(), CampoSnippet::DestinosHost);
+        formulario.manejar_tecla(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(formulario.desplegable_hosts().abierto);
+        for bajadas in [0, 2, 6] {
+            for _ in 0..bajadas {
+                formulario.manejar_tecla(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            }
+            let desplegable = formulario.desplegable_hosts();
+            let resaltada = &desplegable.opciones[desplegable.filtradas()[desplegable.resaltado]];
+            let esperada = format!("\u{25b8} {}", resaltada.etiqueta);
+            for (ancho, alto) in [(40, 12), (50, 12), (60, 14), (80, 24), (100, 32)] {
+                let todo = pintar(ancho, alto, &formulario).join("\n");
+                assert!(
+                    todo.contains(&esperada),
+                    "«{esperada}» fuera de la vista a {ancho}×{alto}:\n{todo}"
+                );
+                assert!(todo.contains("filtro:"), "{ancho}×{alto}:\n{todo}");
+                assert!(todo.contains("guardar"), "{ancho}×{alto}:\n{todo}");
+            }
+        }
+        // Con sitio, las cinco opciones de siempre.
+        let desplegable = formulario.desplegable_hosts();
+        let visibles = desplegable
+            .opciones
+            .iter()
+            .filter(|opcion| {
+                pintar(100, 32, &formulario)
+                    .iter()
+                    .any(|fila| fila.contains(&opcion.etiqueta))
+            })
+            .count();
+        assert_eq!(visibles, OPCIONES_VISIBLES);
+    }
+
+    /// Fase 7: si el formulario no cabe, el cuerpo se desplaza hasta el
+    /// campo con el foco; el pie se ve siempre.
+    #[test]
+    fn en_pequeno_el_campo_con_foco_queda_a_la_vista() {
+        let hosts = vec![host(1, "alfa", &["web"])];
+        let mut formulario = FormularioSnippet::nuevo(&hosts, &[]);
+        let etiquetas = [
+            "Nombre",
+            "Comando",
+            "Descripción",
+            "Etiquetas",
+            "  etiquetas",
+            "  hosts",
+            "Crítico",
+            "Timeout",
+            "Parar",
+        ];
+        for (indice, etiqueta) in etiquetas.iter().enumerate() {
+            if indice > 0 {
+                formulario.manejar_tecla(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            }
+            for (ancho, alto) in [(40, 12), (60, 14), (80, 24)] {
+                let filas = pintar(ancho, alto, &formulario);
+                let todo = filas.join("\n");
+                assert!(
+                    filas
+                        .iter()
+                        .any(|fila| fila.contains(&format!("│  {etiqueta}"))),
+                    "«{etiqueta}» fuera de la vista a {ancho}×{alto}:\n{todo}"
+                );
+                assert!(todo.contains("guardar"), "{todo}");
+            }
+        }
     }
 }

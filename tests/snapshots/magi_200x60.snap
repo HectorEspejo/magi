@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       ▸ actualizar paquetes  web            → 3 hosts  CRÍTICO                                                                                                       │
+│                                         espacio en disco     hetzner-01 +1  → 2 hosts                                                                                                                │
+│                                         reiniciar nginx      web            → 3 hosts  CRÍTICO                                                                                                       │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                 ┌ DELIBERACIÓN MAGI ───────────────────────────────────────────────────────────────────────────────┐                                                 │
+│                                                 │                                                                                                  │                                                 │
+│                                                 │  ACCIÓN: reiniciar nginx → 3 hosts                                                               │                                                 │
+│                                                 │  requerida por: crítico                                                                          │                                                 │
+│                                                 │  ──────────────────────────────────────────────────────────────────────────────────────────────  │                                                 │
+│                                                 │                  MELCHIOR-1                BALTHASAR-2               CASPER-3                    │                                                 │
+│                                                 │                  salud                     backup<24 h               tests                       │                                                 │
+│                                                 │  hetzner-01      ✓ NOMINAL · hace 2 min    ✓ hace 3 h (pg.sql.gz)    ✓ verde                     │                                                 │
+│                                                 │  hetzner-02      ✓ NOMINAL · hace 2 min    ✕ último backup hace 31…  ✓ verde                     │                                                 │
+│                                                 │  vps-openclaw    ✓ NOMINAL · hace 2 min    —                         —                           │                                                 │
+│                                                 │                                                                                                  │                                                 │
+│                                                 │  ──────────────────────────────────────────────────────────────────────────────────────────────  │                                                 │
+│                                                 │  CONSENSO  6 / 7     ██████████████████░░░                                                       │                                                 │
+│                                                 │  ▸ BLOQUEADO — se requiere unanimidad                                                            │                                                 │
+│                                                 │                                                                                                  │                                                 │
+│                                                 │  f forzar (registra motivo)    esc cancelar    ? ayuda                                           │                                                 │
+│                                                 │                                                                                                  │                                                 │
+│                                                 └──────────────────────────────────────────────────────────────────────────────────────────────────┘                                                 │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                       ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐                                       │
+│                                       │  sudo apt update && sudo apt -y upgrade                                                                              │                                       │
+│                                       │                                                                                                                      │                                       │
+│                                       │  Destinos      etiqueta «web»: hetzner-01, hetzner-02, vps-openclaw                                                  │                                       │
+│                                       │  Variables     ninguna                                                                                               │                                       │
+│                                       │  Confirmación  requiere deliberación MAGI (crítico, 3 hosts)                                                         │                                       │
+│                                       │  Timeout 60 s · usado 0 veces · última nunca                                                                         │                                       │
+│                                       │                                                                                                                      │                                       │
+│                                       └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ejecutar  a en todos  p en pestaña  n e x nuevo · editar · borrar  / buscar  t resultados  ? ayuda
