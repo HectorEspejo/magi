@@ -94,7 +94,12 @@ impl Montaje {
     /// Abre el canal SFTP del host y devuelve el directorio de inicio remoto.
     async fn abrir_sftp(&mut self) -> String {
         let host_id = self.host_id;
-        self.enviar(&MensajeCliente::AbrirSftp { host_id }).await;
+        self.enviar(&MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id: None,
+            no_interactivo: false,
+        })
+        .await;
         match self
             .esperar(|mensaje| {
                 matches!(
@@ -107,6 +112,7 @@ impl Montaje {
             MensajeServidor::SftpAbierto {
                 host_id: id,
                 dir_inicio,
+                ..
             } => {
                 assert_eq!(id, host_id);
                 dir_inicio
@@ -444,7 +450,13 @@ async fn un_host_sin_subsistema_sftp_lo_dice() {
         return;
     };
     let host_id = montaje.host_id;
-    montaje.enviar(&MensajeCliente::AbrirSftp { host_id }).await;
+    montaje
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id: None,
+            no_interactivo: false,
+        })
+        .await;
     match montaje
         .esperar(|mensaje| {
             matches!(
@@ -1067,7 +1079,13 @@ async fn el_dialogo_de_contrasena_tambien_sirve_para_abrir_el_sftp() {
         return;
     };
     let host_id = montaje.host_id;
-    montaje.enviar(&MensajeCliente::AbrirSftp { host_id }).await;
+    montaje
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id: None,
+            no_interactivo: false,
+        })
+        .await;
     let mut abierto = false;
     let plazo = tokio::time::Instant::now() + Duration::from_secs(20);
     while !abierto {

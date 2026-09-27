@@ -176,6 +176,10 @@ fn peticion_de_respuesta(mensaje: &MensajeServidor) -> Option<u64> {
         MensajeServidor::Error {
             peticion_id: Some(peticion_id),
             ..
+        }
+        | MensajeServidor::SftpAbierto {
+            peticion_id: Some(peticion_id),
+            ..
         } => *peticion_id,
         _ => return None,
     };

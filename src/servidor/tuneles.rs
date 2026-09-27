@@ -966,7 +966,11 @@ async fn hay_canales(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64) -> bool 
 
 /// Lo mismo, con el estado ya bloqueado.
 fn hay_canales_con(estado: &EstadoServidor, host_id: i64) -> bool {
-    sesiones::canales_de_pestana(estado, host_id) > 0 || estado.sftp.contains_key(&host_id)
+    sesiones::canales_de_pestana(estado, host_id) > 0
+        || estado
+            .sftp
+            .get(&host_id)
+            .is_some_and(|canal| canal.para_archivos)
 }
 
 /// Levanta los túneles automáticos del host que no estén ya en marcha. Antes

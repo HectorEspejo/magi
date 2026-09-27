@@ -209,7 +209,11 @@ async fn pestana_sftp_y_tunel_a_la_vez_comparten_una_conexion() {
         })
         .await;
     escenario
-        .enviar(&MensajeCliente::AbrirSftp { host_id: host })
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        })
         .await;
     escenario
         .enviar(&MensajeCliente::ActivarTunel {
@@ -484,7 +488,15 @@ async fn la_ventana_que_se_va_suelta_sus_dialogos() {
     // Una segunda ventana pide el canal SFTP y se va sin contestar la huella.
     let mut otra = cliente(&ruta, magi::protocolo::VERSION_PROTOCOLO).await;
     let _: MensajeServidor = siguiente(&mut otra).await; // Bienvenida
-    enviar(otra.get_mut(), &MensajeCliente::AbrirSftp { host_id: host }).await;
+    enviar(
+        otra.get_mut(),
+        &MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        },
+    )
+    .await;
     let _ = esperar::<MensajeServidor, _>(&mut otra, |mensaje| {
         matches!(mensaje, MensajeServidor::HuellaDesconocida { .. })
     })
@@ -493,7 +505,11 @@ async fn la_ventana_que_se_va_suelta_sus_dialogos() {
 
     // La ventana que queda pide lo mismo: su diálogo llega enseguida.
     escenario
-        .enviar(&MensajeCliente::AbrirSftp { host_id: host })
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        })
         .await;
     let llegado = tokio::time::timeout(
         Duration::from_secs(8),
@@ -580,7 +596,11 @@ async fn un_host_mudo_no_retiene_el_cerrojo() {
         almacen.cerrar().unwrap();
     }
     escenario
-        .enviar(&MensajeCliente::AbrirSftp { host_id: host })
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        })
         .await;
     let inicio = std::time::Instant::now();
     let error = tokio::time::timeout(
@@ -602,7 +622,11 @@ async fn un_host_mudo_no_retiene_el_cerrojo() {
     }
     // La siguiente apertura del host no espera al cerrojo de la anterior.
     escenario
-        .enviar(&MensajeCliente::AbrirSftp { host_id: host })
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        })
         .await;
     let segundo = tokio::time::timeout(
         Duration::from_secs(40),
@@ -709,4 +733,83 @@ async fn sigterm_para_el_servidor_limpio() {
     almacen.cerrar().unwrap();
     assert!(tipos.contains("servidor_arrancado"), "{tipos:?}");
     assert!(tipos.contains("servidor_detenido"), "{tipos:?}");
+}
+
+/// El canal SFTP que abre una comprobación de backup (BALTHASAR-2) no dialoga
+/// ni levanta los túneles automáticos del host; cuando Archivos lo usa
+/// después, sí cuenta.
+#[tokio::test]
+async fn una_comprobacion_sftp_no_levanta_los_tuneles_automaticos() {
+    if !hay_sftp_server() {
+        eprintln!("sin sftp-server en el sistema: se omite");
+        return;
+    }
+    let (puerto_eco, _eco) = servicio_eco().await;
+    let mut escenario = escenario(OpcionesEscenario::default()).await;
+    let host = escenario.hosts[0];
+    let tunel = crear_tunel(&escenario, host, "auto", puerto_eco, true);
+    escenario
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: Some(1 << 48),
+            no_interactivo: true,
+        })
+        .await;
+    match escenario
+        .esperar(|mensaje| {
+            matches!(
+                mensaje,
+                MensajeServidor::SftpAbierto { .. } | MensajeServidor::Error { .. }
+            )
+        })
+        .await
+    {
+        MensajeServidor::SftpAbierto { peticion_id, .. } => {
+            assert_eq!(peticion_id, Some(1 << 48))
+        }
+        otro => panic!("{otro:?}"),
+    }
+    let llegados = escenario.escuchar(Duration::from_millis(1200)).await;
+    assert!(
+        !llegados.iter().any(|mensaje| matches!(
+            mensaje,
+            MensajeServidor::Tuneles { lista } if lista.iter().any(|t| t.tunel_id == tunel)
+        )),
+        "la comprobación levantó el túnel automático"
+    );
+    // El listado del directorio va por ese canal.
+    escenario
+        .enviar(&MensajeCliente::ListarDir {
+            host_id: host,
+            ruta: "/".to_string(),
+            peticion_id: (1 << 48) + 1,
+        })
+        .await;
+    assert!(matches!(
+        escenario
+            .esperar(|mensaje| matches!(
+                mensaje,
+                MensajeServidor::DirListado { .. } | MensajeServidor::Error { .. }
+            ))
+            .await,
+        MensajeServidor::DirListado { .. }
+    ));
+    // Archivos lo usa: ahora sí es un canal del host y el túnel se levanta.
+    escenario
+        .enviar(&MensajeCliente::AbrirSftp {
+            host_id: host,
+            peticion_id: None,
+            no_interactivo: false,
+        })
+        .await;
+    assert!(
+        escenario
+            .hasta(Duration::from_secs(10), |e| {
+                e.tuneles
+                    .iter()
+                    .any(|t| t.tunel_id == tunel && t.estado == EstadoTunelRemoto::Activo)
+            })
+            .await,
+        "el túnel automático no se levantó con Archivos"
+    );
 }

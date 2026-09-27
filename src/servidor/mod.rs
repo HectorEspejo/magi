@@ -873,9 +873,20 @@ async fn manejar_mensaje(
         // un canal puede tardar (diálogos, red) y el bucle de lectura de este
         // cliente no puede quedarse esperando o su respuesta no llegaría
         // nunca.
-        MensajeCliente::AbrirSftp { host_id } => {
+        MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id,
+            no_interactivo,
+        } => {
             let estado_tarea = estado.clone();
-            tokio::spawn(async move { abrir_sftp(&estado_tarea, cliente_id, host_id).await });
+            let modo = if no_interactivo {
+                sftp::ModoSftp::Comprobacion
+            } else {
+                sftp::ModoSftp::Archivos
+            };
+            tokio::spawn(async move {
+                abrir_sftp(&estado_tarea, cliente_id, host_id, peticion_id, modo).await
+            });
         }
         MensajeCliente::ListarDir {
             host_id,
@@ -1759,8 +1770,10 @@ async fn abrir_sftp(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
     host_id: i64,
+    peticion_id: Option<u64>,
+    modo: sftp::ModoSftp,
 ) {
-    match sftp::asegurar(estado, host_id, cliente_id).await {
+    match sftp::asegurar(estado, host_id, cliente_id, modo).await {
         Ok((_, dir_inicio)) => {
             responder(
                 estado,
@@ -1768,11 +1781,12 @@ async fn abrir_sftp(
                 MensajeServidor::SftpAbierto {
                     host_id,
                     dir_inicio,
+                    peticion_id,
                 },
             )
             .await;
         }
-        Err(motivo) => responder_error(estado, cliente_id, motivo, None).await,
+        Err(motivo) => responder_error(estado, cliente_id, motivo, peticion_id).await,
     }
 }
 
@@ -1974,7 +1988,9 @@ async fn transferir(
 ) {
     // El canal debe estar abierto: la vista Archivos lo pide al entrar.
     if sftp::canal_abierto(estado, host_id).await.is_none() {
-        if let Err(motivo) = sftp::asegurar(estado, host_id, cliente_id).await {
+        if let Err(motivo) =
+            sftp::asegurar(estado, host_id, cliente_id, sftp::ModoSftp::Archivos).await
+        {
             responder_error(estado, cliente_id, motivo, None).await;
             return;
         }

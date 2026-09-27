@@ -44,6 +44,18 @@ const SUBDIR_TEMPORALES: &str = "tmp";
 /// Sufijo de los ficheros que aún se están escribiendo.
 pub const SUFIJO_PARCIAL: &str = ".magi-parcial";
 
+/// Para qué se abre un canal SFTP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModoSftp {
+    /// La vista Archivos (o una transferencia): con diálogos al solicitante
+    /// y cuenta para el ciclo automático de los túneles.
+    Archivos,
+    /// Una comprobación de la deliberación MAGI (BALTHASAR-2): sin diálogos
+    /// y sin levantar túneles automáticos (mirar un directorio no es usar el
+    /// host).
+    Comprobacion,
+}
+
 /// Un canal SFTP abierto, compartido por todas las ventanas.
 pub struct SftpHost {
     pub host_id: i64,
@@ -55,6 +67,10 @@ pub struct SftpHost {
     pub dir_inicio: String,
     pub solicitante: u32,
     pub ultima_actividad: Instant,
+    /// Lo ha pedido la vista Archivos (o una transferencia): cuenta para el
+    /// ciclo automático de los túneles. Uno abierto solo para comprobar un
+    /// backup no cuenta hasta que Archivos lo use.
+    pub para_archivos: bool,
 }
 
 /// El canal puede cerrarse si nadie lo ha usado en la ventana de inactividad
@@ -104,8 +120,10 @@ pub async fn asegurar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     host_id: i64,
     solicitante: u32,
+    modo: ModoSftp,
 ) -> Result<(Arc<SftpSession>, String), String> {
     if let Some((sesion, dir)) = canal_vivo(estado, host_id).await {
+        marcar_para_archivos(estado, host_id, modo).await;
         return Ok((sesion, dir));
     }
 
@@ -122,6 +140,7 @@ pub async fn asegurar(
 
     // Otra ventana pudo abrirlo mientras esperábamos el cerrojo.
     if let Some((sesion, dir)) = canal_vivo(estado, host_id).await {
+        marcar_para_archivos(estado, host_id, modo).await;
         return Ok((sesion, dir));
     }
 
@@ -146,16 +165,17 @@ pub async fn asegurar(
         (host, todos_los_hosts, rutas, id_solicitud)
     };
 
-    match abrir(
-        estado,
-        &host,
-        &todos_los_hosts,
-        &rutas,
-        id_solicitud,
-        solicitante,
-    )
-    .await
-    {
+    let politica = match modo {
+        ModoSftp::Archivos => PoliticaConexion::Interactiva {
+            solicitante,
+            id_solicitud,
+        },
+        ModoSftp::Comprobacion => PoliticaConexion::NoInteractiva {
+            solicitante: Some(solicitante),
+            id_solicitud,
+        },
+    };
+    match abrir(estado, &host, &todos_los_hosts, &rutas, politica).await {
         Ok((sesion, dir_inicio, conexion)) => {
             let mut estado_bloqueado = estado.lock().await;
             estado_bloqueado.sftp.insert(
@@ -168,18 +188,47 @@ pub async fn asegurar(
                     dir_inicio: dir_inicio.clone(),
                     solicitante,
                     ultima_actividad: Instant::now(),
+                    para_archivos: modo == ModoSftp::Archivos,
                 },
             );
             info!(host = %host.nombre, dir = %dir_inicio, "canal SFTP abierto");
             drop(estado_bloqueado);
-            // El host estrena canal: es el momento de sus túneles automáticos.
-            super::tuneles::canales_cambiaron(estado, host_id).await;
+            // El host estrena canal: es el momento de sus túneles automáticos
+            // (salvo que sea solo para una comprobación).
+            if modo == ModoSftp::Archivos {
+                super::tuneles::canales_cambiaron(estado, host_id).await;
+            }
             Ok((sesion, dir_inicio))
         }
         Err(motivo) => {
             warn!(host = %host.nombre, "no se pudo abrir el canal SFTP: {motivo}");
             Err(motivo)
         }
+    }
+}
+
+/// Archivos usa un canal que se abrió para una comprobación: desde ahora
+/// cuenta para el ciclo automático de los túneles.
+async fn marcar_para_archivos(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    host_id: i64,
+    modo: ModoSftp,
+) {
+    if modo != ModoSftp::Archivos {
+        return;
+    }
+    let estrena = {
+        let mut estado_bloqueado = estado.lock().await;
+        match estado_bloqueado.sftp.get_mut(&host_id) {
+            Some(canal) if !canal.para_archivos => {
+                canal.para_archivos = true;
+                true
+            }
+            _ => false,
+        }
+    };
+    if estrena {
+        super::tuneles::canales_cambiaron(estado, host_id).await;
     }
 }
 
@@ -236,18 +285,14 @@ async fn abrir(
     host: &Host,
     todos_los_hosts: &HashMap<i64, Host>,
     rutas: &crate::config::Rutas,
-    id_solicitud: u32,
-    solicitante: u32,
+    politica: PoliticaConexion,
 ) -> Result<(Arc<SftpSession>, String, ConexionTomada), String> {
     let conexion = conexiones::conexion_para_canal(
         estado,
         host,
         todos_los_hosts,
         rutas,
-        PoliticaConexion::Interactiva {
-            solicitante,
-            id_solicitud,
-        },
+        politica,
         UsoCanal::Subsistema,
     )
     .await?;

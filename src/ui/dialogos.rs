@@ -677,7 +677,8 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
             );
         }
         Dialogo::Detalle { titulo, lineas, .. } => {
-            let alto = lineas.len() as u16 + 4;
+            // Bordes y márgenes (4), la línea en blanco y la de teclas (2).
+            let alto = lineas.len() as u16 + 6;
             let recta = centrar(area, 74, alto);
             let mut contenido: Vec<Line> = lineas.iter().map(|texto| linea(texto)).collect();
             contenido.push(Line::from(""));

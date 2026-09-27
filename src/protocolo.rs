@@ -593,6 +593,13 @@ pub enum MensajeCliente {
     /// `Error`; si no hay conexión viva, la abre con los diálogos de siempre.
     AbrirSftp {
         host_id: i64,
+        /// Con él, `SftpAbierto` o `Error` lo devuelven (comprobaciones de la
+        /// deliberación, que esperan su respuesta).
+        #[serde(default)]
+        peticion_id: Option<u64>,
+        /// Sin diálogos y sin levantar túneles automáticos (BALTHASAR-2).
+        #[serde(default)]
+        no_interactivo: bool,
     },
     ListarDir {
         host_id: i64,
@@ -794,6 +801,8 @@ pub enum MensajeServidor {
     SftpAbierto {
         host_id: i64,
         dir_inicio: String,
+        #[serde(default)]
+        peticion_id: Option<u64>,
     },
     DirListado {
         host_id: i64,
@@ -929,7 +938,16 @@ mod pruebas {
     /// Los mensajes que estrena la Fase 4 (v2): archivos y transferencias.
     #[test]
     fn los_mensajes_de_archivos_hacen_ida_y_vuelta() {
-        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp { host_id: 7 });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp {
+            host_id: 7,
+            peticion_id: None,
+            no_interactivo: false,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp {
+            host_id: 7,
+            peticion_id: Some(1 << 48),
+            no_interactivo: true,
+        });
         ida_y_vuelta_cliente(MensajeCliente::ListarDir {
             host_id: 7,
             ruta: "/var/www".to_string(),
@@ -977,6 +995,7 @@ mod pruebas {
 
         ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
             host_id: 7,
+            peticion_id: Some(1 << 48),
             dir_inicio: "/home/hector".to_string(),
         });
         ida_y_vuelta_servidor(MensajeServidor::DirListado {

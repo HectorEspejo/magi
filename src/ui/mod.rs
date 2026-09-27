@@ -2,6 +2,7 @@ pub mod archivos;
 pub mod ayuda;
 pub mod barra;
 pub mod componentes;
+pub mod deliberacion;
 pub mod dialogos;
 pub mod ejecutar;
 pub mod ficha;
@@ -94,6 +95,11 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         Vista::Resultados => resultados::dibujar(marco, trozos[0], app),
     }
     barra::dibujar(marco, trozos[1], app);
+    // La deliberación es modal sobre cualquier vista; una pregunta del
+    // servidor, la paleta o la ayuda van encima.
+    if let Some(abierta) = &app.deliberacion {
+        deliberacion::dibujar(marco, area, app, abierta);
+    }
     if let Some(dialogo) = &app.dialogo {
         dialogos::dibujar(marco, area, app, dialogo);
     } else if app.paleta.is_some() {
