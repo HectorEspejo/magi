@@ -29,6 +29,17 @@ use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::Vista;
 
+pub mod dialogo_magi;
+pub mod formulario_snippet;
+pub mod lanzar;
+mod resultados;
+mod snippets;
+
+pub use dialogo_magi::DeliberacionAbierta;
+pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
+pub use resultados::{AccionResultados, EstadoResultados};
+pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
+
 /// Entradas que carga cada página de la vista Registro.
 pub const REGISTRO_PAGINA: i64 = 200;
 
@@ -486,6 +497,8 @@ pub enum Evento {
     Pantallas(Vec<u32>),
     Identidades(Identidades),
     Sondeo(Sondeo),
+    /// Resultado de una comprobación de la deliberación MAGI.
+    Deliberacion(crate::deliberacion::ResultadoComprobacion),
     ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
 }
 
@@ -520,16 +533,27 @@ pub enum CampoFicha {
     Usuario,
     Identidad,
     Salto,
+    /// «Snippet al conectar» (desplegable del bloque «Al conectar»).
+    Snippet,
     Multiplexar,
     Mantener,
     Keepalive,
+    /// Bloque «Verificaciones previas»: casilla de salud (MELCHIOR-1).
+    Salud,
+    /// Casilla de backup reciente (BALTHASAR-2) y sus dos campos.
+    Backup,
+    BackupRuta,
+    BackupPatron,
+    /// Casilla de tests en verde (CASPER-3) y su comando local.
+    Tests,
+    TestsComando,
     Servicios,
     Opciones,
     /// Bloque de túneles del host (no es un campo de texto).
     Tuneles,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 14] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 21] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -538,9 +562,16 @@ pub const ORDEN_CAMPOS: [CampoFicha; 14] = [
     CampoFicha::Usuario,
     CampoFicha::Identidad,
     CampoFicha::Salto,
+    CampoFicha::Snippet,
     CampoFicha::Multiplexar,
     CampoFicha::Mantener,
     CampoFicha::Keepalive,
+    CampoFicha::Salud,
+    CampoFicha::Backup,
+    CampoFicha::BackupRuta,
+    CampoFicha::BackupPatron,
+    CampoFicha::Tests,
+    CampoFicha::TestsComando,
     CampoFicha::Servicios,
     CampoFicha::Opciones,
     CampoFicha::Tuneles,
@@ -561,6 +592,101 @@ pub enum AccionFicha {
     TunelImportar,
 }
 
+/// Desplegable «Snippet al conectar» de la ficha: «ninguno» y los snippets
+/// aptos (no críticos y sin variables).
+///
+/// `ValorOpcion` no tiene variante para un snippet, así que el id de cada
+/// opción va en `ids`, en paralelo a `desplegable.opciones` (mismo índice).
+pub struct SelectorSnippet {
+    pub desplegable: Desplegable,
+    ids: Vec<Option<i64>>,
+    /// Posición de la opción «(no apto)»: el snippet que el host ya tenía y
+    /// ha dejado de ser apto o ya no existe. Se ve para poder quitarlo, pero
+    /// en cuanto se elige otra cosa desaparece y no se puede volver a elegir.
+    no_apto: Option<usize>,
+}
+
+impl SelectorSnippet {
+    /// `snippets` es la lista completa (se filtran aquí los aptos) y
+    /// `actual`, el `snippet_al_conectar_id` del host.
+    pub fn nuevo(snippets: &[crate::snippets::Snippet], actual: Option<i64>) -> Self {
+        let mut opciones = vec![Opcion {
+            etiqueta: "ninguno".to_string(),
+            valor: ValorOpcion::Ninguno,
+        }];
+        let mut ids = vec![None];
+        for snippet in snippets.iter().filter(|snippet| snippet.apto_al_conectar()) {
+            opciones.push(Opcion {
+                etiqueta: crate::ui::snippets::limpio(&snippet.nombre),
+                valor: ValorOpcion::Ninguno,
+            });
+            ids.push(Some(snippet.id));
+        }
+        let mut no_apto = None;
+        let seleccion = match actual {
+            None => 0,
+            Some(id) => match ids.iter().position(|opcion| *opcion == Some(id)) {
+                Some(indice) => indice,
+                None => {
+                    // El que tiene el host ya no vale (o ya no existe): se
+                    // enseña marcado justo detrás de «ninguno».
+                    let etiqueta = match snippets.iter().find(|snippet| snippet.id == id) {
+                        Some(snippet) => {
+                            format!("{} (no apto)", crate::ui::snippets::limpio(&snippet.nombre))
+                        }
+                        None => format!("snippet #{id} · ya no existe (no apto)"),
+                    };
+                    opciones.insert(
+                        1,
+                        Opcion {
+                            etiqueta,
+                            valor: ValorOpcion::Ninguno,
+                        },
+                    );
+                    ids.insert(1, Some(id));
+                    no_apto = Some(1);
+                    1
+                }
+            },
+        };
+        let mut desplegable = Desplegable::nuevo(opciones);
+        desplegable.seleccion = seleccion;
+        Self {
+            desplegable,
+            ids,
+            no_apto,
+        }
+    }
+
+    /// Id del snippet elegido; `None` es «ninguno».
+    pub fn seleccionado(&self) -> Option<i64> {
+        self.ids.get(self.desplegable.seleccion).copied().flatten()
+    }
+
+    /// ¿La opción elegida es la «(no apto)» que traía el host?
+    pub fn en_no_apto(&self) -> bool {
+        self.no_apto == Some(self.desplegable.seleccion)
+    }
+
+    /// Tras elegir en el desplegable: si ya no está en la opción «(no apto)»,
+    /// esa opción se quita para que no se pueda volver a elegir.
+    fn tras_elegir(&mut self) {
+        let Some(indice) = self.no_apto else {
+            return;
+        };
+        if self.desplegable.seleccion == indice {
+            return;
+        }
+        self.desplegable.opciones.remove(indice);
+        self.ids.remove(indice);
+        if self.desplegable.seleccion > indice {
+            self.desplegable.seleccion -= 1;
+        }
+        self.desplegable.resaltado = 0;
+        self.no_apto = None;
+    }
+}
+
 pub struct Ficha {
     pub host_id: Option<i64>,
     pub original: DatosHost,
@@ -579,6 +705,21 @@ pub struct Ficha {
     pub salto: Desplegable,
     pub multiplexar: bool,
     pub mantener: bool,
+    /// «Snippet al conectar» (va aparte de `DatosHost`: la importación de
+    /// `~/.ssh/config` no lo pisa).
+    pub snippet: SelectorSnippet,
+    /// `snippet_al_conectar_id` con el que se abrió la ficha.
+    pub snippet_original: Option<i64>,
+    /// Bloque «Verificaciones previas (deliberación MAGI)». Ruta, patrón y
+    /// comando se editan y se conservan aunque su casilla esté desmarcada.
+    pub salud: bool,
+    pub backup: bool,
+    pub backup_ruta: CampoTexto,
+    pub backup_patron: CampoTexto,
+    pub tests: bool,
+    pub tests_comando: CampoTexto,
+    /// Verificaciones con las que se abrió la ficha, normalizadas.
+    pub verificaciones_original: crate::deliberacion::DatosVerificaciones,
     pub desplegable_abierto: Option<CampoFicha>,
     pub sugerencias: Vec<String>,
     pub indice_sugerencia: usize,
@@ -632,8 +773,30 @@ impl Ficha {
         }
     }
 
+    /// Snippet al conectar elegido en la ficha.
+    pub fn snippet_al_conectar(&self) -> Option<i64> {
+        self.snippet.seleccionado()
+    }
+
+    /// Bloque «Verificaciones previas» tal como está en el formulario,
+    /// normalizado (textos recortados, vacíos en `None`).
+    pub fn datos_verificaciones(&self) -> crate::deliberacion::DatosVerificaciones {
+        let texto = |campo: &CampoTexto| Some(campo.texto.clone());
+        crate::deliberacion::DatosVerificaciones {
+            salud: self.salud,
+            backup: self.backup,
+            backup_ruta: texto(&self.backup_ruta),
+            backup_patron: texto(&self.backup_patron),
+            tests: self.tests,
+            tests_comando: texto(&self.tests_comando),
+        }
+        .normalizada()
+    }
+
     pub fn sucio(&self) -> bool {
         self.datos() != self.original
+            || self.snippet_al_conectar() != self.snippet_original
+            || self.datos_verificaciones() != self.verificaciones_original
     }
 
     fn campo_texto_mut(&mut self, campo: CampoFicha) -> Option<&mut CampoTexto> {
@@ -644,6 +807,9 @@ impl Ficha {
             CampoFicha::Etiquetas => Some(&mut self.etiquetas),
             CampoFicha::Usuario => Some(&mut self.usuario),
             CampoFicha::Keepalive => Some(&mut self.keepalive),
+            CampoFicha::BackupRuta => Some(&mut self.backup_ruta),
+            CampoFicha::BackupPatron => Some(&mut self.backup_patron),
+            CampoFicha::TestsComando => Some(&mut self.tests_comando),
             _ => None,
         }
     }
@@ -653,18 +819,26 @@ impl Ficha {
             CampoFicha::Grupo => Some(&mut self.grupo),
             CampoFicha::Identidad => Some(&mut self.identidad),
             CampoFicha::Salto => Some(&mut self.salto),
+            CampoFicha::Snippet => Some(&mut self.snippet.desplegable),
             _ => None,
         }
     }
 
     fn es_casilla(campo: CampoFicha) -> bool {
-        matches!(campo, CampoFicha::Multiplexar | CampoFicha::Mantener)
+        matches!(
+            campo,
+            CampoFicha::Multiplexar
+                | CampoFicha::Mantener
+                | CampoFicha::Salud
+                | CampoFicha::Backup
+                | CampoFicha::Tests
+        )
     }
 
     fn es_desplegable(campo: CampoFicha) -> bool {
         matches!(
             campo,
-            CampoFicha::Grupo | CampoFicha::Identidad | CampoFicha::Salto
+            CampoFicha::Grupo | CampoFicha::Identidad | CampoFicha::Salto | CampoFicha::Snippet
         )
     }
 
@@ -750,6 +924,9 @@ impl Ficha {
                 match desplegable.manejar_tecla(&tecla) {
                     crate::ui::componentes::ResultadoDesplegable::Seleccionado(_) => {
                         self.desplegable_abierto = None;
+                        if campo == CampoFicha::Snippet {
+                            self.snippet.tras_elegir();
+                        }
                     }
                     crate::ui::componentes::ResultadoDesplegable::Cerrado => {
                         self.desplegable_abierto = None;
@@ -842,6 +1019,9 @@ impl Ficha {
                             self.keepalive = CampoTexto::nuevo("30");
                         }
                     }
+                    CampoFicha::Salud => self.salud = !self.salud,
+                    CampoFicha::Backup => self.backup = !self.backup,
+                    CampoFicha::Tests => self.tests = !self.tests,
                     _ => {}
                 }
                 AccionFicha::Nada
@@ -869,6 +1049,421 @@ impl Ficha {
             }
         }
         AccionFicha::Nada
+    }
+}
+
+/// Qué ha pasado con las escrituras de la ficha que van aparte de
+/// `DatosHost` (snippet al conectar y verificaciones previas).
+struct EscriturasAparte {
+    /// Un texto por escritura fallida, listo para el mensaje.
+    fallos: Vec<String>,
+    /// Se ha escrito el snippet al conectar.
+    snippet: bool,
+    /// Se han escrito las verificaciones previas.
+    verificaciones: bool,
+}
+
+/// Escribe lo que la ficha guarda aparte de `DatosHost`, cada cosa por su
+/// lado para que el fallo de una no se lleve la otra. `None` es «sin
+/// cambios»: no se toca.
+fn guardar_aparte_de_host(
+    almacen: &Almacen,
+    host_id: i64,
+    snippet: Option<Option<i64>>,
+    verificaciones: Option<&crate::deliberacion::DatosVerificaciones>,
+) -> EscriturasAparte {
+    let mut escrito = EscriturasAparte {
+        fallos: Vec::new(),
+        snippet: false,
+        verificaciones: false,
+    };
+    if let Some(snippet) = snippet {
+        match almacen.fijar_snippet_al_conectar(host_id, snippet) {
+            Ok(()) => escrito.snippet = true,
+            Err(error) => escrito.fallos.push(format!(
+                "no se pudo guardar el snippet al conectar: {error}"
+            )),
+        }
+    }
+    if let Some(verificaciones) = verificaciones {
+        match almacen.guardar_verificaciones(host_id, verificaciones) {
+            Ok(()) => escrito.verificaciones = true,
+            Err(error) => escrito.fallos.push(format!(
+                "no se pudieron guardar las verificaciones previas: {error}"
+            )),
+        }
+    }
+    escrito
+}
+
+#[cfg(test)]
+pub(crate) mod pruebas_ficha {
+    use super::*;
+    use crate::deliberacion::{validar_verificaciones, DatosVerificaciones};
+    use crate::snippets::Snippet;
+
+    pub(crate) fn snippet(id: i64, nombre: &str, comando: &str, critico: bool) -> Snippet {
+        Snippet {
+            id,
+            nombre: nombre.to_string(),
+            comando: comando.to_string(),
+            descripcion: String::new(),
+            etiquetas: Vec::new(),
+            critico,
+            timeout_seg: 60,
+            parar_al_fallo: false,
+            usado_veces: 0,
+            ultimo_uso_en: None,
+            creado_en: String::new(),
+            actualizado_en: String::new(),
+            destinos: Vec::new(),
+        }
+    }
+
+    /// Aptos: 1 y 4. No aptos: 2 (crítico) y 3 (con variables).
+    pub(crate) fn snippets() -> Vec<Snippet> {
+        vec![
+            snippet(1, "limpiar tmp", "rm -rf /tmp/cache", false),
+            snippet(2, "reiniciar", "systemctl restart nginx", true),
+            snippet(3, "ver servicio", "systemctl status {{servicio}}", false),
+            snippet(4, "tail log", "tail -f /var/log/syslog", false),
+        ]
+    }
+
+    pub(crate) fn verificaciones() -> DatosVerificaciones {
+        DatosVerificaciones {
+            salud: true,
+            backup: true,
+            backup_ruta: Some("/var/backups/pg".to_string()),
+            backup_patron: Some("*.sql.gz".to_string()),
+            tests: true,
+            tests_comando: Some("true".to_string()),
+        }
+    }
+
+    /// Ficha de `host` con los snippets y verificaciones dados; sin grupos
+    /// ni más hosts, y con solo «auto» en Identidad.
+    pub(crate) fn ficha_con(
+        host: Option<&Host>,
+        snippets: &[Snippet],
+        verificaciones: Option<DatosVerificaciones>,
+    ) -> Ficha {
+        let identidad = vec![Opcion {
+            etiqueta: "auto".to_string(),
+            valor: ValorOpcion::Identidad(IdentidadRef::Auto),
+        }];
+        App::ficha_de(host, None, &[], &[], identidad, snippets, verificaciones)
+    }
+
+    fn pulsar(ficha: &mut Ficha, codigo: KeyCode) -> AccionFicha {
+        ficha.manejar_tecla(KeyEvent::new(codigo, KeyModifiers::NONE), &[], 0)
+    }
+
+    fn escribir(ficha: &mut Ficha, texto: &str) {
+        for caracter in texto.chars() {
+            pulsar(ficha, KeyCode::Char(caracter));
+        }
+    }
+
+    fn ir_a(ficha: &mut Ficha, campo: CampoFicha) {
+        for _ in 0..ORDEN_CAMPOS.len() {
+            if ficha.campo == campo {
+                return;
+            }
+            pulsar(ficha, KeyCode::Tab);
+        }
+        panic!("{campo:?} no está en el orden de la ficha");
+    }
+
+    fn etiquetas(ficha: &Ficha) -> Vec<String> {
+        ficha
+            .snippet
+            .desplegable
+            .opciones
+            .iter()
+            .map(|opcion| opcion.etiqueta.clone())
+            .collect()
+    }
+
+    #[test]
+    fn la_ficha_trae_el_snippet_al_conectar_y_las_verificaciones_del_host() {
+        let mut host = crate::modelo::host_de_prueba();
+        host.snippet_al_conectar_id = Some(4);
+        let ficha = ficha_con(Some(&host), &snippets(), Some(verificaciones()));
+        assert_eq!(ficha.snippet_al_conectar(), Some(4));
+        assert_eq!(
+            ficha.snippet.desplegable.etiqueta_seleccionada(),
+            "tail log"
+        );
+        assert!(!ficha.snippet.en_no_apto());
+        assert!(ficha.salud && ficha.backup && ficha.tests);
+        assert_eq!(ficha.backup_ruta.texto, "/var/backups/pg");
+        assert_eq!(ficha.backup_patron.texto, "*.sql.gz");
+        assert_eq!(ficha.tests_comando.texto, "true");
+        assert_eq!(ficha.datos_verificaciones(), verificaciones());
+        assert!(!ficha.sucio(), "recién abierta no hay nada que descartar");
+    }
+
+    #[test]
+    fn una_identidad_que_no_esta_en_la_lista_se_conserva_seleccionada() {
+        let mut host = crate::modelo::host_de_prueba();
+        host.identidad_ref = IdentidadRef::Fichero("/ya/no/existe".to_string());
+        let ficha = ficha_con(Some(&host), &snippets(), None);
+        assert_eq!(
+            ficha.identidad.valor_seleccionado(),
+            ValorOpcion::Identidad(IdentidadRef::Fichero("/ya/no/existe".to_string()))
+        );
+        assert!(!ficha.sucio(), "abrirla no puede cambiar la identidad");
+    }
+
+    #[test]
+    fn una_ficha_nueva_no_tiene_snippet_ni_verificaciones() {
+        let ficha = ficha_con(None, &snippets(), None);
+        assert_eq!(ficha.snippet_al_conectar(), None);
+        assert_eq!(ficha.snippet.desplegable.etiqueta_seleccionada(), "ninguno");
+        assert_eq!(ficha.datos_verificaciones(), DatosVerificaciones::default());
+        assert!(!ficha.sucio());
+    }
+
+    #[test]
+    fn el_desplegable_solo_ofrece_snippets_no_criticos_y_sin_variables() {
+        let ficha = ficha_con(None, &snippets(), None);
+        assert_eq!(etiquetas(&ficha), ["ninguno", "limpiar tmp", "tail log"]);
+        assert_eq!(ficha.snippet.ids, [None, Some(1), Some(4)]);
+    }
+
+    /// El que ya tenía el host y ha dejado de ser apto se ve (para quitarlo),
+    /// pero al elegir otro desaparece y no se puede volver a él.
+    #[test]
+    fn un_snippet_que_dejo_de_ser_apto_se_ve_y_no_se_puede_volver_a_elegir() {
+        let mut host = crate::modelo::host_de_prueba();
+        host.snippet_al_conectar_id = Some(2);
+        let mut ficha = ficha_con(Some(&host), &snippets(), None);
+        assert_eq!(
+            etiquetas(&ficha),
+            ["ninguno", "reiniciar (no apto)", "limpiar tmp", "tail log"]
+        );
+        assert_eq!(ficha.snippet_al_conectar(), Some(2));
+        assert!(ficha.snippet.en_no_apto());
+        assert!(!ficha.sucio(), "enseñarlo no es cambiarlo");
+
+        ir_a(&mut ficha, CampoFicha::Snippet);
+        pulsar(&mut ficha, KeyCode::Enter);
+        assert_eq!(ficha.desplegable_abierto, Some(CampoFicha::Snippet));
+        pulsar(&mut ficha, KeyCode::Down);
+        pulsar(&mut ficha, KeyCode::Down);
+        pulsar(&mut ficha, KeyCode::Enter);
+        assert_eq!(ficha.desplegable_abierto, None);
+        assert_eq!(ficha.snippet_al_conectar(), Some(1));
+        assert_eq!(etiquetas(&ficha), ["ninguno", "limpiar tmp", "tail log"]);
+        assert!(!ficha.snippet.en_no_apto());
+        assert!(ficha.sucio());
+
+        // Quitarlo del todo: «ninguno».
+        pulsar(&mut ficha, KeyCode::Enter);
+        pulsar(&mut ficha, KeyCode::Enter);
+        assert_eq!(ficha.snippet_al_conectar(), None);
+    }
+
+    #[test]
+    fn un_snippet_que_ya_no_existe_se_marca_no_apto() {
+        let mut host = crate::modelo::host_de_prueba();
+        host.snippet_al_conectar_id = Some(99);
+        let ficha = ficha_con(Some(&host), &snippets(), None);
+        assert_eq!(
+            ficha.snippet.desplegable.etiqueta_seleccionada(),
+            "snippet #99 · ya no existe (no apto)"
+        );
+        assert_eq!(ficha.snippet_al_conectar(), Some(99));
+        assert!(!ficha.sucio());
+    }
+
+    #[test]
+    fn el_tabulador_recorre_los_campos_nuevos_en_orden() {
+        let mut ficha = ficha_con(None, &snippets(), None);
+        ir_a(&mut ficha, CampoFicha::Salto);
+        let esperados = [
+            CampoFicha::Snippet,
+            CampoFicha::Multiplexar,
+            CampoFicha::Mantener,
+            CampoFicha::Keepalive,
+            CampoFicha::Salud,
+            CampoFicha::Backup,
+            CampoFicha::BackupRuta,
+            CampoFicha::BackupPatron,
+            CampoFicha::Tests,
+            CampoFicha::TestsComando,
+            CampoFicha::Servicios,
+        ];
+        for esperado in esperados {
+            pulsar(&mut ficha, KeyCode::Tab);
+            assert_eq!(ficha.campo, esperado);
+        }
+        pulsar(&mut ficha, KeyCode::BackTab);
+        assert_eq!(ficha.campo, CampoFicha::TestsComando);
+    }
+
+    #[test]
+    fn marcar_una_casilla_de_verificacion_ensucia_la_ficha() {
+        let mut host = crate::modelo::host_de_prueba();
+        host.snippet_al_conectar_id = None;
+        let mut ficha = ficha_con(Some(&host), &snippets(), None);
+        for campo in [CampoFicha::Salud, CampoFicha::Backup, CampoFicha::Tests] {
+            ir_a(&mut ficha, campo);
+            pulsar(&mut ficha, KeyCode::Char(' '));
+            assert!(ficha.sucio(), "{campo:?} marcada");
+            pulsar(&mut ficha, KeyCode::Char(' '));
+            assert!(!ficha.sucio(), "{campo:?} desmarcada otra vez");
+        }
+        // El texto de una verificación desmarcada también es un cambio: se
+        // conserva aunque no se exija.
+        ir_a(&mut ficha, CampoFicha::BackupRuta);
+        escribir(&mut ficha, "/srv/copias");
+        assert!(!ficha.backup);
+        assert_eq!(
+            ficha.datos_verificaciones().backup_ruta.as_deref(),
+            Some("/srv/copias")
+        );
+        assert!(ficha.sucio());
+        // Esc con cambios pregunta antes de descartar.
+        assert!(matches!(
+            pulsar(&mut ficha, KeyCode::Esc),
+            AccionFicha::DescartarConCambios
+        ));
+    }
+
+    #[test]
+    fn en_los_campos_de_verificacion_el_espacio_es_texto() {
+        let mut ficha = ficha_con(None, &snippets(), None);
+        ir_a(&mut ficha, CampoFicha::TestsComando);
+        escribir(&mut ficha, "make test");
+        assert!(!ficha.tests);
+        assert_eq!(ficha.tests_comando.texto, "make test");
+    }
+
+    #[test]
+    fn backup_sin_ruta_y_tests_sin_comando_no_validan() {
+        let mut ficha = ficha_con(None, &snippets(), None);
+        // Desmarcadas no se exige nada.
+        assert!(validar_verificaciones(&ficha.datos_verificaciones()).is_ok());
+
+        ir_a(&mut ficha, CampoFicha::Backup);
+        pulsar(&mut ficha, KeyCode::Char(' '));
+        let error = validar_verificaciones(&ficha.datos_verificaciones()).unwrap_err();
+        assert!(error.contains("backup"), "{error}");
+        // Solo espacios es lo mismo que nada.
+        ir_a(&mut ficha, CampoFicha::BackupRuta);
+        escribir(&mut ficha, "   ");
+        assert!(validar_verificaciones(&ficha.datos_verificaciones()).is_err());
+        escribir(&mut ficha, "/var/backups/pg");
+        assert!(validar_verificaciones(&ficha.datos_verificaciones()).is_ok());
+
+        ir_a(&mut ficha, CampoFicha::Tests);
+        pulsar(&mut ficha, KeyCode::Char(' '));
+        let error = validar_verificaciones(&ficha.datos_verificaciones()).unwrap_err();
+        assert!(error.contains("comando"), "{error}");
+        ir_a(&mut ficha, CampoFicha::TestsComando);
+        escribir(&mut ficha, "true");
+        assert!(validar_verificaciones(&ficha.datos_verificaciones()).is_ok());
+    }
+
+    fn almacen_con_host() -> (Almacen, i64) {
+        let almacen = Almacen::abrir_en_memoria().unwrap();
+        let datos = DatosHost {
+            nombre: "db1".to_string(),
+            direccion: "10.0.0.5".to_string(),
+            ..DatosHost::default()
+        };
+        let id = almacen.crear_host(&datos, Origen::Manual).unwrap();
+        (almacen, id)
+    }
+
+    #[test]
+    fn lo_que_va_aparte_del_host_se_guarda_y_sin_cambios_no_se_toca() {
+        let (almacen, host_id) = almacen_con_host();
+        let snippet_id = almacen
+            .crear_snippet(&crate::snippets::DatosSnippet {
+                nombre: "tail log".to_string(),
+                comando: "tail -f /var/log/syslog".to_string(),
+                destinos: vec![crate::snippets::Destino::Etiqueta("web".to_string())],
+                ..crate::snippets::DatosSnippet::default()
+            })
+            .unwrap();
+        let escrito = guardar_aparte_de_host(
+            &almacen,
+            host_id,
+            Some(Some(snippet_id)),
+            Some(&verificaciones()),
+        );
+        assert!(escrito.fallos.is_empty(), "{:?}", escrito.fallos);
+        assert!(escrito.snippet && escrito.verificaciones);
+        let host = almacen.obtener_host(host_id).unwrap();
+        assert_eq!(host.snippet_al_conectar_id, Some(snippet_id));
+        let guardadas = almacen.verificaciones_de_host(host_id).unwrap().unwrap();
+        assert_eq!(guardadas.datos(), verificaciones());
+
+        let escrito = guardar_aparte_de_host(&almacen, host_id, None, None);
+        assert!(escrito.fallos.is_empty());
+        assert!(!escrito.snippet && !escrito.verificaciones);
+        assert_eq!(
+            almacen
+                .obtener_host(host_id)
+                .unwrap()
+                .snippet_al_conectar_id,
+            Some(snippet_id)
+        );
+
+        // Quitarlo es escribir `None`.
+        let escrito = guardar_aparte_de_host(&almacen, host_id, Some(None), None);
+        assert!(escrito.snippet);
+        assert_eq!(
+            almacen
+                .obtener_host(host_id)
+                .unwrap()
+                .snippet_al_conectar_id,
+            None
+        );
+    }
+
+    /// Si una escritura falla se dice (la ficha no se cierra como si todo
+    /// hubiera ido bien) y la otra no se pierde.
+    #[test]
+    fn un_fallo_de_una_escritura_se_informa_y_no_se_lleva_la_otra() {
+        let (almacen, host_id) = almacen_con_host();
+        // Un snippet que no existe (borrado desde otra ventana): la clave
+        // ajena lo rechaza.
+        let escrito =
+            guardar_aparte_de_host(&almacen, host_id, Some(Some(999)), Some(&verificaciones()));
+        assert_eq!(escrito.fallos.len(), 1, "{:?}", escrito.fallos);
+        assert!(escrito.fallos[0].contains("snippet al conectar"));
+        assert!(!escrito.snippet);
+        assert!(escrito.verificaciones);
+        assert_eq!(
+            almacen
+                .obtener_host(host_id)
+                .unwrap()
+                .snippet_al_conectar_id,
+            None
+        );
+        assert!(almacen.verificaciones_de_host(host_id).unwrap().is_some());
+
+        let invalidas = DatosVerificaciones {
+            backup: true,
+            ..DatosVerificaciones::default()
+        };
+        let escrito = guardar_aparte_de_host(&almacen, host_id, None, Some(&invalidas));
+        assert_eq!(escrito.fallos.len(), 1);
+        assert!(escrito.fallos[0].contains("verificaciones previas"));
+        assert!(!escrito.verificaciones);
+        // Lo que había se queda.
+        assert_eq!(
+            almacen
+                .verificaciones_de_host(host_id)
+                .unwrap()
+                .unwrap()
+                .datos(),
+            verificaciones()
+        );
     }
 }
 
@@ -929,6 +1524,12 @@ pub enum AccionDialogo {
         id: i64,
         host_id: i64,
     },
+    /// Acciones confirmadas de la vista Snippets (Fase 6).
+    Snippets(AccionSnippets),
+    /// Lanzamiento de snippets (Fase 6): `p` con más de cinco hosts.
+    Lanzar(AccionLanzar),
+    /// Vista Resultados (Fase 6): cancelar, sobrescribir la salida.
+    Resultados(AccionResultados),
 }
 
 pub enum EntradaTextoAccion {
@@ -947,9 +1548,18 @@ pub enum EntradaTextoAccion {
     RenombrarGrupo(i64),
     ImportarClave,
     EditarAliasIdentidad(i64),
+    /// `s` en Resultados: guardar la salida de estos hosts (fijados al abrir).
+    GuardarSalida {
+        ejecucion_id: u32,
+        host_ids: Vec<i64>,
+    },
 }
 
 pub enum Dialogo {
+    /// Diálogos de la vista Snippets (formulario).
+    Snippets(DialogoSnippets),
+    /// Diálogo EJECUTAR: hosts, variables y «parar al primer fallo».
+    Ejecutar(DialogoEjecutar),
     Confirmar {
         titulo: String,
         lineas: Vec<String>,
@@ -1157,6 +1767,10 @@ pub enum AccionPaleta {
     IrATuneles,
     /// Abrir el diálogo de túnel nuevo.
     NuevoTunel,
+    /// Entradas de la vista Snippets (Fase 6).
+    Snippets(AccionPaletaSnippets),
+    /// `snippet · <nombre>` y `snippet · <nombre> · <host>`.
+    Lanzar(AccionPaletaLanzar),
 }
 
 pub struct PaletaCmd {
@@ -1223,6 +1837,8 @@ pub struct App {
     pub desplazamiento: usize,
     pub columna_etiquetas: bool,
     pub ficha: Option<Ficha>,
+    /// Deliberación MAGI abierta (modal sobre cualquier vista).
+    pub deliberacion: Option<DeliberacionAbierta>,
     pub paleta: Option<PaletaCmd>,
     pub ayuda: bool,
     pub dialogo: Option<Dialogo>,
@@ -1236,6 +1852,8 @@ pub struct App {
     /// El servidor habla otra versión de protocolo.
     /// Versión del servidor cuando habla otra distinta de la nuestra.
     pub servidor_incompatible: Option<u32>,
+    /// Pid del servidor de otra versión, para decir a quién hay que parar.
+    pub pid_incompatible: Option<u32>,
     /// El servidor ha caído (pendiente del diálogo de relanzado).
     pub servidor_caido: bool,
     /// Sesiones que el servidor perdió al caer (para el diálogo).
@@ -1314,6 +1932,15 @@ pub struct App {
     /// Operaciones de túnel en vuelo, por `peticion_id`.
     peticiones_tunel: HashMap<u64, PeticionTunel>,
     siguiente_peticion_tunel: u64,
+    /// Vista Snippets (F8, Fase 6).
+    pub snippets: EstadoSnippets,
+    /// Vista Resultados (subvista de F8).
+    pub resultados: EstadoResultados,
+    /// Lanzamiento de snippets: atajos de Flota y pestañas en seguimiento.
+    pub lanzar: EstadoLanzar,
+    /// Diálogos tapados por una pregunta del servidor (huella, frase,
+    /// contraseña): vuelven al cerrarse la de encima, en vez de perderse.
+    pila_dialogos: Vec<Dialogo>,
 }
 
 impl App {
@@ -1355,6 +1982,7 @@ impl App {
             desplazamiento: 0,
             columna_etiquetas: false,
             ficha: None,
+            deliberacion: None,
             paleta: None,
             ayuda: false,
             dialogo: None,
@@ -1363,6 +1991,7 @@ impl App {
             pestana_activa: None,
             servidor: cliente::Cliente::sin_servidor(),
             servidor_incompatible: None,
+            pid_incompatible: None,
             servidor_caido: false,
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
@@ -1417,11 +2046,19 @@ impl App {
             // empieza en 0, así que el de túneles arranca muy por encima para
             // que no puedan confundirse nunca (nadie llega a 2^40 peticiones).
             siguiente_peticion_tunel: 1 << 40,
+            snippets: EstadoSnippets::default(),
+            resultados: EstadoResultados::default(),
+            lanzar: EstadoLanzar::default(),
+            pila_dialogos: Vec::new(),
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
-        if let Some(aviso) = aviso_inicial {
-            app.mensaje(aviso, true);
+        app.recargar_snippets();
+        // Atajos de Flota: los que no valen se ignoran con aviso al arrancar.
+        let mut avisos: Vec<String> = aviso_inicial.into_iter().collect();
+        avisos.extend(app.validar_atajos_flota());
+        if !avisos.is_empty() {
+            app.mensaje(avisos.join(" · "), true);
         }
         lanzar_hilo_teclas(
             eventos_tx.clone(),
@@ -1445,8 +2082,9 @@ impl App {
                 app.servidor = servidor;
                 app.servidor_desde = Some(Instant::now());
             }
-            Err(cliente::FalloConexion::VersionIncompatible { version }) => {
+            Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
                 app.servidor_incompatible = Some(version);
+                app.pid_incompatible = pid;
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
                 app.mensaje(motivo, true);
@@ -1592,6 +2230,10 @@ impl App {
                 self.sucio = true;
                 self.sondeo_recibido(sondeo);
             }
+            Evento::Deliberacion(resultado) => {
+                self.sucio = true;
+                self.resultado_deliberacion(resultado);
+            }
             Evento::ClaveGenerada(resultado) => {
                 self.sucio = true;
                 self.evento_clave_generada(resultado);
@@ -1602,6 +2244,9 @@ impl App {
     fn tick(&mut self) {
         if let Some(estado) = &mut self.archivos {
             estado.muestrear(Instant::now());
+        }
+        if self.tick_resultados() | self.tick_lanzar() {
+            self.sucio = true;
         }
         self.contador_ticks += 1;
         if let Some(mensaje) = &self.mensaje {
@@ -1815,6 +2460,12 @@ impl App {
             }
             return;
         }
+        if tecla.code == KeyCode::Char('!') && !self.filtro_activo {
+            if let Some(host_id) = self.host_seleccionado().map(|host| host.id) {
+                self.paleta_snippets_de_host(host_id);
+            }
+            return;
+        }
         if self.filtro_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -1929,20 +2580,31 @@ impl App {
     /// Pide al servidor una sesión nueva al host (↵ en Hosts y Flota,
     /// paleta, `magi conectar`); siempre abre una nueva.
     fn conectar(&mut self, host_id: i64) {
+        let comandos = self.comandos_al_conectar(host_id);
+        self.abrir_sesion_con(host_id, comandos);
+    }
+
+    /// Pide una pestaña al host con sus comandos iniciales (snippet al
+    /// conectar, «abrir en pestaña»); devuelve si se pidió.
+    fn abrir_sesion_con(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+    ) -> bool {
         if self.servidor_incompatible.is_some() {
             self.mensaje(
                 "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
                 true,
             );
-            return;
+            return false;
         }
         if self.servidor_caido {
             self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
-            return;
+            return false;
         }
         if self.aperturas_pendientes.contains(&host_id) {
             self.mensaje("ya hay una conexión en curso con ese host", true);
-            return;
+            return false;
         }
         let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
         self.servidor
@@ -1950,6 +2612,7 @@ impl App {
                 host_id,
                 cols,
                 filas: alto_pty(filas),
+                comandos_iniciales,
             });
         self.aperturas_pendientes.insert(host_id);
         let nombre = self
@@ -1960,6 +2623,7 @@ impl App {
             .unwrap_or_default();
         self.mensaje(format!("conectando con «{nombre}»…"), false);
         self.sucio = true;
+        true
     }
 
     fn iniciar_conexion(&mut self, host: Host, solo_prueba: bool) {
@@ -2060,6 +2724,11 @@ impl App {
                     foco_casilla: false,
                     responder,
                 });
+            }
+            // Solo lo emiten las conexiones automáticas del servidor; una
+            // conexión de la TUI nunca lo pide. Por si acaso, «no la tengo».
+            EventoConexion::PideContrasenaLlavero { responder, .. } => {
+                let _ = responder.send(None);
             }
             EventoConexion::ContrasenaGuardada {
                 host_id,
@@ -2294,7 +2963,7 @@ impl App {
                 tipo_clave: tipo,
                 huella,
             } => {
-                self.dialogo = Some(Dialogo::HuellaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::HuellaServidor {
                     sesion_id,
                     host,
                     tipo,
@@ -2308,7 +2977,7 @@ impl App {
                 anterior,
                 nueva,
             } => {
-                self.dialogo = Some(Dialogo::HuellaCambiadaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::HuellaCambiadaServidor {
                     sesion_id,
                     host,
                     tipo,
@@ -2322,7 +2991,7 @@ impl App {
                 host,
                 intento,
             } => {
-                self.dialogo = Some(Dialogo::FraseServidor {
+                self.mostrar_dialogo_servidor(Dialogo::FraseServidor {
                     sesion_id,
                     host,
                     intento,
@@ -2340,7 +3009,7 @@ impl App {
                 if intento == 1 && self.intentar_llavero(sesion_id, &host) {
                     return;
                 }
-                self.dialogo = Some(Dialogo::ContrasenaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::ContrasenaServidor {
                     sesion_id,
                     host,
                     intento,
@@ -2354,8 +3023,10 @@ impl App {
                 cliente_id,
                 sesiones,
                 tuneles,
+                ejecuciones,
                 ..
             } => {
+                self.actualizar_ejecuciones(ejecuciones);
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
@@ -2381,16 +3052,30 @@ impl App {
                         self.mensaje(format!("{}: {mensaje}", peticion.etiqueta()), true);
                         return;
                     }
+                    // Tampoco lo es una ejecución de snippets (su rango).
+                    if self.error_de_ejecucion(peticion_id, &mensaje) {
+                        return;
+                    }
                 }
                 self.error_de_archivos(mensaje, peticion_id);
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
+            protocolo::MensajeServidor::PideLlavero {
+                sesion_id,
+                host,
+                usuario,
+            } => {
+                self.responder_con_llavero(sesion_id, host, usuario);
+            }
+            // Con `peticion_id` es de una comprobación (lo recoge quien espera).
             protocolo::MensajeServidor::SftpAbierto {
                 host_id,
                 dir_inicio,
+                peticion_id: None,
             } => {
                 self.sftp_abierto(host_id, dir_inicio);
             }
+            protocolo::MensajeServidor::SftpAbierto { .. } => {}
             protocolo::MensajeServidor::DirListado {
                 host_id,
                 ruta,
@@ -2408,7 +3093,9 @@ impl App {
             protocolo::MensajeServidor::Hecho { peticion_id } => {
                 // Las peticiones de túnel se resuelven aquí; el resto son de
                 // la vista Archivos.
-                if self.peticiones_tunel.remove(&peticion_id).is_none() {
+                if self.peticiones_tunel.remove(&peticion_id).is_none()
+                    && !self.hecho_de_ejecucion(peticion_id)
+                {
                     self.hecho_de_archivos(peticion_id);
                 }
             }
@@ -2436,11 +3123,46 @@ impl App {
                 }
                 self.peticion_pager = Some(crate::visor::Peticion::temporal(&ruta));
             }
+            protocolo::MensajeServidor::Ejecuciones { lista } => {
+                self.actualizar_ejecuciones(lista);
+            }
+            protocolo::MensajeServidor::Salida {
+                ejecucion_id,
+                host_id,
+                stdout,
+                stderr,
+                truncada,
+            } => {
+                self.salida_recibida(ejecucion_id, host_id, stdout.0, stderr.0, truncada);
+            }
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
         }
+    }
+
+    /// Una conexión automática del servidor (una ejecución) pide la
+    /// contraseña del llavero: se contesta sin diálogo, desde una tarea (el
+    /// llavero puede tardar), con la contraseña o con `Cerrar` si no la hay.
+    fn responder_con_llavero(&mut self, sesion_id: u32, host: String, usuario: String) {
+        let servidor = self.servidor.clone();
+        self.runtime.spawn(async move {
+            let encontrada = tokio::task::spawn_blocking(move || {
+                crate::llavero::recuperar(&host, &usuario).ok().flatten()
+            })
+            .await
+            .ok()
+            .flatten();
+            match encontrada {
+                Some(contrasena) => servidor.enviar(protocolo::MensajeCliente::Contrasena {
+                    sesion_id,
+                    contrasena: protocolo::Secreto::nuevo(contrasena.as_str()),
+                    recordar: false,
+                }),
+                None => servidor.enviar(protocolo::MensajeCliente::Cerrar { sesion_id }),
+            }
+        });
     }
 
     /// Contraseña del llavero para una sesión que la pide; devuelve si se ha
@@ -2452,7 +3174,9 @@ impl App {
         if ficha.identidad_ref != IdentidadRef::ContrasenaLlavero {
             return false;
         }
-        let usuario = ficha.usuario.clone().unwrap_or_default();
+        // El mismo usuario con el que se guardó: el de la ficha o, sin él, el
+        // local (como hace la conexión al autenticar).
+        let usuario = ficha.usuario.clone().unwrap_or_else(usuario_local);
         let Ok(Some(contrasena)) = crate::llavero::recuperar(host, &usuario) else {
             return false;
         };
@@ -2555,7 +3279,37 @@ impl App {
                 }
             }
         }
+        self.revisar_pestanas_snippet();
+        self.purgar_dialogos_sin_sesion();
         self.sucio = true;
+    }
+
+    /// Una pregunta del servidor (huella, frase, contraseña) no pisa el
+    /// diálogo abierto: lo aparta a la pila y vuelve cuando esta se cierre.
+    fn mostrar_dialogo_servidor(&mut self, dialogo: Dialogo) {
+        if let Some(abierto) = self.dialogo.take() {
+            self.pila_dialogos.push(abierto);
+        }
+        self.dialogo = Some(dialogo);
+    }
+
+    /// Tras cerrar un diálogo, vuelve el que se apartó (el más reciente).
+    fn restaurar_dialogo_apilado(&mut self) {
+        if self.dialogo.is_none() {
+            self.dialogo = self.pila_dialogos.pop();
+        }
+    }
+
+    /// Las preguntas apartadas de una sesión que ya no existe no se enseñan.
+    fn purgar_dialogos_sin_sesion(&mut self) {
+        let vivas: HashSet<u32> = self.pestanas.iter().map(|p| p.sesion_id).collect();
+        self.pila_dialogos.retain(|dialogo| match dialogo {
+            Dialogo::HuellaServidor { sesion_id, .. }
+            | Dialogo::HuellaCambiadaServidor { sesion_id, .. }
+            | Dialogo::FraseServidor { sesion_id, .. }
+            | Dialogo::ContrasenaServidor { sesion_id, .. } => vivas.contains(sesion_id),
+            _ => true,
+        });
     }
 
     /// Tras abrir con «recordar»: guarda en el llavero y marca la identidad.
@@ -2696,6 +3450,17 @@ impl App {
         // enseñándolos activos y los glifos de Hosts y Flota mentirían.
         self.tuneles_activos.clear();
         self.peticiones_tunel.clear();
+        self.resultados_servidor_caido();
+        // Las preguntas del servidor ya no tienen a quién contestar.
+        self.pila_dialogos.retain(|dialogo| {
+            !matches!(
+                dialogo,
+                Dialogo::HuellaServidor { .. }
+                    | Dialogo::HuellaCambiadaServidor { .. }
+                    | Dialogo::FraseServidor { .. }
+                    | Dialogo::ContrasenaServidor { .. }
+            )
+        });
         self.anotar(
             crate::registro::SERVIDOR_CAIDO,
             None,
@@ -2833,18 +3598,64 @@ impl App {
                 return;
             }
         };
-        self.ficha = Some(self.construir_ficha(Some(&host), host.grupo_id));
+        // Sin saber qué verificaciones tiene el host no se abre: la ficha las
+        // enseñaría desmarcadas y `^s` las borraría.
+        let verificaciones = match self.almacen.verificaciones_de_host(host.id) {
+            Ok(verificaciones) => verificaciones.map(|verificaciones| verificaciones.datos()),
+            Err(error) => {
+                self.mensaje(
+                    format!("no se pudieron leer las verificaciones previas: {error}"),
+                    true,
+                );
+                return;
+            }
+        };
+        self.ficha = Some(self.construir_ficha(Some(&host), host.grupo_id, verificaciones));
         self.vista = Vista::Ficha;
         self.refrescar_identidades();
     }
 
     fn abrir_ficha_nueva(&mut self, grupo_id: Option<i64>) {
-        self.ficha = Some(self.construir_ficha(None, grupo_id));
+        self.ficha = Some(self.construir_ficha(None, grupo_id, None));
         self.vista = Vista::Ficha;
         self.refrescar_identidades();
     }
 
-    fn construir_ficha(&self, host: Option<&Host>, grupo_id: Option<i64>) -> Ficha {
+    fn construir_ficha(
+        &self,
+        host: Option<&Host>,
+        grupo_id: Option<i64>,
+        verificaciones: Option<crate::deliberacion::DatosVerificaciones>,
+    ) -> Ficha {
+        // La lista se relee: otra ventana puede haber tocado los snippets. Si
+        // no se puede, vale la de la vista Snippets (solo da las opciones).
+        let snippets = self
+            .almacen
+            .listar_snippets()
+            .unwrap_or_else(|_| self.snippets.lista.clone());
+        Self::ficha_de(
+            host,
+            grupo_id,
+            &self.grupos,
+            &self.hosts,
+            self.opciones_identidad(),
+            &snippets,
+            verificaciones,
+        )
+    }
+
+    /// La ficha de `host` (o una nueva en `grupo_id`) a partir de lo que la
+    /// rodea, sin tocar la `App`. `verificaciones` es lo que hay en
+    /// `VERIFICACIONES_HOST` (`None`: sin fila, ninguna).
+    pub(crate) fn ficha_de(
+        host: Option<&Host>,
+        grupo_id: Option<i64>,
+        grupos: &[Grupo],
+        hosts: &[Host],
+        opciones_identidad: Vec<Opcion>,
+        snippets: &[crate::snippets::Snippet],
+        verificaciones: Option<crate::deliberacion::DatosVerificaciones>,
+    ) -> Ficha {
         let datos = host
             .map(|host| DatosHost {
                 nombre: host.nombre.clone(),
@@ -2864,12 +3675,12 @@ impl App {
                 grupo_id,
                 ..DatosHost::default()
             });
-        let mut grupo = Desplegable::nuevo(opciones_grupo(&self.grupos));
+        let mut grupo = Desplegable::nuevo(opciones_grupo(grupos));
         grupo.seleccionar_valor(&match datos.grupo_id {
             Some(id) => ValorOpcion::Grupo(id),
             None => ValorOpcion::Ninguno,
         });
-        let mut identidad = Desplegable::nuevo(self.opciones_identidad());
+        let mut identidad = Desplegable::nuevo(opciones_identidad);
         identidad.seleccionar_valor(&ValorOpcion::Identidad(datos.identidad_ref.clone()));
         if !identidad
             .opciones
@@ -2883,12 +3694,18 @@ impl App {
                     valor: ValorOpcion::Identidad(datos.identidad_ref.clone()),
                 },
             );
+            // Seleccionada, no solo añadida: si no, la ficha enseñaba «auto» y
+            // guardar cambiaba la identidad del host sin que nadie la tocara.
+            identidad.seleccionar_valor(&ValorOpcion::Identidad(datos.identidad_ref.clone()));
         }
-        let mut salto = Desplegable::nuevo(opciones_salto(&self.hosts, host.map(|h| h.id)));
+        let mut salto = Desplegable::nuevo(opciones_salto(hosts, host.map(|h| h.id)));
         salto.seleccionar_valor(&match datos.salto_host_id {
             Some(id) => ValorOpcion::Salto(id),
             None => ValorOpcion::Ninguno,
         });
+        let snippet_original = host.and_then(|host| host.snippet_al_conectar_id);
+        let verificaciones = verificaciones.unwrap_or_default().normalizada();
+        let texto = |valor: &Option<String>| CampoTexto::nuevo(valor.clone().unwrap_or_default());
         Ficha {
             host_id: host.map(|host| host.id),
             original: datos.clone(),
@@ -2916,6 +3733,15 @@ impl App {
             salto,
             multiplexar: datos.multiplexar,
             mantener: datos.keepalive_seg.is_some(),
+            snippet: SelectorSnippet::nuevo(snippets, snippet_original),
+            snippet_original,
+            salud: verificaciones.salud,
+            backup: verificaciones.backup,
+            backup_ruta: texto(&verificaciones.backup_ruta),
+            backup_patron: texto(&verificaciones.backup_patron),
+            tests: verificaciones.tests,
+            tests_comando: texto(&verificaciones.tests_comando),
+            verificaciones_original: verificaciones,
             desplegable_abierto: None,
             sugerencias: Vec::new(),
             indice_sugerencia: 0,
@@ -3199,7 +4025,17 @@ impl App {
         };
         let host_id = ficha.host_id;
         let mut datos = ficha.datos();
+        let datos_formulario = datos.clone();
+        // Lo que va aparte de `DatosHost`: solo se escribe si ha cambiado.
+        let snippet = ficha.snippet_al_conectar();
+        let snippet_cambiado = snippet != ficha.snippet_original;
+        let verificaciones = ficha.datos_verificaciones();
+        let verificaciones_cambiadas = verificaciones != ficha.verificaciones_original;
         if let Err(motivo) = self.validar_ficha(&datos, host_id) {
+            self.mensaje(motivo, true);
+            return;
+        }
+        if let Err(motivo) = crate::deliberacion::validar_verificaciones(&verificaciones) {
             self.mensaje(motivo, true);
             return;
         }
@@ -3210,45 +4046,96 @@ impl App {
             Some(id) => self.almacen.actualizar_host(id, &datos).map(|_| id),
             None => self.almacen.crear_host(&datos, Origen::Manual),
         };
-        match resultado {
-            Ok(id) => {
-                let aviso_clave = match &datos.identidad_ref {
-                    IdentidadRef::Agente(huella) => {
-                        let cargada = self
-                            .identidades
-                            .agente
-                            .as_ref()
-                            .is_some_and(|agente| agente.iter().any(|c| &c.huella == huella));
-                        if cargada {
-                            None
-                        } else {
-                            Some(format!(
-                                "la clave {} no está en el agente ahora mismo",
-                                acorta_huella(huella)
-                            ))
-                        }
-                    }
-                    _ => None,
-                };
-                self.ficha = None;
-                self.vista = Vista::Hosts;
-                if let Err(error) = self.recargar_inventario() {
-                    self.mensaje(error.to_string(), true);
-                    return;
-                }
-                self.seleccionar_host_id(id);
-                let mut texto = "host guardado".to_string();
-                if let Some(aviso) = aviso_clave {
-                    texto.push_str(" · ");
-                    texto.push_str(&aviso);
-                }
-                self.mensaje(texto, false);
-                if self.config.exportar_al_guardar {
-                    self.exportar(true, true);
+        let id = match resultado {
+            Ok(id) => id,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                return;
+            }
+        };
+        // Un host nuevo ya tiene id: el snippet y las verificaciones van
+        // detrás, cada uno con su escritura.
+        let escrito = guardar_aparte_de_host(
+            &self.almacen,
+            id,
+            snippet_cambiado.then_some(snippet),
+            verificaciones_cambiadas.then_some(&verificaciones),
+        );
+        if let Some(ficha) = &mut self.ficha {
+            if escrito.snippet {
+                ficha.snippet_original = snippet;
+            }
+            if escrito.verificaciones {
+                ficha.verificaciones_original = verificaciones;
+            }
+        }
+        if escrito.verificaciones {
+            // La vista Snippets dice con ellas si una ejecución pasará por la
+            // deliberación.
+            self.recargar_snippets();
+        }
+        if !escrito.fallos.is_empty() {
+            self.ficha_guardada_a_medias(id, datos_formulario, &escrito.fallos);
+            return;
+        }
+        let aviso_clave = match &datos.identidad_ref {
+            IdentidadRef::Agente(huella) => {
+                let cargada = self
+                    .identidades
+                    .agente
+                    .as_ref()
+                    .is_some_and(|agente| agente.iter().any(|c| &c.huella == huella));
+                if cargada {
+                    None
+                } else {
+                    Some(format!(
+                        "la clave {} no está en el agente ahora mismo",
+                        acorta_huella(huella)
+                    ))
                 }
             }
-            Err(error) => self.mensaje(error.to_string(), true),
+            _ => None,
+        };
+        self.ficha = None;
+        self.vista = Vista::Hosts;
+        if let Err(error) = self.recargar_inventario() {
+            self.mensaje(error.to_string(), true);
+            return;
         }
+        self.seleccionar_host_id(id);
+        let mut texto = "host guardado".to_string();
+        if let Some(aviso) = aviso_clave {
+            texto.push_str(" · ");
+            texto.push_str(&aviso);
+        }
+        self.mensaje(texto, false);
+        if self.config.exportar_al_guardar {
+            self.exportar(true, true);
+        }
+    }
+
+    /// `^s` con el host guardado pero sin alguna de las escrituras que van
+    /// aparte (snippet al conectar, verificaciones previas): la ficha no se
+    /// cierra como si todo hubiera ido bien. Sigue abierta sobre el host ya
+    /// guardado —un segundo `^s` no lo crea otra vez— y solo queda «sucio»
+    /// lo que ha fallado. `formulario` es la parte `DatosHost` tal como está
+    /// en la ficha (sin normalizar), que ya es lo guardado.
+    fn ficha_guardada_a_medias(&mut self, id: i64, formulario: DatosHost, fallos: &[String]) {
+        if let Some(ficha) = &mut self.ficha {
+            ficha.host_id = Some(id);
+            ficha.titulo = formulario.nombre.clone();
+            ficha.original = formulario;
+        }
+        let mut texto = format!("host guardado · {}", fallos.join(" · "));
+        if let Err(error) = self.recargar_inventario() {
+            texto.push_str(&format!(" · {error}"));
+        }
+        // El host sí ha cambiado: `magi_config` lo sigue, sin preguntar por el
+        // Include para no tapar el error con un diálogo.
+        if self.config.exportar_al_guardar {
+            self.exportar(false, true);
+        }
+        self.mensaje(texto, true);
     }
 
     fn probar_ficha(&mut self) {
@@ -3295,6 +4182,7 @@ impl App {
             salto_nombre: None,
             sftp_dir_local: None,
             sftp_dir_remoto: None,
+            snippet_al_conectar_id: None,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);
@@ -3598,6 +4486,8 @@ impl App {
             categoria: "túneles",
             accion: AccionPaleta::NuevoTunel,
         });
+        entradas.extend(self.entradas_paleta_snippets());
+        entradas.extend(self.entradas_paleta_lanzar());
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
             categoria: "acción",
@@ -3846,6 +4736,16 @@ impl App {
                         self.ir_a_vista(Vista::Tuneles);
                         self.nuevo_tunel();
                     }
+                    Some(AccionPaleta::Snippets(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_snippets(accion);
+                    }
+                    Some(AccionPaleta::Lanzar(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_lanzar(accion);
+                    }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
                         let sesiones = self.pestanas.len();
@@ -3942,6 +4842,8 @@ impl App {
             // necesita saber con qué host.
             Vista::Archivos | Vista::Transferencias => self.abrir_archivos(None),
             Vista::Tuneles => self.ir_a_tuneles(),
+            Vista::Snippets => self.ir_a_snippets(),
+            Vista::Resultados => self.ir_a_resultados(),
         }
     }
 
@@ -4955,15 +5857,7 @@ impl App {
                 continue;
             };
             self.sondeando.insert(id);
-            peticiones.push(PeticionSondeo {
-                servicios: modelo::servicios_de(&host),
-                host,
-                todos_los_hosts: todos.clone(),
-                known_hosts: self.rutas.fichero_known_hosts(),
-                dir_ssh: self.rutas.dir_ssh(),
-                hogar: self.rutas.hogar.clone(),
-                usuario_local: usuario_local(),
-            });
+            peticiones.push(self.peticion_de_sondeo(host, &todos));
         }
         if peticiones.is_empty() {
             return;
@@ -4995,9 +5889,29 @@ impl App {
         );
     }
 
+    /// Todo lo necesario para sondear un host (Flota y MELCHIOR-1).
+    fn peticion_de_sondeo(&self, host: Host, todos: &HashMap<i64, Host>) -> PeticionSondeo {
+        PeticionSondeo {
+            servicios: modelo::servicios_de(&host),
+            host,
+            todos_los_hosts: todos.clone(),
+            known_hosts: self.rutas.fichero_known_hosts(),
+            dir_ssh: self.rutas.dir_ssh(),
+            hogar: self.rutas.hogar.clone(),
+            usuario_local: usuario_local(),
+        }
+    }
+
+    /// Sondeo de un lote de Flota: cuenta para el progreso y se registra.
     fn sondeo_recibido(&mut self, sondeo: Sondeo) {
         self.sondeando.remove(&sondeo.host_id);
         self.sondeo_hechos = self.sondeo_hechos.saturating_add(1);
+        self.registrar_sondeo(sondeo);
+    }
+
+    /// Guarda un sondeo (de Flota o de la deliberación): tasa de red,
+    /// anotaciones de caída y recuperación, base de datos y último conocido.
+    fn registrar_sondeo(&mut self, sondeo: Sondeo) {
         if let Some(anterior) = self.sondeos.get(&sondeo.host_id) {
             if let Some(tasa) = flota::estado::tasa_red(&sondeo, anterior) {
                 self.tasas_red.insert(sondeo.host_id, tasa);
@@ -5066,6 +5980,24 @@ impl App {
                 self.abrir_archivos(Some(host_id));
             }
             return;
+        }
+        if !self.filtro_activo
+            && !tecla
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            if tecla.code == KeyCode::Char('!') {
+                if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
+                    self.paleta_snippets_de_host(host_id);
+                }
+                return;
+            }
+            // Atajos de `[flota.atajos]` (solo teclas que Flota no usa).
+            if let KeyCode::Char(caracter) = tecla.code {
+                if self.ejecutar_atajo_flota(caracter) {
+                    return;
+                }
+            }
         }
         if self.filtro_activo {
             match tecla.code {
@@ -5301,6 +6233,19 @@ impl App {
             String::new(),
             entrada.detalle.clone(),
         ];
+        // Una deliberación enseña sus comprobaciones, de `DELIBERACIONES`.
+        let mut lineas = lineas;
+        if entrada.tipo.starts_with("deliberacion_") {
+            if let Some(id) = crate::deliberacion::id_en_detalle(&entrada.detalle) {
+                lineas.push(String::new());
+                match self.almacen.obtener_deliberacion(id) {
+                    Ok(deliberacion) => {
+                        lineas.extend(crate::deliberacion::lineas_detalle(&deliberacion, 68))
+                    }
+                    Err(_) => lineas.push(format!("La deliberación #{id} ya no existe.")),
+                }
+            }
+        }
         self.dialogo = Some(Dialogo::Detalle {
             tunel_caido: None,
             titulo: "DETALLE DEL REGISTRO".to_string(),
@@ -5383,6 +6328,7 @@ impl App {
         self.mensaje = None;
         if self.dialogo.is_some() {
             self.tecla_dialogo(tecla);
+            self.restaurar_dialogo_apilado();
             return;
         }
         if self.paleta.is_some() {
@@ -5396,6 +6342,10 @@ impl App {
             ) {
                 self.ayuda = false;
             }
+            return;
+        }
+        if self.deliberacion.is_some() {
+            self.tecla_deliberacion(tecla);
             return;
         }
         if self.vista == Vista::Sesion {
@@ -5449,6 +6399,10 @@ impl App {
                 self.ir_a_vista(Vista::Tuneles);
                 return;
             }
+            KeyCode::F(8) => {
+                self.ir_a_vista(Vista::Snippets);
+                return;
+            }
             KeyCode::Char('p') if tecla.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.abrir_paleta();
                 return;
@@ -5466,6 +6420,8 @@ impl App {
             Vista::Identidades => self.tecla_identidades(tecla),
             Vista::Registro => self.tecla_registro(tecla),
             Vista::Tuneles => self.tecla_tuneles(tecla),
+            Vista::Snippets => self.tecla_snippets(tecla),
+            Vista::Resultados => self.tecla_resultados(tecla),
         }
     }
 
@@ -5551,6 +6507,8 @@ impl App {
             return;
         };
         match dialogo {
+            Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
+            Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Conflicto {
                 nombre,
                 es_dir,
@@ -5964,6 +6922,12 @@ impl App {
                             EntradaTextoAccion::CrearDirectorio => {
                                 self.crear_directorio(&nombre);
                             }
+                            EntradaTextoAccion::GuardarSalida {
+                                ejecucion_id,
+                                host_ids,
+                            } => {
+                                self.guardar_salida_en(nombre, ejecucion_id, host_ids);
+                            }
                             EntradaTextoAccion::EditarAliasIdentidad(id) => {
                                 match self.almacen.renombrar_identidad(id, &nombre) {
                                     Ok(()) => {
@@ -6164,6 +7128,9 @@ impl App {
     fn ejecutar_accion(&mut self, accion: AccionDialogo) {
         match accion {
             AccionDialogo::Nada => {}
+            AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
+            AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
+            AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
             AccionDialogo::BorrarHost(id) => {
                 if let Err(error) = self.almacen.borrar_host(id) {
                     self.mensaje(error.to_string(), true);
@@ -6273,6 +7240,8 @@ impl App {
                     Vista::Identidades => self.ir_a_identidades(),
                     Vista::Registro => self.ir_a_registro(),
                     Vista::Tuneles => self.ir_a_tuneles(),
+                    Vista::Snippets => self.ir_a_snippets(),
+                    Vista::Resultados => self.ir_a_resultados(),
                     _ => self.vista = vista,
                 }
             }
@@ -6645,8 +7614,11 @@ impl App {
         }
         listar_local(&mut estado, false);
         estado.nueva_peticion(crate::archivos::Peticion::AbrirSftp);
-        self.servidor
-            .enviar(protocolo::MensajeCliente::AbrirSftp { host_id });
+        self.servidor.enviar(protocolo::MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id: None,
+            no_interactivo: false,
+        });
         self.archivos = Some(estado);
         if self.vista != Vista::Archivos {
             self.vista_previa = Some(self.vista);
@@ -8092,8 +9064,11 @@ impl App {
                     let host_id = estado.host_id;
                     estado.nueva_peticion(crate::archivos::Peticion::AbrirSftp);
                     self.mensaje(format!("{mensaje}; se vuelve a abrir el canal"), false);
-                    self.servidor
-                        .enviar(protocolo::MensajeCliente::AbrirSftp { host_id });
+                    self.servidor.enviar(protocolo::MensajeCliente::AbrirSftp {
+                        host_id,
+                        peticion_id: None,
+                        no_interactivo: false,
+                    });
                     return;
                 }
                 self.mensaje(mensaje, true);

@@ -5,14 +5,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+pub mod deliberaciones;
 pub mod etiquetas;
 pub mod grupos;
 pub mod hosts;
 pub mod identidades;
 pub mod migraciones;
 pub mod registro;
+pub mod snippets;
 pub mod sondeos;
 pub mod tuneles;
+pub mod verificaciones;
 
 /// Fichero SQLite del inventario.
 pub struct Almacen {
@@ -147,6 +150,89 @@ impl Almacen {
         dir_remoto: Option<&str>,
     ) -> Result<()> {
         hosts::fijar_dirs_sftp(&self.conexion, id, dir_local, dir_remoto)
+    }
+
+    pub fn fijar_snippet_al_conectar(&self, id: i64, snippet_id: Option<i64>) -> Result<()> {
+        hosts::fijar_snippet_al_conectar(&self.conexion, id, snippet_id)
+    }
+
+    // Snippets --------------------------------------------------------------
+
+    pub fn listar_snippets(&self) -> Result<Vec<crate::snippets::Snippet>> {
+        snippets::listar(&self.conexion)
+    }
+
+    pub fn obtener_snippet(&self, id: i64) -> Result<crate::snippets::Snippet> {
+        snippets::obtener(&self.conexion, id)
+    }
+
+    pub fn snippet_por_nombre(&self, nombre: &str) -> Result<Option<crate::snippets::Snippet>> {
+        snippets::por_nombre(&self.conexion, nombre)
+    }
+
+    pub fn crear_snippet(&self, datos: &crate::snippets::DatosSnippet) -> Result<i64> {
+        snippets::crear(&self.conexion, datos)
+    }
+
+    pub fn actualizar_snippet(&self, id: i64, datos: &crate::snippets::DatosSnippet) -> Result<()> {
+        snippets::actualizar(&self.conexion, id, datos)
+    }
+
+    pub fn borrar_snippet(&self, id: i64) -> Result<()> {
+        snippets::borrar(&self.conexion, id)
+    }
+
+    pub fn marcar_uso_snippet(&self, id: i64) -> Result<()> {
+        snippets::marcar_uso(&self.conexion, id)
+    }
+
+    pub fn hosts_con_snippet_al_conectar(&self, id: i64) -> Result<Vec<(i64, String)>> {
+        snippets::hosts_con_snippet_al_conectar(&self.conexion, id)
+    }
+
+    // Verificaciones previas y deliberaciones -----------------------------
+
+    pub fn verificaciones_de_host(
+        &self,
+        host_id: i64,
+    ) -> Result<Option<crate::deliberacion::Verificaciones>> {
+        verificaciones::de_host(&self.conexion, host_id)
+    }
+
+    pub fn verificaciones_por_host(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, crate::deliberacion::Verificaciones>> {
+        verificaciones::por_host(&self.conexion)
+    }
+
+    pub fn guardar_verificaciones(
+        &self,
+        host_id: i64,
+        datos: &crate::deliberacion::DatosVerificaciones,
+    ) -> Result<()> {
+        verificaciones::guardar(&self.conexion, host_id, datos)
+    }
+
+    pub fn crear_deliberacion(
+        &self,
+        nueva: &crate::deliberacion::NuevaDeliberacion,
+    ) -> Result<i64> {
+        deliberaciones::crear(&self.conexion, nueva)
+    }
+
+    pub fn obtener_deliberacion(
+        &self,
+        id: i64,
+    ) -> Result<crate::deliberacion::RegistroDeliberacion> {
+        deliberaciones::obtener(&self.conexion, id)
+    }
+
+    pub fn fijar_resultado_deliberacion(
+        &self,
+        id: i64,
+        resultado: crate::deliberacion::EjecucionResultado,
+    ) -> Result<bool> {
+        deliberaciones::fijar_resultado_ejecucion(&self.conexion, id, resultado)
     }
 
     // Túneles ---------------------------------------------------------------

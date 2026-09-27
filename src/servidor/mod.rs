@@ -7,6 +7,7 @@
 pub mod cliente_remoto;
 pub mod conexiones;
 pub mod difusion;
+pub mod ejecuciones;
 pub mod sesiones;
 pub mod sftp;
 pub mod socks5;
@@ -40,7 +41,8 @@ use sesiones::difundir_lista;
 use sesiones::{ComandoSesion, DecisionDialogo, Pendiente, Sesion};
 
 /// Órdenes de escritura para el hilo con la base de datos: el único escritor
-/// de SQLite dentro del proceso servidor.
+/// de SQLite dentro del proceso servidor. Se ejecutan en orden, así que una
+/// `Barrera` confirmada garantiza que lo anterior ya está escrito.
 pub enum OrdenBd {
     Anotar {
         tipo: String,
@@ -56,7 +58,35 @@ pub enum OrdenBd {
         host_id: i64,
         estado: Option<UltimoEstado>,
     },
+    /// Contesta cuando todo lo encolado antes está escrito (T21: un `Hecho`
+    /// de una operación que anota se envía con la fila ya en `REGISTRO`).
+    Barrera(tokio::sync::oneshot::Sender<()>),
+    /// Cierra la base de datos (checkpoint del WAL) y contesta: al apagarse no
+    /// se pierde ninguna anotación.
+    Terminar(tokio::sync::oneshot::Sender<()>),
+    /// Rellena `DELIBERACIONES.ejecucion_resultado` al terminar una ejecución
+    /// deliberada (una sola vez; excepción documentada a T18).
+    ResultadoDeliberacion {
+        deliberacion_id: i64,
+        resultado: crate::deliberacion::EjecucionResultado,
+    },
 }
+
+/// Plazo para que el escritor confirme una barrera (el doble del
+/// `busy_timeout` de SQLite).
+const PLAZO_ESCRITURA: Duration = Duration::from_secs(10);
+
+/// Plazo total del apagado limpio: nada del remoto puede colgarlo.
+const PLAZO_APAGADO: Duration = Duration::from_secs(10);
+
+/// Plazo de un `Ejecutar` (el sondeo de Flota sobre la conexión viva). Por
+/// debajo del del cliente (`flota::TIMEOUT_SEG`): el servidor contesta antes
+/// de que el cliente se rinda, y así este aún puede caer a su conexión
+/// efímera.
+const PLAZO_EJECUTAR: Duration = Duration::from_secs(4);
+
+/// Parte del plazo anterior para abrir el canal `exec`.
+const PLAZO_CANAL_EJECUTAR: Duration = Duration::from_secs(2);
 
 /// Estado compartido del servidor, siempre bajo `Mutex`.
 pub struct EstadoServidor {
@@ -75,13 +105,18 @@ pub struct EstadoServidor {
     pub siguiente_cliente_id: u32,
     pub vacio_desde: Option<std::time::Instant>,
     pub tx_apagar: Option<mpsc::UnboundedSender<()>>,
+    /// Cerrojo por host de `conexion_para_canal` (corrección 3b): cubre
+    /// «mirar el pool / conectar / guardar» para todos los subsistemas.
+    pub cerrojos_conexion: HashMap<i64, Arc<tokio::sync::Mutex<()>>>,
+    /// El servidor se está apagando: no se admite trabajo nuevo.
+    pub apagando: bool,
+    /// Pasa a `true` cuando el apagado limpio termina: quien lo pida mientras
+    /// está en curso (otro `Parar`, un `SIGTERM`) espera a que acabe.
+    pub apagado: tokio::sync::watch::Sender<bool>,
     /// Canales SFTP abiertos, uno por host y compartidos por todas las ventanas.
     pub sftp: HashMap<i64, sftp::SftpHost>,
-    /// Aperturas de canal SFTP en curso: id de solicitud → host, para poder
-    /// cancelarlas si se va la ventana que las pidió.
-    pub aperturas_sftp: HashMap<u32, i64>,
-    /// Cerrojo de apertura por host: dos ventanas que pidan el mismo host a la
-    /// vez comparten una única conexión.
+    /// Cerrojo de apertura del canal SFTP por host: dos ventanas que pidan el
+    /// mismo host a la vez comparten un único canal.
     pub sftp_cerrojos: HashMap<i64, Arc<tokio::sync::Mutex<()>>>,
     /// Cola de transferencias, lo único de la vista Archivos que sobrevive a la
     /// ventana.
@@ -92,9 +127,9 @@ pub struct EstadoServidor {
     pub tx_cola: Option<mpsc::UnboundedSender<()>>,
     /// Túneles levantados, por id de `TUNELES`.
     pub tuneles: HashMap<i64, tuneles::TunelActivo>,
-    /// Cerrojo de apertura por host: dos túneles del mismo host que se activan
-    /// a la vez comparten una única conexión.
-    pub tuneles_cerrojos: HashMap<i64, Arc<tokio::sync::Mutex<()>>>,
+    /// Ejecuciones de snippets (Fase 6), en curso y terminadas de la última
+    /// hora.
+    pub ejecuciones: ejecuciones::Ejecuciones,
     /// Reenvíos remotos registrados, compartidos con los handlers de russh.
     pub reenvios: Arc<crate::conexion::reenvios::Reenvios>,
     /// Túneles automáticos que el usuario paró a mano: no se vuelven a levantar
@@ -170,14 +205,16 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         siguiente_cliente_id: 1,
         vacio_desde: None,
         tx_apagar: None,
+        cerrojos_conexion: HashMap::new(),
+        apagando: false,
+        apagado: tokio::sync::watch::channel(false).0,
         sftp: HashMap::new(),
-        aperturas_sftp: HashMap::new(),
         sftp_cerrojos: HashMap::new(),
         transferencias: transferencias::Cola::default(),
         difusion_cola: difusion::DifusionCola::default(),
         tx_cola: None,
         tuneles: HashMap::new(),
-        tuneles_cerrojos: HashMap::new(),
+        ejecuciones: ejecuciones::Ejecuciones::default(),
         reenvios: Arc::new(crate::conexion::reenvios::Reenvios::default()),
         tuneles_parados: std::collections::HashSet::new(),
     }));
@@ -193,7 +230,9 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         &estado,
         crate::registro::SERVIDOR_ARRANCADO,
         "servidor de sesiones en marcha",
-    ) {
+    )
+    .await
+    {
         warn!("no se pudo anotar el arranque: {error}");
     }
     info!(socket = %ruta_socket.display(), "servidor arrancado");
@@ -205,10 +244,27 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(revisar_cola(estado.clone()));
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
+    tokio::spawn(ejecuciones::revisar(estado.clone()));
+
+    // SIGTERM es un `Parar`: apagado limpio con sus anotaciones (3b). Así un
+    // MAGI de otra versión puede parar este servidor sin hablar su protocolo.
+    let mut terminar =
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(senal) => Some(senal),
+            Err(error) => {
+                warn!("no se pudo atender SIGTERM: {error}");
+                None
+            }
+        };
 
     loop {
         tokio::select! {
             _ = rx_apagar.recv() => break,
+            _ = esperar_senal(&mut terminar) => {
+                info!("SIGTERM recibido: apagado limpio");
+                apagar_limpio(&estado).await;
+                break;
+            }
             aceptado = listener.accept() => match aceptado {
                 Ok((stream, _)) => {
                     let estado_tarea = estado.clone();
@@ -219,47 +275,106 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         }
     }
 
-    // Salida: socket y lock fuera, aviso anotado.
+    // Salida: socket y lock fuera, aviso anotado y la base de datos cerrada
+    // con todo lo pendiente escrito.
     let _ = std::fs::remove_file(&ruta_socket);
     let _ = std::fs::remove_file(ruta_lock(&rutas));
     let detalle = "servidor detenido";
-    let _ = anotar(&estado, crate::registro::SERVIDOR_DETENIDO, detalle);
+    if let Err(error) = anotar(&estado, crate::registro::SERVIDOR_DETENIDO, detalle).await {
+        warn!("no se pudo anotar la parada: {error}");
+    }
+    cerrar_escritor(&estado).await;
     info!("{detalle}");
     Ok(())
 }
 
-/// Anota un evento en `REGISTRO` a través del escritor del proceso.
-fn anotar(
+/// Espera a la señal si se pudo registrar; si no, nunca termina.
+async fn esperar_senal(senal: &mut Option<tokio::signal::unix::Signal>) {
+    match senal {
+        Some(senal) => {
+            senal.recv().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Anota un evento del servidor en `REGISTRO` a través del escritor.
+async fn anotar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     tipo: &str,
     detalle: &str,
 ) -> Result<(), String> {
     // Se usa el canal; el hilo de la BD valida el tipo igual que `registro::anotar`.
-    estado
-        .try_lock()
-        .map_err(|_| "servidor ocupado".to_string())?
-        .bd
-        .send(OrdenBd::Anotar {
-            tipo: tipo.to_string(),
-            host_id: None,
-            identidad_id: None,
-            detalle: detalle.to_string(),
-            resultado: ResultadoRegistro::Ok,
-        })
-        .map_err(|_| "el escritor de la base de datos no está".to_string())
+    let bd = estado.lock().await.bd.clone();
+    bd.send(OrdenBd::Anotar {
+        tipo: tipo.to_string(),
+        host_id: None,
+        identidad_id: None,
+        detalle: detalle.to_string(),
+        resultado: ResultadoRegistro::Ok,
+    })
+    .map_err(|_| "el escritor de la base de datos no está".to_string())
+}
+
+/// Espera a que el escritor confirme todo lo encolado hasta ahora. Se llama
+/// **sin** el mutex del estado tomado. Si no contesta en plazo se sigue igual
+/// (el efecto remoto ya se ha producido) avisando en el log.
+pub(crate) async fn confirmar_escritura(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) -> bool {
+    let bd = estado.lock().await.bd.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if bd.send(OrdenBd::Barrera(tx)).is_err() {
+        return false;
+    }
+    match tokio::time::timeout(PLAZO_ESCRITURA, rx).await {
+        Ok(Ok(())) => true,
+        _ => {
+            warn!("el escritor de la base de datos no confirmó a tiempo");
+            false
+        }
+    }
+}
+
+/// Cierra la base de datos del escritor esperando a que vacíe su cola.
+async fn cerrar_escritor(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
+    let bd = estado.lock().await.bd.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if bd.send(OrdenBd::Terminar(tx)).is_err() {
+        return;
+    }
+    if tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .is_err()
+    {
+        warn!("la base de datos del servidor no se cerró a tiempo");
+    }
 }
 
 /// Hilo con la única `Connection` de escritura del proceso servidor.
 fn lanzar_escritor_bd(almacen: Almacen) -> std::sync::mpsc::Sender<OrdenBd> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let mut confirmar_cierre = None;
         while let Ok(orden) = rx.recv() {
-            if let Err(error) = ejecutar_orden_bd(almacen.conexion(), orden) {
-                warn!("no se pudo escribir en la base de datos: {error}");
+            match orden {
+                OrdenBd::Barrera(listo) => {
+                    let _ = listo.send(());
+                }
+                OrdenBd::Terminar(listo) => {
+                    confirmar_cierre = Some(listo);
+                    break;
+                }
+                orden => {
+                    if let Err(error) = ejecutar_orden_bd(almacen.conexion(), orden) {
+                        warn!("no se pudo escribir en la base de datos: {error}");
+                    }
+                }
             }
         }
         if let Err(error) = almacen.cerrar() {
             warn!("no se pudo cerrar la base de datos del servidor: {error}");
+        }
+        if let Some(listo) = confirmar_cierre {
+            let _ = listo.send(());
         }
     });
     tx
@@ -273,14 +388,64 @@ fn ejecutar_orden_bd(conexion: &rusqlite::Connection, orden: OrdenBd) -> Result<
             identidad_id,
             detalle,
             resultado,
-        } => crate::registro::anotar(conexion, &tipo, host_id, identidad_id, &detalle, resultado),
+        } => {
+            match crate::registro::anotar(
+                conexion,
+                &tipo,
+                host_id,
+                identidad_id,
+                &detalle,
+                resultado,
+            ) {
+                // El host se borró mientras tanto (una ejecución en curso, una
+                // sesión que se cierra): la fila se guarda sin host, con el
+                // nombre en el detalle, en vez de perderse.
+                Err(error) if host_id.is_some() && es_fallo_de_clave_ajena(&error) => {
+                    crate::registro::anotar(
+                        conexion,
+                        &tipo,
+                        None,
+                        identidad_id,
+                        &detalle,
+                        resultado,
+                    )
+                }
+                otro => otro,
+            }
+        }
         OrdenBd::MarcarConexion { host_id } => {
             crate::almacen::hosts::marcar_conexion(conexion, host_id)
         }
         OrdenBd::MarcarEstado { host_id, estado } => {
             crate::almacen::hosts::marcar_estado(conexion, host_id, estado)
         }
+        OrdenBd::ResultadoDeliberacion {
+            deliberacion_id,
+            resultado,
+        } => crate::almacen::deliberaciones::fijar_resultado_ejecucion(
+            conexion,
+            deliberacion_id,
+            resultado,
+        )
+        .map(|_| ()),
+        OrdenBd::Barrera(listo) | OrdenBd::Terminar(listo) => {
+            let _ = listo.send(());
+            Ok(())
+        }
     }
+}
+
+/// ¿Falló la escritura por una clave ajena (una fila que ya no existe)?
+fn es_fallo_de_clave_ajena(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<rusqlite::Error>()
+        .is_some_and(|error| {
+            matches!(
+                error,
+                rusqlite::Error::SqliteFailure(fallo, _)
+                    if fallo.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY
+            )
+        })
 }
 
 /// Apaga el servidor si no hay clientes ni sesiones durante la gracia. Las
@@ -296,7 +461,8 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
             let ocupado = !estado_bloqueado.clientes.is_empty()
                 || !estado_bloqueado.sesiones.is_empty()
                 || estado_bloqueado.transferencias.hay_vivas()
-                || tuneles::hay_activos(&estado_bloqueado);
+                || tuneles::hay_activos(&estado_bloqueado)
+                || estado_bloqueado.ejecuciones.hay_en_curso();
             if !ocupado {
                 match estado_bloqueado.vacio_desde {
                     None => {
@@ -368,34 +534,95 @@ async fn revisar_pool(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     }
 }
 
-/// Apagado inmediato con limpieza: cierra sesiones y clientes y señaliza.
+/// Apagado con limpieza (por `Parar`, `SIGTERM` o inactividad). Primero todo
+/// lo que anota o marca, sin tocar la red: túneles retirados con su cierre,
+/// sesiones cerradas con el suyo, transferencias abortadas, pool vaciado.
+/// Después, con plazo y en paralelo, lo que habla con los hosts. Quien lo pida
+/// con otro ya en curso espera a que ese termine.
 async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
-    // Los túneles se paran antes de cerrar nada: su registro de cierre lleva
-    // los totales y el pool se libera por identidad.
-    tuneles::parar_todos(estado, "el servidor se apaga").await;
-    let mut estado_bloqueado = estado.lock().await;
-    for (_, sesion) in estado_bloqueado.sesiones.drain() {
-        let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
+    let en_curso = {
+        let mut estado_bloqueado = estado.lock().await;
+        if estado_bloqueado.apagando {
+            Some(estado_bloqueado.apagado.subscribe())
+        } else {
+            estado_bloqueado.apagando = true;
+            None
+        }
+    };
+    if let Some(mut terminado) = en_curso {
+        let _ = tokio::time::timeout(
+            PLAZO_APAGADO + Duration::from_secs(2),
+            terminado.wait_for(|listo| *listo),
+        )
+        .await;
+        return;
     }
-    // Una transferencia en curso se queda sin canal: pasa a error y el motor
-    // borra su parcial.
-    estado_bloqueado
-        .transferencias
-        .abortar_todas("servidor detenido");
-    estado_bloqueado.pendientes.clear();
-    estado_bloqueado.aperturas_sftp.clear();
-    estado_bloqueado.clientes.clear();
-    let conexiones = estado_bloqueado.pool.vaciar();
-    let rutas = estado_bloqueado.rutas.clone();
+
+    // Fase 1: anotaciones y estado, sin red.
+    ejecuciones::cancelar_todas_al_apagar(estado).await;
+    let tuneles = tuneles::retirar_todos(estado, "el servidor se apaga").await;
+    let (conexiones, rutas) = {
+        let mut estado_bloqueado = estado.lock().await;
+        let bd = estado_bloqueado.bd.clone();
+        for (_, sesion) in estado_bloqueado.sesiones.drain() {
+            // Cada sesión anota su cierre aquí: su tarea ya no la encontrará.
+            sesion.cancelar_apertura.cancel();
+            let abriendo = sesion.estado == crate::protocolo::EstadoSesionRemota::Abriendo;
+            let _ = bd.send(OrdenBd::Anotar {
+                tipo: if abriendo {
+                    crate::registro::CONEXION_FALLIDA.to_string()
+                } else {
+                    crate::registro::SESION_CERRADA.to_string()
+                },
+                host_id: Some(sesion.host_id),
+                identidad_id: None,
+                detalle: "el servidor se apaga".to_string(),
+                resultado: if abriendo {
+                    ResultadoRegistro::Error
+                } else {
+                    ResultadoRegistro::Ok
+                },
+            });
+            let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
+        }
+        // Una transferencia en curso se queda sin canal: pasa a error y el
+        // motor borra su parcial.
+        estado_bloqueado
+            .transferencias
+            .abortar_todas("servidor detenido");
+        estado_bloqueado.pendientes.clear();
+        estado_bloqueado.clientes.clear();
+        (
+            estado_bloqueado.pool.vaciar(),
+            estado_bloqueado.rutas.clone(),
+        )
+    };
+
+    // Fase 2: la red, en paralelo y con plazo total.
+    let red = async {
+        let mut tareas: Vec<tokio::task::JoinHandle<()>> = tuneles
+            .into_iter()
+            .map(|tunel| tokio::spawn(tuneles::cerrar_retirado(tunel)))
+            .collect();
+        sftp::cerrar_todos(estado).await;
+        tareas.extend(
+            conexiones
+                .into_iter()
+                .map(|(handle, saltos)| tokio::spawn(conexiones::desconectar(handle, saltos))),
+        );
+        for tarea in tareas {
+            let _ = tarea.await;
+        }
+    };
+    if tokio::time::timeout(PLAZO_APAGADO, red).await.is_err() {
+        warn!("el apagado no cerró todas las conexiones en plazo; se sale igualmente");
+    }
+    // Los temporales no sobreviven al servidor.
+    sftp::vaciar_temporales(&rutas);
+    let mut estado_bloqueado = estado.lock().await;
+    let _ = estado_bloqueado.apagado.send(true);
     if let Some(tx_apagar) = estado_bloqueado.tx_apagar.take() {
         let _ = tx_apagar.send(());
-    }
-    drop(estado_bloqueado);
-    // Los canales SFTP y los temporales no sobreviven al servidor.
-    sftp::cerrar_todos(estado).await;
-    sftp::vaciar_temporales(&rutas);
-    for (handle, saltos) in conexiones {
-        conexiones::desconectar(handle, saltos).await;
     }
 }
 
@@ -423,6 +650,7 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 &tx_escritura,
                 MensajeServidor::VersionIncompatible {
                     version: VERSION_PROTOCOLO,
+                    pid: Some(std::process::id()),
                 },
             );
             return;
@@ -505,6 +733,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
         transferencias: estado_bloqueado.transferencias.info(),
         tuneles: tuneles::lista(&estado_bloqueado),
+        ejecuciones: estado_bloqueado.ejecuciones.info(),
     };
     difusion::enviar(cliente, mensaje);
 }
@@ -520,8 +749,9 @@ async fn manejar_mensaje(
             host_id,
             cols,
             filas,
+            comandos_iniciales,
         } => {
-            abrir_sesion(estado, cliente_id, host_id, cols, filas).await;
+            abrir_sesion(estado, cliente_id, host_id, cols, filas, comandos_iniciales).await;
         }
         MensajeCliente::Adjuntar {
             sesion_id,
@@ -551,7 +781,7 @@ async fn manejar_mensaje(
             redimensionar_adjunto(estado, cliente_id, sesion_id, Tamano { cols, filas }).await;
         }
         MensajeCliente::Cerrar { sesion_id } => {
-            cerrar_sesion(estado, sesion_id).await;
+            cerrar_sesion(estado, cliente_id, sesion_id).await;
         }
         MensajeCliente::Reconectar { sesion_id } => {
             reconectar(estado, cliente_id, sesion_id).await;
@@ -590,8 +820,17 @@ async fn manejar_mensaje(
             )
             .await;
         }
-        MensajeCliente::Ejecutar { host_id, comando } => {
-            ejecutar(estado, cliente_id, host_id, &comando).await;
+        // El sondeo por la conexión viva va a su propia tarea: un host lento
+        // no puede parar el bucle de lectura de este cliente.
+        MensajeCliente::Ejecutar {
+            host_id,
+            comando,
+            peticion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                ejecutar(&estado_tarea, cliente_id, host_id, &comando, peticion_id).await;
+            });
         }
         // Un túnel puede tardar en levantarse (abrir la conexión, pedir el
         // reenvío, los diálogos de siempre), así que va a una tarea propia: el
@@ -634,9 +873,20 @@ async fn manejar_mensaje(
         // un canal puede tardar (diálogos, red) y el bucle de lectura de este
         // cliente no puede quedarse esperando o su respuesta no llegaría
         // nunca.
-        MensajeCliente::AbrirSftp { host_id } => {
+        MensajeCliente::AbrirSftp {
+            host_id,
+            peticion_id,
+            no_interactivo,
+        } => {
             let estado_tarea = estado.clone();
-            tokio::spawn(async move { abrir_sftp(&estado_tarea, cliente_id, host_id).await });
+            let modo = if no_interactivo {
+                sftp::ModoSftp::Comprobacion
+            } else {
+                sftp::ModoSftp::Archivos
+            };
+            tokio::spawn(async move {
+                abrir_sftp(&estado_tarea, cliente_id, host_id, peticion_id, modo).await
+            });
         }
         MensajeCliente::ListarDir {
             host_id,
@@ -722,6 +972,56 @@ async fn manejar_mensaje(
             let estado_tarea = estado.clone();
             tokio::spawn(async move { borrar_temporal(&estado_tarea, cliente_id, ruta).await });
         }
+        // Una ejecución abre conexiones y espera a los hosts: en su tarea.
+        MensajeCliente::LanzarEjecucion {
+            peticion_id,
+            snippet_id,
+            nombre,
+            comando,
+            host_ids,
+            timeout_seg,
+            parar_al_fallo,
+            deliberacion,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                let peticion = ejecuciones::PeticionLanzar {
+                    peticion_id,
+                    snippet_id,
+                    nombre,
+                    comando,
+                    host_ids,
+                    timeout_seg,
+                    parar_al_fallo,
+                    deliberacion,
+                };
+                match ejecuciones::lanzar(&estado_tarea, cliente_id, peticion).await {
+                    Ok(_) => {
+                        responder(
+                            &estado_tarea,
+                            cliente_id,
+                            MensajeServidor::Hecho { peticion_id },
+                        )
+                        .await;
+                    }
+                    Err(motivo) => {
+                        responder_error(&estado_tarea, cliente_id, motivo, Some(peticion_id)).await;
+                    }
+                }
+            });
+        }
+        MensajeCliente::CancelarEjecucion { id } => {
+            ejecuciones::cancelar(estado, id).await;
+        }
+        MensajeCliente::LimpiarEjecuciones => {
+            ejecuciones::limpiar(estado).await;
+        }
+        MensajeCliente::PedirSalida {
+            ejecucion_id,
+            host_id,
+        } => {
+            ejecuciones::pedir_salida(estado, cliente_id, ejecucion_id, host_id).await;
+        }
         MensajeCliente::Listar => {
             let lista = sesiones::lista(&estado.lock().await.sesiones);
             let estado_bloqueado = estado.lock().await;
@@ -791,6 +1091,12 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
             },
         );
     }
+    // Diálogos que solo esta ventana podía contestar (sesiones, SFTP,
+    // túneles, ejecuciones): se sueltan y sus aperturas fallan enseguida en
+    // vez de retener el cerrojo del host hasta el plazo.
+    estado_bloqueado
+        .pendientes
+        .retain(|_, pendiente| pendiente.solicitante != cliente_id);
     // Aperturas que este cliente solicitó: se cancelan («ventana cerrada»).
     let caidas: Vec<u32> = estado_bloqueado
         .sesiones
@@ -805,6 +1111,7 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
     for sesion_id in caidas {
         estado_bloqueado.pendientes.remove(&sesion_id);
         if let Some(sesion) = estado_bloqueado.sesiones.remove(&sesion_id) {
+            sesion.cancelar_apertura.cancel();
             hosts_sin_canal.push(sesion.host_id);
             let bd = estado_bloqueado.bd.clone();
             let _ = bd.send(OrdenBd::Anotar {
@@ -837,7 +1144,8 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
     // Las pestañas de la ventana que se va sueltan su canal: si eran el último
     // del host, sus túneles automáticos se paran.
     for host_id in hosts_sin_canal {
-        tuneles::canales_cambiaron(estado, host_id).await;
+        let estado_tuneles = estado.clone();
+        tokio::spawn(async move { tuneles::canales_cambiaron(&estado_tuneles, host_id).await });
     }
 }
 
@@ -850,7 +1158,17 @@ async fn abrir_sesion(
     host_id: i64,
     cols: u16,
     filas: u16,
+    comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
 ) {
+    // Lo que se escribe en la shell viene del cliente: se acota.
+    let comandos_iniciales: Vec<crate::protocolo::ComandoInicial> = comandos_iniciales
+        .into_iter()
+        .filter(|comando| {
+            !comando.texto.is_empty()
+                && comando.texto.len() <= sesiones::TOPE_COMANDO_INICIAL
+                && !comando.texto.contains('\0')
+        })
+        .collect();
     let (host, todos_los_hosts, rutas) = {
         let estado_bloqueado = estado.lock().await;
         let Ok(lectura) = estado_bloqueado.lectura.lock() else {
@@ -883,6 +1201,9 @@ async fn abrir_sesion(
     };
 
     let mut estado_bloqueado = estado.lock().await;
+    if estado_bloqueado.apagando {
+        return;
+    }
     let sesion_id = estado_bloqueado.siguiente_sesion_id;
     estado_bloqueado.siguiente_sesion_id += 1;
     let nombre = sesiones::nombre_de_pestaña(&estado_bloqueado.sesiones, &host);
@@ -893,6 +1214,7 @@ async fn abrir_sesion(
         filas: filas.max(1),
     };
     let pantalla = crate::conexion::terminal::nuevo(filas, cols);
+    let cancelar = tokio_util::sync::CancellationToken::new();
     estado_bloqueado.sesiones.insert(
         sesion_id,
         Sesion {
@@ -909,13 +1231,15 @@ async fn abrir_sesion(
             ultima_actividad: chrono::Utc::now().timestamp(),
             actividad_no_vista: false,
             handle: None,
+            cancelar_apertura: cancelar.clone(),
+            reconectando: false,
+            comandos_iniciales: comandos_iniciales.clone(),
             tamano,
             pantalla: pantalla.clone(),
             tx_comandos,
         },
     );
     estado_bloqueado.vacio_desde = None;
-    let reenvios = estado_bloqueado.reenvios.clone();
     let datos = sesiones::DatosApertura {
         host,
         todos_los_hosts,
@@ -926,13 +1250,16 @@ async fn abrir_sesion(
         sesion_id,
         solicitante: cliente_id,
         reconexion: false,
-        reenvios,
+        cancelar,
+        comandos: comandos_iniciales
+            .into_iter()
+            .map(|comando| comando.texto)
+            .collect(),
     };
+    // Los túneles automáticos del host se levantan cuando la pestaña queda
+    // abierta (lo hace su tarea), no mientras sus diálogos esperan.
     sesiones::lanzar(estado.clone(), datos, rx_comandos);
     sesiones::difundir_lista(&mut estado_bloqueado);
-    // El host estrena canal: es el momento de levantar sus túneles automáticos.
-    drop(estado_bloqueado);
-    tuneles::canales_cambiaron(estado, host_id).await;
 }
 
 /// Recalcula el tamaño de la sesión y lo aplica si cambió.
@@ -1044,10 +1371,18 @@ async fn redimensionar_adjunto(
 }
 
 /// Cierra una sesión: si abría, cancela; si está caída, se elimina; si está
-/// abierta, el bucle hace el trabajo al recibir `Cerrar`.
-async fn cerrar_sesion(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32) {
+/// abierta, el bucle hace el trabajo al recibir `Cerrar`. Un id que no es de
+/// sesión es el de una apertura de SFTP, túnel o ejecución cuyo diálogo el
+/// solicitante rechaza: se suelta para que falle enseguida.
+async fn cerrar_sesion(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    sesion_id: u32,
+) {
     let mut estado_bloqueado = estado.lock().await;
     let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
+        drop(estado_bloqueado);
+        sesiones::cancelar_dialogo(estado, sesion_id, cliente_id).await;
         return;
     };
     match sesion.estado {
@@ -1055,6 +1390,8 @@ async fn cerrar_sesion(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_
         | crate::protocolo::EstadoSesionRemota::Caida => {
             let fallida_apertura = sesion.estado == crate::protocolo::EstadoSesionRemota::Abriendo;
             let host_id = sesion.host_id;
+            // La apertura en curso se abandona: suelta el cerrojo del host.
+            sesion.cancelar_apertura.cancel();
             estado_bloqueado.pendientes.remove(&sesion_id);
             estado_bloqueado.sesiones.remove(&sesion_id);
             let bd = estado_bloqueado.bd.clone();
@@ -1081,7 +1418,10 @@ async fn cerrar_sesion(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_
             drop(estado_bloqueado);
             // Se ha ido una pestaña: si era la última de ese host, sus túneles
             // automáticos se paran.
-            tuneles::canales_cambiaron(estado, host_id).await;
+            let estado_tuneles = estado.clone();
+            tokio::spawn(async move {
+                tuneles::canales_cambiaron(&estado_tuneles, host_id).await;
+            });
         }
         crate::protocolo::EstadoSesionRemota::Abierta => {
             let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
@@ -1153,31 +1493,40 @@ async fn reconectar(
         return;
     };
 
-    let (cols, filas) = {
+    // Comprobar que sigue caída y marcarla «abriendo» en el mismo bloqueo: dos
+    // `Reconectar` seguidos no pueden lanzar dos aperturas.
+    let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
+    let cancelar = tokio_util::sync::CancellationToken::new();
+    let (cols, filas, pantalla, comandos) = {
         let mut estado_bloqueado = estado.lock().await;
+        if estado_bloqueado.apagando {
+            return;
+        }
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             return;
         };
+        if sesion.estado != crate::protocolo::EstadoSesionRemota::Caida {
+            return;
+        }
+        let (cols, filas) = (sesion.tamano.cols, sesion.tamano.filas);
+        let pantalla = crate::conexion::terminal::nuevo(filas, cols);
         sesion.estado = crate::protocolo::EstadoSesionRemota::Abriendo;
+        sesion.reconectando = true;
+        sesion.cancelar_apertura = cancelar.clone();
         sesion.motivo = Some("reconectando".to_string());
         sesion.handle = None;
-        (sesion.tamano.cols, sesion.tamano.filas)
+        sesion.solicitante = cliente_id;
+        sesion.tx_comandos = tx_comandos;
+        sesion.pantalla = pantalla.clone();
+        // Al reconectar solo se repite lo que es «al conectar».
+        let comandos: Vec<String> = sesion
+            .comandos_iniciales
+            .iter()
+            .filter(|comando| comando.repetir)
+            .map(|comando| comando.texto.clone())
+            .collect();
+        (cols, filas, pantalla, comandos)
     };
-    let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
-    {
-        let mut estado_bloqueado = estado.lock().await;
-        if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
-            sesion.tx_comandos = tx_comandos;
-        }
-    }
-    let pantalla = crate::conexion::terminal::nuevo(filas, cols);
-    {
-        let mut estado_bloqueado = estado.lock().await;
-        if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
-            sesion.pantalla = pantalla.clone();
-        }
-    }
-    let reenvios = estado.lock().await.reenvios.clone();
     let datos = sesiones::DatosApertura {
         host,
         todos_los_hosts,
@@ -1188,7 +1537,8 @@ async fn reconectar(
         sesion_id,
         solicitante: cliente_id,
         reconexion: true,
-        reenvios,
+        cancelar,
+        comandos,
     };
     sesiones::lanzar(estado.clone(), datos, rx_comandos);
     sesiones::difundir_lista(&mut *estado.lock().await);
@@ -1202,86 +1552,120 @@ fn host_id_de(estado: &EstadoServidor, sesion_id: u32) -> i64 {
         .unwrap_or(0)
 }
 
-/// Ejecuta un comando en un canal `exec` de la conexión del pool o de
-/// cualquier sesión abierta al host. Devuelve `Ejecutado` o `SinSesion`.
+/// `Ejecutar` (el sondeo de Flota): un canal `exec` sobre la conexión viva del
+/// host, tomada por la vía única (`SoloViva`: la del pool o, si no, la de una
+/// pestaña abierta; nunca conecta). Contesta `Ejecutado` o `SinSesion` con el
+/// mismo `peticion_id`; sin conexión viva el cliente cae a su efímera.
 async fn ejecutar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
     host_id: i64,
     comando: &str,
+    peticion_id: u64,
 ) {
-    // Buscar conexión: primero el pool, luego cualquier sesión abierta al host.
-    let handle = {
-        let mut estado_bloqueado = estado.lock().await;
-        if let Some(handle) = estado_bloqueado.pool.reutilizar(host_id) {
-            Some((handle, true))
-        } else {
-            estado_bloqueado
-                .sesiones
-                .values()
-                .find(|sesion| sesion.host_id == host_id && sesion.handle.is_some())
-                .and_then(|sesion| sesion.handle.clone())
-                .map(|handle| (handle, false))
-        }
-    };
-    let Some((handle, del_pool)) = handle else {
+    let (host, rutas) = {
         let estado_bloqueado = estado.lock().await;
-        if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
-            difusion::enviar(cliente, MensajeServidor::SinSesion { host_id });
-        }
-        return;
+        let host = estado_bloqueado
+            .lectura
+            .lock()
+            .ok()
+            .and_then(|lectura| lectura.obtener_host(host_id).ok());
+        (host, estado_bloqueado.rutas.clone())
     };
-    let resultado = ejecutar_en_handle(&handle, comando).await;
-    if del_pool {
-        // Por identidad: entremedias el pool puede tener ya otra conexión de
-        // este host (una pestaña nueva, por ejemplo) y el canal contado es el
-        // de esta.
-        estado.lock().await.pool.liberar_si_es(host_id, &handle);
-    }
-    let estado_bloqueado = estado.lock().await;
-    if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
-        match resultado {
-            Ok((salida, codigo)) => difusion::enviar(
-                cliente,
-                MensajeServidor::Ejecutado {
+    let tomada = match host {
+        Some(host) => {
+            conexiones::conexion_para_canal(
+                estado,
+                &host,
+                &HashMap::new(),
+                &rutas,
+                conexiones::PoliticaConexion::SoloViva,
+                conexiones::UsoCanal::Subsistema,
+            )
+            .await
+        }
+        None => Err("el host ya no existe".to_string()),
+    };
+    let respuesta = match tomada {
+        Ok(tomada) => {
+            let resultado = ejecutar_en_handle(&tomada.handle, comando, PLAZO_EJECUTAR).await;
+            tomada.soltar().await;
+            match resultado {
+                Ok((salida, codigo)) => MensajeServidor::Ejecutado {
                     host_id,
+                    peticion_id,
                     salida,
                     codigo,
                 },
-            ),
-            // Una conexión del pool que se está cerrando hace caer el exec:
-            // el cliente repite con su conexión efímera.
-            Err(_) => difusion::enviar(cliente, MensajeServidor::SinSesion { host_id }),
+                // Una conexión que se está cerrando hace caer el exec: el
+                // cliente repite con su conexión efímera.
+                Err(motivo) => {
+                    warn!(host_id, "el exec del sondeo falló: {motivo}");
+                    MensajeServidor::SinSesion {
+                        host_id,
+                        peticion_id,
+                    }
+                }
+            }
         }
-    }
+        Err(_) => MensajeServidor::SinSesion {
+            host_id,
+            peticion_id,
+        },
+    };
+    responder(estado, cliente_id, respuesta).await;
 }
 
-/// Canal `exec` sobre una conexión viva; devuelve salida y código de salida.
+/// Canal `exec` sobre una conexión viva, con plazo; devuelve la salida
+/// (stdout y stderr juntos) y el código de salida. Se lee hasta el cierre del
+/// canal: el `exit-status` llega después del EOF. El canal se cierra siempre.
 async fn ejecutar_en_handle(
-    handle: &russh::client::Handle<crate::conexion::cliente::Cliente>,
+    handle: &Arc<russh::client::Handle<crate::conexion::cliente::Cliente>>,
     comando: &str,
+    plazo: Duration,
 ) -> Result<(String, i32), String> {
-    let mut canal = handle
-        .channel_open_session()
-        .await
-        .map_err(|error| error.to_string())?;
-    canal
-        .exec(true, comando.as_bytes().to_vec())
-        .await
-        .map_err(|error| error.to_string())?;
+    /// Tope de lo que se guarda de la salida del sondeo.
+    const TOPE: usize = 4 * 1024 * 1024;
+    let limite = tokio::time::Instant::now() + plazo;
+    // Una conexión medio muerta se delata al abrir el canal: plazo corto, y
+    // el cliente cae a su conexión efímera antes de rendirse.
+    let apertura = handle.clone();
+    let mut canal = conexiones::abrir_con_plazo(PLAZO_CANAL_EJECUTAR, async move {
+        apertura.channel_open_session().await
+    })
+    .await?;
     let mut salida = Vec::new();
-    let mut codigo = 0;
-    loop {
-        match canal.wait().await {
-            Some(ChannelMsg::Data { data }) => salida.extend_from_slice(&data),
-            Some(ChannelMsg::ExtendedData { data, .. }) => salida.extend_from_slice(&data),
-            Some(ChannelMsg::ExitStatus { exit_status }) => codigo = exit_status as i32,
-            Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
-            _ => {}
+    let mut codigo = None;
+    let trabajo = async {
+        canal
+            .exec(true, comando.as_bytes().to_vec())
+            .await
+            .map_err(|error| error.to_string())?;
+        let _ = canal.eof().await;
+        loop {
+            match canal.wait().await {
+                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    if salida.len() < TOPE {
+                        salida.extend_from_slice(&data);
+                    }
+                }
+                Some(ChannelMsg::ExitStatus { exit_status }) => codigo = Some(exit_status as i32),
+                Some(ChannelMsg::Close) | None => break,
+                _ => {}
+            }
         }
-    }
+        Ok::<(), String>(())
+    };
+    let resultado = tokio::time::timeout_at(limite, trabajo).await;
     let _ = canal.close().await;
-    Ok((String::from_utf8_lossy(&salida).to_string(), codigo))
+    match resultado {
+        Err(_) => Err("se agotó el plazo del comando".to_string()),
+        Ok(Err(motivo)) => Err(motivo),
+        Ok(Ok(())) => Ok((
+            String::from_utf8_lossy(&salida).to_string(),
+            codigo.unwrap_or(-1),
+        )),
+    }
 }
 
 // ---------------------------------------------------------------- archivos
@@ -1325,15 +1709,16 @@ async fn activar_tunel(
     tunel_id: i64,
     peticion_id: u64,
 ) {
-    let solicitante = cliente_id;
-    match tuneles::activar(
+    let resultado = tuneles::activar(
         estado,
         tunel_id,
         crate::protocolo::OrigenTunel::Manual,
-        solicitante,
+        Some(cliente_id),
     )
-    .await
-    {
+    .await;
+    // La respuesta sale con la anotación ya escrita (T21).
+    confirmar_escritura(estado).await;
+    match resultado {
         Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
         Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
     }
@@ -1360,6 +1745,7 @@ async fn parar_tunel(
             .await
             .ok();
     }
+    confirmar_escritura(estado).await;
     responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
 }
 
@@ -1370,7 +1756,9 @@ async fn relanzar_tunel(
     tunel_id: i64,
     peticion_id: u64,
 ) {
-    match tuneles::relanzar(estado, tunel_id, cliente_id).await {
+    let resultado = tuneles::relanzar(estado, tunel_id, cliente_id).await;
+    confirmar_escritura(estado).await;
+    match resultado {
         Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
         Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
     }
@@ -1382,8 +1770,10 @@ async fn abrir_sftp(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
     host_id: i64,
+    peticion_id: Option<u64>,
+    modo: sftp::ModoSftp,
 ) {
-    match sftp::asegurar(estado, host_id, cliente_id).await {
+    match sftp::asegurar(estado, host_id, cliente_id, modo).await {
         Ok((_, dir_inicio)) => {
             responder(
                 estado,
@@ -1391,11 +1781,12 @@ async fn abrir_sftp(
                 MensajeServidor::SftpAbierto {
                     host_id,
                     dir_inicio,
+                    peticion_id,
                 },
             )
             .await;
         }
-        Err(motivo) => responder_error(estado, cliente_id, motivo, None).await,
+        Err(motivo) => responder_error(estado, cliente_id, motivo, peticion_id).await,
     }
 }
 
@@ -1496,6 +1887,9 @@ async fn borrar_remoto(
         resultado: ResultadoRegistro::Ok,
     });
     drop(estado_bloqueado);
+    // `Hecho` sale con la fila ya escrita (T21): quien lo reciba puede leer
+    // `REGISTRO` y encontrarla.
+    confirmar_escritura(estado).await;
     responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
 }
 
@@ -1594,7 +1988,9 @@ async fn transferir(
 ) {
     // El canal debe estar abierto: la vista Archivos lo pide al entrar.
     if sftp::canal_abierto(estado, host_id).await.is_none() {
-        if let Err(motivo) = sftp::asegurar(estado, host_id, cliente_id).await {
+        if let Err(motivo) =
+            sftp::asegurar(estado, host_id, cliente_id, sftp::ModoSftp::Archivos).await
+        {
             responder_error(estado, cliente_id, motivo, None).await;
             return;
         }
@@ -1713,6 +2109,47 @@ fn imprime_tuneles(tuneles: &[crate::protocolo::InfoTunel]) {
     }
 }
 
+/// Ejecuciones de snippets en curso: snippet, hosts y progreso.
+fn imprime_ejecuciones(ejecuciones: &[crate::protocolo::InfoEjecucion]) {
+    let en_curso: Vec<&crate::protocolo::InfoEjecucion> = ejecuciones
+        .iter()
+        .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
+        .collect();
+    if en_curso.is_empty() {
+        println!("Sin ejecuciones de snippets en curso.");
+        return;
+    }
+    println!("Ejecuciones en curso: {}", en_curso.len());
+    println!(
+        "{:<5} {:<28} {:<7} {:<8} {:<8} PROGRESO",
+        "ID", "SNIPPET", "HOSTS", "OK", "FALLO"
+    );
+    for ejecucion in en_curso {
+        let cuenta = |estados: &[crate::protocolo::EstadoHostEjecucion]| {
+            ejecucion
+                .hosts
+                .iter()
+                .filter(|host| estados.contains(&host.estado))
+                .count()
+        };
+        use crate::protocolo::EstadoHostEjecucion as E;
+        let terminados = ejecucion
+            .hosts
+            .iter()
+            .filter(|host| host.estado.es_final())
+            .count();
+        println!(
+            "{:<5} {:<28} {:<7} {:<8} {:<8} {terminados}/{} terminados",
+            ejecucion.id,
+            recortar_texto(&ejecucion.nombre, 28),
+            ejecucion.hosts.len(),
+            cuenta(&[E::Ok]),
+            cuenta(&[E::Fallo, E::Error]),
+            ejecucion.hosts.len(),
+        );
+    }
+}
+
 /// Recorta un texto a un ancho, con puntos suspensivos si sobra.
 fn recortar_texto(texto: &str, ancho: usize) -> String {
     if texto.chars().count() <= ancho {
@@ -1736,6 +2173,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             return Ok(1);
         }
     };
+    let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
     match leer_respuesta(&mut stream).await? {
         MensajeServidor::Bienvenida {
@@ -1745,6 +2183,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             sesiones,
             transferencias,
             tuneles,
+            ejecuciones,
             ..
         } => {
             println!(
@@ -1774,11 +2213,14 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             }
             imprime_cola(&transferencias);
             imprime_tuneles(&tuneles);
+            imprime_ejecuciones(&ejecuciones);
             Ok(0)
         }
-        MensajeServidor::VersionIncompatible { version } => {
+        MensajeServidor::VersionIncompatible { version, pid } => {
+            let pid = pid.or(pid_par);
             println!(
-                "El servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir."
+                "El servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir.",
+                pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
             );
             Ok(1)
         }
@@ -1794,7 +2236,8 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
 }
 
 /// `magi servidor parar`: cierra las sesiones y apaga el servidor, con
-/// confirmación si hay sesiones vivas (salvo `--si`).
+/// confirmación si hay sesiones vivas (salvo `--si`). Ante un servidor de
+/// otra versión, muestra su pid y le envía `SIGTERM` tras confirmar.
 pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     let ruta = ruta_socket(rutas);
     let mut stream = match UnixStream::connect(&ruta).await {
@@ -1807,32 +2250,45 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             return Ok(1);
         }
     };
+    // El pid del otro extremo del socket, por si no habla nuestro protocolo.
+    let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    let (cuantas, tuneles_vivos) = match leer_respuesta(&mut stream).await? {
+    let (cuantas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(&mut stream).await? {
         MensajeServidor::Bienvenida {
-            sesiones, tuneles, ..
+            sesiones,
+            tuneles,
+            ejecuciones,
+            ..
         } => (
             sesiones.len(),
             tuneles
                 .iter()
                 .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
                 .count(),
+            ejecuciones
+                .iter()
+                .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
+                .count(),
         ),
-        MensajeServidor::VersionIncompatible { version } => {
-            println!(
-                "El servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}; no se puede parar con este comando."
-            );
-            return Ok(1);
+        MensajeServidor::VersionIncompatible { version, pid } => {
+            drop(stream);
+            // El pid del kernel antes que el que dice el propio servidor.
+            return parar_otra_version(rutas, version, pid_par.or(pid), si).await;
         }
         _ => {
             println!("Respuesta inesperada del servidor.");
             return Ok(1);
         }
     };
-    if (cuantas > 0 || tuneles_vivos > 0) && !si {
+    if (cuantas > 0 || tuneles_vivos > 0 || ejecuciones_vivas > 0) && !si {
         let mut aviso = format!("Hay {cuantas} sesión(es) abierta(s)");
         if tuneles_vivos > 0 {
-            aviso.push_str(&format!(" y {tuneles_vivos} túnel(es) levantado(s)"));
+            aviso.push_str(&format!(", {tuneles_vivos} túnel(es) levantado(s)"));
+        }
+        if ejecuciones_vivas > 0 {
+            aviso.push_str(&format!(
+                " y {ejecuciones_vivas} ejecución(es) de snippets en curso (se cancelarán)"
+            ));
         }
         print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
         use std::io::Write as _;
@@ -1854,6 +2310,99 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     let _ = stream.read_to_end(&mut resto).await;
     println!("Servidor detenido.");
     Ok(0)
+}
+
+/// Un servidor de otra versión no entiende `Parar`: se le manda `SIGTERM`
+/// (con confirmación salvo `--si`) y se espera a que suelte el lock.
+async fn parar_otra_version(
+    rutas: &Rutas,
+    version: u32,
+    pid: Option<u32>,
+    si: bool,
+) -> Result<i32> {
+    let Some(pid) = pid else {
+        println!(
+            "El servidor en marcha habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}, y no se pudo averiguar su pid. Búscalo con «pgrep -f 'magi --servidor'» y páralo con «kill <pid>»."
+        );
+        return Ok(1);
+    };
+    println!(
+        "El servidor en marcha (pid {pid}) habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}."
+    );
+    if !si {
+        print!(
+            "¿Enviarle SIGTERM? Sus sesiones se cerrarán{}. [s/N] ",
+            if version < VERSION_PROTOCOLO {
+                " (un servidor de una versión anterior no las anota al cerrarlas)"
+            } else {
+                ""
+            }
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        let mut respuesta = String::new();
+        if std::io::stdin().read_line(&mut respuesta).is_err()
+            || !respuesta.trim().eq_ignore_ascii_case("s")
+        {
+            println!("No se ha parado el servidor.");
+            return Ok(0);
+        }
+    }
+    // La pregunta no tiene plazo: el servidor pudo pararse solo mientras
+    // tanto (y su pid, reutilizarse). Si el lock ya está libre, no se manda
+    // nada a nadie.
+    if crate::cliente::lock_libre(&ruta_lock(rutas)) {
+        let _ = std::fs::remove_file(ruta_socket(rutas));
+        println!("El servidor ya se había detenido (pid {pid}).");
+        return Ok(0);
+    }
+    if parar_por_senal(rutas, pid).await? {
+        println!("Servidor detenido (pid {pid}).");
+        Ok(0)
+    } else {
+        println!("El servidor no se detuvo en 10 s; prueba «kill -9 {pid}».");
+        Ok(1)
+    }
+}
+
+/// Pid del proceso al otro lado del socket (`SO_PEERCRED` en Linux,
+/// `LOCAL_PEERPID` en macOS), solo si es del mismo usuario y no somos
+/// nosotros: es el servidor al que se le podría mandar una señal.
+pub fn pid_del_par(stream: &UnixStream) -> Option<u32> {
+    let credencial = stream.peer_cred().ok()?;
+    let pid = credencial.pid()?;
+    if pid <= 1 || pid as u32 == std::process::id() {
+        return None;
+    }
+    if credencial.uid() != nix::unistd::getuid().as_raw() {
+        return None;
+    }
+    Some(pid as u32)
+}
+
+/// Manda `SIGTERM` al servidor y espera (hasta 10 s) a que el proceso
+/// termine y el lock quede libre. Si murió sin limpiar (una versión anterior
+/// no atiende la señal), se borra su socket huérfano. Devuelve si se detuvo.
+pub async fn parar_por_senal(rutas: &Rutas, pid: u32) -> Result<bool> {
+    let pid_nix = nix::unistd::Pid::from_raw(pid as i32);
+    match nix::sys::signal::kill(pid_nix, nix::sys::signal::Signal::SIGTERM) {
+        Ok(()) => {}
+        // Ya no existe: se paró solo entretanto.
+        Err(nix::errno::Errno::ESRCH) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!("enviando SIGTERM al pid {pid}: {error}"));
+        }
+    }
+    let inicio = std::time::Instant::now();
+    while inicio.elapsed() < Duration::from_secs(10) {
+        let vivo = nix::sys::signal::kill(pid_nix, None).is_ok();
+        if !vivo && crate::cliente::lock_libre(&ruta_lock(rutas)) {
+            let _ = std::fs::remove_file(ruta_socket(rutas));
+            return Ok(true);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(false)
 }
 
 async fn saludo_y_envio(stream: &mut UnixStream) -> Result<()> {

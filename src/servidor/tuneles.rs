@@ -24,35 +24,18 @@ use tracing::{info, warn};
 
 use crate::conexion::cliente::Cliente;
 use crate::conexion::reenvios::{Contadores, Reenvio, Reenvios};
-use crate::conexion::salto::Transporte;
 use crate::modelo::{Host, ResultadoRegistro, TipoTunel, Tunel};
 use crate::protocolo::{EstadoTunelRemoto, InfoTunel, MensajeServidor, OrigenTunel};
 use crate::registro;
 
-use super::{conexiones, difusion, sesiones, EstadoServidor};
+use super::conexiones::{self, ConexionTomada, PoliticaConexion, UsoCanal};
+use super::{difusion, sesiones, EstadoServidor};
 
 /// Cada cuánto se revisan las conexiones caídas y se refrescan los contadores.
 pub const REVISION: Duration = Duration::from_millis(500);
 
 /// Plazo de las operaciones que hablan con el host (pedir y cancelar reenvíos).
 const PLAZO: Duration = Duration::from_secs(10);
-
-/// De dónde salió la conexión que sostiene el túnel.
-enum Conexion {
-    /// Del pool: se libera por identidad.
-    DelPool(Arc<Handle<Cliente>>),
-    /// La abrió el túnel (el host no multiplexa): se cierra al parar.
-    Propia(Transporte),
-}
-
-impl Conexion {
-    fn handle(&self) -> Arc<Handle<Cliente>> {
-        match self {
-            Conexion::DelPool(handle) => handle.clone(),
-            Conexion::Propia(transporte) => transporte.handle.clone(),
-        }
-    }
-}
 
 /// Un túnel levantado, con lo que hace falta para pararlo.
 pub struct TunelActivo {
@@ -69,11 +52,13 @@ pub struct TunelActivo {
     pub automatico: bool,
     pub estado: EstadoTunelRemoto,
     pub origen: OrigenTunel,
+    /// Ventana que lo pidió; 0 si lo levantó el ciclo automático.
     pub solicitante: u32,
     pub desde: i64,
     pub ultimo_error: Option<String>,
     pub contadores: Arc<Contadores>,
-    conexion: Option<Conexion>,
+    /// Canal contado en la conexión del pool: se suelta por identidad.
+    conexion: Option<ConexionTomada>,
     /// Manda parar al bucle que acepta conexiones (local y dinámico).
     parada: Option<oneshot::Sender<()>>,
     /// Avisa a las copias en curso de que el túnel se para: hay que cortarlas.
@@ -149,13 +134,15 @@ pub fn hay_activos(estado: &EstadoServidor) -> bool {
 
 /// Levanta un túnel. Si ya estaba en marcha se ignora (el usuario lo pidió dos
 /// veces); si estaba caído, esto es un relanzamiento y los contadores vuelven a
-/// cero.
+/// cero. Sin solicitante (el ciclo automático) la conexión no dialoga: si
+/// necesitara credenciales, el túnel queda caído con el motivo.
 pub async fn activar(
     estado: &Arc<Mutex<EstadoServidor>>,
     tunel_id: i64,
     origen: OrigenTunel,
-    solicitante: u32,
+    solicitante: Option<u32>,
 ) -> Result<(), String> {
+    let id_ventana = solicitante.unwrap_or(0);
     {
         let estado_bloqueado = estado.lock().await;
         if let Some(activo) = estado_bloqueado.tuneles.get(&tunel_id) {
@@ -199,14 +186,26 @@ pub async fn activar(
     // levanta dos veces mientras se abre la conexión. La comprobación y la
     // reserva van en el mismo bloqueo: si no, dos pulsaciones rápidas del
     // usuario colarían dos levantamientos del mismo túnel.
+    // Los contadores son nuevos en cada activación: sirven también de
+    // identidad para saber, al terminar, si la entrada sigue siendo la suya.
     let contadores = Arc::new(Contadores::default());
+    let identidad = contadores.clone();
     let (cancelacion, aviso) = watch::channel(false);
     {
         let mut estado_bloqueado = estado.lock().await;
+        if estado_bloqueado.apagando {
+            return Err(conexiones::APAGANDO.to_string());
+        }
         if let Some(activo) = estado_bloqueado.tuneles.get(&tunel_id) {
             if activo.estado.en_marcha() {
                 return Ok(());
             }
+        }
+        // El ciclo automático solo levanta con el host en uso, comprobado en
+        // el mismo bloqueo que la inserción: si la pestaña se cerró mientras
+        // tanto, su `canales_cambiaron` ya no encontraría este túnel.
+        if origen == OrigenTunel::Automatico && !hay_canales_con(&estado_bloqueado, tunel.host_id) {
+            return Ok(());
         }
         estado_bloqueado.tuneles.insert(
             tunel_id,
@@ -222,7 +221,7 @@ pub async fn activar(
                 automatico: tunel.automatico,
                 estado: EstadoTunelRemoto::Activando,
                 origen,
-                solicitante,
+                solicitante: id_ventana,
                 desde: Utc::now().timestamp(),
                 ultimo_error: None,
                 contadores: contadores.clone(),
@@ -235,27 +234,25 @@ pub async fn activar(
     }
     difundir(estado).await;
 
-    // Cerrojo por host: dos túneles del mismo host que se levantan a la vez
-    // compartirían dos conexiones y, con `multiplexar`, la segunda desplazaría
-    // a la primera del pool y la mataría.
-    let cerrojo = {
-        let mut estado_bloqueado = estado.lock().await;
-        estado_bloqueado
-            .tuneles_cerrojos
-            .entry(tunel.host_id)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+    // Dos túneles del mismo host que se levantan a la vez comparten una única
+    // conexión: el cerrojo por host lo pone `conexion_para_canal`.
+    let politica = match solicitante {
+        Some(solicitante) => PoliticaConexion::Interactiva {
+            solicitante,
+            id_solicitud,
+        },
+        None => PoliticaConexion::NoInteractiva {
+            solicitante: None,
+            id_solicitud,
+        },
     };
-    let _guardia = cerrojo.lock().await;
-
     let levantado = levantar(
         estado,
         &tunel,
         &host,
         &todos_los_hosts,
         &rutas,
-        id_solicitud,
-        solicitante,
+        politica,
         contadores,
         aviso,
     )
@@ -274,8 +271,10 @@ pub async fn activar(
                 .get(&tunel_id)
                 .is_some_and(|activo| {
                     activo.estado == EstadoTunelRemoto::Activando
-                        && activo.solicitante == solicitante
-                });
+                        && Arc::ptr_eq(&activo.contadores, &identidad)
+                })
+                && (origen != OrigenTunel::Automatico
+                    || hay_canales_con(&estado_bloqueado, tunel.host_id));
             if !sigue {
                 drop(estado_bloqueado);
                 soltar_levantado(estado, tunel.host_id, levantado).await;
@@ -314,8 +313,18 @@ pub async fn activar(
             );
         }
         Err(motivo) => {
-            caido(estado, tunel_id, &motivo, true).await;
-            difundir(estado).await;
+            // Solo si la entrada sigue siendo esta activación: una parada, un
+            // relanzamiento o el ciclo automático pueden haberla sustituido.
+            let es_la_suya = estado
+                .lock()
+                .await
+                .tuneles
+                .get(&tunel_id)
+                .is_some_and(|activo| Arc::ptr_eq(&activo.contadores, &identidad));
+            if es_la_suya {
+                caido(estado, tunel_id, &motivo, true).await;
+                difundir(estado).await;
+            }
             return Err(motivo);
         }
     }
@@ -326,7 +335,7 @@ pub async fn activar(
 /// Lo que deja levantado un túnel: con qué conexión, escuchando dónde y cómo
 /// pararlo.
 struct Levantado {
-    conexion: Conexion,
+    conexion: ConexionTomada,
     escucha_efectiva: String,
     parada: Option<oneshot::Sender<()>>,
     reenvio: Option<(String, u32)>,
@@ -340,24 +349,27 @@ async fn levantar(
     host: &Host,
     todos_los_hosts: &HashMap<i64, Host>,
     rutas: &crate::config::Rutas,
-    id_solicitud: u32,
-    solicitante: u32,
+    politica: PoliticaConexion,
     contadores: Arc<Contadores>,
     aviso: watch::Receiver<bool>,
 ) -> Result<Levantado, String> {
-    let (handle, propia) = conexiones::conexion_para_canal(
-        estado,
-        host,
-        todos_los_hosts,
-        rutas,
-        id_solicitud,
-        solicitante,
-    )
-    .await?;
-    let conexion = match propia {
-        Some(transporte) => Conexion::Propia(transporte),
-        None => Conexion::DelPool(handle.clone()),
+    // Si el túnel se para mientras espera el cerrojo o la conexión, la
+    // apertura se abandona: no quedan diálogos para un túnel que ya no existe.
+    let mut parado = aviso.clone();
+    let conexion = tokio::select! {
+        conexion = conexiones::conexion_para_canal(
+            estado,
+            host,
+            todos_los_hosts,
+            rutas,
+            politica,
+            UsoCanal::Subsistema,
+        ) => conexion?,
+        _ = parado.wait_for(|parar| *parar) => {
+            return Err("el túnel se paró mientras se levantaba".to_string());
+        }
     };
+    let handle = conexion.handle.clone();
 
     let resultado = levantar_con(tunel, handle, contadores, estado, aviso).await;
     match resultado {
@@ -368,7 +380,7 @@ async fn levantar(
             reenvio,
         }),
         Err(motivo) => {
-            soltar(estado, tunel.host_id, conexion).await;
+            conexion.soltar().await;
             Err(motivo)
         }
     }
@@ -467,22 +479,6 @@ async fn levantar_con(
     }
 }
 
-/// Aparta un canal del pool (por identidad) o cierra la conexión propia.
-async fn soltar(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64, conexion: Conexion) {
-    match conexion {
-        Conexion::DelPool(handle) => {
-            estado.lock().await.pool.liberar_si_es(host_id, &handle);
-        }
-        Conexion::Propia(transporte) => {
-            conexiones::desconectar(
-                transporte.handle,
-                transporte.saltos.into_iter().map(Arc::new).collect(),
-            )
-            .await;
-        }
-    }
-}
-
 /// Un túnel que se estaba levantando se queda sin quien conteste a los
 /// diálogos: pasa a caído en vez de esperar al plazo.
 pub async fn caido_por_solicitante(
@@ -533,11 +529,11 @@ async fn caido(estado: &Arc<Mutex<EstadoServidor>>, tunel_id: i64, motivo: &str,
             .reenvios
             .quitar(host_id, &direccion, puerto);
         if let Some(conexion) = &conexion {
-            cancelar_reenvio(&conexion.handle(), &direccion, puerto).await;
+            cancelar_reenvio(&conexion.handle, &direccion, puerto).await;
         }
     }
     if let Some(conexion) = conexion {
-        soltar(estado, host_id, conexion).await;
+        conexion.soltar().await;
     }
 }
 
@@ -570,9 +566,9 @@ async fn soltar_levantado(
             .await
             .reenvios
             .quitar(host_id, &direccion, puerto);
-        cancelar_reenvio(&levantado.conexion.handle(), &direccion, puerto).await;
+        cancelar_reenvio(&levantado.conexion.handle, &direccion, puerto).await;
     }
-    soltar(estado, host_id, levantado.conexion).await;
+    levantado.conexion.soltar().await;
 }
 
 fn partir_escucha(escucha: &str) -> Result<(String, u16), String> {
@@ -650,18 +646,19 @@ async fn aceptar_local(
         let mut aviso = aviso.clone();
         tokio::spawn(async move {
             let _ = flujo.set_nodelay(true);
-            let canal = tokio::time::timeout(
-                PLAZO,
-                handle.channel_open_direct_tcpip(
-                    destino.clone(),
-                    u32::from(puerto_destino),
-                    origen.ip().to_string(),
-                    u32::from(origen.port()),
-                ),
-            )
-            .await
-            .map_err(|_| "se agotó el plazo abriendo el canal".to_string())
-            .and_then(|resultado| resultado.map_err(|error| error.to_string()));
+            let apertura = handle.clone();
+            let (hacia, ip_origen) = (destino.clone(), origen.ip().to_string());
+            let canal = conexiones::abrir_con_plazo(PLAZO, async move {
+                apertura
+                    .channel_open_direct_tcpip(
+                        hacia,
+                        u32::from(puerto_destino),
+                        ip_origen,
+                        u32::from(origen.port()),
+                    )
+                    .await
+            })
+            .await;
             let canal = match canal {
                 Ok(canal) => canal,
                 Err(error) => {
@@ -723,18 +720,14 @@ async fn aceptar_socks(
                 super::socks5::Peticion::Conectar(destino, puerto) => (destino, u32::from(puerto)),
                 super::socks5::Peticion::NoSoportada | super::socks5::Peticion::Invalida => return,
             };
-            let canal = tokio::time::timeout(
-                PLAZO,
-                handle.channel_open_direct_tcpip(
-                    destino.clone(),
-                    puerto,
-                    origen.ip().to_string(),
-                    u32::from(origen.port()),
-                ),
-            )
-            .await
-            .map_err(|_| "se agotó el plazo abriendo el canal".to_string())
-            .and_then(|resultado| resultado.map_err(|error| error.to_string()));
+            let apertura = handle.clone();
+            let (hacia, ip_origen) = (destino.clone(), origen.ip().to_string());
+            let canal = conexiones::abrir_con_plazo(PLAZO, async move {
+                apertura
+                    .channel_open_direct_tcpip(hacia, puerto, ip_origen, u32::from(origen.port()))
+                    .await
+            })
+            .await;
             let canal = match canal {
                 Ok(canal) => canal,
                 Err(error) => {
@@ -826,7 +819,7 @@ async fn cerrar(estado: &Arc<Mutex<EstadoServidor>>, mut activo: TunelActivo, mo
         if let Some(conexion) = &activo.conexion {
             // Cancelar el reenvío no toca a las pestañas que compartan la
             // conexión: solo deja de aceptar conexiones en ese puerto.
-            cancelar_reenvio(&conexion.handle(), &direccion, puerto).await;
+            cancelar_reenvio(&conexion.handle, &direccion, puerto).await;
         }
     }
     let (_, aceptadas, subidos, bajados) = activo.contadores.instantanea();
@@ -844,7 +837,7 @@ async fn cerrar(estado: &Arc<Mutex<EstadoServidor>>, mut activo: TunelActivo, mo
         resultado: ResultadoRegistro::Ok,
     });
     if let Some(conexion) = activo.conexion.take() {
-        soltar(estado, activo.host_id, conexion).await;
+        conexion.soltar().await;
     }
 }
 
@@ -863,7 +856,7 @@ pub async fn relanzar(
         }
         estado_bloqueado.tuneles.remove(&tunel_id);
     }
-    activar(estado, tunel_id, OrigenTunel::Manual, solicitante).await
+    activar(estado, tunel_id, OrigenTunel::Manual, Some(solicitante)).await
 }
 
 /// Descarta el error de un túnel caído: la fila vuelve a «inactivo» sin
@@ -968,16 +961,28 @@ pub async fn canales_cambiaron(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64
 
 /// ¿Tiene este host alguna pestaña o canal SFTP vivo? Los túneles no cuentan.
 async fn hay_canales(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64) -> bool {
-    let estado_bloqueado = estado.lock().await;
-    sesiones::canales_de_pestana(&estado_bloqueado, host_id) > 0
-        || estado_bloqueado.sftp.contains_key(&host_id)
+    hay_canales_con(&*estado.lock().await, host_id)
 }
 
-/// Levanta los túneles automáticos del host que no estén ya en marcha.
+/// Lo mismo, con el estado ya bloqueado.
+fn hay_canales_con(estado: &EstadoServidor, host_id: i64) -> bool {
+    sesiones::canales_de_pestana(estado, host_id) > 0
+        || estado
+            .sftp
+            .get(&host_id)
+            .is_some_and(|canal| canal.para_archivos)
+}
+
+/// Levanta los túneles automáticos del host que no estén ya en marcha. Antes
+/// de cada uno se vuelve a mirar si el host sigue en uso: levantar uno puede
+/// tardar y la pestaña puede haberse cerrado entretanto.
 async fn activar_automaticos(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64) {
     for fila in tuneles_de_host(estado, host_id).await {
         if !fila.automatico {
             continue;
+        }
+        if !hay_canales(estado, host_id).await {
+            return;
         }
         let parado_a_mano = estado
             .lock()
@@ -997,7 +1002,7 @@ async fn activar_automaticos(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64) 
         if !ya_activo {
             // El ciclo automático no dialoga nunca: si necesita credenciales, el
             // túnel queda caído con el motivo y el usuario decide.
-            let _ = activar(estado, fila.id, OrigenTunel::Automatico, 0).await;
+            let _ = activar(estado, fila.id, OrigenTunel::Automatico, None).await;
         }
     }
 }
@@ -1035,14 +1040,75 @@ pub async fn parar_de_host(estado: &Arc<Mutex<EstadoServidor>>, host_id: i64, mo
     }
 }
 
-/// Para todos los túneles (apagado del servidor).
-pub async fn parar_todos(estado: &Arc<Mutex<EstadoServidor>>, motivo: &str) {
-    let ids: Vec<i64> = {
-        let estado_bloqueado = estado.lock().await;
-        estado_bloqueado.tuneles.keys().copied().collect()
+/// Lo que queda de un túnel retirado al apagar: lo que toca la red.
+pub struct TunelRetirado {
+    conexion: Option<ConexionTomada>,
+    reenvio: Option<(String, u32)>,
+}
+
+/// Apagado del servidor, primera fase (sin red): saca todos los túneles,
+/// corta listeners y copias, olvida sus reenvíos y anota `tunel_cerrado` de
+/// los activos con sus totales. Lo que habla con el host va aparte
+/// (`cerrar_retirado`), para que un host que no contesta no se coma el plazo
+/// del apagado antes de anotar nada.
+pub async fn retirar_todos(
+    estado: &Arc<Mutex<EstadoServidor>>,
+    motivo: &str,
+) -> Vec<TunelRetirado> {
+    let (activos, bd, reenvios) = {
+        let mut estado_bloqueado = estado.lock().await;
+        let activos: Vec<TunelActivo> = estado_bloqueado
+            .tuneles
+            .drain()
+            .map(|(_, activo)| activo)
+            .collect();
+        (
+            activos,
+            estado_bloqueado.bd.clone(),
+            estado_bloqueado.reenvios.clone(),
+        )
     };
-    for tunel_id in ids {
-        let _ = parar(estado, tunel_id, motivo, false).await;
+    let mut retirados = Vec::new();
+    for mut activo in activos {
+        if let Some(parada) = activo.parada.take() {
+            let _ = parada.send(());
+        }
+        let _ = activo.cancelacion.send(true);
+        let reenvio = activo.reenvio.take();
+        if let Some((direccion, puerto)) = &reenvio {
+            reenvios.quitar(activo.host_id, direccion, *puerto);
+        }
+        // Un caído ya anotó su caída y uno que se levantaba no llegó a abrir.
+        if activo.estado == EstadoTunelRemoto::Activo {
+            let (_, aceptadas, subidos, bajados) = activo.contadores.instantanea();
+            let _ = bd.send(super::OrdenBd::Anotar {
+                tipo: registro::TUNEL_CERRADO.to_string(),
+                host_id: Some(activo.host_id),
+                identidad_id: None,
+                detalle: format!(
+                    "{} · {motivo} · {aceptadas} conexión(es) · ↓ {} · ↑ {}",
+                    activo.nombre,
+                    crate::archivos::tamano_legible(bajados),
+                    crate::archivos::tamano_legible(subidos)
+                ),
+                resultado: ResultadoRegistro::Ok,
+            });
+        }
+        retirados.push(TunelRetirado {
+            conexion: activo.conexion.take(),
+            reenvio,
+        });
+    }
+    retirados
+}
+
+/// Segunda fase: cancela la escucha remota (con plazo) y suelta la conexión.
+pub async fn cerrar_retirado(retirado: TunelRetirado) {
+    if let (Some(conexion), Some((direccion, puerto))) = (&retirado.conexion, &retirado.reenvio) {
+        cancelar_reenvio(&conexion.handle, direccion, *puerto).await;
+    }
+    if let Some(conexion) = retirado.conexion {
+        conexion.soltar().await;
     }
 }
 
@@ -1066,7 +1132,7 @@ pub async fn revisar(estado: Arc<Mutex<EstadoServidor>>) {
                     activo
                         .conexion
                         .as_ref()
-                        .is_some_and(|conexion| conexion.handle().is_closed())
+                        .is_some_and(|conexion| conexion.handle.is_closed())
                 })
                 .map(|activo| {
                     (

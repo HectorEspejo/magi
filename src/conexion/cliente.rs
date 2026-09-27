@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 use super::huellas::{self, EstadoHuella};
-use super::salto::{conectar_cadena, construir_cadena, Transporte};
+use super::salto::{conectar_cadena, construir_cadena};
 use super::terminal::{self, Pantalla};
 use super::{ComandoConexion, EventoConexion, PlanConexion};
 use crate::modelo::{EstadoSesion, Host, IdentidadRef};
@@ -289,7 +289,7 @@ pub async fn sesion_completa(
     }
 
     let pantalla = terminal::nuevo(plan.filas, plan.cols);
-    let mut canal = match abrir_canal(&transporte, plan.cols, plan.filas).await {
+    let mut canal = match abrir_canal(&transporte.handle, plan.cols, plan.filas).await {
         Ok(canal) => canal,
         Err(error) => return emitir_error(&tx, host_id, &error.to_string()),
     };
@@ -310,12 +310,14 @@ pub async fn sesion_completa(
     plan.registro.lock().await.remove(&host_id);
 }
 
+/// Abre un canal de sesión con pty y shell sobre una conexión ya autenticada
+/// (propia o del pool: con `multiplexar` varias pestañas comparten conexión).
 pub async fn abrir_canal(
-    transporte: &Transporte,
+    handle: &Handle<Cliente>,
     cols: u16,
     filas: u16,
 ) -> Result<Channel<russh::client::Msg>, ErrorCliente> {
-    let canal = transporte.handle.channel_open_session().await?;
+    let canal = handle.channel_open_session().await?;
     canal
         .request_pty(
             false,
@@ -498,6 +500,10 @@ pub async fn autenticar(
                 // cliente solicitante por el protocolo.
                 return autenticar_con_contrasena(handle, host, contexto, &usuario, true).await;
             }
+            if contexto.fuente_contrasena == super::FuenteContrasena::SolicitanteLlavero {
+                return autenticar_con_llavero_del_solicitante(handle, host, contexto, &usuario)
+                    .await;
+            }
             let mut habia_entrada = false;
             match crate::llavero::recuperar(&host.nombre, &usuario) {
                 Ok(Some(contrasena)) => {
@@ -571,8 +577,8 @@ async fn autenticar_con_contrasena(
 ) -> Result<IdentidadUsada, ErrorCliente> {
     if !contexto.interactivo {
         return Err(ErrorCliente::Mensaje(format!(
-            "«{}» autentica con contraseña y el sondeo no dialoga; \
-             conéctate una vez con ↵ o usa una clave",
+            "«{}» pide la contraseña cada vez y una operación automática no dialoga; \
+             guárdala en el llavero (conéctate una vez con ↵ y marca «recordar») o usa una clave",
             host.nombre
         )));
     }
@@ -627,6 +633,45 @@ async fn autenticar_con_contrasena(
     Err(ErrorCliente::Mensaje(
         "contraseña incorrecta tras 3 intentos".to_string(),
     ))
+}
+
+/// Plazo para que el solicitante conteste con la contraseña de su llavero.
+pub const PLAZO_LLAVERO: Duration = Duration::from_secs(10);
+
+/// Contraseña de una conexión automática: la pide al solicitante, que solo
+/// puede sacarla de su llavero (un intento, con plazo). Nunca hay diálogo.
+async fn autenticar_con_llavero_del_solicitante(
+    handle: &mut Handle<Cliente>,
+    host: &Host,
+    contexto: &Contexto,
+    usuario: &str,
+) -> Result<IdentidadUsada, ErrorCliente> {
+    let (responder, respuesta) = oneshot::channel();
+    let _ = contexto.tx.send(EventoConexion::PideContrasenaLlavero {
+        host: host.nombre.clone(),
+        usuario: usuario.to_string(),
+        responder,
+    });
+    let Ok(Ok(Some(contrasena))) = tokio::time::timeout(PLAZO_LLAVERO, respuesta).await else {
+        return Err(ErrorCliente::Mensaje(format!(
+            "«{}» usa contraseña y no hay ninguna guardada en el llavero; \
+             conéctate una vez con ↵ y marca «recordar»",
+            host.nombre
+        )));
+    };
+    let resultado = handle
+        .authenticate_password(usuario, contrasena.as_str())
+        .await?;
+    if !resultado.success() {
+        return Err(ErrorCliente::Mensaje(format!(
+            "la contraseña del llavero de «{}» ya no vale; conéctate una vez con ↵",
+            host.nombre
+        )));
+    }
+    Ok(IdentidadUsada {
+        descripcion: "contraseña · llavero".to_string(),
+        huella: None,
+    })
 }
 
 /// Intenta todas las claves del agente o solo la de la huella indicada.
@@ -754,7 +799,7 @@ async fn cargar_clave(
     }
     if !contexto.interactivo {
         return Err(ErrorCliente::Mensaje(format!(
-            "la clave {} requiere frase y no hay diálogo posible",
+            "la clave {} requiere frase y no hay diálogo posible; cárgala en el agente con ssh-add",
             ruta.display()
         )));
     }

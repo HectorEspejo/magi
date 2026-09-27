@@ -9,7 +9,7 @@ const SELECCION: &str = "
            h.identidad_ref, h.salto_host_id, h.multiplexar, h.keepalive_seg,
            h.opciones_extra, h.origen, h.ultimo_estado, h.ultima_conexion_en,
            h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios,
-           h.sftp_dir_local, h.sftp_dir_remoto
+           h.sftp_dir_local, h.sftp_dir_remoto, h.snippet_al_conectar_id
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -38,6 +38,7 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
         servicios: fila.get(18)?,
         sftp_dir_local: fila.get(19)?,
         sftp_dir_remoto: fila.get(20)?,
+        snippet_al_conectar_id: fila.get(21)?,
     })
 }
 
@@ -262,6 +263,21 @@ pub fn contar(conexion: &Connection) -> Result<i64> {
         .query_row("SELECT COUNT(*) FROM HOSTS", [], |fila| fila.get(0))
         .context("contando hosts")?;
     Ok(total)
+}
+
+/// Fija (o quita) el «snippet al conectar» de un host. Va aparte de
+/// `DatosHost` para que la importación de `~/.ssh/config`, que reescribe la
+/// ficha, no lo pise.
+pub fn fijar_snippet_al_conectar(
+    conexion: &Connection,
+    id: i64,
+    snippet_id: Option<i64>,
+) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET snippet_al_conectar_id = ?1, actualizado_en = ?2 WHERE id = ?3",
+        params![snippet_id, fecha_ahora(), id],
+    )?;
+    Ok(())
 }
 
 /// Guarda los últimos directorios de la vista Archivos de un host. No toca

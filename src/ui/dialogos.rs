@@ -16,7 +16,7 @@ fn span_texto(contenido: &str) -> Span<'static> {
     Span::raw(contenido.to_string())
 }
 
-fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
+pub(crate) fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
     Span::styled(
         tecla.to_string(),
         Style::default()
@@ -28,13 +28,21 @@ fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
     let tema = &app.tema;
     match dialogo {
+        Dialogo::Snippets(crate::app::DialogoSnippets::Formulario(formulario)) => {
+            crate::ui::formulario_snippet::dibujar(marco, area, app, formulario);
+        }
+        Dialogo::Ejecutar(dialogo) => {
+            crate::ui::ejecutar::dibujar(marco, area, app, dialogo);
+        }
         Dialogo::Confirmar {
             titulo,
             lineas,
             peligro,
             ..
         } => {
-            let alto = lineas.len() as u16 + 4;
+            // Bordes (2), márgenes del modal (2), la línea en blanco y la de
+            // teclas: sin ellas la línea «s confirmar» quedaba recortada.
+            let alto = lineas.len() as u16 + 6;
             let recta = centrar(area, 66, alto);
             let mut contenido: Vec<Line> = lineas.iter().map(|texto| linea(texto)).collect();
             contenido.push(Line::from(""));
@@ -669,7 +677,8 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
             );
         }
         Dialogo::Detalle { titulo, lineas, .. } => {
-            let alto = lineas.len() as u16 + 4;
+            // Bordes y márgenes (4), la línea en blanco y la de teclas (2).
+            let alto = lineas.len() as u16 + 6;
             let recta = centrar(area, 74, alto);
             let mut contenido: Vec<Line> = lineas.iter().map(|texto| linea(texto)).collect();
             contenido.push(Line::from(""));
@@ -1112,7 +1121,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
     }
 }
 
-fn modal(
+pub(crate) fn modal(
     marco: &mut Frame,
     recta: Rect,
     titulo: &str,

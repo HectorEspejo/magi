@@ -1,5 +1,10 @@
 use magi::almacen::Almacen;
+use magi::deliberacion::{
+    ComprobacionesHost, DatosVerificaciones, EjecucionResultado, NuevaDeliberacion,
+    ResultadoDeliberacion, Veredicto,
+};
 use magi::modelo::{DatosHost, DatosTunel, IdentidadRef, Origen, TipoTunel, UltimoEstado};
+use magi::snippets::{DatosSnippet, Destino};
 
 fn datos(nombre: &str) -> DatosHost {
     DatosHost {
@@ -33,6 +38,10 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         "IDENTIDADES",
         "REGISTRO",
         "TUNELES",
+        "SNIPPETS",
+        "SNIPPET_DESTINOS",
+        "VERIFICACIONES_HOST",
+        "DELIBERACIONES",
     ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
@@ -68,7 +77,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
@@ -601,4 +610,768 @@ fn el_puerto_cero_y_los_tipos_distintos_no_chocan() {
 
     assert_eq!(almacen.tuneles_de_host(host).unwrap().len(), 3);
     assert_eq!(almacen.tuneles_de_host(otro).unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------- snippets
+
+fn snippet_de(nombre: &str, destinos: Vec<Destino>) -> DatosSnippet {
+    DatosSnippet {
+        nombre: nombre.to_string(),
+        comando: "systemctl restart nginx".to_string(),
+        destinos,
+        ..DatosSnippet::default()
+    }
+}
+
+fn etiqueta(nombre: &str) -> Destino {
+    Destino::Etiqueta(nombre.to_string())
+}
+
+fn suelto(id: i64, nombre: &str) -> Destino {
+    Destino::Host {
+        id,
+        nombre: nombre.to_string(),
+    }
+}
+
+/// Filas de `SNIPPET_DESTINOS` que cumplen `condicion` (SQL fijo del test).
+fn contar_destinos(almacen: &Almacen, condicion: &str, parametro: i64) -> i64 {
+    almacen
+        .conexion()
+        .query_row(
+            &format!("SELECT COUNT(*) FROM SNIPPET_DESTINOS WHERE {condicion}"),
+            [parametro],
+            |fila| fila.get(0),
+        )
+        .unwrap()
+}
+
+fn contar_filas(almacen: &Almacen, tabla: &str) -> i64 {
+    almacen
+        .conexion()
+        .query_row(&format!("SELECT COUNT(*) FROM {tabla}"), [], |fila| {
+            fila.get(0)
+        })
+        .unwrap()
+}
+
+/// Una base de la fase 5 (cuatro migraciones) sube a la 5 sin perder hosts ni
+/// túneles, y los hosts estrenan `snippet_al_conectar_id` a NULL.
+#[test]
+fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        for migracion in &magi::almacen::migraciones::MIGRACIONES[..4] {
+            conexion.execute_batch(migracion).unwrap();
+        }
+        conexion.pragma_update(None, "user_version", 4).unwrap();
+        conexion
+            .execute(
+                "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
+                                    creado_en, actualizado_en, servicios, sftp_dir_remoto)
+                 VALUES ('fase5', '10.0.0.7', 22, '', 'manual',
+                         '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00',
+                         'nginx', '/srv')",
+                [],
+            )
+            .unwrap();
+        conexion
+            .execute(
+                "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
+                                      creado_en, actualizado_en)
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 1,
+                         '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00')",
+                [],
+            )
+            .unwrap();
+    }
+    let almacen = Almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+
+    let hosts = almacen.listar_hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    let host = &hosts[0];
+    assert_eq!(host.nombre, "fase5");
+    assert_eq!(host.servicios, "nginx");
+    assert_eq!(host.sftp_dir_remoto.as_deref(), Some("/srv"));
+    assert_eq!(host.snippet_al_conectar_id, None);
+    assert_eq!(almacen.tuneles_de_host(host.id).unwrap().len(), 1);
+    assert!(almacen.listar_snippets().unwrap().is_empty());
+    assert!(almacen.verificaciones_por_host().unwrap().is_empty());
+    assert_eq!(contar_filas(&almacen, "DELIBERACIONES"), 0);
+
+    // La columna nueva es una clave ajena que funciona en la base migrada.
+    let snippet = almacen
+        .crear_snippet(&snippet_de("al-conectar", vec![suelto(host.id, "fase5")]))
+        .unwrap();
+    almacen
+        .fijar_snippet_al_conectar(host.id, Some(snippet))
+        .unwrap();
+    assert_eq!(
+        almacen
+            .obtener_host(host.id)
+            .unwrap()
+            .snippet_al_conectar_id,
+        Some(snippet)
+    );
+}
+
+/// Borrar un snippet se lleva sus destinos (ON DELETE CASCADE) y no toca los
+/// hosts a los que apuntaba.
+#[test]
+fn borrar_un_snippet_borra_sus_destinos() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let otro = almacen
+        .crear_snippet(&snippet_de("otro", vec![etiqueta("web")]))
+        .unwrap();
+    let id = almacen
+        .crear_snippet(&snippet_de(
+            "reiniciar",
+            vec![etiqueta("web"), suelto(uno, "uno")],
+        ))
+        .unwrap();
+    assert_eq!(contar_destinos(&almacen, "snippet_id = ?1", id), 2);
+
+    almacen.borrar_snippet(id).unwrap();
+    assert_eq!(contar_destinos(&almacen, "snippet_id = ?1", id), 0);
+    assert!(almacen.obtener_snippet(id).is_err());
+    assert_eq!(almacen.listar_hosts().unwrap().len(), 1);
+    assert_eq!(
+        almacen.obtener_snippet(otro).unwrap().destinos,
+        vec![etiqueta("web")],
+        "los destinos de otro snippet no caen"
+    );
+}
+
+/// Borrar un host se lleva sus destinos sueltos (el snippet se queda con los
+/// demás) y su fila de `VERIFICACIONES_HOST`.
+#[test]
+fn borrar_un_host_borra_sus_destinos_sueltos_y_sus_verificaciones() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+    let id = almacen
+        .crear_snippet(&snippet_de(
+            "reiniciar",
+            vec![etiqueta("web"), suelto(uno, "uno"), suelto(dos, "dos")],
+        ))
+        .unwrap();
+    let salud = DatosVerificaciones {
+        salud: true,
+        ..DatosVerificaciones::default()
+    };
+    almacen.guardar_verificaciones(uno, &salud).unwrap();
+    almacen.guardar_verificaciones(dos, &salud).unwrap();
+
+    almacen.borrar_host(uno).unwrap();
+    assert_eq!(contar_destinos(&almacen, "host_id = ?1", uno), 0);
+    assert_eq!(
+        almacen.obtener_snippet(id).unwrap().destinos,
+        vec![etiqueta("web"), suelto(dos, "dos")]
+    );
+    assert_eq!(almacen.verificaciones_de_host(uno).unwrap(), None);
+    let restantes = almacen.verificaciones_por_host().unwrap();
+    assert_eq!(restantes.len(), 1);
+    assert!(restantes[&dos].salud);
+}
+
+/// Borrar un snippet deja sin «snippet al conectar» a los hosts que lo tenían
+/// y conserva la deliberación con `snippet_id` a NULL (ON DELETE SET NULL).
+#[test]
+fn borrar_un_snippet_deja_a_null_el_snippet_al_conectar_y_la_deliberacion() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let id = almacen
+        .crear_snippet(&snippet_de("tmux", vec![suelto(host, "uno")]))
+        .unwrap();
+    magi::almacen::hosts::fijar_snippet_al_conectar(almacen.conexion(), host, Some(id)).unwrap();
+    assert_eq!(
+        almacen.hosts_con_snippet_al_conectar(id).unwrap(),
+        vec![(host, "uno".to_string())]
+    );
+    let deliberacion = almacen
+        .crear_deliberacion(&NuevaDeliberacion {
+            snippet_id: Some(id),
+            accion: "tmux → uno".to_string(),
+            hosts: vec![(host, "uno".to_string())],
+            comprobaciones: Vec::new(),
+            resultado: ResultadoDeliberacion::Aprobada,
+            bloqueada: false,
+            motivo: None,
+            usuario: "hector".to_string(),
+        })
+        .unwrap();
+
+    almacen.borrar_snippet(id).unwrap();
+    assert_eq!(
+        almacen.obtener_host(host).unwrap().snippet_al_conectar_id,
+        None
+    );
+    assert!(almacen
+        .hosts_con_snippet_al_conectar(id)
+        .unwrap()
+        .is_empty());
+    let fila = almacen.obtener_deliberacion(deliberacion).unwrap();
+    assert_eq!(fila.snippet_id, None);
+    assert_eq!(fila.accion, "tmux → uno");
+    assert_eq!(fila.resultado, ResultadoDeliberacion::Aprobada);
+    assert_eq!(fila.hosts, vec![(host, "uno".to_string())]);
+}
+
+/// Crear con destinos, obtener, listar por nombre, buscar por nombre y
+/// actualizar sustituyendo los destinos.
+#[test]
+fn crud_de_snippets_con_destinos() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+
+    let id = almacen
+        .crear_snippet(&DatosSnippet {
+            nombre: "  reiniciar nginx ".to_string(),
+            comando: "systemctl restart {{servicio:nginx}}\n".to_string(),
+            descripcion: "  reinicia el proxy  ".to_string(),
+            etiquetas: vec!["Servicios web".to_string()],
+            critico: true,
+            timeout_seg: 120,
+            parar_al_fallo: true,
+            // El nombre del host suelto lo pone `HOSTS` al leer, no el que
+            // venga en los datos.
+            destinos: vec![etiqueta(" Web "), suelto(dos, "nombre-viejo")],
+        })
+        .unwrap();
+    let snippet = almacen.obtener_snippet(id).unwrap();
+    assert_eq!(snippet.nombre, "reiniciar nginx");
+    assert_eq!(snippet.comando, "systemctl restart {{servicio:nginx}}");
+    assert_eq!(snippet.descripcion, "reinicia el proxy");
+    assert_eq!(snippet.etiquetas, vec!["servicios", "web"]);
+    assert!(snippet.critico);
+    assert_eq!(snippet.timeout_seg, 120);
+    assert!(snippet.parar_al_fallo);
+    assert_eq!(snippet.usado_veces, 0);
+    assert_eq!(snippet.ultimo_uso_en, None);
+    assert!(!snippet.creado_en.is_empty());
+    assert_eq!(snippet.destinos, vec![etiqueta("web"), suelto(dos, "dos")]);
+
+    // Listar va por nombre, no por orden de creación.
+    let otro = almacen
+        .crear_snippet(&snippet_de("apt update", vec![etiqueta("prod")]))
+        .unwrap();
+    let listado = almacen.listar_snippets().unwrap();
+    let nombres: Vec<&str> = listado
+        .iter()
+        .map(|snippet| snippet.nombre.as_str())
+        .collect();
+    assert_eq!(nombres, vec!["apt update", "reiniciar nginx"]);
+    assert_eq!(listado[0].destinos, vec![etiqueta("prod")]);
+    assert_eq!(listado[1], snippet);
+
+    // Por nombre exacto, recortando los espacios de la consulta.
+    assert_eq!(
+        almacen.snippet_por_nombre(" reiniciar nginx ").unwrap(),
+        Some(snippet.clone())
+    );
+    assert_eq!(almacen.snippet_por_nombre("no existe").unwrap(), None);
+
+    // Actualizar sustituye los destinos por completo.
+    let mut editado = snippet.datos();
+    editado.comando = "systemctl reload nginx".to_string();
+    editado.critico = false;
+    editado.destinos = vec![suelto(uno, "uno")];
+    almacen.actualizar_snippet(id, &editado).unwrap();
+    let snippet = almacen.obtener_snippet(id).unwrap();
+    assert_eq!(snippet.comando, "systemctl reload nginx");
+    assert!(!snippet.critico);
+    assert_eq!(snippet.destinos, vec![suelto(uno, "uno")]);
+    assert_eq!(contar_destinos(&almacen, "snippet_id = ?1", id), 1);
+    assert_eq!(
+        almacen.obtener_snippet(otro).unwrap().destinos,
+        vec![etiqueta("prod")]
+    );
+
+    // Renombrar el host cambia el nombre del destino: va por id.
+    let mut renombrado = datos("uno-bis");
+    renombrado.etiquetas.clear();
+    almacen.actualizar_host(uno, &renombrado).unwrap();
+    assert_eq!(
+        almacen.obtener_snippet(id).unwrap().destinos,
+        vec![suelto(uno, "uno-bis")]
+    );
+
+    // Un snippet que ya no existe no se actualiza en silencio.
+    assert!(almacen.actualizar_snippet(9999, &editado).is_err());
+}
+
+#[test]
+fn nombre_de_snippet_repetido_da_error_legible() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let error = almacen
+        .crear_snippet(&snippet_de("  reiniciar ", vec![etiqueta("db")]))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ya existe un snippet con el nombre"),
+        "{error}"
+    );
+
+    let otro = almacen
+        .crear_snippet(&snippet_de("otro", vec![etiqueta("web")]))
+        .unwrap();
+    let error = almacen
+        .actualizar_snippet(otro, &snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ya existe un snippet con el nombre"),
+        "{error}"
+    );
+    assert_eq!(almacen.obtener_snippet(otro).unwrap().nombre, "otro");
+    assert_eq!(almacen.listar_snippets().unwrap().len(), 2);
+}
+
+/// La validación de `snippets::validar` también protege el almacén: nada
+/// inválido llega a `SNIPPETS`.
+#[test]
+fn los_snippets_se_validan_al_guardar() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let bueno = snippet_de("bueno", vec![etiqueta("web")]);
+
+    let sin_destinos = DatosSnippet {
+        destinos: Vec::new(),
+        ..bueno.clone()
+    };
+    let error = almacen.crear_snippet(&sin_destinos).unwrap_err();
+    assert!(error.to_string().contains("destino"), "{error}");
+
+    // Un destino que se queda vacío al normalizar tampoco cuenta.
+    let destino_en_blanco = DatosSnippet {
+        destinos: vec![etiqueta("   ")],
+        ..bueno.clone()
+    };
+    assert!(almacen.crear_snippet(&destino_en_blanco).is_err());
+
+    for timeout_seg in [0, 4, 3601] {
+        let error = almacen
+            .crear_snippet(&DatosSnippet {
+                timeout_seg,
+                ..bueno.clone()
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("timeout"), "{error}");
+    }
+    for timeout_seg in [5, 3600] {
+        almacen
+            .crear_snippet(&DatosSnippet {
+                nombre: format!("limite-{timeout_seg}"),
+                timeout_seg,
+                ..bueno.clone()
+            })
+            .unwrap();
+    }
+
+    let entre_comillas = DatosSnippet {
+        comando: "grep '{{patron}}' /var/log/syslog".to_string(),
+        ..bueno.clone()
+    };
+    let error = almacen.crear_snippet(&entre_comillas).unwrap_err();
+    assert!(error.to_string().contains("comillas"), "{error}");
+
+    let sin_nombre = DatosSnippet {
+        nombre: "   ".to_string(),
+        ..bueno.clone()
+    };
+    assert!(almacen.crear_snippet(&sin_nombre).is_err());
+
+    // Solo entraron los dos de los límites; editar tampoco se salta la
+    // validación.
+    assert_eq!(almacen.listar_snippets().unwrap().len(), 2);
+    let id = almacen.crear_snippet(&bueno).unwrap();
+    assert!(almacen.actualizar_snippet(id, &sin_destinos).is_err());
+    assert_eq!(
+        almacen.obtener_snippet(id).unwrap().destinos,
+        vec![etiqueta("web")]
+    );
+}
+
+#[test]
+fn marcar_uso_cuenta_y_fecha_la_ultima_vez() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let id = almacen
+        .crear_snippet(&snippet_de("uptime", vec![etiqueta("web")]))
+        .unwrap();
+    almacen.marcar_uso_snippet(id).unwrap();
+    almacen.marcar_uso_snippet(id).unwrap();
+    let snippet = almacen.obtener_snippet(id).unwrap();
+    assert_eq!(snippet.usado_veces, 2);
+    let ultimo = snippet.ultimo_uso_en.expect("fecha del último uso");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&ultimo).is_ok(),
+        "{ultimo}"
+    );
+}
+
+#[test]
+fn hosts_con_snippet_al_conectar_por_nombre() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let zeta = almacen.crear_host(&datos("zeta"), Origen::Manual).unwrap();
+    let alfa = almacen.crear_host(&datos("alfa"), Origen::Manual).unwrap();
+    let libre = almacen.crear_host(&datos("libre"), Origen::Manual).unwrap();
+    let tmux = almacen
+        .crear_snippet(&snippet_de("tmux", vec![etiqueta("web")]))
+        .unwrap();
+    let otro = almacen
+        .crear_snippet(&snippet_de("otro", vec![etiqueta("web")]))
+        .unwrap();
+    almacen.fijar_snippet_al_conectar(zeta, Some(tmux)).unwrap();
+    almacen.fijar_snippet_al_conectar(alfa, Some(tmux)).unwrap();
+    almacen
+        .fijar_snippet_al_conectar(libre, Some(otro))
+        .unwrap();
+    assert_eq!(
+        almacen.hosts_con_snippet_al_conectar(tmux).unwrap(),
+        vec![(alfa, "alfa".to_string()), (zeta, "zeta".to_string())]
+    );
+    almacen.fijar_snippet_al_conectar(zeta, None).unwrap();
+    assert_eq!(
+        almacen.hosts_con_snippet_al_conectar(tmux).unwrap(),
+        vec![(alfa, "alfa".to_string())]
+    );
+    assert_eq!(
+        almacen.hosts_con_snippet_al_conectar(otro).unwrap(),
+        vec![(libre, "libre".to_string())]
+    );
+}
+
+/// Filas tocadas a mano: un destino con etiqueta y host a la vez (o sin
+/// ninguno) se salta, y un snippet con timeout imposible no rompe el listado
+/// de los demás.
+#[test]
+fn las_filas_ilegibles_se_saltan_sin_romper_el_listado() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+    let id = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let sano = almacen
+        .crear_snippet(&snippet_de("sano", vec![suelto(uno, "uno")]))
+        .unwrap();
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO SNIPPET_DESTINOS (snippet_id, etiqueta, host_id) VALUES (?1, 'db', ?2)",
+            rusqlite::params![id, dos],
+        )
+        .unwrap();
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO SNIPPET_DESTINOS (snippet_id, etiqueta, host_id) VALUES (?1, NULL, NULL)",
+            [id],
+        )
+        .unwrap();
+    assert_eq!(contar_destinos(&almacen, "snippet_id = ?1", id), 3);
+
+    let listado = almacen.listar_snippets().unwrap();
+    assert_eq!(listado.len(), 2);
+    assert_eq!(listado[0].nombre, "reiniciar");
+    assert_eq!(listado[0].destinos, vec![etiqueta("web")]);
+    assert_eq!(listado[1].destinos, vec![suelto(uno, "uno")]);
+    assert_eq!(
+        almacen.obtener_snippet(id).unwrap().destinos,
+        vec![etiqueta("web")]
+    );
+
+    // Un timeout fuera de rango no se ejecuta tal cual: el snippet se salta
+    // al listar y los demás siguen ahí.
+    almacen
+        .conexion()
+        .execute("UPDATE SNIPPETS SET timeout_seg = 0 WHERE id = ?1", [id])
+        .unwrap();
+    let listado = almacen.listar_snippets().unwrap();
+    assert_eq!(listado.len(), 1);
+    assert_eq!(listado[0].id, sano);
+    assert!(almacen.obtener_snippet(id).is_err());
+}
+
+// ---------------------------------------------------------- verificaciones
+
+/// Una fila por host, creada al activar la primera comprobación y
+/// actualizada (UPSERT) después.
+#[test]
+fn las_verificaciones_crean_fila_al_activar_y_despues_actualizan() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+
+    // Sin ninguna activa y sin fila previa: nada que guardar.
+    almacen
+        .guardar_verificaciones(host, &DatosVerificaciones::default())
+        .unwrap();
+    assert_eq!(almacen.verificaciones_de_host(host).unwrap(), None);
+    assert_eq!(contar_filas(&almacen, "VERIFICACIONES_HOST"), 0);
+
+    // Activar la primera crea la fila.
+    almacen
+        .guardar_verificaciones(
+            host,
+            &DatosVerificaciones {
+                salud: true,
+                ..DatosVerificaciones::default()
+            },
+        )
+        .unwrap();
+    let guardadas = almacen.verificaciones_de_host(host).unwrap().unwrap();
+    assert_eq!(guardadas.host_id, host);
+    assert!(guardadas.salud);
+    assert!(!guardadas.backup && !guardadas.tests);
+    assert!(!guardadas.actualizado_en.is_empty());
+
+    // Volver a guardar actualiza la misma fila y recorta los textos.
+    let completas = DatosVerificaciones {
+        salud: false,
+        backup: true,
+        backup_ruta: Some("  /var/backups ".to_string()),
+        backup_patron: Some("*.sql.gz".to_string()),
+        tests: true,
+        tests_comando: Some(" make test ".to_string()),
+    };
+    almacen.guardar_verificaciones(host, &completas).unwrap();
+    assert_eq!(contar_filas(&almacen, "VERIFICACIONES_HOST"), 1);
+    let guardadas = almacen.verificaciones_de_host(host).unwrap().unwrap();
+    assert!(!guardadas.salud);
+    assert!(guardadas.backup);
+    assert_eq!(guardadas.backup_ruta.as_deref(), Some("/var/backups"));
+    assert_eq!(guardadas.backup_patron.as_deref(), Some("*.sql.gz"));
+    assert!(guardadas.tests);
+    assert_eq!(guardadas.tests_comando.as_deref(), Some("make test"));
+
+    // Con fila, desactivarlo todo la actualiza (no la borra) y conserva la
+    // ruta, el patrón y el comando que vengan en los datos.
+    let apagadas = DatosVerificaciones {
+        backup: false,
+        tests: false,
+        ..completas
+    };
+    almacen.guardar_verificaciones(host, &apagadas).unwrap();
+    let guardadas = almacen.verificaciones_de_host(host).unwrap().unwrap();
+    assert!(!guardadas.alguna_activa());
+    assert_eq!(guardadas.backup_ruta.as_deref(), Some("/var/backups"));
+    assert_eq!(guardadas.tests_comando.as_deref(), Some("make test"));
+    let por_host = almacen.verificaciones_por_host().unwrap();
+    assert_eq!(por_host.len(), 1);
+    assert_eq!(por_host[&host], guardadas);
+}
+
+#[test]
+fn las_verificaciones_incompletas_se_rechazan() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+
+    let backup_sin_ruta = DatosVerificaciones {
+        backup: true,
+        ..DatosVerificaciones::default()
+    };
+    let error = almacen
+        .guardar_verificaciones(host, &backup_sin_ruta)
+        .unwrap_err();
+    assert!(error.to_string().contains("directorio remoto"), "{error}");
+
+    let backup_ruta_en_blanco = DatosVerificaciones {
+        backup: true,
+        backup_ruta: Some("   ".to_string()),
+        ..DatosVerificaciones::default()
+    };
+    assert!(almacen
+        .guardar_verificaciones(host, &backup_ruta_en_blanco)
+        .is_err());
+
+    let patron_invalido = DatosVerificaciones {
+        backup: true,
+        backup_ruta: Some("/var/backups".to_string()),
+        backup_patron: Some("[".to_string()),
+        ..DatosVerificaciones::default()
+    };
+    assert!(almacen
+        .guardar_verificaciones(host, &patron_invalido)
+        .is_err());
+
+    let tests_sin_comando = DatosVerificaciones {
+        tests: true,
+        tests_comando: Some("  ".to_string()),
+        ..DatosVerificaciones::default()
+    };
+    let error = almacen
+        .guardar_verificaciones(host, &tests_sin_comando)
+        .unwrap_err();
+    assert!(error.to_string().contains("comando"), "{error}");
+
+    assert_eq!(almacen.verificaciones_de_host(host).unwrap(), None);
+    assert_eq!(contar_filas(&almacen, "VERIFICACIONES_HOST"), 0);
+}
+
+// ---------------------------------------------------------- deliberaciones
+
+fn deliberacion_de(
+    snippet_id: Option<i64>,
+    hosts: Vec<(i64, String)>,
+    resultado: ResultadoDeliberacion,
+    motivo: Option<&str>,
+) -> NuevaDeliberacion {
+    let comprobaciones = hosts
+        .iter()
+        .map(|(host_id, host)| ComprobacionesHost {
+            host_id: *host_id,
+            host: host.clone(),
+            salud: Veredicto::Aprueba {
+                detalle: "NOMINAL · carga 0,4".to_string(),
+                ms: 212,
+            },
+            backup: Veredicto::Rechaza {
+                detalle: "último backup hace 31 h".to_string(),
+                ms: 845,
+            },
+            tests: Veredicto::NoActiva,
+        })
+        .collect();
+    NuevaDeliberacion {
+        snippet_id,
+        accion: "reiniciar nginx → uno, dos".to_string(),
+        hosts,
+        comprobaciones,
+        resultado,
+        bloqueada: true,
+        motivo: motivo.map(str::to_string),
+        usuario: "hector".to_string(),
+    }
+}
+
+/// `hosts_json` y `comprobaciones_json` vuelven tal cual se guardaron, con
+/// los cuatro tipos de veredicto.
+#[test]
+fn las_deliberaciones_guardan_hosts_y_comprobaciones_de_ida_y_vuelta() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar nginx", vec![etiqueta("web")]))
+        .unwrap();
+    let mut nueva = deliberacion_de(
+        Some(snippet),
+        vec![(uno, "uno".to_string()), (dos, "dos «bis»".to_string())],
+        ResultadoDeliberacion::Forzada,
+        Some("  revisado a mano  "),
+    );
+    nueva.comprobaciones[1].salud = Veredicto::Pendiente;
+    let id = almacen.crear_deliberacion(&nueva).unwrap();
+
+    let fila = almacen.obtener_deliberacion(id).unwrap();
+    assert_eq!(fila.id, id);
+    assert!(!fila.fecha.is_empty());
+    assert_eq!(fila.snippet_id, Some(snippet));
+    assert_eq!(fila.accion, nueva.accion);
+    assert_eq!(fila.hosts, nueva.hosts);
+    assert_eq!(fila.comprobaciones, nueva.comprobaciones);
+    assert_eq!(fila.resultado, ResultadoDeliberacion::Forzada);
+    assert!(fila.bloqueada);
+    assert_eq!(fila.motivo.as_deref(), Some("revisado a mano"));
+    assert_eq!(fila.usuario, "hector");
+    assert_eq!(fila.ejecucion_resultado, None);
+    assert_eq!(fila.consenso(), (1, 4));
+
+    // En la base es JSON legible, no un volcado opaco.
+    let (hosts_json, comprobaciones_json): (String, String) = almacen
+        .conexion()
+        .query_row(
+            "SELECT hosts_json, comprobaciones_json FROM DELIBERACIONES WHERE id = ?1",
+            [id],
+            |fila| Ok((fila.get(0)?, fila.get(1)?)),
+        )
+        .unwrap();
+    let hosts: serde_json::Value = serde_json::from_str(&hosts_json).unwrap();
+    assert_eq!(hosts[1][1], "dos «bis»");
+    let comprobaciones: serde_json::Value = serde_json::from_str(&comprobaciones_json).unwrap();
+    assert_eq!(comprobaciones[0]["backup"]["estado"], "rechaza");
+    assert_eq!(comprobaciones[0]["tests"]["estado"], "n/a");
+    assert_eq!(comprobaciones[1]["salud"]["estado"], "pendiente");
+
+    // Aprobada y cancelada no necesitan motivo; un motivo en blanco es None.
+    for resultado in [
+        ResultadoDeliberacion::Aprobada,
+        ResultadoDeliberacion::Cancelada,
+    ] {
+        let id = almacen
+            .crear_deliberacion(&deliberacion_de(
+                None,
+                vec![(uno, "uno".to_string())],
+                resultado,
+                Some("   "),
+            ))
+            .unwrap();
+        let fila = almacen.obtener_deliberacion(id).unwrap();
+        assert_eq!(fila.resultado, resultado);
+        assert_eq!(fila.snippet_id, None);
+        assert_eq!(fila.motivo, None);
+    }
+}
+
+#[test]
+fn una_deliberacion_forzada_sin_motivo_no_se_guarda() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let hosts = vec![(1, "uno".to_string())];
+    for motivo in [None, Some(""), Some("   ")] {
+        let error = almacen
+            .crear_deliberacion(&deliberacion_de(
+                None,
+                hosts.clone(),
+                ResultadoDeliberacion::Forzada,
+                motivo,
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("motivo"), "{error}");
+    }
+    assert_eq!(contar_filas(&almacen, "DELIBERACIONES"), 0);
+}
+
+/// El resultado de la ejecución se escribe una sola vez: la segunda escritura
+/// no pisa la primera.
+#[test]
+fn el_resultado_de_la_ejecucion_solo_se_fija_una_vez() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let id = almacen
+        .crear_deliberacion(&deliberacion_de(
+            None,
+            vec![(1, "uno".to_string())],
+            ResultadoDeliberacion::Aprobada,
+            None,
+        ))
+        .unwrap();
+    assert!(almacen
+        .fijar_resultado_deliberacion(id, EjecucionResultado::Parcial)
+        .unwrap());
+    assert!(!almacen
+        .fijar_resultado_deliberacion(id, EjecucionResultado::Ok)
+        .unwrap());
+    assert_eq!(
+        almacen
+            .obtener_deliberacion(id)
+            .unwrap()
+            .ejecucion_resultado,
+        Some(EjecucionResultado::Parcial)
+    );
+    // Una fila que no existe no se escribe ni da error.
+    assert!(!almacen
+        .fijar_resultado_deliberacion(id + 100, EjecucionResultado::Error)
+        .unwrap());
 }

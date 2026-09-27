@@ -23,7 +23,17 @@ use crate::archivos::Entrada;
 /// v3 (Fase 5): túneles. El cliente hace el CRUD de `TUNELES` y el servidor
 /// los ejecuta; `Tuneles{lista}` difunde la lista completa (definidos y su
 /// estado en vivo) y `Bienvenida` la lleva para que una ventana nueva la vea.
-pub const VERSION_PROTOCOLO: u32 = 3;
+///
+/// v4 (Fase 6): corrección 3b del pool y snippets. `Ejecutar` y sus respuestas
+/// llevan `peticion_id` (dos sondeos al mismo host ya no se cruzan);
+/// `VersionIncompatible` lleva el pid del servidor; `PideLlavero` pide al
+/// solicitante una contraseña que solo puede salir de su llavero (nunca de un
+/// diálogo); `Cerrar` cancela también los diálogos pendientes de aperturas que
+/// no son sesiones (SFTP, túneles, ejecuciones). Snippets: `LanzarEjecucion`,
+/// `CancelarEjecucion`, `LimpiarEjecuciones`, `PedirSalida` → `Salida`, la
+/// difusión `Ejecuciones{lista}` (también en `Bienvenida`) y los comandos
+/// iniciales de `AbrirSesion`.
+pub const VERSION_PROTOCOLO: u32 = 4;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -360,6 +370,163 @@ impl InfoTunel {
     }
 }
 
+// ---------------------------------------------------------------- ejecuciones
+
+/// Bytes de la salida de un comando remoto: viajan en base64 y el depurado
+/// solo dice cuántos son (T44: la salida no puede acabar en un log por
+/// accidente).
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SalidaRemota(#[serde(with = "base64_bytes")] pub Vec<u8>);
+
+impl fmt::Debug for SalidaRemota {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} B>", self.0.len())
+    }
+}
+
+/// Texto que se escribe en una pestaña nada más abrir la shell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComandoInicial {
+    pub texto: String,
+    /// Se vuelve a escribir al reconectar: el «snippet al conectar». El de
+    /// «abrir en pestaña» se escribe una sola vez.
+    pub repetir: bool,
+}
+
+/// La deliberación que autoriza una ejecución: el servidor lee su fila de
+/// `DELIBERACIONES`, la valida y, al terminar, anota y rellena el resultado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliberacionLanzada {
+    pub id: i64,
+    pub forzada: bool,
+    pub motivo: Option<String>,
+}
+
+/// Estado de una ejecución.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EstadoEjecucion {
+    EnCurso,
+    Terminada,
+    Cancelada,
+}
+
+impl EstadoEjecucion {
+    pub fn texto(self) -> &'static str {
+        match self {
+            EstadoEjecucion::EnCurso => "en curso",
+            EstadoEjecucion::Terminada => "terminada",
+            EstadoEjecucion::Cancelada => "cancelada",
+        }
+    }
+}
+
+/// Estado de un host dentro de una ejecución.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EstadoHostEjecucion {
+    EnCola,
+    Conectando,
+    Ejecutando,
+    Ok,
+    Fallo,
+    Error,
+    Cancelado,
+    Omitido,
+}
+
+impl EstadoHostEjecucion {
+    pub fn texto(self) -> &'static str {
+        match self {
+            EstadoHostEjecucion::EnCola => "en cola",
+            EstadoHostEjecucion::Conectando => "conectando",
+            EstadoHostEjecucion::Ejecutando => "ejecutando",
+            EstadoHostEjecucion::Ok => "ok",
+            EstadoHostEjecucion::Fallo => "fallo",
+            EstadoHostEjecucion::Error => "error",
+            EstadoHostEjecucion::Cancelado => "cancelado",
+            EstadoHostEjecucion::Omitido => "omitido",
+        }
+    }
+
+    /// `●` ok, `✕` fallo/error, `◐` en marcha, `○` en cola, `–` omitido o
+    /// cancelado (ASCII `* x o o -`).
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (EstadoHostEjecucion::Ok, false) => "●",
+            (EstadoHostEjecucion::Fallo | EstadoHostEjecucion::Error, false) => "✕",
+            (EstadoHostEjecucion::Conectando | EstadoHostEjecucion::Ejecutando, false) => "◐",
+            (EstadoHostEjecucion::EnCola, false) => "○",
+            (EstadoHostEjecucion::Cancelado | EstadoHostEjecucion::Omitido, false) => "–",
+            (EstadoHostEjecucion::Ok, true) => "*",
+            (EstadoHostEjecucion::Fallo | EstadoHostEjecucion::Error, true) => "x",
+            (
+                EstadoHostEjecucion::Conectando
+                | EstadoHostEjecucion::Ejecutando
+                | EstadoHostEjecucion::EnCola,
+                true,
+            ) => "o",
+            (EstadoHostEjecucion::Cancelado | EstadoHostEjecucion::Omitido, true) => "-",
+        }
+    }
+
+    /// ¿Ya no va a cambiar?
+    pub fn es_final(self) -> bool {
+        matches!(
+            self,
+            EstadoHostEjecucion::Ok
+                | EstadoHostEjecucion::Fallo
+                | EstadoHostEjecucion::Error
+                | EstadoHostEjecucion::Cancelado
+                | EstadoHostEjecucion::Omitido
+        )
+    }
+
+    /// ¿Está conectando o ejecutando?
+    pub fn en_marcha(self) -> bool {
+        matches!(
+            self,
+            EstadoHostEjecucion::Conectando | EstadoHostEjecucion::Ejecutando
+        )
+    }
+}
+
+/// Un host de una ejecución tal como se difunde: metadatos, nunca la salida.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InfoEjecucionHost {
+    pub host_id: i64,
+    pub nombre: String,
+    pub estado: EstadoHostEjecucion,
+    pub codigo: Option<i32>,
+    /// Época en milisegundos en la que empezó a conectar.
+    pub inicio_ms: Option<i64>,
+    pub duracion_ms: Option<u64>,
+    pub bytes_stdout: u64,
+    pub bytes_stderr: u64,
+    pub truncada: bool,
+    pub error: Option<String>,
+}
+
+/// Una ejecución tal como se difunde. No lleva el comando: puede contener el
+/// valor de una variable que no tiene por qué ver otra ventana.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InfoEjecucion {
+    pub id: u32,
+    /// El de la `LanzarEjecucion` que la creó: con `solicitante`, la ventana
+    /// que la pidió la reconoce en la difusión.
+    pub peticion_id: u64,
+    pub solicitante: u32,
+    pub snippet_id: Option<i64>,
+    pub nombre: String,
+    pub hosts: Vec<InfoEjecucionHost>,
+    pub timeout_seg: u32,
+    pub parar_al_fallo: bool,
+    pub deliberacion_id: Option<i64>,
+    pub forzada: bool,
+    pub estado: EstadoEjecucion,
+    /// Épocas en segundos.
+    pub creada_en: i64,
+    pub terminada_en: Option<i64>,
+}
+
 // ---------------------------------------------------------------- cliente → servidor
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -373,6 +540,10 @@ pub enum MensajeCliente {
         host_id: i64,
         cols: u16,
         filas: u16,
+        /// Lo que se escribe en la shell al abrirla (snippet al conectar y el
+        /// de «abrir en pestaña»); al reconectar, solo los que `repetir`.
+        #[serde(default)]
+        comandos_iniciales: Vec<ComandoInicial>,
     },
     Adjuntar {
         sesion_id: u32,
@@ -411,14 +582,24 @@ pub enum MensajeCliente {
         contrasena: Secreto,
         recordar: bool,
     },
+    /// Ejecuta un comando en la conexión viva del host (sondeo de Flota).
+    /// Responde `Ejecutado` o `SinSesion` con el mismo `peticion_id`.
     Ejecutar {
         host_id: i64,
         comando: String,
+        peticion_id: u64,
     },
     /// Abre (o reutiliza) el canal SFTP del host. Responde `SftpAbierto` o
     /// `Error`; si no hay conexión viva, la abre con los diálogos de siempre.
     AbrirSftp {
         host_id: i64,
+        /// Con él, `SftpAbierto` o `Error` lo devuelven (comprobaciones de la
+        /// deliberación, que esperan su respuesta).
+        #[serde(default)]
+        peticion_id: Option<u64>,
+        /// Sin diálogos y sin levantar túneles automáticos (BALTHASAR-2).
+        #[serde(default)]
+        no_interactivo: bool,
     },
     ListarDir {
         host_id: i64,
@@ -487,6 +668,30 @@ pub enum MensajeCliente {
     RecargarTuneles {
         host_id: i64,
     },
+    /// Ejecuta un snippet ya resuelto (comando sustituido y hosts) en el
+    /// servidor. Responde `Hecho` o `Error` con el `peticion_id`.
+    LanzarEjecucion {
+        peticion_id: u64,
+        snippet_id: Option<i64>,
+        nombre: String,
+        comando: String,
+        host_ids: Vec<i64>,
+        timeout_seg: u32,
+        parar_al_fallo: bool,
+        deliberacion: Option<DeliberacionLanzada>,
+    },
+    /// Cancela una ejecución: los hosts en cola quedan omitidos y los que
+    /// están en marcha, cancelados.
+    CancelarEjecucion {
+        id: u32,
+    },
+    /// Quita las ejecuciones terminadas.
+    LimpiarEjecuciones,
+    /// Pide la salida de un host de una ejecución; contesta `Salida`.
+    PedirSalida {
+        ejecucion_id: u32,
+        host_id: i64,
+    },
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
@@ -510,9 +715,16 @@ pub enum MensajeServidor {
         /// Túneles definidos y su estado en vivo, con lo mismo que difunde
         /// `Tuneles`.
         tuneles: Vec<InfoTunel>,
+        /// Ejecuciones en memoria (en curso y terminadas de la última hora).
+        #[serde(default)]
+        ejecuciones: Vec<InfoEjecucion>,
     },
     VersionIncompatible {
         version: u32,
+        /// Pid del servidor, para poder pararlo desde un MAGI de otra versión.
+        /// Un servidor anterior a la v4 no lo envía.
+        #[serde(default)]
+        pid: Option<u32>,
     },
     Sesiones {
         lista: Vec<InfoSesion>,
@@ -565,19 +777,32 @@ pub enum MensajeServidor {
         intento: u8,
         recordar_por_defecto: bool,
     },
+    /// La conexión de una operación automática (una ejecución, un túnel)
+    /// autentica con la contraseña del llavero: el solicitante contesta con
+    /// `Contrasena` si la tiene guardada o con `Cerrar` si no. Nunca abre un
+    /// diálogo.
+    PideLlavero {
+        sesion_id: u32,
+        host: String,
+        usuario: String,
+    },
     Ejecutado {
         host_id: i64,
+        peticion_id: u64,
         salida: String,
         codigo: i32,
     },
     SinSesion {
         host_id: i64,
+        peticion_id: u64,
     },
     /// Canal SFTP listo. `dir_inicio` es el directorio de inicio del usuario
     /// remoto (el que se usa si el host no tiene guardado el suyo).
     SftpAbierto {
         host_id: i64,
         dir_inicio: String,
+        #[serde(default)]
+        peticion_id: Option<u64>,
     },
     DirListado {
         host_id: i64,
@@ -595,6 +820,20 @@ pub enum MensajeServidor {
     /// segundo y solo si cambian.
     Tuneles {
         lista: Vec<InfoTunel>,
+    },
+    /// Difusión de las ejecuciones completas: en cada cambio de estado.
+    Ejecuciones {
+        lista: Vec<InfoEjecucion>,
+    },
+    /// Salida de un host de una ejecución (solo a quien la pidió).
+    Salida {
+        ejecucion_id: u32,
+        host_id: i64,
+        #[serde(rename = "stdout_b64")]
+        stdout: SalidaRemota,
+        #[serde(rename = "stderr_b64")]
+        stderr: SalidaRemota,
+        truncada: bool,
     },
     /// Operación remota terminada (`BorrarRemoto`, `RenombrarRemoto`,
     /// `CrearDirRemoto`).
@@ -651,6 +890,10 @@ mod pruebas {
             host_id: 7,
             cols: 120,
             filas: 38,
+            comandos_iniciales: vec![ComandoInicial {
+                texto: "tmux attach\n".to_string(),
+                repetir: true,
+            }],
         });
         ida_y_vuelta_cliente(MensajeCliente::Adjuntar {
             sesion_id: 3,
@@ -685,6 +928,7 @@ mod pruebas {
         ida_y_vuelta_cliente(MensajeCliente::Ejecutar {
             host_id: 7,
             comando: "uptime".to_string(),
+            peticion_id: 1 << 48,
         });
         ida_y_vuelta_cliente(MensajeCliente::Listar);
         ida_y_vuelta_cliente(MensajeCliente::Parar);
@@ -694,7 +938,16 @@ mod pruebas {
     /// Los mensajes que estrena la Fase 4 (v2): archivos y transferencias.
     #[test]
     fn los_mensajes_de_archivos_hacen_ida_y_vuelta() {
-        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp { host_id: 7 });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp {
+            host_id: 7,
+            peticion_id: None,
+            no_interactivo: false,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSftp {
+            host_id: 7,
+            peticion_id: Some(1 << 48),
+            no_interactivo: true,
+        });
         ida_y_vuelta_cliente(MensajeCliente::ListarDir {
             host_id: 7,
             ruta: "/var/www".to_string(),
@@ -742,6 +995,7 @@ mod pruebas {
 
         ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
             host_id: 7,
+            peticion_id: Some(1 << 48),
             dir_inicio: "/home/hector".to_string(),
         });
         ida_y_vuelta_servidor(MensajeServidor::DirListado {
@@ -820,8 +1074,21 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_tres() {
-        assert_eq!(VERSION_PROTOCOLO, 3);
+    fn la_version_del_protocolo_es_la_cuatro() {
+        assert_eq!(VERSION_PROTOCOLO, 4);
+    }
+
+    /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
+    #[test]
+    fn version_incompatible_sin_pid_se_lee_como_ninguno() {
+        let linea = r#"{"tipo":"VersionIncompatible","version":3}"#;
+        assert_eq!(
+            decodificar::<MensajeServidor>(linea).unwrap(),
+            MensajeServidor::VersionIncompatible {
+                version: 3,
+                pid: None,
+            }
+        );
     }
 
     /// Los mensajes de túneles hacen ida y vuelta por los dos sentidos.
@@ -875,7 +1142,112 @@ mod pruebas {
             sesiones: Vec::new(),
             transferencias: Vec::new(),
             tuneles: vec![tunel],
+            ejecuciones: Vec::new(),
         });
+    }
+
+    /// Los mensajes de ejecuciones (Fase 6) hacen ida y vuelta.
+    #[test]
+    fn los_mensajes_de_ejecuciones_hacen_ida_y_vuelta() {
+        ida_y_vuelta_cliente(MensajeCliente::LanzarEjecucion {
+            peticion_id: 1 << 44,
+            snippet_id: Some(3),
+            nombre: "reiniciar nginx".to_string(),
+            comando: "systemctl restart nginx".to_string(),
+            host_ids: vec![1, 2],
+            timeout_seg: 60,
+            parar_al_fallo: true,
+            deliberacion: Some(DeliberacionLanzada {
+                id: 12,
+                forzada: true,
+                motivo: Some("revisado a mano".to_string()),
+            }),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::CancelarEjecucion { id: 4 });
+        ida_y_vuelta_cliente(MensajeCliente::LimpiarEjecuciones);
+        ida_y_vuelta_cliente(MensajeCliente::PedirSalida {
+            ejecucion_id: 4,
+            host_id: 2,
+        });
+        let ejecucion = InfoEjecucion {
+            id: 4,
+            peticion_id: 1 << 44,
+            solicitante: 1,
+            snippet_id: Some(3),
+            nombre: "reiniciar nginx".to_string(),
+            hosts: vec![InfoEjecucionHost {
+                host_id: 2,
+                nombre: "hetzner-02".to_string(),
+                estado: EstadoHostEjecucion::Fallo,
+                codigo: Some(1),
+                inicio_ms: Some(1_700_000_000_000),
+                duracion_ms: Some(800),
+                bytes_stdout: 0,
+                bytes_stderr: 1400,
+                truncada: false,
+                error: None,
+            }],
+            timeout_seg: 60,
+            parar_al_fallo: true,
+            deliberacion_id: Some(12),
+            forzada: true,
+            estado: EstadoEjecucion::Terminada,
+            creada_en: 1_700_000_000,
+            terminada_en: Some(1_700_000_002),
+        };
+        ida_y_vuelta_servidor(MensajeServidor::Ejecuciones {
+            lista: vec![ejecucion],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Salida {
+            ejecucion_id: 4,
+            host_id: 2,
+            stdout: SalidaRemota(b"hola\n".to_vec()),
+            stderr: SalidaRemota(b"\x1b[31merror\x1b[0m".to_vec()),
+            truncada: false,
+        });
+    }
+
+    /// La salida viaja en base64 con el nombre del informe y el depurado no
+    /// enseña los bytes.
+    #[test]
+    fn la_salida_viaja_en_base64_y_no_se_depura() {
+        let mensaje = MensajeServidor::Salida {
+            ejecucion_id: 1,
+            host_id: 1,
+            stdout: SalidaRemota(b"secreto".to_vec()),
+            stderr: SalidaRemota::default(),
+            truncada: false,
+        };
+        let linea = codificar(&mensaje).unwrap();
+        assert!(linea.contains("\"stdout_b64\":\"c2VjcmV0bw==\""), "{linea}");
+        let depurado = format!("{mensaje:?}");
+        assert!(!depurado.contains("secreto"), "{depurado}");
+        assert!(depurado.contains("<7 B>"), "{depurado}");
+    }
+
+    /// Una salida máxima (1 MiB por flujo) cabe en una línea del protocolo.
+    #[test]
+    fn una_salida_maxima_cabe_en_una_linea() {
+        let mensaje = MensajeServidor::Salida {
+            ejecucion_id: 1,
+            host_id: 1,
+            stdout: SalidaRemota(vec![0xff; 1024 * 1024]),
+            stderr: SalidaRemota(vec![0xfe; 1024 * 1024]),
+            truncada: true,
+        };
+        assert!(codificar(&mensaje).unwrap().len() < LINEA_MAXIMA);
+    }
+
+    /// Un `AbrirSesion` de un cliente sin comandos iniciales se lee igual.
+    #[test]
+    fn abrir_sesion_sin_comandos_iniciales_se_lee() {
+        let linea = r#"{"tipo":"AbrirSesion","host_id":1,"cols":80,"filas":24}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::AbrirSesion {
+                comandos_iniciales, ..
+            } => assert!(comandos_iniciales.is_empty()),
+            otro => panic!("{otro:?}"),
+        }
     }
 
     /// El glifo y el texto de cada estado, para que la vista no se desvíe.
@@ -916,8 +1288,12 @@ mod pruebas {
             sesiones: sesiones.clone(),
             transferencias: Vec::new(),
             tuneles: Vec::new(),
+            ejecuciones: Vec::new(),
         });
-        ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible { version: 99 });
+        ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible {
+            version: 99,
+            pid: Some(4321),
+        });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });
         ida_y_vuelta_servidor(MensajeServidor::PantallaCompleta {
             sesion_id: 1,
@@ -964,12 +1340,21 @@ mod pruebas {
             intento: 1,
             recordar_por_defecto: true,
         });
+        ida_y_vuelta_servidor(MensajeServidor::PideLlavero {
+            sesion_id: 9,
+            host: "hetzner-01".to_string(),
+            usuario: "hector".to_string(),
+        });
         ida_y_vuelta_servidor(MensajeServidor::Ejecutado {
             host_id: 7,
+            peticion_id: 1 << 48,
             salida: "load average".to_string(),
             codigo: 0,
         });
-        ida_y_vuelta_servidor(MensajeServidor::SinSesion { host_id: 7 });
+        ida_y_vuelta_servidor(MensajeServidor::SinSesion {
+            host_id: 7,
+            peticion_id: 1 << 48,
+        });
         ida_y_vuelta_servidor(MensajeServidor::Error {
             mensaje: "mensaje desconocido".to_string(),
             peticion_id: None,

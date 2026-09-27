@@ -155,7 +155,8 @@ fn linea_entrada(
             Style::default().fg(tema.paleta.texto),
         ),
         Span::styled(
-            formato_columna(&entrada.tipo, 20),
+            // 22: el tipo más largo (`deliberacion_cancelada`) cabe entero.
+            formato_columna(&entrada.tipo, 22),
             Style::default().fg(tema.paleta.acento),
         ),
         Span::styled(
@@ -174,11 +175,11 @@ fn linea_entrada(
                 .fg(tema.paleta.fondo)
                 .add_modifier(Modifier::BOLD),
         );
-    } else if ancho > 70 {
+    } else if ancho > 72 {
         linea.spans.push(Span::styled(
             format!(
                 "   {}",
-                recortar(&entrada.detalle, ancho.saturating_sub(62))
+                recortar(&entrada.detalle, ancho.saturating_sub(64))
             ),
             Style::default().fg(tema.paleta.inactivo),
         ));

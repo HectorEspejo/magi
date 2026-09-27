@@ -57,11 +57,22 @@ un socket Unix en `$XDG_RUNTIME_DIR/magi/servidor.sock` (macOS:
   ventanas adjuntas.
 - Varios terminales comparten el servidor; el diálogo de huella, frase o
   contraseña lo recibe solo la ventana que pidió la conexión.
-- Hosts con `multiplexar` reutilizan la conexión entre pestañas sin
-  reautenticar; la conexión libre se cierra tras 30 s sin canales.
+- Cada host tiene como mucho **una conexión compartida** en el servidor. El
+  SFTP, los túneles, el sondeo por la conexión viva y las ejecuciones de
+  snippets la usan siempre; las pestañas, solo si el host tiene
+  `multiplexar`: entonces una segunda pestaña abre un canal nuevo sin
+  reautenticar ni volver a preguntar la huella. Sin `multiplexar`, cada
+  pestaña abre su propia conexión, que se cierra con ella. Abrir una pestaña
+  nunca tumba un túnel ni el SFTP del host, y dos aperturas simultáneas del
+  mismo host esperan una a la otra en vez de abrir dos conexiones. La
+  conexión compartida se cierra tras 30 s sin canales.
 - Sin clientes, sesiones, transferencias ni túneles levantados durante 10 s el
   servidor se apaga solo (`[servidor] gracia_apagado_seg`). Si muere, las
   ventanas lo detectan y ofrecen relanzarlo.
+- `SIGTERM` para el servidor igual que `magi servidor parar`: cierra sesiones
+  y túneles anotándolo y borra socket y lock. Si el servidor en marcha es de
+  otra versión (tras actualizar MAGI), `magi servidor parar` muestra su pid y
+  le envía `SIGTERM` tras confirmar (`--si` no pregunta).
 - El sondeo de Flota, con sesión viva, ejecuta el script sobre esa conexión;
   sin ella cae a su conexión efímera.
 - El log del servidor va en `~/.local/state/magi/logs/servidor.log.<fecha>`;
@@ -178,6 +189,102 @@ en `0.0.0.0` o `::` la puede usar cualquier equipo de tu red (el diálogo lo
 avisa en ámbar) y el SOCKS5 no pide autenticación a quien lo use. En un túnel
 remoto, el host solo expondrá esa escucha si tiene `GatewayPorts`.
 
+## Snippets
+
+`F8` abre **Snippets**: comandos guardados que se ejecutan en varios hosts a
+la vez. Cada snippet tiene nombre, comando (multilínea), descripción,
+etiquetas propias, destinos, `crítico`, timeout (5-3600 s) y «parar al primer
+fallo». Los **destinos** son etiquetas de host (`web` = todos los hosts con esa
+etiqueta) y hosts sueltos; se resuelven al ejecutar, sin duplicados y en el
+orden de Hosts.
+
+- **Variables**: `{{servicio}}` o `{{servicio:nginx}}` (con valor por
+  defecto); el nombre es `[a-z_][a-z0-9_]*` y todo lo demás (`{{.Names}}` de
+  docker) es literal. El valor se sustituye **escapado para el shell** con
+  `shell-escape`: `a b; rm -rf /` llega como un único argumento entrecomillado.
+  Una variable vacía sin defecto no deja continuar, y una variable dentro de
+  comillas o de un heredoc se rechaza al guardar (el escape no serviría ahí).
+- **Ejecutar**: `↵` abre EJECUTAR (casillas por host, variables, «parar al
+  primer fallo» y timeout); `a` ejecuta en todos los destinos pidiendo solo las
+  variables; `p` abre una pestaña por host con el comando escrito al abrir el
+  shell (confirma si son más de 5). Desde la paleta: `snippet · <nombre>` y
+  `snippet · <nombre> · <host>`; en Hosts y Flota, `!` lista los snippets que
+  apuntan al host seleccionado.
+- **En el servidor**: la ejecución la hace el servidor de sesiones, hasta 8
+  hosts en paralelo sobre la conexión del pool, con stdout y stderr separados,
+  código de salida y el timeout del snippet (al vencer, el host queda en error
+  «tiempo agotado» y la conexión sigue viva). Nunca dialoga: una huella sin
+  aceptar, una clave con frase fuera del agente o una contraseña que no esté en
+  el llavero dejan el host en error con la instrucción. «Parar al primer
+  fallo» deja `omitido` lo que aún no había empezado.
+- **Resultados** (`t` en Snippets): ejecuciones y hosts con su estado, código,
+  duración y bytes; `↵` enseña stdout y stderr sin secuencias de escape y se
+  refresca mientras corre; `s` guarda la salida en un fichero (600), `x`
+  cancela, `r` repite (volviendo a deliberar si procede) y `C` limpia las
+  terminadas. Cada flujo se guarda hasta 1 MiB; la salida **nunca** va al
+  registro ni al log. Todas las ventanas ven el mismo progreso y las terminadas
+  se conservan una hora.
+- **Snippet al conectar**: en la ficha, bloque «Al conectar», un snippet no
+  crítico y sin variables que se escribe en cada pestaña nueva a ese host y al
+  reconectarla. Nunca delibera.
+- **Atajos de Flota**: `[flota.atajos]` asigna una tecla a un snippet sobre el
+  host seleccionado; sigue el mismo flujo que `snippet · <nombre> · <host>`.
+  Las teclas que ya usa Flota o los snippets que no existen se ignoran con
+  aviso al arrancar.
+
+```sh
+magi snippets    # destinos resueltos, crítico y último uso
+```
+
+## Deliberación MAGI
+
+Antes de ejecutar un snippet **crítico**, en **más de un host** o en un host
+con **verificaciones previas**, MAGI delibera: tres comprobaciones por host,
+todas en paralelo y con un plazo duro de 2 s cada una, que nunca abren
+diálogos.
+
+| Comprobación | Aprueba si | Rechaza si |
+|---|---|---|
+| MELCHIOR-1 · salud | El último sondeo es NOMINAL y tiene menos de 5 min, o lo es uno nuevo | CARGA (con los culpables), ALCANZABLE, CAÍDA o sin datos a tiempo |
+| BALTHASAR-2 · backup | El fichero más reciente de la ruta que casa con el patrón tiene menos de 24 h | Más viejo, directorio vacío, sin acceso SFTP o plazo vencido |
+| CASPER-3 · tests | `sh -c <comando>` **en local** termina con 0 | Otro código (con la última línea de stderr) o plazo vencido (el proceso se mata) |
+
+Qué comprueba cada host se elige en su ficha, bloque «Verificaciones previas»:
+salud, backup (ruta remota y patrón, p. ej. `*.sql.gz`) y tests (comando
+local, p. ej. `gh run list … | grep -qx success`). El SFTP de BALTHASAR-2 no
+dialoga ni levanta los túneles automáticos del host.
+
+El diálogo enseña una tabla host × comprobación (`✓` aprueba, `✕` rechaza,
+`—` no activa, `◐` comprobando) con el dato de cada veredicto, la barra de
+consenso y el estado. Hace falta **unanimidad**:
+
+- **APROBADO**: `Ctrl+K` ejecuta. `↵` **no** ejecuta nunca.
+- **BLOQUEADO**: `f` abre el campo motivo; con al menos 10 caracteres pasa a
+  **FORZADO** y `Ctrl+K` ejecuta. El motivo queda registrado con el usuario y
+  la hora.
+- Sin comprobaciones activas (un snippet crítico en un host sin
+  verificaciones) muestra «sin comprobaciones configuradas» y sigue pidiendo
+  `Ctrl+K`.
+- `Esc` cancela: no se ejecuta nada y el registro anota
+  `deliberacion_cancelada`.
+
+Cada deliberación resuelta queda en `DELIBERACIONES` (acción, hosts,
+comprobaciones, resultado, motivo y usuario); al terminar la ejecución, el
+servidor anota `deliberacion_aprobada` o `deliberacion_forzada` con el
+resultado (`ok`, `parcial`, `error`, `cancelada`). En `F7`, el detalle de esas
+entradas enseña las comprobaciones.
+
+```toml
+[deliberacion]
+backup_horas = 24    # antigüedad máxima del backup
+salud_max_min = 5    # antigüedad máxima del último sondeo
+limite_seg = 2       # plazo de cada comprobación
+motivo_min = 10      # caracteres mínimos del motivo de un forzado
+
+[flota.atajos]
+d = "desplegar"      # tecla → nombre del snippet
+```
+
 ## Sondeo de flota
 
 `F1` abre **Flota**, la vista de arranque. El sondeo ejecuta un único script
@@ -269,17 +376,20 @@ paleta fija de respaldo.
 ## Atajos
 
 Globales: `F1` Flota · `F2` Hosts · `F3` pestaña activa o lista de sesiones ·
-`F4` Archivos · `F5` Identidades · `F6` Túneles · `F7` Registro · `Ctrl+P`
-paleta · `?` ayuda · `Esc` cierra diálogos y filtros · `q` vuelve o sale.
+`F4` Archivos · `F5` Identidades · `F6` Túneles · `F7` Registro · `F8`
+Snippets · `Ctrl+P` paleta · `?` ayuda · `Esc` cierra diálogos y filtros ·
+`q` vuelve o sale.
 
 Flota: `↑` `↓` / `j` `k` mover · `↵` conectar · `r` sondear el host · `R`
 sondear todos los visibles · `e` editar la ficha · `/` filtro · `a`
-activar/pausar el auto-refresco. `↵` abre siempre una sesión nueva.
+activar/pausar el auto-refresco · `!` snippets del host · las teclas de
+`[flota.atajos]`, que aparecen en la barra. `↵` abre siempre una sesión nueva.
 
 Hosts: `↑` `↓` / `j` `k` mover · `←` `→` / `h` `l` plegar grupo · `↵`
 conectar (siempre sesión nueva) · `e` editar · `n` nuevo · `g` menú de
 grupos · `x` borrar · `Tab` alternar usuario·puerto / etiquetas · `/` filtro ·
-`I` importar · `E` exportar. `●N` junto al nombre indica N sesiones vivas.
+`I` importar · `E` exportar · `!` snippets del host. `●N` junto al nombre
+indica N sesiones vivas.
 
 Identidades: `n` generar · `i` importar · `c` copiar la pública · `e` alias ·
 `x` revocar/reactivar · `s` reescanear · `v` ver revocadas.
@@ -311,6 +421,17 @@ detalle · `q` volver.
 Túneles: `↑` `↓` / `j` `k` mover · `Espacio` activar, parar o descartar el
 error · `n` nuevo · `e` editar · `x` borrar · `a` automático · `r` relanzar ·
 `↵` detalle · `/` filtro · `Esc` limpiar el filtro o volver · `q` volver.
+
+Snippets: `↑` `↓` / `j` `k` mover · `↵` ejecutar (diálogo) · `a` en todos los
+destinos · `p` en pestañas · `n` nuevo · `e` editar · `x` borrar · `/`
+filtro · `t` Resultados · `q` volver. En el formulario, `Ctrl+S` guarda.
+
+Resultados: `↑` `↓` / `j` `k` mover · `Tab` panel · `↵` ver la salida (`Tab`
+alterna stdout/stderr) · `s` guardar la salida · `x` cancelar · `r` repetir ·
+`C` limpiar terminadas · `q` volver.
+
+Deliberación: `Ctrl+K` ejecutar (solo con consenso o forzada) · `f` forzar con
+motivo · `↑` `↓` recorrer hosts · `Esc` cancelar o salir del motivo.
 
 En `config.toml`:
 
@@ -358,6 +479,14 @@ normal, legible y reimportable con `magi importar ~/.ssh/magi_config`.
   túnel remoto registrado se rechaza.
 - MAGI genera claves en `~/.ssh` (nunca sobrescribe) pero jamás borra ficheros
   de `~/.ssh` ni quita claves del agente: revocar es una baja lógica.
+- Los snippets se ejecutan con sus variables escapadas para el shell
+  (`shell-escape`) y la salida de los comandos remotos nunca se escribe en el
+  registro ni en el log; al pintarla se quitan las secuencias de escape.
+- Las ejecuciones y la deliberación nunca dialogan: la contraseña de una
+  ejecución solo sale del llavero de la ventana que la lanzó. CASPER-3 ejecuta
+  en **local** el comando que pongas en la ficha, con tu usuario.
+- Un snippet crítico, en varios hosts o en un host con verificaciones no se
+  ejecuta sin deliberación, y forzarla exige un motivo que queda registrado.
 - Los nombres de unidad systemd se validan (`[A-Za-z0-9@._-]+`) antes de
   pasarlos al script de sondeo, que los recibe como argumentos.
 - `magi.db`, `magi_config`, `known_hosts`, las claves generadas y las
@@ -381,6 +510,15 @@ extra), el protocolo (ida y vuelta de todos los mensajes, bytes en base64,
 secretos ocultos en el depurado, mensajes desconocidos) y el servidor con
 socket temporal (arranque, saludo versionado, apagado por inactividad, lock
 duplicado y desconexión por mensaje mal formado).
+
+El pool de conexiones (`tests/pool.rs`) comprueba que pestañas, SFTP y
+túneles comparten una única conexión con `multiplexar`, que una pestaña no
+tumba un túnel, el `Ejecutar` con plazo y el `SIGTERM` al binario real. Las
+ejecuciones (`tests/ejecuciones.rs`) corren contra un servidor SSH en proceso
+que atiende `exec`: varios hosts, código ≠ 0, timeout con el pool vivo, parar
+al primer fallo, cancelación, tope de 1 MiB, anotaciones sin salida y
+deliberaciones. La deliberación tiene pruebas de las tres comprobaciones
+(CASPER-3 con `true`, `false` y `sleep 3` reales) y del diálogo.
 
 Las pruebas de archivos (`tests/sftp.rs`) levantan un servidor SSH en proceso
 que sirve el subsistema `sftp` con el **`sftp-server` real de OpenSSH**: listar,

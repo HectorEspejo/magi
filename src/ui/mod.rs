@@ -2,16 +2,21 @@ pub mod archivos;
 pub mod ayuda;
 pub mod barra;
 pub mod componentes;
+pub mod deliberacion;
 pub mod dialogos;
+pub mod ejecutar;
 pub mod ficha;
 pub mod flota;
+pub mod formulario_snippet;
 pub mod hosts;
 pub mod identidades;
 pub mod pager;
 pub mod paleta;
 pub mod registro;
+pub mod resultados;
 pub mod sesion;
 pub mod sesiones;
+pub mod snippets;
 pub mod transferencias;
 pub mod tuneles;
 
@@ -49,6 +54,10 @@ pub enum Vista {
     Transferencias,
     /// Vista Túneles (F5): reenvíos definidos y su estado en vivo.
     Tuneles,
+    /// Vista Snippets (F8, Fase 6): comandos guardados y sus destinos.
+    Snippets,
+    /// Resultados de las ejecuciones de snippets (subvista de F8).
+    Resultados,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -82,8 +91,15 @@ pub fn dibujar(marco: &mut Frame, app: &App) {
         Vista::Archivos => archivos::dibujar(marco, trozos[0], app),
         Vista::Transferencias => transferencias::dibujar(marco, trozos[0], app),
         Vista::Tuneles => tuneles::dibujar(marco, trozos[0], app),
+        Vista::Snippets => snippets::dibujar(marco, trozos[0], app),
+        Vista::Resultados => resultados::dibujar(marco, trozos[0], app),
     }
     barra::dibujar(marco, trozos[1], app);
+    // La deliberación es modal sobre cualquier vista; una pregunta del
+    // servidor, la paleta o la ayuda van encima.
+    if let Some(abierta) = &app.deliberacion {
+        deliberacion::dibujar(marco, area, app, abierta);
+    }
     if let Some(dialogo) = &app.dialogo {
         dialogos::dibujar(marco, area, app, dialogo);
     } else if app.paleta.is_some() {

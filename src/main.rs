@@ -20,6 +20,7 @@ use magi::protocolo::{
 };
 use magi::registro;
 use magi::servidor;
+use magi::snippets;
 use magi::sshconfig;
 use magi::tema;
 
@@ -71,6 +72,9 @@ enum Comando {
     },
     /// Lista los túneles definidos y activos.
     Tuneles,
+    /// Lista los snippets con sus destinos resueltos, si son críticos y su
+    /// último uso.
+    Snippets,
 }
 
 #[derive(Subcommand)]
@@ -206,6 +210,16 @@ fn main() -> anyhow::Result<()> {
                 .context("creando el runtime de tokio")?;
             let codigo = runtime.block_on(tuneles_cli(&rutas))?;
             std::process::exit(codigo);
+        }
+        Some(Comando::Snippets) => {
+            // Solo lee el inventario: no hace falta el servidor de sesiones.
+            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let snippets = almacen.listar_snippets()?;
+            let hosts = almacen.listar_hosts()?;
+            let grupos = almacen.listar_grupos()?;
+            almacen.cerrar()?;
+            print!("{}", snippets::listado_cli(&snippets, &hosts, &grupos));
+            Ok(())
         }
         Some(Comando::Conectar { host }) => {
             let almacen = Almacen::abrir(&rutas.base_datos())?;
@@ -602,9 +616,10 @@ async fn esperar_tunel(
             | MensajeServidor::PideFrase { .. }
             | MensajeServidor::HuellaDesconocida { .. }
             | MensajeServidor::HuellaCambiada { .. } => return Ok(DesenlaceTunel::SinCredenciales),
-            MensajeServidor::VersionIncompatible { version } => {
+            MensajeServidor::VersionIncompatible { version, pid } => {
                 anyhow::bail!(
-                    "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                    "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
+                    pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
                 );
             }
             _ => {}
@@ -764,9 +779,10 @@ async fn leer_tuneles(stream: &mut UnixStream) -> anyhow::Result<Option<Vec<Info
             match mensaje {
                 MensajeServidor::Bienvenida { tuneles, .. } => return Ok(Some(tuneles)),
                 MensajeServidor::Tuneles { lista } => return Ok(Some(lista)),
-                MensajeServidor::VersionIncompatible { version } => {
+                MensajeServidor::VersionIncompatible { version, pid } => {
                     anyhow::bail!(
-                        "el servidor habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+                        "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
+                        pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
                     );
                 }
                 _ => {}

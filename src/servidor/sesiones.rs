@@ -4,30 +4,42 @@
 //! clientes.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use russh::client::Handle;
-use russh::{Channel, ChannelMsg, Disconnect};
+use russh::{Channel, ChannelMsg};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use crate::conexion::cliente::{abrir_canal, Cliente, Contexto, IdentidadUsada};
-use crate::conexion::salto::{conectar_cadena, construir_cadena, Transporte};
+use crate::conexion::cliente::{abrir_canal, Cliente};
 use crate::conexion::terminal::{self, Pantalla};
-use crate::conexion::{EventoConexion, FuenteContrasena};
+use crate::conexion::EventoConexion;
 use crate::config::Rutas;
 use crate::modelo::{EstadoSesion, Host};
 use crate::protocolo::{EstadoSesionRemota, InfoSesion, MensajeServidor, Secreto};
 
 use super::cliente_remoto::Tamano;
+use super::conexiones::{self, ConexionTomada, PoliticaConexion, UsoCanal};
 use super::difusion;
 use super::EstadoServidor;
 
 /// Tiempo máximo que espera el servidor una decisión del solicitante.
 const TIMEOUT_DECISION: Duration = Duration::from_secs(5 * 60);
+
+/// Plazo para abrir el canal de la pestaña (pty y shell) sobre una conexión
+/// ya autenticada.
+const PLAZO_CANAL: Duration = Duration::from_secs(10);
+
+/// Tope de un comando inicial (lo manda el cliente y se escribe en la shell).
+pub const TOPE_COMANDO_INICIAL: usize = 64 * 1024;
+
+/// Generación de cada diálogo pendiente: el temporizador de uno no puede
+/// borrar el siguiente que ocupe el mismo id (otro intento de frase, p. ej.).
+static GENERACION_DIALOGO: AtomicU64 = AtomicU64::new(1);
 
 /// Comandos que el estado del servidor encola hacia la tarea de una sesión.
 #[derive(Debug)]
@@ -43,6 +55,9 @@ pub enum DialogoPendiente {
     Huella(oneshot::Sender<bool>),
     Frase(oneshot::Sender<Option<Zeroizing<String>>>),
     Contrasena(oneshot::Sender<Option<(Zeroizing<String>, bool)>>),
+    /// Contraseña de una conexión automática: solo del llavero del
+    /// solicitante, que contesta sin diálogo.
+    Llavero(oneshot::Sender<Option<Zeroizing<String>>>),
 }
 
 /// Una decisión pendiente: el diálogo y el cliente que puede responderla. El
@@ -51,6 +66,8 @@ pub enum DialogoPendiente {
 pub struct Pendiente {
     pub solicitante: u32,
     pub dialogo: DialogoPendiente,
+    /// Para que el temporizador solo retire el diálogo que programó.
+    pub generacion: u64,
 }
 
 /// Respuesta de un diálogo que llega por el protocolo desde un cliente.
@@ -77,6 +94,16 @@ pub struct Sesion {
     pub actividad_no_vista: bool,
     /// Conexión SSH de esta sesión (para `Ejecutar` y cerrarla si es propia).
     pub handle: Option<Arc<Handle<Cliente>>>,
+    /// Cancela la apertura en curso (la pestaña se cierra, la ventana que la
+    /// pidió se va o el servidor se apaga): suelta el cerrojo del host y la
+    /// conexión a medias en vez de seguir dialogando para nadie.
+    pub cancelar_apertura: tokio_util::sync::CancellationToken,
+    /// Está reabriendo tras una caída: sigue contando para el ciclo automático
+    /// de los túneles como cuando estaba caída.
+    pub reconectando: bool,
+    /// Lo que se escribe al abrir la shell; al reconectar, solo lo que
+    /// `repetir` (el snippet al conectar).
+    pub comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     /// Tamaño vigente (último aplicado al remoto).
     pub tamano: Tamano,
     /// Pantalla del servidor de la sesión (volcado al adjuntar).
@@ -118,16 +145,23 @@ pub fn difundir_lista(estado: &mut EstadoServidor) {
     );
 }
 
-/// Pestañas vivas de un host: las que están abiertas o abriéndose. Es lo que
-/// cuenta para el ciclo automático de los túneles, que **no** cuenta los
-/// túneles ni el canal SFTP (ese va aparte).
+/// Pestañas de un host que cuentan para el ciclo automático de los túneles:
+/// las abiertas y las caídas. Los túneles y el canal SFTP van aparte.
 pub fn canales_de_pestana(estado: &EstadoServidor, host_id: i64) -> usize {
     // Las caídas siguen contando: la pestaña está ahí y se puede reconectar,
-    // así que el túnel no tiene por qué caerse con ella.
+    // así que el túnel no tiene por qué caerse con ella. Las que aún abren no
+    // cuentan: sus túneles automáticos se levantan cuando la pestaña queda
+    // abierta, para no competir con sus diálogos por la conexión del host.
     estado
         .sesiones
         .values()
-        .filter(|sesion| sesion.host_id == host_id)
+        .filter(|sesion| {
+            sesion.host_id == host_id
+                && (matches!(
+                    sesion.estado,
+                    EstadoSesionRemota::Abierta | EstadoSesionRemota::Caida
+                ) || (sesion.estado == EstadoSesionRemota::Abriendo && sesion.reconectando))
+        })
         .count()
 }
 
@@ -182,14 +216,16 @@ pub struct DatosApertura {
     pub solicitante: u32,
     /// Es una reconexión: el id y el nombre ya existen.
     pub reconexion: bool,
-    /// Registro de reenvíos remotos del servidor: la conexión de una pestaña
-    /// también puede recibir canales `forwarded-tcpip` de sus túneles.
-    pub reenvios: Arc<crate::conexion::reenvios::Reenvios>,
+    /// La de la sesión: cancelarla aborta la apertura.
+    pub cancelar: tokio_util::sync::CancellationToken,
+    /// Textos que se escriben en la shell en esta apertura, en orden.
+    pub comandos: Vec<String>,
 }
 
-/// Lanza la tarea de una sesión: abre la conexión (flujo de la Fase 1 con los
-/// diálogos reenviados al solicitante) y sirve el bucle de teclas y pantallas
-/// hasta el cierre. La sesión ya debe estar insertada en el estado.
+/// Lanza la tarea de una sesión: toma la conexión (la del pool con
+/// `multiplexar`, o una propia; los diálogos van al solicitante) y sirve el
+/// bucle de teclas y pantallas hasta el cierre. La sesión ya debe estar
+/// insertada en el estado.
 pub fn lanzar(
     estado: Arc<tokio::sync::Mutex<EstadoServidor>>,
     datos: DatosApertura,
@@ -208,110 +244,173 @@ async fn abrir_y_servir(
     let sesion_id = datos.sesion_id;
     let host_id = datos.host.id;
     let reconexion = datos.reconexion;
-    let (tx_eventos, rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
-    tokio::spawn(puente_eventos(
-        estado.clone(),
-        sesion_id,
-        datos.solicitante,
-        rx_eventos,
-    ));
 
-    let apertura = abrir_conexion(&datos, &tx_eventos).await;
-    drop(tx_eventos);
-    // El puente NO se espera: el handler russh conserva un clon del canal de
-    // eventos mientras la conexión viva, de modo que sigue traduciendo
-    // diálogos y avisos y muere solo cuando la conexión cae. Esperarlo aquí
-    // colgaría la apertura para siempre.
-
-    match apertura {
-        Ok((transporte, mut canal, pantalla, identidad)) => {
-            let multiplexar = datos.host.multiplexar;
-            let handle = transporte.handle.clone();
-            // Con `multiplexar` la conexión queda en el pool y sobrevive a la
-            // sesión; sin él, es conexión propia y se cierra con ella.
-            let (propio, desplazada) = if multiplexar {
-                let desplazada = estado.lock().await.pool.guardar(host_id, transporte);
-                (None, desplazada)
-            } else {
-                (Some(transporte), None)
-            };
-            // Si el pool ya tenía otra conexión para este host, se cerró al
-            // sustituirla: nadie más la iba a cerrar.
-            if let Some((handle_viejo, saltos_viejos)) = desplazada {
-                super::conexiones::desconectar(handle_viejo, saltos_viejos).await;
-            }
-            {
-                let mut estado_bloqueado = estado.lock().await;
-                let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
-                    // La sesión se cerró mientras abría: limpia y termina.
-                    super::conexiones::desconectar(handle, Vec::new()).await;
-                    desconectar_propio(propio).await;
-                    return;
-                };
-                sesion.estado = EstadoSesionRemota::Abierta;
-                sesion.motivo = None;
-                sesion.identidad = identidad.descripcion.clone();
-                sesion.abierta_en = Utc::now().timestamp();
-                sesion.handle = Some(handle.clone());
-            }
-            let bd = estado.lock().await.bd.clone();
-            let _ = bd.send(super::OrdenBd::Anotar {
-                tipo: if reconexion {
-                    crate::registro::SESION_RECONECTADA.to_string()
-                } else {
-                    crate::registro::CONEXION_ABIERTA.to_string()
-                },
-                host_id: Some(host_id),
-                identidad_id: None,
-                detalle: format!(
-                    "sesión abierta con «{}» · {}",
-                    datos.host.nombre, identidad.descripcion
-                ),
-                resultado: crate::modelo::ResultadoRegistro::Ok,
-            });
-            let _ = bd.send(super::OrdenBd::MarcarConexion { host_id });
-            let _ = bd.send(super::OrdenBd::MarcarEstado {
-                host_id,
-                estado: Some(crate::modelo::UltimoEstado::Ok),
-            });
-            info!(sesion = sesion_id, host = %datos.host.nombre, "sesión abierta en el servidor");
-            difundir_lista(&mut *estado.lock().await);
-
-            bucle_sesion(
-                estado,
-                sesion_id,
-                &mut canal,
-                &pantalla,
-                &mut rx_comandos,
-                propio,
-            )
-            .await;
-        }
+    // Corrección 3b: la pestaña pide la conexión por la única vía, con el
+    // cerrojo del host. Con `multiplexar` reutiliza la viva del pool (sin
+    // autenticar) y nunca desplaza nada; sin él abre una propia. Si la pestaña
+    // se cierra mientras tanto, la apertura se abandona (y con ella el
+    // cerrojo y la conexión a medias).
+    let tomada = tokio::select! {
+        tomada = conexiones::conexion_para_canal(
+            &estado,
+            &datos.host,
+            &datos.todos_los_hosts,
+            &datos.rutas,
+            PoliticaConexion::Interactiva {
+                solicitante: datos.solicitante,
+                id_solicitud: sesion_id,
+            },
+            UsoCanal::Pestana,
+        ) => tomada,
+        _ = datos.cancelar.cancelled() => return,
+    };
+    let tomada = match tomada {
+        Ok(tomada) => tomada,
         Err(motivo) => {
-            warn!(sesion = sesion_id, host = %datos.host.nombre, "apertura fallida: {motivo}");
-            let bd = estado.lock().await.bd.clone();
-            let _ = bd.send(super::OrdenBd::Anotar {
-                tipo: crate::registro::CONEXION_FALLIDA.to_string(),
-                host_id: Some(host_id),
-                identidad_id: None,
-                detalle: motivo.clone(),
-                resultado: crate::modelo::ResultadoRegistro::Error,
-            });
-            let _ = bd.send(super::OrdenBd::MarcarEstado {
-                host_id,
-                estado: Some(crate::modelo::UltimoEstado::Error),
-            });
-            fallida(&estado, sesion_id, &motivo).await;
+            apertura_fallida(&estado, &datos, &motivo).await;
+            return;
         }
+    };
+    let handle = tomada.handle.clone();
+    let (cols, filas) = (datos.cols, datos.filas);
+    let canal = conexiones::abrir_con_plazo(PLAZO_CANAL, async move {
+        abrir_canal(&handle, cols, filas).await
+    })
+    .await;
+    let mut canal = match canal {
+        Ok(canal) => canal,
+        Err(motivo) => {
+            tomada.soltar().await;
+            apertura_fallida(&estado, &datos, &motivo).await;
+            return;
+        }
+    };
+    // Comandos iniciales (snippet al conectar, «abrir en pestaña»): se
+    // escriben antes de dar la pestaña por abierta, tras la shell.
+    for texto in &datos.comandos {
+        let escrito =
+            tokio::time::timeout(PLAZO_CANAL, canal.data_bytes(texto.clone().into_bytes())).await;
+        if !matches!(escrito, Ok(Ok(()))) {
+            warn!(sesion = sesion_id, "no se pudo escribir el comando inicial");
+            break;
+        }
+    }
+
+    let primera_en_conexion = {
+        let mut estado_bloqueado = estado.lock().await;
+        let otra_en_la_misma = estado_bloqueado.sesiones.values().any(|sesion| {
+            sesion.id != sesion_id
+                && sesion.estado == EstadoSesionRemota::Abierta
+                && sesion
+                    .handle
+                    .as_ref()
+                    .is_some_and(|handle| Arc::ptr_eq(handle, &tomada.handle))
+        });
+        let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
+            // La sesión se cerró mientras abría: se suelta lo tomado (por
+            // identidad; la conexión del pool sigue sirviendo a los demás).
+            drop(estado_bloqueado);
+            let _ = canal.close().await;
+            tomada.soltar().await;
+            return;
+        };
+        sesion.estado = EstadoSesionRemota::Abierta;
+        sesion.reconectando = false;
+        sesion.motivo = None;
+        sesion.identidad = tomada.identidad.clone();
+        sesion.abierta_en = Utc::now().timestamp();
+        sesion.handle = Some(tomada.handle.clone());
+        !otra_en_la_misma
+    };
+    let bd = estado.lock().await.bd.clone();
+    // `conexion_abierta` una sola vez por conexión: una segunda pestaña que
+    // reutiliza la del pool no la vuelve a anotar.
+    if reconexion || primera_en_conexion {
+        let _ = bd.send(super::OrdenBd::Anotar {
+            tipo: if reconexion {
+                crate::registro::SESION_RECONECTADA.to_string()
+            } else {
+                crate::registro::CONEXION_ABIERTA.to_string()
+            },
+            host_id: Some(host_id),
+            identidad_id: None,
+            detalle: format!(
+                "sesión abierta con «{}» · {}",
+                datos.host.nombre, tomada.identidad
+            ),
+            resultado: crate::modelo::ResultadoRegistro::Ok,
+        });
+    }
+    let _ = bd.send(super::OrdenBd::MarcarConexion { host_id });
+    let _ = bd.send(super::OrdenBd::MarcarEstado {
+        host_id,
+        estado: Some(crate::modelo::UltimoEstado::Ok),
+    });
+    info!(
+        sesion = sesion_id,
+        host = %datos.host.nombre,
+        reutilizada = !tomada.nueva,
+        "sesión abierta en el servidor"
+    );
+    difundir_lista(&mut *estado.lock().await);
+    // La pestaña ya cuenta para el ciclo automático de los túneles del host.
+    let estado_tuneles = estado.clone();
+    tokio::spawn(async move {
+        super::tuneles::canales_cambiaron(&estado_tuneles, host_id).await;
+    });
+
+    bucle_sesion(
+        estado,
+        sesion_id,
+        &mut canal,
+        &datos.pantalla,
+        &mut rx_comandos,
+        tomada,
+    )
+    .await;
+}
+
+/// La apertura no llegó a abrir la pestaña: se quita, se anota y se avisa.
+/// Solo anota quien retira la sesión: si ya la quitó otro (se cerró desde la
+/// ventana, se fue la ventana, se apaga el servidor), ese lo anotó.
+async fn apertura_fallida(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    motivo: &str,
+) {
+    warn!(sesion = datos.sesion_id, host = %datos.host.nombre, "apertura fallida: {motivo}");
+    let mut estado_bloqueado = estado.lock().await;
+    estado_bloqueado.pendientes.remove(&datos.sesion_id);
+    let seguia = estado_bloqueado.sesiones.remove(&datos.sesion_id).is_some();
+    if seguia {
+        let bd = estado_bloqueado.bd.clone();
+        let _ = bd.send(super::OrdenBd::Anotar {
+            tipo: crate::registro::CONEXION_FALLIDA.to_string(),
+            host_id: Some(datos.host.id),
+            identidad_id: None,
+            detalle: motivo.to_string(),
+            resultado: crate::modelo::ResultadoRegistro::Error,
+        });
+        let _ = bd.send(super::OrdenBd::MarcarEstado {
+            host_id: datos.host.id,
+            estado: Some(crate::modelo::UltimoEstado::Error),
+        });
+    }
+    avisar_fallida(&mut estado_bloqueado, datos.sesion_id, motivo);
+    drop(estado_bloqueado);
+    if seguia && datos.reconexion {
+        // Una reconexión fallida se lleva la pestaña, que contaba para el
+        // ciclo automático de los túneles del host.
+        let estado_tuneles = estado.clone();
+        let host_id = datos.host.id;
+        tokio::spawn(async move {
+            super::tuneles::canales_cambiaron(&estado_tuneles, host_id).await;
+        });
     }
 }
 
-/// Marca una apertura como fallida: elimina la sesión, descarta cualquier
-/// decisión pendiente y avisa a todos los clientes con el motivo.
-async fn fallida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32, motivo: &str) {
-    let mut estado_bloqueado = estado.lock().await;
-    estado_bloqueado.pendientes.remove(&sesion_id);
-    estado_bloqueado.sesiones.remove(&sesion_id);
+/// Avisa a todos los clientes de que la apertura acabó sin pestaña.
+fn avisar_fallida(estado_bloqueado: &mut EstadoServidor, sesion_id: u32, motivo: &str) {
     difusion::difundir(
         &estado_bloqueado.clientes,
         MensajeServidor::Estado {
@@ -320,72 +419,30 @@ async fn fallida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u3
             motivo: Some(motivo.to_string()),
         },
     );
-    difundir_lista(&mut estado_bloqueado);
-}
-
-/// Conecta la cadena completa y abre el pty con la shell.
-async fn abrir_conexion(
-    datos: &DatosApertura,
-    tx_eventos: &mpsc::UnboundedSender<EventoConexion>,
-) -> Result<
-    (
-        Transporte,
-        Channel<russh::client::Msg>,
-        Pantalla,
-        IdentidadUsada,
-    ),
-    String,
-> {
-    emitir_estado(tx_eventos, EstadoSesion::Resolviendo);
-    let cadena =
-        construir_cadena(&datos.host, &datos.todos_los_hosts).map_err(|error| error.to_string())?;
-    emitir_estado(tx_eventos, EstadoSesion::Conectando);
-    let contexto = Contexto {
-        known_hosts: datos.rutas.fichero_known_hosts(),
-        dir_ssh: datos.rutas.dir_ssh(),
-        hogar: datos.rutas.hogar.clone(),
-        usuario_local: crate::conexion::usuario_local(),
-        tx: tx_eventos.clone(),
-        interactivo: true,
-        fuente_contrasena: FuenteContrasena::Solicitante,
-        reenvios: Some(datos.reenvios.clone()),
-    };
-    let transporte = conectar_cadena(&cadena, &contexto)
-        .await
-        .map_err(|error| error.to_string())?;
-    let pantalla = datos.pantalla.clone();
-    let canal = match abrir_canal(&transporte, datos.cols, datos.filas).await {
-        Ok(canal) => canal,
-        Err(error) => {
-            let _ = transporte
-                .handle
-                .disconnect(Disconnect::ByApplication, "", "")
-                .await;
-            return Err(error.to_string());
-        }
-    };
-    let identidad = IdentidadUsada {
-        descripcion: transporte.identidad.descripcion.clone(),
-        huella: transporte.identidad.huella.clone(),
-    };
-    Ok((transporte, canal, pantalla, identidad))
-}
-
-fn emitir_estado(tx: &mpsc::UnboundedSender<EventoConexion>, estado: EstadoSesion) {
-    let _ = tx.send(EventoConexion::Estado { host_id: 0, estado });
+    difundir_lista(estado_bloqueado);
 }
 
 /// Traduce los eventos de la tarea de conexión a mensajes del protocolo:
 /// diálogos solo al solicitante (con respuesta diferida), estados al resto.
-/// La usan igual las sesiones y las aperturas de canal SFTP, que no tienen
-/// sesión propia: `peticion_id` es el id de la solicitud de conexión.
+/// La usan igual las sesiones, las aperturas de canal SFTP, los túneles y las
+/// ejecuciones: `peticion_id` es el id de la solicitud de conexión. Sin
+/// solicitante (un túnel automático), todo diálogo se contesta «no» al
+/// momento: una operación automática no dialoga.
 pub async fn puente_eventos(
     estado: Arc<tokio::sync::Mutex<EstadoServidor>>,
     peticion_id: u32,
-    solicitante: u32,
+    solicitante: Option<u32>,
     mut rx: mpsc::UnboundedReceiver<EventoConexion>,
 ) {
     while let Some(evento) = rx.recv().await {
+        let Some(solicitante) = solicitante else {
+            // Soltar el evento suelta su canal de respuesta: la conexión lo
+            // lee como «cancelado». Los avisos sí se anotan.
+            if let EventoConexion::HuellaRegistrada { .. } = evento {
+                anotar_huella(&estado, evento).await;
+            }
+            continue;
+        };
         match evento {
             EventoConexion::Estado { estado: fino, .. } => {
                 let motivo = motivo_de_estado(fino).to_string();
@@ -415,6 +472,7 @@ pub async fn puente_eventos(
                         tipo_clave: tipo,
                         huella,
                     },
+                    TIMEOUT_DECISION,
                 )
                 .await;
             }
@@ -437,6 +495,7 @@ pub async fn puente_eventos(
                         anterior,
                         nueva,
                     },
+                    TIMEOUT_DECISION,
                 )
                 .await;
             }
@@ -455,6 +514,7 @@ pub async fn puente_eventos(
                         host,
                         intento,
                     },
+                    TIMEOUT_DECISION,
                 )
                 .await;
             }
@@ -475,33 +535,32 @@ pub async fn puente_eventos(
                         intento,
                         recordar_por_defecto,
                     },
+                    TIMEOUT_DECISION,
+                )
+                .await;
+            }
+            EventoConexion::PideContrasenaLlavero {
+                host,
+                usuario,
+                responder,
+            } => {
+                decidir(
+                    &estado,
+                    peticion_id,
+                    solicitante,
+                    DialogoPendiente::Llavero(responder),
+                    MensajeServidor::PideLlavero {
+                        sesion_id: peticion_id,
+                        host,
+                        usuario,
+                    },
+                    crate::conexion::cliente::PLAZO_LLAVERO,
                 )
                 .await;
             }
             // La huella ya se escribió en known_hosts: el efecto se anota aquí.
-            EventoConexion::HuellaRegistrada {
-                host_id,
-                anterior,
-                nueva,
-            } => {
-                let (tipo, detalle) = match anterior {
-                    Some(anterior) => (
-                        crate::registro::HUELLA_SUSTITUIDA,
-                        format!("anterior {anterior} · nueva {nueva}"),
-                    ),
-                    None => (
-                        crate::registro::HUELLA_ACEPTADA,
-                        format!("huella nueva {nueva}"),
-                    ),
-                };
-                let bd = estado.lock().await.bd.clone();
-                let _ = bd.send(super::OrdenBd::Anotar {
-                    tipo: tipo.to_string(),
-                    host_id: (host_id != 0).then_some(host_id),
-                    identidad_id: None,
-                    detalle,
-                    resultado: crate::modelo::ResultadoRegistro::Ok,
-                });
+            evento @ EventoConexion::HuellaRegistrada { .. } => {
+                anotar_huella(&estado, evento).await;
             }
             // Eventos que en el servidor no aplican: la apertura no pasa por
             // `sesion_completa` y las pantallas las difunde el bucle.
@@ -516,22 +575,61 @@ pub async fn puente_eventos(
     }
 }
 
+/// La huella ya está en known_hosts: se anota el efecto.
+async fn anotar_huella(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, evento: EventoConexion) {
+    let EventoConexion::HuellaRegistrada {
+        host_id,
+        anterior,
+        nueva,
+    } = evento
+    else {
+        return;
+    };
+    let (tipo, detalle) = match anterior {
+        Some(anterior) => (
+            crate::registro::HUELLA_SUSTITUIDA,
+            format!("anterior {anterior} · nueva {nueva}"),
+        ),
+        None => (
+            crate::registro::HUELLA_ACEPTADA,
+            format!("huella nueva {nueva}"),
+        ),
+    };
+    let bd = estado.lock().await.bd.clone();
+    let _ = bd.send(super::OrdenBd::Anotar {
+        tipo: tipo.to_string(),
+        host_id: (host_id != 0).then_some(host_id),
+        identidad_id: None,
+        detalle,
+        resultado: crate::modelo::ResultadoRegistro::Ok,
+    });
+}
+
 /// Guarda una decisión pendiente, avisa al solicitante y al resto de clientes,
-/// y programa el timeout de 5 minutos. `peticion_id` es el id de la solicitud
-/// de conexión: el de una sesión o el de una apertura de canal SFTP.
+/// y programa su plazo (5 minutos si espera al usuario, 10 s si es el
+/// llavero). `peticion_id` es el id de la solicitud de conexión: el de una
+/// sesión o el de una apertura de SFTP, túnel o ejecución. Si el solicitante
+/// ya no está conectado, nadie va a contestar: se descarta al momento.
 pub async fn decidir(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     peticion_id: u32,
     solicitante: u32,
     dialogo: DialogoPendiente,
     mensaje: MensajeServidor,
+    plazo: Duration,
 ) {
     let mut estado_bloqueado = estado.lock().await;
+    if !estado_bloqueado.clientes.contains_key(&solicitante) {
+        drop(dialogo);
+        return;
+    }
+    let generacion = GENERACION_DIALOGO.fetch_add(1, Ordering::Relaxed);
     estado_bloqueado.pendientes.insert(
         peticion_id,
         Pendiente {
             solicitante,
             dialogo,
+            generacion,
         },
     );
     let mut otros: Vec<u32> = Vec::new();
@@ -558,19 +656,45 @@ pub async fn decidir(
             }
         }
     }
-    // Timeout: si la decisión no llega, se descarta el canal de respuesta y
-    // la apertura se cancela sola.
+    // Plazo: si la decisión no llega, se descarta el canal de respuesta y la
+    // apertura se cancela sola. Solo se retira el diálogo que se programó: el
+    // mismo id puede estar ya en su siguiente intento.
     let estado_timeout = estado.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(TIMEOUT_DECISION).await;
+        tokio::time::sleep(plazo).await;
         let mut estado_bloqueado = estado_timeout.lock().await;
-        if estado_bloqueado.pendientes.remove(&peticion_id).is_some() {
+        let es_el_mismo = estado_bloqueado
+            .pendientes
+            .get(&peticion_id)
+            .is_some_and(|pendiente| pendiente.generacion == generacion);
+        if es_el_mismo {
+            estado_bloqueado.pendientes.remove(&peticion_id);
             warn!(
                 peticion = peticion_id,
-                "decisión sin respuesta tras 5 minutos"
+                "decisión sin respuesta en {} s",
+                plazo.as_secs()
             );
         }
     });
+}
+
+/// El solicitante renuncia a un diálogo pendiente (`Cerrar` sobre un id que
+/// no es de sesión: una apertura de SFTP, túnel o ejecución). Se suelta su
+/// canal de respuesta y la apertura falla enseguida en vez de esperar al plazo.
+pub async fn cancelar_dialogo(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    peticion_id: u32,
+    cliente_id: u32,
+) -> bool {
+    let mut estado_bloqueado = estado.lock().await;
+    let es_suyo = estado_bloqueado
+        .pendientes
+        .get(&peticion_id)
+        .is_some_and(|pendiente| pendiente.solicitante == cliente_id);
+    if es_suyo {
+        estado_bloqueado.pendientes.remove(&peticion_id);
+    }
+    es_suyo
 }
 
 /// Resuelve una decisión que llega por el protocolo. Solo el solicitante de la
@@ -613,6 +737,10 @@ pub async fn resolver_decision(
             let _ = responder.send(Some((contrasena.0, recordar)));
             true
         }
+        (DialogoPendiente::Llavero(responder), DecisionDialogo::Contrasena(contrasena, _)) => {
+            let _ = responder.send(Some(contrasena.0));
+            true
+        }
         (dialogo, _) => {
             drop(dialogo);
             warn!(
@@ -642,7 +770,7 @@ async fn bucle_sesion(
     canal: &mut Channel<russh::client::Msg>,
     pantalla: &Pantalla,
     rx_comandos: &mut mpsc::UnboundedReceiver<ComandoSesion>,
-    propio: Option<Transporte>,
+    tomada: ConexionTomada,
 ) {
     let mut vio_eof = false;
     loop {
@@ -651,7 +779,7 @@ async fn bucle_sesion(
                 Some(ComandoSesion::Teclas(bytes)) => {
                     if let Err(error) = canal.data_bytes(bytes).await {
                         caida(&estado, sesion_id, &format!("se perdió la conexión: {error}")).await;
-                        desconectar_propio(propio).await;
+                        tomada.soltar().await;
                         return;
                     }
                 }
@@ -663,7 +791,7 @@ async fn bucle_sesion(
                     let _ = canal.eof().await;
                     let _ = canal.close().await;
                     cerrada(&estado, sesion_id, "cerrada desde la ventana").await;
-                    desconectar_propio(propio).await;
+                    tomada.soltar().await;
                     return;
                 }
             },
@@ -677,7 +805,7 @@ async fn bucle_sesion(
                 Some(ChannelMsg::Eof) => vio_eof = true,
                 Some(ChannelMsg::Close) => {
                     cerrada(&estado, sesion_id, "el remoto cerró la sesión").await;
-                    desconectar_propio(propio).await;
+                    tomada.soltar().await;
                     return;
                 }
                 None => {
@@ -686,7 +814,7 @@ async fn bucle_sesion(
                     } else {
                         caida(&estado, sesion_id, "la conexión se ha perdido").await;
                     }
-                    desconectar_propio(propio).await;
+                    tomada.soltar().await;
                     return;
                 }
                 _ => {}
@@ -737,10 +865,8 @@ async fn cerrada(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u3
             detalle: motivo.to_string(),
             resultado: crate::modelo::ResultadoRegistro::Ok,
         });
-        if let Some(handle) = sesion.handle {
-            // Por identidad: la entrada del pool puede ser ya otra conexión.
-            estado_bloqueado.pool.liberar_si_es(sesion.host_id, &handle);
-        }
+        // El canal del pool (o la conexión propia) lo suelta el bucle de la
+        // sesión con su `ConexionTomada`, por identidad.
     }
     estado_bloqueado.pendientes.remove(&sesion_id);
     difundir_lista(&mut estado_bloqueado);
@@ -755,25 +881,21 @@ async fn cerrada(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u3
 /// Red caída o EOF inesperado: la sesión se conserva hasta reconectar o cerrar.
 async fn caida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32, motivo: &str) {
     let mut estado_bloqueado = estado.lock().await;
-    let (host_id, ids, handle) = {
+    let (host_id, ids) = {
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             estado_bloqueado.pendientes.remove(&sesion_id);
             return;
         };
         sesion.estado = EstadoSesionRemota::Caida;
+        sesion.reconectando = false;
         sesion.motivo = Some(motivo.to_string());
+        // El canal del pool lo suelta el bucle de la sesión justo después.
+        sesion.handle = None;
         (
             sesion.host_id,
             sesion.adjuntos.keys().copied().collect::<Vec<u32>>(),
-            sesion.handle.take(),
         )
     };
-    // La conexión se cayó: si estaba en el pool, su canal deja de contar ahora
-    // mismo. Si no, la entrada quedaría viva para siempre y `revisar_pool` no
-    // la recogería nunca (solo mira las que no tienen canales).
-    if let Some(handle) = handle {
-        estado_bloqueado.pool.liberar_si_es(host_id, &handle);
-    }
     let aviso = MensajeServidor::Estado {
         sesion_id,
         estado: EstadoSesionRemota::Caida,
@@ -790,11 +912,4 @@ async fn caida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32,
     });
     estado_bloqueado.pendientes.remove(&sesion_id);
     difundir_lista(&mut estado_bloqueado);
-}
-
-async fn desconectar_propio(propio: Option<Transporte>) {
-    if let Some(transporte) = propio {
-        let saltos = transporte.saltos.into_iter().map(Arc::new).collect();
-        super::conexiones::desconectar(transporte.handle, saltos).await;
-    }
 }
