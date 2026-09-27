@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,14 +27,20 @@ use crate::sshconfig;
 use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::Vista;
+use ratatui::backend::Backend;
+use ratatui::layout::Rect;
+use ratatui::Terminal;
 
 pub mod dialogo_magi;
 pub mod formulario_snippet;
+pub mod geometria;
 pub mod lanzar;
 mod resultados;
 mod snippets;
+pub mod teclado;
 
 pub use dialogo_magi::DeliberacionAbierta;
+pub use geometria::Geometria;
 pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
 pub use resultados::{AccionResultados, EstadoResultados};
 pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
@@ -1817,7 +1822,13 @@ pub struct App {
     pub runtime: tokio::runtime::Runtime,
     pub eventos_tx: mpsc::UnboundedSender<Evento>,
     eventos_rx: mpsc::UnboundedReceiver<Evento>,
-    salir_flag: Arc<AtomicBool>,
+    /// Mando del hilo de teclas (pausa del visor y salida).
+    teclado: Arc<teclado::ControlTeclas>,
+    /// Tamaño de la terminal: aplicado, pendiente y agrupación (Fase 7).
+    geometria: Geometria,
+    /// Sondeos SSH y escaneo del agente al entrar en las vistas. Las pruebas
+    /// de pintado lo apagan para no salir a la red.
+    efectos_externos: bool,
     pub salir: bool,
     abrir_al_cerrar: Option<i64>,
     /// Mensaje sobre sesiones que siguen abiertas, mostrado al salir.
@@ -1904,10 +1915,6 @@ pub struct App {
     /// Fichero que hay que abrir con el paginador en cuanto el bucle pueda
     /// suspender la TUI (la UI nunca bloquea mientras despacha una tecla).
     pub peticion_pager: Option<crate::visor::Peticion>,
-    /// Mientras el paginador tiene el terminal, el hilo de teclas calla.
-    pausa_teclas: Arc<AtomicBool>,
-    /// Alto de la terminal, para mover el cursor dentro de la ventana visible.
-    pub terminal_alto: u16,
     /// Orígenes locales de los «mover» que aún no se han asociado a su
     /// transferencia, por (host, primer origen): el id lo da el servidor en la
     /// difusión. Emparejar por posición sería frágil con dos hosts a la vez.
@@ -1952,8 +1959,51 @@ impl App {
         runtime: tokio::runtime::Runtime,
         aviso_inicial: Option<String>,
     ) -> Result<Self> {
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, aviso_inicial)?;
+        teclado::lanzar(app.eventos_tx.clone(), app.teclado.clone());
+        lanzar_tick(&app.runtime, app.eventos_tx.clone());
+        app.refrescar_identidades();
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        // Conexión con el servidor de sesiones (autolanzado si hace falta).
+        app.conectar_con_servidor();
+        Ok(app)
+    }
+
+    /// App para pruebas de pintado y de la tubería de tamaño: sin hilo de
+    /// teclas, sin tick, sin servidor y sin salir a la red. Devuelve también
+    /// lo que la App envía al servidor.
+    #[doc(hidden)]
+    pub fn de_prueba(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<protocolo::MensajeCliente>)> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, None)?;
+        app.efectos_externos = false;
+        let (servidor, enviados) = cliente::Cliente::de_prueba();
+        app.pantallas = servidor.pantallas();
+        app.servidor = servidor;
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        Ok((app, enviados))
+    }
+
+    /// Estado inicial, sin efectos: ni hilos, ni red, ni servidor.
+    fn construir(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+        runtime: tokio::runtime::Runtime,
+        aviso_inicial: Option<String>,
+    ) -> Result<Self> {
         let (eventos_tx, eventos_rx) = mpsc::unbounded_channel();
-        let salir_flag = Arc::new(AtomicBool::new(false));
         let prefijo = crate::teclas::parsear_prefijo(&config.prefijo_escape)
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
         let auto_refresco = config.flota.auto_refresco_seg >= 15;
@@ -1963,9 +2013,11 @@ impl App {
             tema,
             almacen,
             runtime,
-            eventos_tx: eventos_tx.clone(),
+            eventos_tx,
             eventos_rx,
-            salir_flag: salir_flag.clone(),
+            teclado: Arc::new(teclado::ControlTeclas::default()),
+            geometria: Geometria::nueva((80, 24), Instant::now()),
+            efectos_externos: true,
             salir: false,
             abrir_al_cerrar: None,
             aviso_al_salir: None,
@@ -2029,8 +2081,6 @@ impl App {
             seleccion_cola: 0,
             desplazamiento_cola: 0,
             peticion_pager: None,
-            pausa_teclas: Arc::new(AtomicBool::new(false)),
-            terminal_alto: 24,
             borrados_locales_pendientes: HashMap::new(),
             borrados_locales: HashMap::new(),
             transferencias_refrescadas: HashSet::new(),
@@ -2060,84 +2110,53 @@ impl App {
         if !avisos.is_empty() {
             app.mensaje(avisos.join(" · "), true);
         }
-        lanzar_hilo_teclas(
-            eventos_tx.clone(),
-            salir_flag.clone(),
-            app.pausa_teclas.clone(),
-        );
-        lanzar_tick(&app.runtime, eventos_tx.clone());
-        app.refrescar_identidades();
-        app.cargar_sondeos();
-        app.entrar_en_flota();
+        Ok(app)
+    }
 
-        // Conexión con el servidor de sesiones (autolanzado si hace falta).
-        let tx_conexion = eventos_tx.clone();
-        let rutas_cliente = app.rutas.clone();
-        match app
+    /// Conecta con el servidor de sesiones (lo lanza si no hay socket). Las
+    /// pruebas de extremo a extremo lo llaman con el servidor ya arrancado.
+    #[doc(hidden)]
+    pub fn conectar_con_servidor(&mut self) {
+        let tx_conexion = self.eventos_tx.clone();
+        let rutas_cliente = self.rutas.clone();
+        match self
             .runtime
             .block_on(cliente::conectar(&rutas_cliente, tx_conexion))
         {
             Ok(servidor) => {
-                app.pantallas = servidor.pantallas();
-                app.servidor = servidor;
-                app.servidor_desde = Some(Instant::now());
+                self.pantallas = servidor.pantallas();
+                self.servidor = servidor;
+                self.servidor_desde = Some(Instant::now());
             }
             Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
-                app.servidor_incompatible = Some(version);
-                app.pid_incompatible = pid;
+                self.servidor_incompatible = Some(version);
+                self.pid_incompatible = pid;
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
-                app.mensaje(motivo, true);
+                self.mensaje(motivo, true);
             }
         }
-        Ok(app)
     }
 
     pub fn ejecutar(mut self) -> Result<()> {
+        let mut terminal = crate::ui::iniciar_terminal()?;
+        // Primero el tamaño: la pestaña que se abra al arrancar lo necesita.
+        self.iniciar_pintado(&mut terminal)?;
         if let Some(host_id) = self.abrir_al_arrancar.take() {
             self.conectar(host_id);
         }
-        let mut terminal = crate::ui::iniciar_terminal()?;
-        self.terminal_alto = terminal.size().map(|area| area.height).unwrap_or(24);
         while !self.salir {
-            if self.sucio {
-                terminal.draw(|marco| crate::ui::dibujar(marco, &self))?;
-                self.sucio = false;
-            }
-            match self.eventos_rx.blocking_recv() {
-                Some(evento) => self.procesar(evento),
-                None => break,
+            if !self.ciclo(&mut terminal)? {
+                break;
             }
             // El visor suspende la TUI: se hace aquí, con el terminal a mano,
             // y no dentro del despacho de la tecla.
             if let Some(peticion) = self.peticion_pager.take() {
-                self.pausa_teclas.store(true, Ordering::Relaxed);
-                let aviso = crate::ui::pager::suspender_y_ver(
-                    &mut terminal,
-                    &self.tema,
-                    &self.config,
-                    &peticion,
-                );
-                self.pausa_teclas.store(false, Ordering::Relaxed);
-                if peticion.temporal {
-                    self.servidor
-                        .enviar(protocolo::MensajeCliente::BorrarTemporal {
-                            ruta: peticion.ruta.clone(),
-                        });
-                }
-                if let Some(aviso) = aviso {
-                    self.mensaje(aviso, true);
-                }
-                // El visor pudo cambiar el tamaño de la ventana: el hilo de
-                // teclas no ve ese evento mientras está pausado.
-                if let Ok(area) = terminal.size() {
-                    self.terminal_alto = area.height;
-                }
-                self.sucio = true;
+                self.ver_en_paginador(&mut terminal, &peticion)?;
             }
         }
         crate::ui::restaurar_terminal();
-        self.salir_flag.store(true, Ordering::Relaxed);
+        self.teclado.salir();
         // Las sesiones sobreviven a la ventana; el servidor se entera del
         // adiós antes de que termine el proceso.
         self.servidor.enviar(protocolo::MensajeCliente::Adios);
@@ -2147,27 +2166,217 @@ impl App {
         self.almacen.cerrar()
     }
 
-    fn procesar(&mut self, evento: Evento) {
+    /// Toma el tamaño real del terminal como aplicado y hace el primer pintado.
+    #[doc(hidden)]
+    pub fn iniciar_pintado<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let area = terminal.size()?;
+        self.geometria = Geometria::nueva((area.width, area.height), Instant::now());
+        self.sucio = true;
+        self.pintar(terminal)
+    }
+
+    /// Una vuelta del bucle: aplicar el tamaño si toca o pintar si hay algo
+    /// nuevo, esperar un evento (sin plazo, o ≤ 16 ms con un tamaño pendiente)
+    /// y procesarlo. Devuelve `false` si el canal de eventos se cerró.
+    #[doc(hidden)]
+    pub fn ciclo<B>(&mut self, terminal: &mut Terminal<B>) -> Result<bool>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        self.paso(terminal, Instant::now())?;
+        let evento = match self.geometria.espera(Instant::now()) {
+            None => self.eventos_rx.blocking_recv(),
+            Some(plazo) => {
+                // El `timeout` se crea dentro del runtime: fuera no hay reloj.
+                let (runtime, eventos) = (&self.runtime, &mut self.eventos_rx);
+                match runtime.block_on(async { tokio::time::timeout(plazo, eventos.recv()).await })
+                {
+                    Ok(evento) => evento,
+                    // Plazo cumplido: el siguiente paso aplica el tamaño.
+                    Err(_) => return Ok(true),
+                }
+            }
+        };
+        match evento {
+            Some(evento) => {
+                self.procesar(evento);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Recibe y procesa eventos durante `plazo`, aplicando tamaños y pintando
+    /// como el bucle. Para las pruebas de extremo a extremo.
+    #[doc(hidden)]
+    pub fn bombear<B>(&mut self, terminal: &mut Terminal<B>, plazo: Duration) -> Result<usize>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let fin = Instant::now() + plazo;
+        let mut procesados = 0;
+        loop {
+            self.paso(terminal, Instant::now())?;
+            let restante = fin.saturating_duration_since(Instant::now());
+            if restante.is_zero() {
+                return Ok(procesados);
+            }
+            let espera = self
+                .geometria
+                .espera(Instant::now())
+                .map_or(restante, |tick| tick.min(restante));
+            let (runtime, eventos) = (&self.runtime, &mut self.eventos_rx);
+            if let Ok(Some(evento)) =
+                runtime.block_on(async { tokio::time::timeout(espera, eventos.recv()).await })
+            {
+                self.procesar(evento);
+                procesados += 1;
+            }
+        }
+    }
+
+    /// Aplica el tamaño vencido, si lo hay, y pinta si hay algo nuevo. Con un
+    /// tamaño pendiente no se pinta: el terminal ya cambió y un pintado con el
+    /// tamaño viejo limpiaría la pantalla una vez de más.
+    #[doc(hidden)]
+    pub fn paso<B>(&mut self, terminal: &mut Terminal<B>, ahora: Instant) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        if let Some(tamano) = self.geometria.vencido(ahora) {
+            self.aplicar_tamano(terminal, tamano)?;
+        }
+        if self.sucio && self.geometria.pendiente().is_none() {
+            self.pintar(terminal)?;
+        }
+        Ok(())
+    }
+
+    /// Aplica un tamaño nuevo: terminal (`resize` limpia la pantalla y el
+    /// búfer anterior), disposición recalculada en el pintado y, en la vista
+    /// Sesión, el tamaño del PTY de la pestaña adjunta. Es el único sitio que
+    /// envía `Redimensionar`.
+    fn aplicar_tamano<B>(&mut self, terminal: &mut Terminal<B>, tamano: (u16, u16)) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        terminal.resize(Rect::new(0, 0, tamano.0, tamano.1))?;
+        self.geometria.confirmar(tamano);
+        self.sucio = true;
+        self.pintar(terminal)?;
+        if self.vista == Vista::Sesion {
+            if let Some(sesion_id) = self.pestana_activa_id() {
+                let (cols, filas) = self.tamano_pty();
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::Redimensionar {
+                        sesion_id,
+                        cols,
+                        filas,
+                    });
+            }
+        }
+        Ok(())
+    }
+
+    fn pintar<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let app: &App = self;
+        terminal.draw(|marco| crate::ui::dibujar(marco, app))?;
+        self.sucio = false;
+        Ok(())
+    }
+
+    /// Vuelta de una suspensión de la TUI (visor): el terminal pudo cambiar de
+    /// tamaño mientras tanto, así que se aplica el real.
+    #[doc(hidden)]
+    pub fn volver_de_suspension<B>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        real: (u16, u16),
+    ) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        self.geometria.descartar_pendiente();
+        if real != self.geometria.aplicado() {
+            self.aplicar_tamano(terminal, real)
+        } else {
+            self.sucio = true;
+            self.pintar(terminal)
+        }
+    }
+
+    fn ver_en_paginador(
+        &mut self,
+        terminal: &mut crate::ui::TerminalMagi,
+        peticion: &crate::visor::Peticion,
+    ) -> Result<()> {
+        // El hilo de teclas deja el tty antes de que el paginador lo tome.
+        self.teclado.pausar_y_esperar(Duration::from_millis(200));
+        let aviso = crate::ui::pager::suspender_y_ver(terminal, &self.tema, &self.config, peticion);
+        self.teclado.reanudar();
+        if peticion.temporal {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::BorrarTemporal {
+                    ruta: peticion.ruta.clone(),
+                });
+        }
+        if let Some(aviso) = aviso {
+            self.mensaje(aviso, true);
+        }
+        let real = terminal
+            .size()
+            .map(|area| (area.width, area.height))
+            .unwrap_or(self.geometria.aplicado());
+        self.volver_de_suspension(terminal, real)
+    }
+
+    /// Tamaño aplicado.
+    #[doc(hidden)]
+    pub fn geometria(&self) -> &Geometria {
+        &self.geometria
+    }
+
+    /// Alto aplicado de la terminal (para las filas visibles de las listas).
+    fn terminal_alto(&self) -> u16 {
+        self.geometria.aplicado().1
+    }
+
+    /// Tamaño del PTY remoto para el tamaño aplicado: el único origen de
+    /// `AbrirSesion`, `Adjuntar` y `Redimensionar`. Saneado a 2×1 (T28).
+    pub fn tamano_pty(&self) -> (u16, u16) {
+        let (cols, filas) = self.geometria.aplicado();
+        (cols.max(2), alto_pty(filas))
+    }
+
+    /// Procesa un evento como si llegase ahora.
+    #[doc(hidden)]
+    pub fn procesar(&mut self, evento: Evento) {
+        self.procesar_en(evento, Instant::now());
+    }
+
+    /// Procesa un evento; `ahora` solo cuenta para agrupar los `Resize`.
+    #[doc(hidden)]
+    pub fn procesar_en(&mut self, evento: Evento, ahora: Instant) {
         match evento {
             Evento::Tecla(tecla) => {
                 self.sucio = true;
                 self.procesar_tecla(tecla);
             }
-            Evento::Redimension(cols, filas) => {
-                self.sucio = true;
-                self.terminal_alto = filas;
-                let filas_pty = alto_pty(filas);
-                if self.vista == Vista::Sesion {
-                    if let Some(sesion_id) = self.pestana_activa_id() {
-                        self.servidor
-                            .enviar(protocolo::MensajeCliente::Redimensionar {
-                                sesion_id,
-                                cols,
-                                filas: filas_pty,
-                            });
-                    }
-                }
-            }
+            // Solo se anota: `Geometria` agrupa y el bucle lo aplica.
+            Evento::Redimension(cols, filas) => self.geometria.registrar((cols, filas), ahora),
             Evento::Tick => self.tick(),
             Evento::Conexion(evento) => {
                 self.sucio = true;
@@ -2606,12 +2815,12 @@ impl App {
             self.mensaje("ya hay una conexión en curso con ese host", true);
             return false;
         }
-        let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (cols, filas) = self.tamano_pty();
         self.servidor
             .enviar(protocolo::MensajeCliente::AbrirSesion {
                 host_id,
                 cols,
-                filas: alto_pty(filas),
+                filas,
                 comandos_iniciales,
             });
         self.aperturas_pendientes.insert(host_id);
@@ -2636,8 +2845,7 @@ impl App {
         let (cols, filas) = if solo_prueba {
             (80, 24)
         } else {
-            let tamano = crossterm::terminal::size().unwrap_or((80, 24));
-            (tamano.0, tamano.1.saturating_sub(2).max(1))
+            self.tamano_pty()
         };
         let usuario_local = usuario_local();
         let plan = PlanConexion {
@@ -2847,11 +3055,11 @@ impl App {
 
     fn adjuntar_pestaña_activa(&mut self) {
         if let Some(sesion_id) = self.pestana_activa_id() {
-            let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (cols, filas) = self.tamano_pty();
             self.servidor.enviar(protocolo::MensajeCliente::Adjuntar {
                 sesion_id,
                 cols,
-                filas: alto_pty(filas),
+                filas,
             });
         }
     }
@@ -3794,6 +4002,9 @@ impl App {
     }
 
     fn refrescar_identidades(&mut self) {
+        if !self.efectos_externos {
+            return;
+        }
         let dir_ssh = self.rutas.dir_ssh();
         let tx = self.eventos_tx.clone();
         self.runtime.spawn(async move {
@@ -4910,7 +5121,7 @@ impl App {
         if self.seleccion_tunel >= total {
             self.seleccion_tunel = total.saturating_sub(1);
         }
-        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto());
         self.ajustar_tuneles(altura, total);
     }
 
@@ -5037,7 +5248,7 @@ impl App {
     /// Teclas de la vista Túneles.
     fn tecla_tuneles(&mut self, tecla: KeyEvent) {
         let total = self.tuneles_visibles().len();
-        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto());
         if self.filtro_tuneles_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -5839,7 +6050,7 @@ impl App {
     }
 
     fn sondear_hosts(&mut self, ids: Vec<i64>) {
-        if ids.is_empty() {
+        if ids.is_empty() || !self.efectos_externos {
             return;
         }
         let todos: HashMap<i64, Host> = self
@@ -7306,43 +7517,6 @@ impl App {
     }
 }
 
-fn lanzar_hilo_teclas(
-    tx: mpsc::UnboundedSender<Evento>,
-    salir: Arc<AtomicBool>,
-    pausa: Arc<AtomicBool>,
-) {
-    std::thread::spawn(move || {
-        while !salir.load(Ordering::Relaxed) {
-            // Con el paginador en primer plano las teclas son suyas: se
-            // drenan y se tiran, para que no revienten al volver.
-            if pausa.load(Ordering::Relaxed) {
-                let _ = crossterm::event::poll(Duration::ZERO);
-                let _ = crossterm::event::read();
-                std::thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-            match crossterm::event::poll(Duration::from_millis(100)) {
-                Ok(true) => match crossterm::event::read() {
-                    Ok(crossterm::event::Event::Key(tecla)) => {
-                        if tx.send(Evento::Tecla(tecla)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(crossterm::event::Event::Resize(cols, filas)) => {
-                        if tx.send(Evento::Redimension(cols, filas)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => break,
-                },
-                Ok(false) => {}
-                Err(_) => break,
-            }
-        }
-    });
-}
-
 fn lanzar_tick(runtime: &tokio::runtime::Runtime, tx: mpsc::UnboundedSender<Evento>) {
     runtime.spawn(async move {
         let mut intervalo = tokio::time::interval(Duration::from_millis(200));
@@ -7530,7 +7704,7 @@ impl App {
             .archivos
             .as_ref()
             .is_some_and(|estado| !estado.cola.is_empty());
-        crate::ui::archivos::alto_panel(self.terminal_alto, con_cola)
+        crate::ui::archivos::alto_panel(self.terminal_alto(), con_cola)
     }
 
     /// Host con el que abrir Archivos: el de la pestaña activa de Sesión o el
@@ -7893,7 +8067,7 @@ impl App {
             .as_ref()
             .map(|estado| estado.cola.len())
             .unwrap_or(0);
-        let altura = crate::ui::transferencias::alto_lista(self.terminal_alto);
+        let altura = crate::ui::transferencias::alto_lista(self.terminal_alto());
         match tecla.code {
             KeyCode::Esc | KeyCode::Char('q') => self.vista = Vista::Archivos,
             KeyCode::Up | KeyCode::Char('k') => {

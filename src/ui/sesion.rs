@@ -49,13 +49,27 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
         relleno(marco, contenido, app, pestaña);
         if let Ok(parser) = pestaña.pantalla.lock() {
             let widget = PseudoTerminal::new(parser.screen()).cursor(Cursor::default());
-            marco.render_widget(widget, contenido);
+            marco.render_widget(widget, area_remota(contenido, pestaña));
         }
     }
     marco.render_widget(
         Paragraph::new(barra_estado(app, indice, pestaña, contenido)),
         trozos[3],
     );
+}
+
+/// Zona que ocupa el remoto: su tamaño vigente, si es menor que el área (otra
+/// ventana más pequeña impone el mínimo). El resto queda con el relleno `░`,
+/// que el terminal taparía si se pintase sobre toda el área.
+fn area_remota(area: Rect, pestaña: &PestanaUI) -> Rect {
+    if pestaña.cols_remoto == 0 || pestaña.filas_remoto == 0 {
+        return area;
+    }
+    Rect {
+        width: area.width.min(pestaña.cols_remoto),
+        height: area.height.min(pestaña.filas_remoto),
+        ..area
+    }
 }
 
 /// Relleno tenue `░` para la zona que no cubre el remoto cuando otra ventana

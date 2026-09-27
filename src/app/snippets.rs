@@ -119,7 +119,7 @@ impl App {
     /// Acota la selección a lo visible y la deja dentro de la ventana.
     fn ajustar_snippets(&mut self) {
         let total = self.snippets_visibles().len();
-        let altura = crate::ui::snippets::alto_lista(self.terminal_alto);
+        let altura = crate::ui::snippets::alto_lista(self.terminal_alto());
         let estado = &mut self.snippets;
         if estado.seleccion >= total {
             estado.seleccion = total.saturating_sub(1);
@@ -164,7 +164,7 @@ impl App {
 
     /// Teclas de la vista Snippets.
     pub(super) fn tecla_snippets(&mut self, tecla: KeyEvent) {
-        let altura = crate::ui::snippets::alto_lista(self.terminal_alto);
+        let altura = crate::ui::snippets::alto_lista(self.terminal_alto());
         let seleccion = self.snippets.seleccion;
         if self.snippets.filtro_activo {
             match tecla.code {

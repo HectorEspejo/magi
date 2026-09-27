@@ -975,7 +975,7 @@ impl App {
 
     /// Filas de cada panel del visor con la terminal de ahora.
     fn altos_visor(&self) -> [usize; 2] {
-        alturas_visor(self.terminal_alto)
+        alturas_visor(self.terminal_alto())
     }
 
     pub(super) fn tecla_resultados(&mut self, tecla: KeyEvent) {
@@ -983,7 +983,7 @@ impl App {
             self.tecla_visor(tecla);
             return;
         }
-        let alturas = alturas_paneles(self.terminal_alto, self.resultados.ejecuciones.len());
+        let alturas = alturas_paneles(self.terminal_alto(), self.resultados.ejecuciones.len());
         let altura = if self.resultados.panel_hosts() {
             alturas.1
         } else {

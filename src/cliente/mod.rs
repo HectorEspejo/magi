@@ -96,6 +96,14 @@ impl Cliente {
         Self::con_canal(tx, pantallas::Pantallas::default())
     }
 
+    /// Cliente de pruebas: lo que la App envía al servidor queda en el
+    /// receptor devuelto.
+    #[doc(hidden)]
+    pub fn de_prueba() -> (Self, mpsc::UnboundedReceiver<MensajeCliente>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self::con_canal(tx, pantallas::Pantallas::default()), rx)
+    }
+
     fn con_canal(
         tx: mpsc::UnboundedSender<MensajeCliente>,
         pantallas: pantallas::Pantallas,

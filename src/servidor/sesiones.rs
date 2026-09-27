@@ -106,6 +106,8 @@ pub struct Sesion {
     pub comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     /// Tamaño vigente (último aplicado al remoto).
     pub tamano: Tamano,
+    /// Ventana que impone ese tamaño, tal como se difundió la última vez.
+    pub ventana_minima: Option<u32>,
     /// Pantalla del servidor de la sesión (volcado al adjuntar).
     pub pantalla: Pantalla,
     pub tx_comandos: mpsc::UnboundedSender<ComandoSesion>,
@@ -192,13 +194,29 @@ pub fn nombre_de_pestaña(sesiones: &HashMap<u32, Sesion>, host: &Host) -> Strin
     format!("{} ({numero})", host.nombre)
 }
 
-/// Tamaño de la sesión: mínimo de los adjuntos; sin adjuntos se conserva el
-/// último.
+/// Tamaño de la sesión: mínimo de los adjuntos, columna a columna y fila a
+/// fila; sin adjuntos se conserva el último. Solo cuentan los adjuntos: si la
+/// ventana pequeña crece o se va, el tamaño sube (antes partía del último
+/// aplicado y nunca podía crecer).
 pub fn tamano_minimo(adjuntos: &HashMap<u32, Tamano>, actual: Tamano) -> Tamano {
-    adjuntos.values().fold(actual, |menor, tamano| Tamano {
-        cols: menor.cols.min(tamano.cols),
-        filas: menor.filas.min(tamano.filas),
-    })
+    adjuntos
+        .values()
+        .copied()
+        .reduce(|menor, tamano| Tamano {
+            cols: menor.cols.min(tamano.cols),
+            filas: menor.filas.min(tamano.filas),
+        })
+        .unwrap_or(actual)
+}
+
+/// Ventana que impone el tamaño: la de menos columnas; a igualdad, la de menos
+/// filas y después la de id menor. Si una ventana da a la vez el mínimo de
+/// columnas y de filas, es ella.
+pub fn ventana_minima(adjuntos: &HashMap<u32, Tamano>) -> Option<u32> {
+    adjuntos
+        .iter()
+        .min_by_key(|(cliente_id, tamano)| (tamano.cols, tamano.filas, **cliente_id))
+        .map(|(cliente_id, _)| *cliente_id)
 }
 
 // ---------------------------------------------------------------- apertura
@@ -912,4 +930,48 @@ async fn caida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, sesion_id: u32,
     });
     estado_bloqueado.pendientes.remove(&sesion_id);
     difundir_lista(&mut estado_bloqueado);
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    fn tamano(cols: u16, filas: u16) -> Tamano {
+        Tamano { cols, filas }
+    }
+
+    #[test]
+    fn el_minimo_crece_cuando_crece_la_unica_ventana() {
+        let mut adjuntos = HashMap::new();
+        adjuntos.insert(1, tamano(200, 56));
+        assert_eq!(tamano_minimo(&adjuntos, tamano(100, 26)), tamano(200, 56));
+    }
+
+    #[test]
+    fn el_minimo_encoge_con_la_ventana() {
+        let mut adjuntos = HashMap::new();
+        adjuntos.insert(1, tamano(80, 20));
+        assert_eq!(tamano_minimo(&adjuntos, tamano(100, 26)), tamano(80, 20));
+    }
+
+    #[test]
+    fn sin_adjuntos_se_conserva_el_ultimo() {
+        assert_eq!(
+            tamano_minimo(&HashMap::new(), tamano(100, 26)),
+            tamano(100, 26)
+        );
+        assert_eq!(ventana_minima(&HashMap::new()), None);
+    }
+
+    #[test]
+    fn con_dos_ventanas_manda_la_menor_por_componente() {
+        let mut adjuntos = HashMap::new();
+        adjuntos.insert(1, tamano(200, 30));
+        adjuntos.insert(2, tamano(120, 46));
+        assert_eq!(tamano_minimo(&adjuntos, tamano(10, 10)), tamano(120, 30));
+        // Impone las columnas la ventana 2.
+        assert_eq!(ventana_minima(&adjuntos), Some(2));
+        adjuntos.insert(2, tamano(200, 30));
+        assert_eq!(ventana_minima(&adjuntos), Some(1), "empate: id menor");
+    }
 }
