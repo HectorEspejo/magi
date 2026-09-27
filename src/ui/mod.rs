@@ -3,6 +3,7 @@ pub mod ayuda;
 pub mod barra;
 pub mod componentes;
 pub mod dialogos;
+pub mod ejecutar;
 pub mod ficha;
 pub mod flota;
 pub mod formulario_snippet;

@@ -31,6 +31,9 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, dialogo: &Dialogo) {
         Dialogo::Snippets(crate::app::DialogoSnippets::Formulario(formulario)) => {
             crate::ui::formulario_snippet::dibujar(marco, area, app, formulario);
         }
+        Dialogo::Ejecutar(dialogo) => {
+            crate::ui::ejecutar::dibujar(marco, area, app, dialogo);
+        }
         Dialogo::Confirmar {
             titulo,
             lineas,

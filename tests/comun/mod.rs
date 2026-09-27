@@ -1087,6 +1087,7 @@ impl Escenario {
     pub async fn abrir_sesion(&mut self, host_id: i64) -> u32 {
         let conocidas: HashSet<u32> = self.sesiones.iter().map(|sesion| sesion.id).collect();
         self.enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id,
             cols: 80,
             filas: 24,

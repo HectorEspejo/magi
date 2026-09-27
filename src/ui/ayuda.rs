@@ -59,6 +59,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 ("x", "borrar host"),
                 ("⇥", "alternar usuario·puerto / etiquetas"),
                 ("/", "filtro incremental"),
+                ("!", "snippets que apuntan al host"),
                 ("I", "importar ~/.ssh/config"),
                 ("E", "exportar magi_config"),
                 ("F2 / F3", "ir a Hosts / a la sesión"),
@@ -176,6 +177,9 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 ("e", "editar la ficha"),
                 ("/", "filtrar"),
                 ("a", "activar o pausar el auto-refresco"),
+                ("!", "snippets que apuntan al host"),
+                ("atajos", "[flota.atajos]: snippet sobre el host"),
+                ("F8", "Snippets"),
             ],
         ),
     };

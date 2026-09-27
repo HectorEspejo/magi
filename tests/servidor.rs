@@ -311,6 +311,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
     enviar_a(
         &mut escritura,
         &MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id,
             cols: 80,
             filas: 24,
@@ -478,6 +479,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
             .id
     };
     cliente.enviar(magi::protocolo::MensajeCliente::AbrirSesion {
+        comandos_iniciales: Vec::new(),
         host_id,
         cols: 80,
         filas: 24,

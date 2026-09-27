@@ -99,7 +99,7 @@ fn atajos(app: &App) -> Line<'static> {
             ("?", "ayuda"),
             ("q", "salir"),
         ],
-        Vista::Flota | Vista::Hosts => vec![
+        Vista::Hosts => vec![
             (super::tecla(tema, "↵", "enter"), "conectar"),
             (super::tecla(tema, "↓↑", "j/k"), "mover"),
             (super::tecla(tema, "→←", "l/h"), "plegar"),
@@ -109,6 +109,20 @@ fn atajos(app: &App) -> Line<'static> {
             ("x", "borrar"),
             (super::tecla(tema, "⇥", "tab"), "etiquetas"),
             ("/", "filtrar"),
+            ("!", "snippets"),
+            ("^p", "paleta"),
+            ("?", "ayuda"),
+            ("q", "salir"),
+        ],
+        Vista::Flota => vec![
+            (super::tecla(tema, "↵", "enter"), "conectar"),
+            (super::tecla(tema, "↓↑", "j/k"), "mover"),
+            ("r", "sondear"),
+            ("R", "todos"),
+            ("a", "auto"),
+            ("e", "editar"),
+            ("/", "filtrar"),
+            ("!", "snippets"),
             ("^p", "paleta"),
             ("?", "ayuda"),
             ("q", "salir"),
@@ -143,7 +157,16 @@ fn atajos(app: &App) -> Line<'static> {
             ("t", "resultados"),
             ("?", "ayuda"),
         ],
-        Vista::Resultados => vec![("?", "ayuda"), ("q", "volver")],
+        Vista::Resultados => vec![
+            (super::tecla(tema, "⇥", "tab"), "panel"),
+            ("↵", "salida"),
+            ("s", "guardar"),
+            ("r", "repetir"),
+            ("x", "cancelar"),
+            ("C", "limpiar"),
+            ("?", "ayuda"),
+            ("q", "volver"),
+        ],
         Vista::Sesion => vec![],
         Vista::Sesiones => vec![],
     };
@@ -162,6 +185,22 @@ fn atajos(app: &App) -> Line<'static> {
             format!(" {descripcion}"),
             Style::default().fg(tema.paleta.texto),
         ));
+    }
+    // Atajos de `[flota.atajos]`: tecla y snippet, tras los de la vista.
+    if app.vista == Vista::Flota {
+        for (tecla, snippet) in app.atajos_flota() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                tecla.to_string(),
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" {}", crate::snippets::salida::sanear_linea(snippet, 24)),
+                Style::default().fg(tema.paleta.texto),
+            ));
+        }
     }
     // Con el filtro activo la barra muestra la consulta que se está escribiendo.
     if app.vista == Vista::Tuneles && app.filtro_tuneles_activo {

@@ -1,6 +1,7 @@
 //! Vista Snippets (`F8`): lista con destino resumido, panel inferior con el
 //! comando, los destinos resueltos, la confirmación y el uso; filtro `/`;
-//! alta, edición y borrado. La ejecución llega en el sprint siguiente.
+//! alta, edición y borrado. `↵`, `a` y `p` lanzan el seleccionado (ver
+//! `lanzar`).
 
 use std::collections::HashMap;
 
@@ -12,10 +13,8 @@ use crate::ui::snippets::{limpio, partir};
 use crate::ui::Vista;
 
 use super::formulario_snippet::{AccionFormulario, FormularioSnippet};
+use super::lanzar::OrigenLanzamiento;
 use super::{AccionDialogo, AccionPaleta, App, Dialogo, EntradaPaleta};
-
-/// Lo que dicen `↵`, `a` y `p` mientras la ejecución no exista (sprint 2).
-const EJECUCION_PENDIENTE: &str = "la ejecución de snippets llega en el siguiente sprint";
 
 /// Ancho útil de las líneas del diálogo de confirmación (66 de ancho menos
 /// bordes y márgenes): el modal no parte las líneas largas.
@@ -201,11 +200,9 @@ impl App {
             KeyCode::Char('e') => self.editar_snippet_seleccionado(),
             KeyCode::Char('x') => self.confirmar_borrado_snippet(),
             KeyCode::Char('t') => self.ir_a_resultados(),
-            KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('p') => {
-                if self.snippet_seleccionado().is_some() {
-                    self.mensaje(EJECUCION_PENDIENTE, false);
-                }
-            }
+            KeyCode::Enter => self.lanzar_seleccionado(OrigenLanzamiento::Dialogo),
+            KeyCode::Char('a') => self.lanzar_seleccionado(OrigenLanzamiento::Todos),
+            KeyCode::Char('p') => self.lanzar_seleccionado(OrigenLanzamiento::Pestanas),
             KeyCode::Esc => {
                 if self.snippets.filtro.is_empty() {
                     self.volver_de_snippets();
@@ -217,6 +214,14 @@ impl App {
             KeyCode::Char('q') => self.volver_de_snippets(),
             KeyCode::Char('?') => self.ayuda = true,
             _ => {}
+        }
+    }
+
+    /// `↵` (diálogo EJECUTAR), `a` (todos) y `p` (en pestaña) sobre el
+    /// seleccionado: se lanza por id, releído de la base.
+    fn lanzar_seleccionado(&mut self, origen: OrigenLanzamiento) {
+        if let Some(id) = self.snippet_seleccionado().map(|snippet| snippet.id) {
+            self.iniciar_snippet(id, origen);
         }
     }
 
@@ -311,17 +316,39 @@ impl App {
             return;
         };
         let nombre = snippet.nombre.clone();
+        let apto_al_conectar = snippet.apto_al_conectar();
         let resueltos =
             crate::snippets::resolver(&snippet.destinos, &self.hosts, &self.grupos).len();
+        let mut avisos = Vec::new();
         if resueltos == 0 {
             // Guardar con cero hosts no se bloquea (una etiqueta puede no
             // tener hosts todavía), pero se avisa.
+            avisos.push("todavía no apunta a ningún host".to_string());
+        }
+        if !apto_al_conectar {
+            // Crítico o con variables ya no se escribe al abrir una pestaña:
+            // quien lo tenga como «snippet al conectar» debe saberlo.
+            match self.almacen.hosts_con_snippet_al_conectar(id) {
+                Ok(hosts) if !hosts.is_empty() => {
+                    let nombres: Vec<String> = hosts
+                        .into_iter()
+                        .map(|(_, nombre)| limpio(&nombre))
+                        .collect();
+                    avisos.push(aviso_al_conectar(&nombres));
+                }
+                Ok(_) => {}
+                Err(error) => avisos.push(format!(
+                    "no se pudo comprobar quién lo usa al conectar: {error}"
+                )),
+            }
+        }
+        if avisos.is_empty() {
+            self.mensaje(format!("snippet «{nombre}» guardado"), false);
+        } else {
             self.mensaje(
-                format!("snippet «{nombre}» guardado; todavía no apunta a ningún host"),
+                format!("snippet «{nombre}» guardado; {}", avisos.join("; ")),
                 true,
             );
-        } else {
-            self.mensaje(format!("snippet «{nombre}» guardado"), false);
         }
     }
 
@@ -417,6 +444,15 @@ fn destino_al_volver(previa: Option<Vista>, hay_ficha: bool) -> Vista {
     }
 }
 
+/// Aviso al guardar un snippet que deja de ser apto para «snippet al
+/// conectar» de estos hosts.
+fn aviso_al_conectar(hosts: &[String]) -> String {
+    format!(
+        "es el snippet al conectar de {}: dejará de escribirse al abrir",
+        hosts.join(", ")
+    )
+}
+
 /// Líneas de la confirmación de borrado: el nombre y, si algún host lo tiene
 /// como «snippet al conectar», quiénes se quedarán sin él (partido a lo ancho
 /// del diálogo, que no parte líneas).
@@ -478,6 +514,14 @@ mod pruebas {
             Vista::Hosts
         );
         assert_eq!(destino_al_volver(None, false), Vista::Hosts);
+    }
+
+    #[test]
+    fn guardar_uno_que_deja_de_ser_apto_avisa_a_sus_hosts() {
+        assert_eq!(
+            aviso_al_conectar(&["web-01".to_string(), "web-02".to_string()]),
+            "es el snippet al conectar de web-01, web-02: dejará de escribirse al abrir"
+        );
     }
 
     #[test]

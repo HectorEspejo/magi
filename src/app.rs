@@ -29,11 +29,14 @@ use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::Vista;
 
+mod dialogo_magi;
 pub mod formulario_snippet;
+pub mod lanzar;
 mod resultados;
 mod snippets;
 
-pub use resultados::EstadoResultados;
+pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
+pub use resultados::{AccionResultados, EstadoResultados};
 pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
 
 /// Entradas que carga cada página de la vista Registro.
@@ -938,6 +941,10 @@ pub enum AccionDialogo {
     },
     /// Acciones confirmadas de la vista Snippets (Fase 6).
     Snippets(AccionSnippets),
+    /// Lanzamiento de snippets (Fase 6): `p` con más de cinco hosts.
+    Lanzar(AccionLanzar),
+    /// Vista Resultados (Fase 6): cancelar, sobrescribir la salida.
+    Resultados(AccionResultados),
 }
 
 pub enum EntradaTextoAccion {
@@ -956,11 +963,18 @@ pub enum EntradaTextoAccion {
     RenombrarGrupo(i64),
     ImportarClave,
     EditarAliasIdentidad(i64),
+    /// `s` en Resultados: guardar la salida de estos hosts (fijados al abrir).
+    GuardarSalida {
+        ejecucion_id: u32,
+        host_ids: Vec<i64>,
+    },
 }
 
 pub enum Dialogo {
-    /// Diálogos de la vista Snippets (formulario; en S2, EJECUTAR).
+    /// Diálogos de la vista Snippets (formulario).
     Snippets(DialogoSnippets),
+    /// Diálogo EJECUTAR: hosts, variables y «parar al primer fallo».
+    Ejecutar(DialogoEjecutar),
     Confirmar {
         titulo: String,
         lineas: Vec<String>,
@@ -1170,6 +1184,8 @@ pub enum AccionPaleta {
     NuevoTunel,
     /// Entradas de la vista Snippets (Fase 6).
     Snippets(AccionPaletaSnippets),
+    /// `snippet · <nombre>` y `snippet · <nombre> · <host>`.
+    Lanzar(AccionPaletaLanzar),
 }
 
 pub struct PaletaCmd {
@@ -1333,6 +1349,11 @@ pub struct App {
     pub snippets: EstadoSnippets,
     /// Vista Resultados (subvista de F8).
     pub resultados: EstadoResultados,
+    /// Lanzamiento de snippets: atajos de Flota y pestañas en seguimiento.
+    pub lanzar: EstadoLanzar,
+    /// Diálogos tapados por una pregunta del servidor (huella, frase,
+    /// contraseña): vuelven al cerrarse la de encima, en vez de perderse.
+    pila_dialogos: Vec<Dialogo>,
 }
 
 impl App {
@@ -1439,12 +1460,17 @@ impl App {
             siguiente_peticion_tunel: 1 << 40,
             snippets: EstadoSnippets::default(),
             resultados: EstadoResultados::default(),
+            lanzar: EstadoLanzar::default(),
+            pila_dialogos: Vec::new(),
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
         app.recargar_snippets();
-        if let Some(aviso) = aviso_inicial {
-            app.mensaje(aviso, true);
+        // Atajos de Flota: los que no valen se ignoran con aviso al arrancar.
+        let mut avisos: Vec<String> = aviso_inicial.into_iter().collect();
+        avisos.extend(app.validar_atajos_flota());
+        if !avisos.is_empty() {
+            app.mensaje(avisos.join(" · "), true);
         }
         lanzar_hilo_teclas(
             eventos_tx.clone(),
@@ -1626,6 +1652,9 @@ impl App {
     fn tick(&mut self) {
         if let Some(estado) = &mut self.archivos {
             estado.muestrear(Instant::now());
+        }
+        if self.tick_resultados() | self.tick_lanzar() {
+            self.sucio = true;
         }
         self.contador_ticks += 1;
         if let Some(mensaje) = &self.mensaje {
@@ -1839,6 +1868,12 @@ impl App {
             }
             return;
         }
+        if tecla.code == KeyCode::Char('!') && !self.filtro_activo {
+            if let Some(host_id) = self.host_seleccionado().map(|host| host.id) {
+                self.paleta_snippets_de_host(host_id);
+            }
+            return;
+        }
         if self.filtro_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -1953,20 +1988,31 @@ impl App {
     /// Pide al servidor una sesión nueva al host (↵ en Hosts y Flota,
     /// paleta, `magi conectar`); siempre abre una nueva.
     fn conectar(&mut self, host_id: i64) {
+        let comandos = self.comandos_al_conectar(host_id);
+        self.abrir_sesion_con(host_id, comandos);
+    }
+
+    /// Pide una pestaña al host con sus comandos iniciales (snippet al
+    /// conectar, «abrir en pestaña»); devuelve si se pidió.
+    fn abrir_sesion_con(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+    ) -> bool {
         if self.servidor_incompatible.is_some() {
             self.mensaje(
                 "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
                 true,
             );
-            return;
+            return false;
         }
         if self.servidor_caido {
             self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
-            return;
+            return false;
         }
         if self.aperturas_pendientes.contains(&host_id) {
             self.mensaje("ya hay una conexión en curso con ese host", true);
-            return;
+            return false;
         }
         let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
         self.servidor
@@ -1974,6 +2020,7 @@ impl App {
                 host_id,
                 cols,
                 filas: alto_pty(filas),
+                comandos_iniciales,
             });
         self.aperturas_pendientes.insert(host_id);
         let nombre = self
@@ -1984,6 +2031,7 @@ impl App {
             .unwrap_or_default();
         self.mensaje(format!("conectando con «{nombre}»…"), false);
         self.sucio = true;
+        true
     }
 
     fn iniciar_conexion(&mut self, host: Host, solo_prueba: bool) {
@@ -2323,7 +2371,7 @@ impl App {
                 tipo_clave: tipo,
                 huella,
             } => {
-                self.dialogo = Some(Dialogo::HuellaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::HuellaServidor {
                     sesion_id,
                     host,
                     tipo,
@@ -2337,7 +2385,7 @@ impl App {
                 anterior,
                 nueva,
             } => {
-                self.dialogo = Some(Dialogo::HuellaCambiadaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::HuellaCambiadaServidor {
                     sesion_id,
                     host,
                     tipo,
@@ -2351,7 +2399,7 @@ impl App {
                 host,
                 intento,
             } => {
-                self.dialogo = Some(Dialogo::FraseServidor {
+                self.mostrar_dialogo_servidor(Dialogo::FraseServidor {
                     sesion_id,
                     host,
                     intento,
@@ -2369,7 +2417,7 @@ impl App {
                 if intento == 1 && self.intentar_llavero(sesion_id, &host) {
                     return;
                 }
-                self.dialogo = Some(Dialogo::ContrasenaServidor {
+                self.mostrar_dialogo_servidor(Dialogo::ContrasenaServidor {
                     sesion_id,
                     host,
                     intento,
@@ -2383,8 +2431,10 @@ impl App {
                 cliente_id,
                 sesiones,
                 tuneles,
+                ejecuciones,
                 ..
             } => {
+                self.actualizar_ejecuciones(ejecuciones);
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
@@ -2408,6 +2458,10 @@ impl App {
                 if let Some(peticion_id) = peticion_id {
                     if let Some(peticion) = self.peticiones_tunel.remove(&peticion_id) {
                         self.mensaje(format!("{}: {mensaje}", peticion.etiqueta()), true);
+                        return;
+                    }
+                    // Tampoco lo es una ejecución de snippets (su rango).
+                    if self.error_de_ejecucion(peticion_id, &mensaje) {
                         return;
                     }
                 }
@@ -2444,7 +2498,9 @@ impl App {
             protocolo::MensajeServidor::Hecho { peticion_id } => {
                 // Las peticiones de túnel se resuelven aquí; el resto son de
                 // la vista Archivos.
-                if self.peticiones_tunel.remove(&peticion_id).is_none() {
+                if self.peticiones_tunel.remove(&peticion_id).is_none()
+                    && !self.hecho_de_ejecucion(peticion_id)
+                {
                     self.hecho_de_archivos(peticion_id);
                 }
             }
@@ -2471,6 +2527,18 @@ impl App {
                     return;
                 }
                 self.peticion_pager = Some(crate::visor::Peticion::temporal(&ruta));
+            }
+            protocolo::MensajeServidor::Ejecuciones { lista } => {
+                self.actualizar_ejecuciones(lista);
+            }
+            protocolo::MensajeServidor::Salida {
+                ejecucion_id,
+                host_id,
+                stdout,
+                stderr,
+                truncada,
+            } => {
+                self.salida_recibida(ejecucion_id, host_id, stdout.0, stderr.0, truncada);
             }
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
@@ -2616,7 +2684,37 @@ impl App {
                 }
             }
         }
+        self.revisar_pestanas_snippet();
+        self.purgar_dialogos_sin_sesion();
         self.sucio = true;
+    }
+
+    /// Una pregunta del servidor (huella, frase, contraseña) no pisa el
+    /// diálogo abierto: lo aparta a la pila y vuelve cuando esta se cierre.
+    fn mostrar_dialogo_servidor(&mut self, dialogo: Dialogo) {
+        if let Some(abierto) = self.dialogo.take() {
+            self.pila_dialogos.push(abierto);
+        }
+        self.dialogo = Some(dialogo);
+    }
+
+    /// Tras cerrar un diálogo, vuelve el que se apartó (el más reciente).
+    fn restaurar_dialogo_apilado(&mut self) {
+        if self.dialogo.is_none() {
+            self.dialogo = self.pila_dialogos.pop();
+        }
+    }
+
+    /// Las preguntas apartadas de una sesión que ya no existe no se enseñan.
+    fn purgar_dialogos_sin_sesion(&mut self) {
+        let vivas: HashSet<u32> = self.pestanas.iter().map(|p| p.sesion_id).collect();
+        self.pila_dialogos.retain(|dialogo| match dialogo {
+            Dialogo::HuellaServidor { sesion_id, .. }
+            | Dialogo::HuellaCambiadaServidor { sesion_id, .. }
+            | Dialogo::FraseServidor { sesion_id, .. }
+            | Dialogo::ContrasenaServidor { sesion_id, .. } => vivas.contains(sesion_id),
+            _ => true,
+        });
     }
 
     /// Tras abrir con «recordar»: guarda en el llavero y marca la identidad.
@@ -2757,6 +2855,17 @@ impl App {
         // enseñándolos activos y los glifos de Hosts y Flota mentirían.
         self.tuneles_activos.clear();
         self.peticiones_tunel.clear();
+        self.resultados_servidor_caido();
+        // Las preguntas del servidor ya no tienen a quién contestar.
+        self.pila_dialogos.retain(|dialogo| {
+            !matches!(
+                dialogo,
+                Dialogo::HuellaServidor { .. }
+                    | Dialogo::HuellaCambiadaServidor { .. }
+                    | Dialogo::FraseServidor { .. }
+                    | Dialogo::ContrasenaServidor { .. }
+            )
+        });
         self.anotar(
             crate::registro::SERVIDOR_CAIDO,
             None,
@@ -3661,6 +3770,7 @@ impl App {
             accion: AccionPaleta::NuevoTunel,
         });
         entradas.extend(self.entradas_paleta_snippets());
+        entradas.extend(self.entradas_paleta_lanzar());
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
             categoria: "acción",
@@ -3913,6 +4023,11 @@ impl App {
                         let accion = accion.clone();
                         self.paleta = None;
                         self.accion_paleta_snippets(accion);
+                    }
+                    Some(AccionPaleta::Lanzar(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_lanzar(accion);
                     }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
@@ -5137,6 +5252,24 @@ impl App {
             }
             return;
         }
+        if !self.filtro_activo
+            && !tecla
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            if tecla.code == KeyCode::Char('!') {
+                if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
+                    self.paleta_snippets_de_host(host_id);
+                }
+                return;
+            }
+            // Atajos de `[flota.atajos]` (solo teclas que Flota no usa).
+            if let KeyCode::Char(caracter) = tecla.code {
+                if self.ejecutar_atajo_flota(caracter) {
+                    return;
+                }
+            }
+        }
         if self.filtro_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -5453,6 +5586,7 @@ impl App {
         self.mensaje = None;
         if self.dialogo.is_some() {
             self.tecla_dialogo(tecla);
+            self.restaurar_dialogo_apilado();
             return;
         }
         if self.paleta.is_some() {
@@ -5628,6 +5762,7 @@ impl App {
         };
         match dialogo {
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
+            Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Conflicto {
                 nombre,
                 es_dir,
@@ -6041,6 +6176,12 @@ impl App {
                             EntradaTextoAccion::CrearDirectorio => {
                                 self.crear_directorio(&nombre);
                             }
+                            EntradaTextoAccion::GuardarSalida {
+                                ejecucion_id,
+                                host_ids,
+                            } => {
+                                self.guardar_salida_en(nombre, ejecucion_id, host_ids);
+                            }
                             EntradaTextoAccion::EditarAliasIdentidad(id) => {
                                 match self.almacen.renombrar_identidad(id, &nombre) {
                                     Ok(()) => {
@@ -6242,6 +6383,8 @@ impl App {
         match accion {
             AccionDialogo::Nada => {}
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
+            AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
+            AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
             AccionDialogo::BorrarHost(id) => {
                 if let Err(error) = self.almacen.borrar_host(id) {
                     self.mensaje(error.to_string(), true);

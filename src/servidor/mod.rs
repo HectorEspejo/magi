@@ -7,6 +7,7 @@
 pub mod cliente_remoto;
 pub mod conexiones;
 pub mod difusion;
+pub mod ejecuciones;
 pub mod sesiones;
 pub mod sftp;
 pub mod socks5;
@@ -63,6 +64,12 @@ pub enum OrdenBd {
     /// Cierra la base de datos (checkpoint del WAL) y contesta: al apagarse no
     /// se pierde ninguna anotación.
     Terminar(tokio::sync::oneshot::Sender<()>),
+    /// Rellena `DELIBERACIONES.ejecucion_resultado` al terminar una ejecución
+    /// deliberada (una sola vez; excepción documentada a T18).
+    ResultadoDeliberacion {
+        deliberacion_id: i64,
+        resultado: crate::deliberacion::EjecucionResultado,
+    },
 }
 
 /// Plazo para que el escritor confirme una barrera (el doble del
@@ -120,6 +127,9 @@ pub struct EstadoServidor {
     pub tx_cola: Option<mpsc::UnboundedSender<()>>,
     /// Túneles levantados, por id de `TUNELES`.
     pub tuneles: HashMap<i64, tuneles::TunelActivo>,
+    /// Ejecuciones de snippets (Fase 6), en curso y terminadas de la última
+    /// hora.
+    pub ejecuciones: ejecuciones::Ejecuciones,
     /// Reenvíos remotos registrados, compartidos con los handlers de russh.
     pub reenvios: Arc<crate::conexion::reenvios::Reenvios>,
     /// Túneles automáticos que el usuario paró a mano: no se vuelven a levantar
@@ -204,6 +214,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         difusion_cola: difusion::DifusionCola::default(),
         tx_cola: None,
         tuneles: HashMap::new(),
+        ejecuciones: ejecuciones::Ejecuciones::default(),
         reenvios: Arc::new(crate::conexion::reenvios::Reenvios::default()),
         tuneles_parados: std::collections::HashSet::new(),
     }));
@@ -233,6 +244,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(revisar_cola(estado.clone()));
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
+    tokio::spawn(ejecuciones::revisar(estado.clone()));
 
     // SIGTERM es un `Parar`: apagado limpio con sus anotaciones (3b). Así un
     // MAGI de otra versión puede parar este servidor sin hablar su protocolo.
@@ -407,6 +419,15 @@ fn ejecutar_orden_bd(conexion: &rusqlite::Connection, orden: OrdenBd) -> Result<
         OrdenBd::MarcarEstado { host_id, estado } => {
             crate::almacen::hosts::marcar_estado(conexion, host_id, estado)
         }
+        OrdenBd::ResultadoDeliberacion {
+            deliberacion_id,
+            resultado,
+        } => crate::almacen::deliberaciones::fijar_resultado_ejecucion(
+            conexion,
+            deliberacion_id,
+            resultado,
+        )
+        .map(|_| ()),
         OrdenBd::Barrera(listo) | OrdenBd::Terminar(listo) => {
             let _ = listo.send(());
             Ok(())
@@ -440,7 +461,8 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
             let ocupado = !estado_bloqueado.clientes.is_empty()
                 || !estado_bloqueado.sesiones.is_empty()
                 || estado_bloqueado.transferencias.hay_vivas()
-                || tuneles::hay_activos(&estado_bloqueado);
+                || tuneles::hay_activos(&estado_bloqueado)
+                || estado_bloqueado.ejecuciones.hay_en_curso();
             if !ocupado {
                 match estado_bloqueado.vacio_desde {
                     None => {
@@ -537,6 +559,7 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
     }
 
     // Fase 1: anotaciones y estado, sin red.
+    ejecuciones::cancelar_todas_al_apagar(estado).await;
     let tuneles = tuneles::retirar_todos(estado, "el servidor se apaga").await;
     let (conexiones, rutas) = {
         let mut estado_bloqueado = estado.lock().await;
@@ -710,6 +733,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
         transferencias: estado_bloqueado.transferencias.info(),
         tuneles: tuneles::lista(&estado_bloqueado),
+        ejecuciones: estado_bloqueado.ejecuciones.info(),
     };
     difusion::enviar(cliente, mensaje);
 }
@@ -725,8 +749,9 @@ async fn manejar_mensaje(
             host_id,
             cols,
             filas,
+            comandos_iniciales,
         } => {
-            abrir_sesion(estado, cliente_id, host_id, cols, filas).await;
+            abrir_sesion(estado, cliente_id, host_id, cols, filas, comandos_iniciales).await;
         }
         MensajeCliente::Adjuntar {
             sesion_id,
@@ -936,6 +961,56 @@ async fn manejar_mensaje(
             let estado_tarea = estado.clone();
             tokio::spawn(async move { borrar_temporal(&estado_tarea, cliente_id, ruta).await });
         }
+        // Una ejecución abre conexiones y espera a los hosts: en su tarea.
+        MensajeCliente::LanzarEjecucion {
+            peticion_id,
+            snippet_id,
+            nombre,
+            comando,
+            host_ids,
+            timeout_seg,
+            parar_al_fallo,
+            deliberacion,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                let peticion = ejecuciones::PeticionLanzar {
+                    peticion_id,
+                    snippet_id,
+                    nombre,
+                    comando,
+                    host_ids,
+                    timeout_seg,
+                    parar_al_fallo,
+                    deliberacion,
+                };
+                match ejecuciones::lanzar(&estado_tarea, cliente_id, peticion).await {
+                    Ok(_) => {
+                        responder(
+                            &estado_tarea,
+                            cliente_id,
+                            MensajeServidor::Hecho { peticion_id },
+                        )
+                        .await;
+                    }
+                    Err(motivo) => {
+                        responder_error(&estado_tarea, cliente_id, motivo, Some(peticion_id)).await;
+                    }
+                }
+            });
+        }
+        MensajeCliente::CancelarEjecucion { id } => {
+            ejecuciones::cancelar(estado, id).await;
+        }
+        MensajeCliente::LimpiarEjecuciones => {
+            ejecuciones::limpiar(estado).await;
+        }
+        MensajeCliente::PedirSalida {
+            ejecucion_id,
+            host_id,
+        } => {
+            ejecuciones::pedir_salida(estado, cliente_id, ejecucion_id, host_id).await;
+        }
         MensajeCliente::Listar => {
             let lista = sesiones::lista(&estado.lock().await.sesiones);
             let estado_bloqueado = estado.lock().await;
@@ -1072,7 +1147,17 @@ async fn abrir_sesion(
     host_id: i64,
     cols: u16,
     filas: u16,
+    comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
 ) {
+    // Lo que se escribe en la shell viene del cliente: se acota.
+    let comandos_iniciales: Vec<crate::protocolo::ComandoInicial> = comandos_iniciales
+        .into_iter()
+        .filter(|comando| {
+            !comando.texto.is_empty()
+                && comando.texto.len() <= sesiones::TOPE_COMANDO_INICIAL
+                && !comando.texto.contains('\0')
+        })
+        .collect();
     let (host, todos_los_hosts, rutas) = {
         let estado_bloqueado = estado.lock().await;
         let Ok(lectura) = estado_bloqueado.lectura.lock() else {
@@ -1137,6 +1222,7 @@ async fn abrir_sesion(
             handle: None,
             cancelar_apertura: cancelar.clone(),
             reconectando: false,
+            comandos_iniciales: comandos_iniciales.clone(),
             tamano,
             pantalla: pantalla.clone(),
             tx_comandos,
@@ -1154,6 +1240,10 @@ async fn abrir_sesion(
         solicitante: cliente_id,
         reconexion: false,
         cancelar,
+        comandos: comandos_iniciales
+            .into_iter()
+            .map(|comando| comando.texto)
+            .collect(),
     };
     // Los túneles automáticos del host se levantan cuando la pestaña queda
     // abierta (lo hace su tarea), no mientras sus diálogos esperan.
@@ -1396,7 +1486,7 @@ async fn reconectar(
     // `Reconectar` seguidos no pueden lanzar dos aperturas.
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
     let cancelar = tokio_util::sync::CancellationToken::new();
-    let (cols, filas, pantalla) = {
+    let (cols, filas, pantalla, comandos) = {
         let mut estado_bloqueado = estado.lock().await;
         if estado_bloqueado.apagando {
             return;
@@ -1417,7 +1507,14 @@ async fn reconectar(
         sesion.solicitante = cliente_id;
         sesion.tx_comandos = tx_comandos;
         sesion.pantalla = pantalla.clone();
-        (cols, filas, pantalla)
+        // Al reconectar solo se repite lo que es «al conectar».
+        let comandos: Vec<String> = sesion
+            .comandos_iniciales
+            .iter()
+            .filter(|comando| comando.repetir)
+            .map(|comando| comando.texto.clone())
+            .collect();
+        (cols, filas, pantalla, comandos)
     };
     let datos = sesiones::DatosApertura {
         host,
@@ -1430,6 +1527,7 @@ async fn reconectar(
         solicitante: cliente_id,
         reconexion: true,
         cancelar,
+        comandos,
     };
     sesiones::lanzar(estado.clone(), datos, rx_comandos);
     sesiones::difundir_lista(&mut *estado.lock().await);
@@ -1995,6 +2093,47 @@ fn imprime_tuneles(tuneles: &[crate::protocolo::InfoTunel]) {
     }
 }
 
+/// Ejecuciones de snippets en curso: snippet, hosts y progreso.
+fn imprime_ejecuciones(ejecuciones: &[crate::protocolo::InfoEjecucion]) {
+    let en_curso: Vec<&crate::protocolo::InfoEjecucion> = ejecuciones
+        .iter()
+        .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
+        .collect();
+    if en_curso.is_empty() {
+        println!("Sin ejecuciones de snippets en curso.");
+        return;
+    }
+    println!("Ejecuciones en curso: {}", en_curso.len());
+    println!(
+        "{:<5} {:<28} {:<7} {:<8} {:<8} PROGRESO",
+        "ID", "SNIPPET", "HOSTS", "OK", "FALLO"
+    );
+    for ejecucion in en_curso {
+        let cuenta = |estados: &[crate::protocolo::EstadoHostEjecucion]| {
+            ejecucion
+                .hosts
+                .iter()
+                .filter(|host| estados.contains(&host.estado))
+                .count()
+        };
+        use crate::protocolo::EstadoHostEjecucion as E;
+        let terminados = ejecucion
+            .hosts
+            .iter()
+            .filter(|host| host.estado.es_final())
+            .count();
+        println!(
+            "{:<5} {:<28} {:<7} {:<8} {:<8} {terminados}/{} terminados",
+            ejecucion.id,
+            recortar_texto(&ejecucion.nombre, 28),
+            ejecucion.hosts.len(),
+            cuenta(&[E::Ok]),
+            cuenta(&[E::Fallo, E::Error]),
+            ejecucion.hosts.len(),
+        );
+    }
+}
+
 /// Recorta un texto a un ancho, con puntos suspensivos si sobra.
 fn recortar_texto(texto: &str, ancho: usize) -> String {
     if texto.chars().count() <= ancho {
@@ -2028,6 +2167,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             sesiones,
             transferencias,
             tuneles,
+            ejecuciones,
             ..
         } => {
             println!(
@@ -2057,6 +2197,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             }
             imprime_cola(&transferencias);
             imprime_tuneles(&tuneles);
+            imprime_ejecuciones(&ejecuciones);
             Ok(0)
         }
         MensajeServidor::VersionIncompatible { version, pid } => {
@@ -2096,14 +2237,21 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     // El pid del otro extremo del socket, por si no habla nuestro protocolo.
     let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    let (cuantas, tuneles_vivos) = match leer_respuesta(&mut stream).await? {
+    let (cuantas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(&mut stream).await? {
         MensajeServidor::Bienvenida {
-            sesiones, tuneles, ..
+            sesiones,
+            tuneles,
+            ejecuciones,
+            ..
         } => (
             sesiones.len(),
             tuneles
                 .iter()
                 .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
+                .count(),
+            ejecuciones
+                .iter()
+                .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count(),
         ),
         MensajeServidor::VersionIncompatible { version, pid } => {
@@ -2116,10 +2264,15 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             return Ok(1);
         }
     };
-    if (cuantas > 0 || tuneles_vivos > 0) && !si {
+    if (cuantas > 0 || tuneles_vivos > 0 || ejecuciones_vivas > 0) && !si {
         let mut aviso = format!("Hay {cuantas} sesión(es) abierta(s)");
         if tuneles_vivos > 0 {
-            aviso.push_str(&format!(" y {tuneles_vivos} túnel(es) levantado(s)"));
+            aviso.push_str(&format!(", {tuneles_vivos} túnel(es) levantado(s)"));
+        }
+        if ejecuciones_vivas > 0 {
+            aviso.push_str(&format!(
+                " y {ejecuciones_vivas} ejecución(es) de snippets en curso (se cancelarán)"
+            ));
         }
         print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
         use std::io::Write as _;

@@ -755,6 +755,7 @@ async fn el_ciclo_automatico_respeta_los_manuales() {
     // Con una pestaña abierta, el automático se levanta solo.
     montaje
         .enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,
@@ -916,6 +917,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
     // Con la primera pestaña se levanta solo.
     montaje
         .enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,
@@ -939,6 +941,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
     // resucita.
     montaje
         .enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,

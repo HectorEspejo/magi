@@ -34,6 +34,9 @@ const TIMEOUT_DECISION: Duration = Duration::from_secs(5 * 60);
 /// ya autenticada.
 const PLAZO_CANAL: Duration = Duration::from_secs(10);
 
+/// Tope de un comando inicial (lo manda el cliente y se escribe en la shell).
+pub const TOPE_COMANDO_INICIAL: usize = 64 * 1024;
+
 /// Generación de cada diálogo pendiente: el temporizador de uno no puede
 /// borrar el siguiente que ocupe el mismo id (otro intento de frase, p. ej.).
 static GENERACION_DIALOGO: AtomicU64 = AtomicU64::new(1);
@@ -98,6 +101,9 @@ pub struct Sesion {
     /// Está reabriendo tras una caída: sigue contando para el ciclo automático
     /// de los túneles como cuando estaba caída.
     pub reconectando: bool,
+    /// Lo que se escribe al abrir la shell; al reconectar, solo lo que
+    /// `repetir` (el snippet al conectar).
+    pub comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     /// Tamaño vigente (último aplicado al remoto).
     pub tamano: Tamano,
     /// Pantalla del servidor de la sesión (volcado al adjuntar).
@@ -212,6 +218,8 @@ pub struct DatosApertura {
     pub reconexion: bool,
     /// La de la sesión: cancelarla aborta la apertura.
     pub cancelar: tokio_util::sync::CancellationToken,
+    /// Textos que se escriben en la shell en esta apertura, en orden.
+    pub comandos: Vec<String>,
 }
 
 /// Lanza la tarea de una sesión: toma la conexión (la del pool con
@@ -277,6 +285,16 @@ async fn abrir_y_servir(
             return;
         }
     };
+    // Comandos iniciales (snippet al conectar, «abrir en pestaña»): se
+    // escriben antes de dar la pestaña por abierta, tras la shell.
+    for texto in &datos.comandos {
+        let escrito =
+            tokio::time::timeout(PLAZO_CANAL, canal.data_bytes(texto.clone().into_bytes())).await;
+        if !matches!(escrito, Ok(Ok(()))) {
+            warn!(sesion = sesion_id, "no se pudo escribir el comando inicial");
+            break;
+        }
+    }
 
     let primera_en_conexion = {
         let mut estado_bloqueado = estado.lock().await;

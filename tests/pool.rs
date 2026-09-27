@@ -202,6 +202,7 @@ async fn pestana_sftp_y_tunel_a_la_vez_comparten_una_conexion() {
     let tunel = crear_tunel_local(&escenario, host, "eco", puerto_eco);
     escenario
         .enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id: host,
             cols: 80,
             filas: 24,
@@ -518,6 +519,7 @@ async fn cerrar_una_pestana_que_espera_la_huella_se_anota_una_vez() {
     let host = escenario.hosts[0];
     escenario
         .enviar(&MensajeCliente::AbrirSesion {
+            comandos_iniciales: Vec::new(),
             host_id: host,
             cols: 80,
             filas: 24,
