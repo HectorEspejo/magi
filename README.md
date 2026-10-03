@@ -37,6 +37,7 @@ cargo run -- tuneles            # lista los túneles definidos y activos
 cargo run -- tunel activar <host> <nombre>   # levanta ese túnel
 cargo run -- tunel parar <host> <nombre>     # lo para
 cargo run -- conectar <host>    # abre la TUI con una sesión nueva a ese host
+cargo run -- sincronizaciones   # lista las sincronizaciones guardadas
 cargo test                      # tests de almacén, parser, estados, ids y vuelta
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
@@ -191,10 +192,65 @@ transferencias siguen cuando se cierra la ventana.
 - **Borrar, renombrar y crear**: `x` borra sin papelera tras confirmar con el
   recuento, `r` renombra y `d` crea un directorio. En remoto lo hace el
   servidor (el borrado, recursivo) y queda anotado en el historial.
+- **Editar** (`E`): un fichero local se abre con tu editor y el panel se
+  refresca al volver. Uno remoto se baja a un temporal privado
+  (`$XDG_RUNTIME_DIR/magi/ediciones`, 700 y 600), se abre con el editor
+  (`[archivos] editor`, `$VISUAL`, `$EDITOR`, `nvim` o `vi`, lanzado sin shell
+  y con la TUI suspendida) y, si el SHA-256 cambió, se pregunta si subirlo.
+  Antes de subir se comprueba el remoto: si cambió mientras editabas sale el
+  conflicto (`s` sobrescribir, `c` guardar tu versión como copia local
+  `<nombre>.magi-<AAAAMMDD-HHMMSS>` en el panel local, `d` descartar); si pasará
+  a ser de otro usuario o es un fichero sensible, se avisa. La subida conserva
+  los permisos del original. **El temporal no se borra hasta que la subida
+  termina, dices «sin cambios», descartas o guardas la copia local**: si algo
+  falla se conserva, se dice su ruta y se ofrece reintentar. Por encima de
+  `editar_max_mb` (10) o si parece binario, se pide confirmación. Sobre un
+  enlace a fichero se edita su destino; sobre un directorio, nada.
+- **Permisos** (`p`): rejilla rwx (usuario, grupo, otros) y octal de 3 o 4
+  dígitos sincronizados sobre lo marcado. Con modos distintos, las casillas que
+  no coinciden salen `[~]` y se respetan en cada fichero; las casillas solo
+  tocan los 9 bits rwx y los especiales solo cambian si se escriben en el
+  octal. Con directorios, recursivo con alcance todo, solo directorios o solo
+  ficheros, con confirmación y recuento; un aviso en ámbar dice si los
+  directorios se quedarán sin `x`. Los enlaces nunca se tocan. `Ctrl+S` aplica.
+  En remoto lo hace el servidor y queda anotado (`permisos_cambiados`).
+- **Propietario**: el detalle `i` enseña propietario y grupo por nombre con el
+  número entre paréntesis (`www-data (33)`). En remoto los nombres salen de
+  `/etc/passwd` y `/etc/group` del host, leídos por SFTP al abrir el canal (sin
+  ejecutar nada); usuarios de LDAP/SSSD se quedan con el número.
+- **Sincronizar** (`S`): sincroniza el directorio del panel activo con el del
+  otro, en cualquier dirección (activo local → subida, remoto → bajada). El
+  diálogo SINCRONIZAR ofrece borrar en el destino lo que no está en el origen
+  (desmarcado), exclusiones extra y guardar la sincronización con un nombre. El
+  plan es recursivo: crear lo que falta, actualizar lo que difiere en tamaño o
+  fecha (±2 s), borrar lo que sobra solo con la casilla y omitir, con su motivo,
+  los enlaces a directorio y los choques fichero/directorio. Al crear se usan
+  los permisos del origen; al actualizar se conservan los del destino. La vista
+  previa es la confirmación: resumen `+ crear · ~ actualizar · − borrar`,
+  bytes, excluidos y omitidos, lista con `↑` `↓` `PgUp` `PgDn`, filtro `f` y
+  `↵` para seguir (si el plan está vacío, «todo al día»). En subidas se avisa de
+  ficheros sensibles; si se sube a un host con verificaciones o se marca
+  «borrar», pasa por la deliberación MAGI (`Ctrl+K` ejecuta). Se ejecuta en la
+  cola del servidor (sobrevive a cerrar la ventana) y **solo borra al terminar,
+  si todo se copió bien**: si falla un fichero, no se borra nada y queda
+  «parcial». Transferencias enseña la fase `borrando`.
+- **Exclusiones y `.magiignore`**: con la sintaxis de gitignore y en este
+  orden: `[archivos] excluir` (por defecto `.git/`, `target/`, `node_modules/`,
+  `__pycache__/`, `.DS_Store` y `.magiignore`), el `.magiignore` de la raíz del
+  origen y las exclusiones extra. **Lo excluido no se crea, no se actualiza y
+  nunca se borra** en el destino.
+- **Sincronizaciones guardadas** (`L`): las del host, con dirección (`−` si
+  borra), rutas y último resultado. `↵` planifica y abre la vista previa; `n`
+  nueva, `e` editar, `x` borrar (con confirmación). También desde la paleta
+  (`sync · <host> · <nombre>`) y con `magi sincronizaciones`.
 
 Últimos directorios: cada host recuerda dónde se quedó cada panel
 (`HOSTS.sftp_dir_local` y `HOSTS.sftp_dir_remoto`), así que al volver se abre
 donde se estaba.
+
+```sh
+magi sincronizaciones   # host, nombre, dirección, rutas, borrar y último resultado
+```
 
 ## Túneles
 
@@ -467,9 +523,18 @@ ventana no las cierra.
 Archivos: `Tab` panel · `↑` `↓` / `j` `k` mover · `PgUp` `PgDn` página ·
 `Home` `End` extremos · `↵` entrar o ver · `⌫` / `-` subir · `Espacio` marcar y
 bajar · `a` / `A` marcar todo / desmarcar · `c` copiar · `m` mover · `x`
-borrar · `r` renombrar · `d` crear directorio · `.` ocultos · `/` filtro · `R`
-refrescar · `g` ir a ruta · `i` detalle · `h` cambiar de host · `t` cola ·
+borrar · `E` editar · `p` permisos · `S` sincronizar · `L` sincronizaciones
+guardadas · `r` renombrar · `d` crear directorio · `.` ocultos · `/` filtro ·
+`R` refrescar · `g` ir a ruta · `i` detalle · `h` cambiar de host · `t` cola ·
 `Esc` limpiar filtro o marcas · `q` volver.
+
+PERMISOS: `↑` `↓` `←` `→` rejilla · `Espacio` marcar · `Tab` / `Shift+Tab`
+octal, recursivo y alcance · `Ctrl+S` aplicar · `Esc` cancelar.
+
+SINCRONIZAR: `Tab` / `Shift+Tab` campos · `Espacio` casillas · `↵` planificar ·
+`Esc` cancelar. Vista previa: `↑` `↓` `PgUp` `PgDn` recorrer · `f` filtrar por
+tipo de cambio · `↵` continuar · `Esc` cancelar. Guardadas (`L`): `↵`
+ejecutar · `n` nueva · `e` editar · `x` borrar · `q` volver.
 
 Transferencias: `↑` `↓` mover · `x` cancelar · `C` limpiar terminadas · `↵`
 detalle · `q` volver.
@@ -498,6 +563,9 @@ En `config.toml`:
 avisar = [".env*", "*.pem", "*.key", "id_*"]
 mostrar_ocultos = false
 pager = ""        # vacío usa $PAGER y, si no hay, less
+editor = ""       # vacío usa $VISUAL, $EDITOR, nvim y vi (programa y argumentos, sin shell)
+excluir = [".git/", "target/", "node_modules/", "__pycache__/", ".DS_Store", ".magiignore"]
+editar_max_mb = 10   # por encima, E pide confirmación antes de bajar el fichero
 ```
 
 ## El `Include` de `~/.ssh/config`
@@ -545,6 +613,14 @@ normal, legible y reimportable con `magi importar ~/.ssh/magi_config`.
   en **local** el comando que pongas en la ficha, con tu usuario.
 - Un snippet crítico, en varios hosts o en un host con verificaciones no se
   ejecuta sin deliberación, y forzarla exige un motivo que queda registrado.
+- Un temporal de edición nunca se borra mientras tenga trabajo sin poner a
+  salvo; el editor se lanza como programa y argumentos, sin shell. Sobrescribir
+  un fichero remoto es atómico (`posix-rename@openssh.com`, o en tres pasos sin
+  perder nunca el original) y conserva sus permisos; si el propietario va a
+  cambiar, se avisa antes.
+- Una sincronización solo borra en el destino rutas fijadas en el plan, nunca
+  excluidas, solo tras copiar todo sin errores y siempre con deliberación MAGI.
+  `chmod` nunca sigue enlaces y el recursivo pide confirmación con el recuento.
 - Los nombres de unidad systemd se validan (`[A-Za-z0-9@._-]+`) antes de
   pasarlos al script de sondeo, que los recibe como argumentos.
 - `magi.db`, `magi_config`, `known_hosts`, las claves generadas y las
@@ -593,6 +669,11 @@ Las pruebas de archivos (`tests/sftp.rs`) levantan un servidor SSH en proceso
 que sirve el subsistema `sftp` con el **`sftp-server` real de OpenSSH**: listar,
 subir y bajar ficheros y directorios, conflicto con `omitir`, cancelación en
 curso, `mtime` conservado, temporales en 600, borrado recursivo y la cola que
-ve una segunda ventana. Si el sistema no trae `sftp-server`, esas pruebas se
-saltan con un aviso en lugar de fallar. El resto (marcas, avisos de sensibles,
+ve una segunda ventana. Desde la Fase 8 también sobrescribir un fichero
+existente (posix-rename y los tres pasos), los temporales de edición, `StatRemoto`,
+`CambiarPermisos` con sus alcances, `ListarArbol` por bloques con exclusiones y
+`.magiignore`, los nombres de propietario, los permisos tras sobrescribir, el
+borrado al terminar solo con éxito y las anotaciones de sincronización y
+deliberación. Si el sistema no trae `sftp-server`, esas pruebas se saltan con
+un aviso en lugar de fallar. El resto (marcas, avisos de sensibles,
 paneles, orden y fechas) son pruebas unitarias puras.
