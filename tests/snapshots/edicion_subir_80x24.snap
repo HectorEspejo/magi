@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ──────────────────────────── local ⇄ hetzner-01 ─ [remoto] ⇥ ┐
+│ /var/www/cooperapp                                                           │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│    ..                                                                        │
+│    static              — 2025   ✕                                            │
+│    actual.py@        9 B 2025   ✕                                            │
+│    compartido@       8 B 2025   ✕                                            │
+│ ▸  main┌ SUBIR CAMBIOS ─────────────────────────────────────────────┐        │
+│    ngin│                                                            │        │
+│    serv│  ¿Subir cambios a                                          │        │
+│    volc│  hetzner-01:/var/www/cooperapp/main.py?                    │        │
+│        │                                                            │        │
+│        │  Antes se comprueba que no haya cambiado en el host.       │        │
+│        │                                                            │        │
+│        │  s subir   n no subir                                      │        │
+│        │                                                            │        │
+│        └────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 8 elementos · 12.0 MB                                                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+ bajando hetzner-01:/var/www/cooperapp/main.py para editarlo…

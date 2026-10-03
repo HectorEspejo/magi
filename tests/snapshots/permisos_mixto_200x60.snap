@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ [tmp]/hogar ───────────────────────────────────────────────────────────────────────────┐┌ /srv/web ────────────────────────────────────────────────────────────────────────────────────────┐
+│   ..                                                                                             ││▸  ..                                                                                             │
+│   notas.md        9 B 2025   ✕                                                                   ││ • app                — 2025   ✕                                                                  │
+│                                                                                                  ││   static             — 2025   ✕                                                                  │
+│                                                                                                  ││ • config.yaml     2 kB 2025   ✕                                                                  │
+│                                                                                                  ││   enlace@          7 B 2025   ✕                                                                  │
+│                                                                                                  ││ • main.py        14 kB 2025   ✕                                                                  │
+│                                                                                                  ││   run.sh         512 B 2025   ✕                                                                  │
+│                                                                                                  ││   www.conf       300 B 2025   ✕                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                  ┌ PERMISOS · 3 elementos (2 ficheros, 1 directorio) ─────────────┐                                                                  │
+│                                                                  │                                                                │                                                                  │
+│                                                                  │              leer   escribir   ejecutar                        │                                                                  │
+│                                                                  │  usuario     [x]    [x]        [~]                             │                                                                  │
+│                                                                  │  grupo       [~]    [ ]        [~]                             │                                                                  │
+│                                                                  │  otros       [~]    [ ]        [~]                             │                                                                  │
+│                                                                  │  octal       [      ]                                          │                                                                  │
+│                                                                  │  [ ] recursivo   (•) todo   ( ) solo dirs   ( ) solo ficheros  │                                                                  │
+│                                                                  │                                                                │                                                                  │
+│                                                                  │  ^s aplicar   ⇥ campo   espacio marcar   esc cancelar          │                                                                  │
+│                                                                  │                                                                │                                                                  │
+│                                                                  └────────────────────────────────────────────────────────────────┘                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+└ 2 elementos · 9 B ───────────────────────────────────────────────────────────────────────────────┘└ 8 elementos · 17 kB · 3 marcado(s) ──────────────────────────────────────────────────────────────┘
+ ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  p permisos  L guardadas  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda

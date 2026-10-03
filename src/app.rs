@@ -2049,9 +2049,6 @@ pub struct App {
     pub sincronizar: sincronizar::EstadoSincronizar,
     /// Operaciones de Archivos de la Fase 8 en vuelo, por `peticion_id`.
     pub peticiones_archivos: HashMap<u64, PeticionArchivos>,
-    // TODO(fase8): quitar el `allow` al integrar (lo usan edición, permisos y
-    // sincronización).
-    #[allow(dead_code)]
     siguiente_peticion_archivos: u64,
 }
 
@@ -3913,7 +3910,6 @@ impl App {
     /// EOF del socket sin `Adios`: el servidor ha caído.
     /// Registra una operación de Archivos de la Fase 8 y devuelve su
     /// `peticion_id` (rango propio, ver `RANGO_ARCHIVOS_APP`).
-    #[allow(dead_code)]
     pub(crate) fn nueva_peticion_archivos(&mut self, peticion: PeticionArchivos) -> u64 {
         self.siguiente_peticion_archivos += 1;
         let id = self.siguiente_peticion_archivos;
@@ -7195,6 +7191,7 @@ impl App {
                 | Dialogo::ConflictoImportacion { .. }
                 | Dialogo::Conflicto { .. }
                 | Dialogo::Detalle { .. }
+                | Dialogo::Edicion(_)
         )
     }
 

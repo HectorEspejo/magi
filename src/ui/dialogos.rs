@@ -46,7 +46,7 @@ pub(crate) fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
 
 /// Línea de teclas del pie: `tecla texto`, separadas por tres espacios (el
 /// reparto en renglones prefiere cortar ahí).
-fn teclas(pares: &[(&str, &str)], tema: &Tema) -> Line<'static> {
+pub(crate) fn teclas(pares: &[(&str, &str)], tema: &Tema) -> Line<'static> {
     let mut spans = Vec::new();
     for (indice, (tecla, texto)) in pares.iter().enumerate() {
         if indice > 0 {
