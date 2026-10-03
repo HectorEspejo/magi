@@ -96,6 +96,14 @@ impl Cliente {
         Self::con_canal(tx, pantallas::Pantallas::default())
     }
 
+    /// Cliente de pruebas: lo que la App envía al servidor queda en el
+    /// receptor devuelto.
+    #[doc(hidden)]
+    pub fn de_prueba() -> (Self, mpsc::UnboundedReceiver<MensajeCliente>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self::con_canal(tx, pantallas::Pantallas::default()), rx)
+    }
+
     fn con_canal(
         tx: mpsc::UnboundedSender<MensajeCliente>,
         pantallas: pantallas::Pantallas,
@@ -365,6 +373,13 @@ async fn tarea_lectura(
                     Ok(MensajeServidor::PantallaCompleta { sesion_id, bytes, cols, filas }) => {
                         pantallas.volcar(sesion_id, filas, cols, &bytes);
                         let _ = tx_eventos.send(crate::app::Evento::Pantallas(vec![sesion_id]));
+                    }
+                    // El tamaño nuevo se aplica aquí, en orden con los datos:
+                    // lo que el remoto pinte después ya llega con ese tamaño.
+                    // La App recibe el mensaje igualmente (barra y relleno).
+                    Ok(mensaje @ MensajeServidor::Redimensionada { sesion_id, cols, filas, .. }) => {
+                        pantallas.redimensionar(sesion_id, filas, cols);
+                        let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
                     }
                     Ok(mensaje) => {
                         // La respuesta de una petición esperable va a quien la

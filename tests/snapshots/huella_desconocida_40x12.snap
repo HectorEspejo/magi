@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ HUELLA DESCONOCIDA ────────────────┐│
+││ Host: hetzner-01                   ││
+││ Tipo:  ssh-ed25519                 ││
+││ Huella: SHA256:Ab3dE5fG7hJ9kL1mN3p ││
+││         Q5rS7tU9vW1xY3zA5bC7dE9    ││
+││ La huella no está en known_hosts.  ││
+││                                    ││
+││ a aceptar y añadir                 ││
+││ x cancelar la apertura             ││
+└└──────────────────────────── ↑↓ 1/2 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

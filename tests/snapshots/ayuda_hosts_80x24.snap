@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · HOSTS ────────────────────────────────────────────────────── 7 hosts ─┐
+│  ▼ prod┌ AYUDA · HOSTS ─────────────────────────────────────────────┐        │
+│▸   ○ he│                                                            │        │
+│    ○ he│  ↑ ↓ / j k     mover la selección                          │        │
+│    ○ vp│  ← → / h l     plegar o desplegar el grupo                 │        │
+│  ▼ casa│  ↵             conectar con el host                        │        │
+│    ○ dg│  e             editar la ficha                             │        │
+│    ○ ma│  n             nuevo host                                  │        │
+│  ▼ sin │  g             menú de grupos                              │        │
+│    ○ ba│  x             borrar host                                 │        │
+│    ○ ri│  ⇥             alternar usuario·puerto / etiquetas         │        │
+│        │  /             filtro incremental                          │        │
+│        │  !             snippets que apuntan al host                │        │
+│        │  I             importar ~/.ssh/config                      │        │
+│        │  E             exportar magi_config                        │        │
+│        │  F2 / F3       ir a Hosts / a la sesión                    │        │
+│        │  ^p            paleta de comandos                          │        │
+│        │  q             volver o salir                              │        │
+│        │  ↑↓ PgUp PgDn  desplazar diálogos y esta ayuda             │        │
+│        │                                                            │        │
+│        │  esc o ? para cerrar                                       │        │
+│        │                                                            │        │
+└────────└────────────────────────────────────────────────────────────┘────────┘
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  / filtrar  ? más

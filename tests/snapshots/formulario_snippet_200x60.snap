@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       ▸ actualizar paquetes  web            → 3 hosts  CRÍTICO                                                                                                       │
+│                                         espacio en disco     hetzner-01 +1  → 2 hosts                                                                                                                │
+│                                         reiniciar nginx      web            → 3 hosts  CRÍTICO                                                                                                       │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                        ┌ NUEVO SNIPPET ─────────────────────────────────────────────────────────────────────┐                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │  Nombre        [ ┃                                                              ]  │                                                        │
+│                                                        │  Comando       │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │                │                                                                   │                                                        │
+│                                                        │  Descripción   [                                                                ]  │                                                        │
+│                                                        │  Etiquetas     [                                                                ]  │                                                        │
+│                                                        │  Destinos      etiquetas de host y hosts sueltos (al menos uno)                    │                                                        │
+│                                                        │    etiquetas   [                                                                ]  │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │    hosts       [ ninguno                                                        ]  │                                                        │
+│                                                        │  Crítico       [ ] siempre pide la deliberación MAGI                               │                                                        │
+│                                                        │  Timeout       [ 60     ] segundos (5-3600)                                        │                                                        │
+│                                                        │  Parar         [ ] al primer fallo                                                 │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │  → sin destinos: añade una etiqueta de host o un host                              │                                                        │
+│                                                        │  variables: ninguna                                                                │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        │  ^s guardar  ⇥ campo  esc cancelar                                                 │                                                        │
+│                                                        │                                                                                    │                                                        │
+│                                                        └────────────────────────────────────────────────────────────────────────────────────┘                                                        │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                       ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐                                       │
+│                                       │  sudo apt update && sudo apt -y upgrade                                                                              │                                       │
+│                                       │                                                                                                                      │                                       │
+│                                       │  Destinos      etiqueta «web»: hetzner-01, hetzner-02, vps-openclaw                                                  │                                       │
+│                                       │  Variables     ninguna                                                                                               │                                       │
+│                                       │  Confirmación  requiere deliberación MAGI (crítico, 3 hosts)                                                         │                                       │
+│                                       │  Timeout 60 s · usado 0 veces · última nunca                                                                         │                                       │
+│                                       │                                                                                                                      │                                       │
+│                                       └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ejecutar  a en todos  p en pestaña  n e x nuevo · editar · borrar  / buscar  t resultados  ? ayuda

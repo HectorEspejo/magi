@@ -1,0 +1,139 @@
+---
+source: tests/redimensionado/vistas_a.rs
+---
+Flota 40:
+ ↵ ssh  r sondear  ⇥ detalle  ? más
+Flota 50:
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más
+Flota 60:
+ ↵ ssh  r sondear  ⇥ detalle  e editar  / filtrar  ? más
+Flota 70:
+ ↵ ssh  r sondear  ⇥ detalle  R todos  e editar  / filtrar  ? más
+Flota 80:
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más
+Flota 99:
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  ? más
+Flota 100:
+ ↵ ssh  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
+Flota 120:
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+Flota 200:
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+Flota detalle 40:
+ ↵ ssh  r sondear  ⇥ lista  ? más
+Flota detalle 50:
+ ↵ ssh  r sondear  ⇥ lista  e editar  ? más
+Flota detalle 60:
+ ↵ ssh  r sondear  ⇥ lista  e editar  / filtrar  ? más
+Flota detalle 70:
+ ↵ ssh  r sondear  ⇥ lista  R todos  e editar  / filtrar  ? más
+Flota detalle 80:
+ ↵ ssh  r sondear  ⇥ lista  R todos  a auto  e editar  / filtrar  ? más
+Flota detalle 99:
+ ↵ ssh  r sondear  ⇥ lista  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  ? más
+Flota detalle 100:
+ ↵ ssh  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
+Flota detalle 120:
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+Flota detalle 200:
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+Hosts 40:
+ ↵ conectar  e editar  / filtrar  ? más
+Hosts 50:
+ ↵ conectar  e editar  n nuevo  / filtrar  ? más
+Hosts 60:
+ ↵ conectar  →← plegar  e editar  n nuevo  / filtrar  ? más
+Hosts 70:
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  / filtrar  ? más
+Hosts 80:
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  / filtrar  ? más
+Hosts 99:
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ? más
+Hosts 100:
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ? más
+Hosts 120:
+ ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  ? más
+Hosts 200:
+ ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+Sesiones 40:
+ ↵ entrar  n nueva  r reconectar  ? más
+Sesiones 50:
+ ↵ entrar  n nueva  r reconectar  x cerrar  ? más
+Sesiones 60:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+Sesiones 70:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+Sesiones 80:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+Sesiones 99:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+Sesiones 100:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+Sesiones 120:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+Sesiones 200:
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+Identidades 50:
+ n generar  i importar  c copiar pública  ? más
+Identidades 60:
+ n generar  i importar  c copiar pública  x revocar  ? más
+Identidades 70:
+ n generar  i importar  c copiar pública  e alias  x revocar  ? más
+Identidades 80:
+ n generar  i importar  c copiar pública  e alias  x revocar  q salir  ? más
+Identidades 99:
+ n generar  i importar  c copiar pública  e alias  x revocar  s reescanear  v revocadas  ? más
+Identidades 100:
+ n generar  i importar  c copiar pública  e alias  x revocar  s reescanear  v revocadas  ? más
+Identidades 120:
+ ↓↑ mover  n generar  i importar  c copiar pública  e alias  x revocar  s reescanear  v revocadas  q salir  ? ayuda
+Identidades 200:
+ ↓↑ mover  n generar  i importar  c copiar pública  e alias  x revocar  s reescanear  v revocadas  q salir  ? ayuda
+Túneles 50:
+ espacio activar/parar  n nuevo  ↵ detalle  ? más
+Túneles 60:
+ espacio activar/parar  n nuevo  e editar  ↵ detalle  ? más
+Túneles 70:
+ espacio activar/parar  n nuevo  e editar  x borrar  ↵ detalle  ? más
+Túneles 80:
+ espacio activar/parar  n nuevo  e editar  a auto  ↵ detalle  / filtrar  ? más
+Túneles 99:
+ espacio activar/parar  n nuevo  e editar  x borrar  a auto  ↵ detalle  / filtrar  q volver  ? más
+Túneles 100:
+ espacio activar/parar  n nuevo  e editar  x borrar  a auto  ↵ detalle  / filtrar  q volver  ? más
+Túneles 120:
+ espacio activar/parar  n nuevo  e editar  x borrar  a auto  r relanzar  ↵ detalle  / filtrar  q volver  ? más
+Túneles 200:
+ ↓↑ mover  espacio activar/parar  n nuevo  e editar  x borrar  a auto  r relanzar  ↵ detalle  / filtrar  q volver  ? ayuda
+Registro 50:
+ ↵ detalle  / filtrar  t tipo  x exportar  ? más
+Registro 60:
+ ↵ detalle  / filtrar  t tipo  p purgar >90 d  ? más
+Registro 70:
+ ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  ? más
+Registro 80:
+ ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? más
+Registro 99:
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda
+Registro 100:
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda
+Registro 120:
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda
+Registro 200:
+ ↓↑ mover  ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? ayuda
+Snippets 50:
+ ↵ ejecutar  a en todos  / buscar  ? más
+Snippets 60:
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  ? más
+Snippets 70:
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más
+Snippets 80:
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más
+Snippets 99:
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más
+Snippets 100:
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más
+Snippets 120:
+ ↵ ejecutar  a en todos  p en pestaña  n e x nuevo · editar · borrar  / buscar  t resultados  ? ayuda
+Snippets 200:
+ ↵ ejecutar  a en todos  p en pestaña  n e x nuevo · editar · borrar  / buscar  t resultados  ? ayuda

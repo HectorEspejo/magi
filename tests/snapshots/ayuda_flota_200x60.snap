@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.168.1.40:22                                                                                                                     │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │     ┌ AYUDA · FLOTA ─────────────────────────────────────────────┐                                                                    │
+│                                                              │     │                                                            │                                                                    │
+│                                                              │     │  ↑ ↓ / j k     mover la selección                          │                                                                    │
+│                                                              │     │  ↵             conectar con el host                        │                                                                    │
+│                                                              │     │  r             sondear el host seleccionado                │                                                                    │
+│                                                              │     │  R             sondear todos los visibles                  │                                                                    │
+│                                                              │     │  e             editar la ficha                             │                                                                    │
+│                                                              │     │  /             filtrar                                     │                                                                    │
+│                                                              │     │  a             activar o pausar el auto-refresco           │                                                                    │
+│                                                              │     │  !             snippets que apuntan al host                │                                                                    │
+│                                                              │     │  atajos        [flota.atajos]: snippet sobre el host       │                                                                    │
+│                                                              │     │  F8            Snippets                                    │                                                                    │
+│                                                              │     │  ⇥             alternar lista y detalle (estrecho)         │                                                                    │
+│                                                              │     │  ↑↓ PgUp PgDn  desplazar diálogos y esta ayuda             │                                                                    │
+│                                                              │     │                                                            │                                                                    │
+│                                                              │     │  esc o ? para cerrar                                       │                                                                    │
+│                                                              │     │                                                            │                                                                    │
+│                                                              │     └────────────────────────────────────────────────────────────┘                                                                    │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

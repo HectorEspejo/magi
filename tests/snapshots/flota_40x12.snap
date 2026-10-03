@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│  HOSTS                    ⇥ detalle  │
+│▸ ◐ backup-nas   CARGA                │
+│  ○ dgx-spark    FRÍA                 │
+│  ● hetzner-01   NOMINAL              │
+│  ● hetzner-02   NOMINAL              │
+│  ◐ mac-mini-m1  CARGA                │
+│  ✕ rincon-dev   CAÍDA                │
+│  ● vps-openclaw NOMINAL              │
+│                                      │
+└──────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

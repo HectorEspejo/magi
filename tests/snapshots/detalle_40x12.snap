@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ DETALLE DEL REGISTRO ──────────────┐│
+││ línea 04 · sondeo de hetzner-01    ││
+││ con carga 0.42                     ││
+││ línea 05 · sondeo de hetzner-01    ││
+││ con carga 0.42                     ││
+││ línea 06 · sondeo de hetzner-01    ││
+││ con carga 0.42                     ││
+││                                    ││
+││ ↵ / esc cerrar                     ││
+└└────────────────────────── ↑↓ 7/123 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
++ MAGI - HOST - hetzner-01 - editar - #1 ------------------+
+|  [ 22 ]                                                 ^|
+|  Grupo                                                   |
+|  [ produccion                 v ]                        |
+|  Etiquetas                                               |
+|  [ web ]                                                 |
+|                                                          |
+| ACCESO                                                   |
+|  Usuario                                                 |
+|  [ root ]                                                |
+|  Identidad                                               |
+|  [ auto                                     v ]          |
+|  Sa+---------------------------------+                  v|
+|  TÚ| auto                            |           n nuevo |
+|    | contraseña - se pide al conectar|.0.0.1:5~  postgres|
+|+ SE| contraseña - llavero del sistema| EXTRA -----------+|
+||   +---------------------------------+                  ||
+|+---------------------------++---------------------------+|
++----------------------------------------------------------+
+ tab campo  ^s guardar  esc descartar

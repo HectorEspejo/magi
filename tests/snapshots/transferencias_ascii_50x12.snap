@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
++ TRANSFERENCIAS - 1 en curso - 2 en cola -------+
+|    ESTADO    ORIGEN -> DESTINO   PROGRESO      |
+|> o en curso  main.py -> hetzner~  78 %  1.1 MB |
+|  o en cola   static -> hetzner-~   0 %  0 B    |
+|  o en cola   access.log -> hetz~   0 %  0 B    |
+|  * hecha     config.yaml -> het~ 100 %  2 kB   |
+|  x error     backup.tgz -> hetz~ permiso deneg~|
+|                                                |
+|                                                |
+|                                                |
++ 5 ------------------------------ enter detalle +
+ x cancelar  C limpiar  enter detalle  ? más

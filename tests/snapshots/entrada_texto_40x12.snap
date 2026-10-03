@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · HOSTS ────────────── 7 hosts ─┐
+│  ▼ produccion               (3)      │
+│┌ NUEVO GRUPO ───────────────────────┐│
+││                                    ││
+││ Nombre: [ servidores de casa┃ ]    ││
+││                                    ││
+││ ↵ aceptar   esc cancelar           ││
+││                                    ││
+│└────────────────────────────────────┘│
+│    ○ backup-nas                      │
+└──────────────────────────────────────┘
+ ↵ conectar  e editar  / filtrar  ? más

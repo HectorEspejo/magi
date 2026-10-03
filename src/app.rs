@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,15 +26,22 @@ use crate::registro::FiltroRegistro;
 use crate::sshconfig;
 use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
+use crate::ui::disposicion::{Disposicion, Lista};
 use crate::ui::Vista;
+use ratatui::backend::Backend;
+use ratatui::layout::Rect;
+use ratatui::Terminal;
 
 pub mod dialogo_magi;
 pub mod formulario_snippet;
+pub mod geometria;
 pub mod lanzar;
 mod resultados;
 mod snippets;
+pub mod teclado;
 
 pub use dialogo_magi::DeliberacionAbierta;
+pub use geometria::Geometria;
 pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
 pub use resultados::{AccionResultados, EstadoResultados};
 pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
@@ -50,6 +56,8 @@ pub struct EstadoRegistro {
     pub campo: CampoTexto,
     pub texto_activo: bool,
     pub seleccion: usize,
+    /// Primera entrada visible (la reescribe cada pintado).
+    pub desplazamiento: usize,
 }
 
 impl EstadoRegistro {
@@ -61,6 +69,7 @@ impl EstadoRegistro {
             campo: CampoTexto::default(),
             texto_activo: false,
             seleccion: 0,
+            desplazamiento: 0,
         }
     }
 
@@ -507,6 +516,13 @@ pub struct Mensaje {
     pub texto: String,
     pub error: bool,
     pub creado: Instant,
+}
+
+/// Panel de Flota que se ve en modo estrecho (en normal se ven los dos).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelFlota {
+    Lista,
+    Detalle,
 }
 
 #[derive(Debug, Clone)]
@@ -1778,6 +1794,8 @@ pub struct PaletaCmd {
     pub entradas: Vec<EntradaPaleta>,
     pub filtradas: Vec<usize>,
     pub seleccion: usize,
+    /// Primera entrada visible (la reescribe cada pintado).
+    pub desplazamiento: usize,
     matcher: Matcher,
 }
 
@@ -1817,7 +1835,16 @@ pub struct App {
     pub runtime: tokio::runtime::Runtime,
     pub eventos_tx: mpsc::UnboundedSender<Evento>,
     eventos_rx: mpsc::UnboundedReceiver<Evento>,
-    salir_flag: Arc<AtomicBool>,
+    /// Mando del hilo de teclas (pausa del visor y salida).
+    teclado: Arc<teclado::ControlTeclas>,
+    /// Tamaño de la terminal: aplicado, pendiente y agrupación (Fase 7).
+    geometria: Geometria,
+    /// Disposición del último pintado: modo, aviso de tamaño y ventanas de
+    /// las listas. Es la única copia de «filas visibles» que usan las teclas.
+    disposicion: Disposicion,
+    /// Sondeos SSH y escaneo del agente al entrar en las vistas. Las pruebas
+    /// de pintado lo apagan para no salir a la red.
+    efectos_externos: bool,
     pub salir: bool,
     abrir_al_cerrar: Option<i64>,
     /// Mensaje sobre sesiones que siguen abiertas, mostrado al salir.
@@ -1888,6 +1915,21 @@ pub struct App {
     pub seleccion_sesiones: usize,
     pub sondeo_hechos: usize,
     pub seleccion_flota: usize,
+    /// Primera fila visible de la lista de Flota (la reescribe cada pintado).
+    pub desplazamiento_flota: usize,
+    /// Panel visible de Flota en modo estrecho (`Tab` alterna).
+    pub panel_flota: PanelFlota,
+    /// Primera fila visible de la lista de Sesiones.
+    pub desplazamiento_sesiones: usize,
+    /// Primera fila visible de Identidades.
+    pub desplazamiento_identidades: usize,
+    /// Desplazamiento del diálogo abierto que no cabe (↑ ↓ PgUp PgDn); vuelve
+    /// a 0 al cambiar de diálogo.
+    pub desplazamiento_modal: usize,
+    /// Desplazamiento de la ayuda `?`.
+    pub desplazamiento_ayuda: usize,
+    /// Diálogo a la vista la última vez, para reiniciar su desplazamiento.
+    modal_visto: Option<(std::mem::Discriminant<Dialogo>, usize)>,
     pub auto_refresco: bool,
     ultimo_auto: Instant,
     pub identidades_bd: Vec<crate::modelo::Identidad>,
@@ -1904,10 +1946,6 @@ pub struct App {
     /// Fichero que hay que abrir con el paginador en cuanto el bucle pueda
     /// suspender la TUI (la UI nunca bloquea mientras despacha una tecla).
     pub peticion_pager: Option<crate::visor::Peticion>,
-    /// Mientras el paginador tiene el terminal, el hilo de teclas calla.
-    pausa_teclas: Arc<AtomicBool>,
-    /// Alto de la terminal, para mover el cursor dentro de la ventana visible.
-    pub terminal_alto: u16,
     /// Orígenes locales de los «mover» que aún no se han asociado a su
     /// transferencia, por (host, primer origen): el id lo da el servidor en la
     /// difusión. Emparejar por posición sería frágil con dos hosts a la vez.
@@ -1952,8 +1990,51 @@ impl App {
         runtime: tokio::runtime::Runtime,
         aviso_inicial: Option<String>,
     ) -> Result<Self> {
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, aviso_inicial)?;
+        teclado::lanzar(app.eventos_tx.clone(), app.teclado.clone());
+        lanzar_tick(&app.runtime, app.eventos_tx.clone());
+        app.refrescar_identidades();
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        // Conexión con el servidor de sesiones (autolanzado si hace falta).
+        app.conectar_con_servidor();
+        Ok(app)
+    }
+
+    /// App para pruebas de pintado y de la tubería de tamaño: sin hilo de
+    /// teclas, sin tick, sin servidor y sin salir a la red. Devuelve también
+    /// lo que la App envía al servidor.
+    #[doc(hidden)]
+    pub fn de_prueba(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<protocolo::MensajeCliente>)> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, None)?;
+        app.efectos_externos = false;
+        let (servidor, enviados) = cliente::Cliente::de_prueba();
+        app.pantallas = servidor.pantallas();
+        app.servidor = servidor;
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        Ok((app, enviados))
+    }
+
+    /// Estado inicial, sin efectos: ni hilos, ni red, ni servidor.
+    fn construir(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+        runtime: tokio::runtime::Runtime,
+        aviso_inicial: Option<String>,
+    ) -> Result<Self> {
         let (eventos_tx, eventos_rx) = mpsc::unbounded_channel();
-        let salir_flag = Arc::new(AtomicBool::new(false));
         let prefijo = crate::teclas::parsear_prefijo(&config.prefijo_escape)
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
         let auto_refresco = config.flota.auto_refresco_seg >= 15;
@@ -1963,9 +2044,12 @@ impl App {
             tema,
             almacen,
             runtime,
-            eventos_tx: eventos_tx.clone(),
+            eventos_tx,
             eventos_rx,
-            salir_flag: salir_flag.clone(),
+            teclado: Arc::new(teclado::ControlTeclas::default()),
+            geometria: Geometria::nueva((80, 24), Instant::now()),
+            disposicion: Disposicion::default(),
+            efectos_externos: true,
             salir: false,
             abrir_al_cerrar: None,
             aviso_al_salir: None,
@@ -2018,6 +2102,13 @@ impl App {
             sondeo_total: 0,
             sondeo_hechos: 0,
             seleccion_flota: 0,
+            desplazamiento_flota: 0,
+            panel_flota: PanelFlota::Lista,
+            desplazamiento_sesiones: 0,
+            desplazamiento_identidades: 0,
+            desplazamiento_modal: 0,
+            desplazamiento_ayuda: 0,
+            modal_visto: None,
             auto_refresco,
             ultimo_auto: Instant::now(),
             identidades_bd: Vec::new(),
@@ -2029,8 +2120,6 @@ impl App {
             seleccion_cola: 0,
             desplazamiento_cola: 0,
             peticion_pager: None,
-            pausa_teclas: Arc::new(AtomicBool::new(false)),
-            terminal_alto: 24,
             borrados_locales_pendientes: HashMap::new(),
             borrados_locales: HashMap::new(),
             transferencias_refrescadas: HashSet::new(),
@@ -2060,84 +2149,53 @@ impl App {
         if !avisos.is_empty() {
             app.mensaje(avisos.join(" · "), true);
         }
-        lanzar_hilo_teclas(
-            eventos_tx.clone(),
-            salir_flag.clone(),
-            app.pausa_teclas.clone(),
-        );
-        lanzar_tick(&app.runtime, eventos_tx.clone());
-        app.refrescar_identidades();
-        app.cargar_sondeos();
-        app.entrar_en_flota();
+        Ok(app)
+    }
 
-        // Conexión con el servidor de sesiones (autolanzado si hace falta).
-        let tx_conexion = eventos_tx.clone();
-        let rutas_cliente = app.rutas.clone();
-        match app
+    /// Conecta con el servidor de sesiones (lo lanza si no hay socket). Las
+    /// pruebas de extremo a extremo lo llaman con el servidor ya arrancado.
+    #[doc(hidden)]
+    pub fn conectar_con_servidor(&mut self) {
+        let tx_conexion = self.eventos_tx.clone();
+        let rutas_cliente = self.rutas.clone();
+        match self
             .runtime
             .block_on(cliente::conectar(&rutas_cliente, tx_conexion))
         {
             Ok(servidor) => {
-                app.pantallas = servidor.pantallas();
-                app.servidor = servidor;
-                app.servidor_desde = Some(Instant::now());
+                self.pantallas = servidor.pantallas();
+                self.servidor = servidor;
+                self.servidor_desde = Some(Instant::now());
             }
             Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
-                app.servidor_incompatible = Some(version);
-                app.pid_incompatible = pid;
+                self.servidor_incompatible = Some(version);
+                self.pid_incompatible = pid;
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
-                app.mensaje(motivo, true);
+                self.mensaje(motivo, true);
             }
         }
-        Ok(app)
     }
 
     pub fn ejecutar(mut self) -> Result<()> {
+        let mut terminal = crate::ui::iniciar_terminal()?;
+        // Primero el tamaño: la pestaña que se abra al arrancar lo necesita.
+        self.iniciar_pintado(&mut terminal)?;
         if let Some(host_id) = self.abrir_al_arrancar.take() {
             self.conectar(host_id);
         }
-        let mut terminal = crate::ui::iniciar_terminal()?;
-        self.terminal_alto = terminal.size().map(|area| area.height).unwrap_or(24);
         while !self.salir {
-            if self.sucio {
-                terminal.draw(|marco| crate::ui::dibujar(marco, &self))?;
-                self.sucio = false;
-            }
-            match self.eventos_rx.blocking_recv() {
-                Some(evento) => self.procesar(evento),
-                None => break,
+            if !self.ciclo(&mut terminal)? {
+                break;
             }
             // El visor suspende la TUI: se hace aquí, con el terminal a mano,
             // y no dentro del despacho de la tecla.
             if let Some(peticion) = self.peticion_pager.take() {
-                self.pausa_teclas.store(true, Ordering::Relaxed);
-                let aviso = crate::ui::pager::suspender_y_ver(
-                    &mut terminal,
-                    &self.tema,
-                    &self.config,
-                    &peticion,
-                );
-                self.pausa_teclas.store(false, Ordering::Relaxed);
-                if peticion.temporal {
-                    self.servidor
-                        .enviar(protocolo::MensajeCliente::BorrarTemporal {
-                            ruta: peticion.ruta.clone(),
-                        });
-                }
-                if let Some(aviso) = aviso {
-                    self.mensaje(aviso, true);
-                }
-                // El visor pudo cambiar el tamaño de la ventana: el hilo de
-                // teclas no ve ese evento mientras está pausado.
-                if let Ok(area) = terminal.size() {
-                    self.terminal_alto = area.height;
-                }
-                self.sucio = true;
+                self.ver_en_paginador(&mut terminal, &peticion)?;
             }
         }
         crate::ui::restaurar_terminal();
-        self.salir_flag.store(true, Ordering::Relaxed);
+        self.teclado.salir();
         // Las sesiones sobreviven a la ventana; el servidor se entera del
         // adiós antes de que termine el proceso.
         self.servidor.enviar(protocolo::MensajeCliente::Adios);
@@ -2147,27 +2205,298 @@ impl App {
         self.almacen.cerrar()
     }
 
-    fn procesar(&mut self, evento: Evento) {
+    /// Toma el tamaño real del terminal como aplicado y hace el primer pintado.
+    #[doc(hidden)]
+    pub fn iniciar_pintado<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let area = terminal.size()?;
+        self.geometria = Geometria::nueva((area.width, area.height), Instant::now());
+        self.sucio = true;
+        self.pintar(terminal)
+    }
+
+    /// Una vuelta del bucle: aplicar el tamaño si toca o pintar si hay algo
+    /// nuevo, esperar un evento (sin plazo, o ≤ 16 ms con un tamaño pendiente)
+    /// y procesarlo. Devuelve `false` si el canal de eventos se cerró.
+    #[doc(hidden)]
+    pub fn ciclo<B>(&mut self, terminal: &mut Terminal<B>) -> Result<bool>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        self.paso(terminal, Instant::now())?;
+        let evento = match self.geometria.espera(Instant::now()) {
+            None => self.eventos_rx.blocking_recv(),
+            Some(plazo) => {
+                // El `timeout` se crea dentro del runtime: fuera no hay reloj.
+                let (runtime, eventos) = (&self.runtime, &mut self.eventos_rx);
+                match runtime.block_on(async { tokio::time::timeout(plazo, eventos.recv()).await })
+                {
+                    Ok(evento) => evento,
+                    // Plazo cumplido: el siguiente paso aplica el tamaño.
+                    Err(_) => return Ok(true),
+                }
+            }
+        };
+        match evento {
+            Some(evento) => {
+                self.procesar(evento);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Recibe y procesa eventos durante `plazo`, aplicando tamaños y pintando
+    /// como el bucle. Para las pruebas de extremo a extremo.
+    #[doc(hidden)]
+    pub fn bombear<B>(&mut self, terminal: &mut Terminal<B>, plazo: Duration) -> Result<usize>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let fin = Instant::now() + plazo;
+        let mut procesados = 0;
+        loop {
+            self.paso(terminal, Instant::now())?;
+            let restante = fin.saturating_duration_since(Instant::now());
+            if restante.is_zero() {
+                return Ok(procesados);
+            }
+            let espera = self
+                .geometria
+                .espera(Instant::now())
+                .map_or(restante, |tick| tick.min(restante));
+            let (runtime, eventos) = (&self.runtime, &mut self.eventos_rx);
+            if let Ok(Some(evento)) =
+                runtime.block_on(async { tokio::time::timeout(espera, eventos.recv()).await })
+            {
+                self.procesar(evento);
+                procesados += 1;
+            }
+        }
+    }
+
+    /// Aplica el tamaño vencido, si lo hay, y pinta si hay algo nuevo. Con un
+    /// tamaño pendiente no se pinta: el terminal ya cambió y un pintado con el
+    /// tamaño viejo limpiaría la pantalla una vez de más.
+    #[doc(hidden)]
+    pub fn paso<B>(&mut self, terminal: &mut Terminal<B>, ahora: Instant) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        match self.geometria.vencido(ahora) {
+            Some(geometria::Vencido::Aplicar(tamano)) => self.aplicar_tamano(terminal, tamano)?,
+            // Ida y vuelta al mismo tamaño: el terminal truncó lo pintado y lo
+            // volvió a crecer en blanco; el búfer anterior no lo sabe.
+            Some(geometria::Vencido::Repintar) => {
+                terminal.clear()?;
+                self.sucio = true;
+                self.pintar(terminal)?;
+            }
+            None => {}
+        }
+        if self.sucio && self.geometria.pendiente().is_none() {
+            self.pintar(terminal)?;
+        }
+        Ok(())
+    }
+
+    /// Aplica un tamaño nuevo: terminal (`resize` limpia la pantalla y el
+    /// búfer anterior), disposición recalculada en el pintado y, en la vista
+    /// Sesión, el tamaño del PTY de la pestaña adjunta. Es el único sitio que
+    /// envía `Redimensionar`.
+    fn aplicar_tamano<B>(&mut self, terminal: &mut Terminal<B>, tamano: (u16, u16)) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        terminal.resize(Rect::new(0, 0, tamano.0, tamano.1))?;
+        self.geometria.confirmar(tamano);
+        self.sucio = true;
+        self.pintar(terminal)?;
+        if self.vista == Vista::Sesion {
+            if let Some(sesion_id) = self.pestana_activa_id() {
+                let (cols, filas) = self.tamano_pty();
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::Redimensionar {
+                        sesion_id,
+                        cols,
+                        filas,
+                    });
+            }
+        }
+        Ok(())
+    }
+
+    fn pintar<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        let app: &App = self;
+        let mut disposicion = Disposicion::default();
+        terminal.draw(|marco| disposicion = crate::ui::dibujar(marco, app))?;
+        self.sincronizar_con(&disposicion);
+        self.disposicion = disposicion;
+        self.sincronizar_resultados();
+        self.sucio = false;
+        Ok(())
+    }
+
+    /// Tras pintar, los desplazamientos guardados pasan a ser los que se
+    /// pintaron: la selección sigue a la vista y no hay huecos al final aunque
+    /// el tamaño haya cambiado.
+    fn sincronizar_con(&mut self, disposicion: &Disposicion) {
+        let inicio = |lista| disposicion.lista(lista).map(|ventana| ventana.inicio);
+        if let Some(inicio) = inicio(Lista::Hosts) {
+            self.desplazamiento = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Flota) {
+            self.desplazamiento_flota = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Sesiones) {
+            self.desplazamiento_sesiones = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Identidades) {
+            self.desplazamiento_identidades = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Registro) {
+            self.registro.desplazamiento = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Transferencias) {
+            self.desplazamiento_cola = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Tuneles) {
+            self.desplazamiento_tuneles = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Snippets) {
+            self.snippets.desplazamiento = inicio;
+        }
+        if let (Some(inicio), Some(paleta)) = (inicio(Lista::Paleta), self.paleta.as_mut()) {
+            paleta.desplazamiento = inicio;
+        }
+        if let Some(archivos) = self.archivos.as_mut() {
+            if let Some(inicio) = inicio(Lista::ArchivosLocal) {
+                archivos.local.desplazamiento = inicio;
+            }
+            if let Some(inicio) = inicio(Lista::ArchivosRemoto) {
+                archivos.remoto.desplazamiento = inicio;
+            }
+        }
+        if let Some(inicio) = inicio(Lista::Modal) {
+            self.desplazamiento_modal = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Ayuda) {
+            self.desplazamiento_ayuda = inicio;
+        }
+    }
+
+    /// Disposición del último pintado.
+    #[doc(hidden)]
+    pub fn disposicion(&self) -> &Disposicion {
+        &self.disposicion
+    }
+
+    /// Vuelta de una suspensión de la TUI (visor): el terminal pudo cambiar de
+    /// tamaño mientras tanto, así que se aplica el real.
+    #[doc(hidden)]
+    pub fn volver_de_suspension<B>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        real: (u16, u16),
+    ) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
+        self.geometria.descartar_pendiente();
+        if real != self.geometria.aplicado() {
+            self.aplicar_tamano(terminal, real)
+        } else {
+            self.sucio = true;
+            self.pintar(terminal)
+        }
+    }
+
+    fn ver_en_paginador(
+        &mut self,
+        terminal: &mut crate::ui::TerminalMagi,
+        peticion: &crate::visor::Peticion,
+    ) -> Result<()> {
+        // El hilo de teclas deja el tty antes de que el paginador lo tome.
+        self.teclado.pausar_y_esperar(Duration::from_millis(200));
+        let aviso = crate::ui::pager::suspender_y_ver(terminal, &self.tema, &self.config, peticion);
+        self.teclado.reanudar();
+        if peticion.temporal {
+            self.servidor
+                .enviar(protocolo::MensajeCliente::BorrarTemporal {
+                    ruta: peticion.ruta.clone(),
+                });
+        }
+        if let Some(aviso) = aviso {
+            self.mensaje(aviso, true);
+        }
+        let real = terminal
+            .size()
+            .map(|area| (area.width, area.height))
+            .unwrap_or(self.geometria.aplicado());
+        self.volver_de_suspension(terminal, real)
+    }
+
+    /// Tamaño aplicado.
+    #[doc(hidden)]
+    pub fn geometria(&self) -> &Geometria {
+        &self.geometria
+    }
+
+    /// Tamaño del PTY remoto para el tamaño aplicado: el único origen de
+    /// `AbrirSesion`, `Adjuntar` y `Redimensionar`. Saneado a 2×1 (T28).
+    pub fn tamano_pty(&self) -> (u16, u16) {
+        let (cols, filas) = self.geometria.aplicado();
+        (cols.max(2), alto_pty(filas))
+    }
+
+    /// Procesa un evento como si llegase ahora.
+    #[doc(hidden)]
+    pub fn procesar(&mut self, evento: Evento) {
+        self.procesar_en(evento, Instant::now());
+    }
+
+    /// Procesa un evento; `ahora` solo cuenta para agrupar los `Resize`.
+    #[doc(hidden)]
+    pub fn procesar_en(&mut self, evento: Evento, ahora: Instant) {
+        self.despachar(evento, ahora);
+        self.vigilar_modales();
+    }
+
+    /// Un diálogo nuevo (o la ayuda recién abierta) empieza sin desplazar.
+    fn vigilar_modales(&mut self) {
+        let visto = self
+            .dialogo
+            .as_ref()
+            .map(|dialogo| (std::mem::discriminant(dialogo), self.pila_dialogos.len()));
+        if visto != self.modal_visto {
+            self.modal_visto = visto;
+            self.desplazamiento_modal = 0;
+        }
+        if !self.ayuda {
+            self.desplazamiento_ayuda = 0;
+        }
+    }
+
+    fn despachar(&mut self, evento: Evento, ahora: Instant) {
         match evento {
             Evento::Tecla(tecla) => {
                 self.sucio = true;
                 self.procesar_tecla(tecla);
             }
-            Evento::Redimension(cols, filas) => {
-                self.sucio = true;
-                self.terminal_alto = filas;
-                let filas_pty = alto_pty(filas);
-                if self.vista == Vista::Sesion {
-                    if let Some(sesion_id) = self.pestana_activa_id() {
-                        self.servidor
-                            .enviar(protocolo::MensajeCliente::Redimensionar {
-                                sesion_id,
-                                cols,
-                                filas: filas_pty,
-                            });
-                    }
-                }
-            }
+            // Solo se anota: `Geometria` agrupa y el bucle lo aplica.
+            Evento::Redimension(cols, filas) => self.geometria.registrar((cols, filas), ahora),
             Evento::Tick => self.tick(),
             Evento::Conexion(evento) => {
                 self.sucio = true;
@@ -2497,8 +2826,14 @@ impl App {
         match tecla.code {
             KeyCode::Char('j') | KeyCode::Down => self.mover_seleccion(1),
             KeyCode::Char('k') | KeyCode::Up => self.mover_seleccion(-1),
-            KeyCode::PageDown => self.mover_seleccion(10),
-            KeyCode::PageUp => self.mover_seleccion(-10),
+            KeyCode::PageDown => {
+                let pagina = self.disposicion.filas(Lista::Hosts) as i32;
+                self.mover_seleccion(pagina);
+            }
+            KeyCode::PageUp => {
+                let pagina = self.disposicion.filas(Lista::Hosts) as i32;
+                self.mover_seleccion(-pagina);
+            }
             KeyCode::Home => self.seleccion = 0,
             KeyCode::End => self.seleccion = self.filas.len().saturating_sub(1),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('l') | KeyCode::Right => {
@@ -2606,12 +2941,12 @@ impl App {
             self.mensaje("ya hay una conexión en curso con ese host", true);
             return false;
         }
-        let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (cols, filas) = self.tamano_pty();
         self.servidor
             .enviar(protocolo::MensajeCliente::AbrirSesion {
                 host_id,
                 cols,
-                filas: alto_pty(filas),
+                filas,
                 comandos_iniciales,
             });
         self.aperturas_pendientes.insert(host_id);
@@ -2636,8 +2971,7 @@ impl App {
         let (cols, filas) = if solo_prueba {
             (80, 24)
         } else {
-            let tamano = crossterm::terminal::size().unwrap_or((80, 24));
-            (tamano.0, tamano.1.saturating_sub(2).max(1))
+            self.tamano_pty()
         };
         let usuario_local = usuario_local();
         let plan = PlanConexion {
@@ -2847,11 +3181,11 @@ impl App {
 
     fn adjuntar_pestaña_activa(&mut self) {
         if let Some(sesion_id) = self.pestana_activa_id() {
-            let (cols, filas) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (cols, filas) = self.tamano_pty();
             self.servidor.enviar(protocolo::MensajeCliente::Adjuntar {
                 sesion_id,
                 cols,
-                filas: alto_pty(filas),
+                filas,
             });
         }
     }
@@ -3534,6 +3868,8 @@ impl App {
                 }
                 KeyCode::Char('n') => self.navegar_pestañas(1),
                 KeyCode::Char('p') => self.navegar_pestañas(-1),
+                // La barra de estado anuncia «prefijo ? ayuda».
+                KeyCode::Char('?') => self.ayuda = true,
                 KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
                     self.ir_a_pestaña(c.to_digit(10).unwrap() as usize);
                 }
@@ -3794,6 +4130,9 @@ impl App {
     }
 
     fn refrescar_identidades(&mut self) {
+        if !self.efectos_externos {
+            return;
+        }
         let dir_ssh = self.rutas.dir_ssh();
         let tx = self.eventos_tx.clone();
         self.runtime.spawn(async move {
@@ -4558,6 +4897,7 @@ impl App {
             accion: AccionPaleta::ApagarServidor,
         });
         let mut paleta = PaletaCmd {
+            desplazamiento: 0,
             consulta: CampoTexto::default(),
             entradas,
             filtradas: Vec::new(),
@@ -4584,6 +4924,7 @@ impl App {
     /// Abre la paleta con una lista de entradas y una consulta ya puesta.
     fn abrir_paleta_con(&mut self, entradas: Vec<EntradaPaleta>, consulta: &str) {
         let mut paleta = PaletaCmd {
+            desplazamiento: 0,
             consulta: CampoTexto::nuevo(consulta.to_string()),
             entradas,
             filtradas: Vec::new(),
@@ -4608,11 +4949,20 @@ impl App {
     }
 
     fn tecla_paleta(&mut self, tecla: KeyEvent) {
+        // Página: las entradas que se vieron en el último pintado.
+        let pagina = self.disposicion.filas(Lista::Paleta);
+        let ventana = self.disposicion.lista(Lista::Paleta);
         let Some(paleta) = &mut self.paleta else {
             return;
         };
         match tecla.code {
             KeyCode::Esc => self.paleta = None,
+            // Solo se ejecuta la entrada seleccionada si se veía: con la
+            // paleta encogida a la línea de la consulta no hay nada a la vista.
+            KeyCode::Enter
+                if !ventana.is_some_and(|ventana| {
+                    (ventana.inicio..ventana.inicio + ventana.filas).contains(&paleta.seleccion)
+                }) => {}
             KeyCode::Enter => {
                 let accion = paleta.entrada_seleccionada().map(|entrada| &entrada.accion);
                 match accion {
@@ -4769,6 +5119,13 @@ impl App {
                     paleta.seleccion += 1;
                 }
             }
+            KeyCode::PageUp => {
+                paleta.seleccion = paleta.seleccion.saturating_sub(pagina);
+            }
+            KeyCode::PageDown => {
+                paleta.seleccion =
+                    (paleta.seleccion + pagina).min(paleta.filtradas.len().saturating_sub(1));
+            }
             _ => {
                 if paleta.consulta.manejar_tecla(&tecla) {
                     paleta.recalcular();
@@ -4910,7 +5267,7 @@ impl App {
         if self.seleccion_tunel >= total {
             self.seleccion_tunel = total.saturating_sub(1);
         }
-        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        let altura = self.disposicion.filas(Lista::Tuneles);
         self.ajustar_tuneles(altura, total);
     }
 
@@ -5037,7 +5394,7 @@ impl App {
     /// Teclas de la vista Túneles.
     fn tecla_tuneles(&mut self, tecla: KeyEvent) {
         let total = self.tuneles_visibles().len();
-        let altura = crate::ui::tuneles::alto_lista(self.terminal_alto);
+        let altura = self.disposicion.filas(Lista::Tuneles);
         if self.filtro_tuneles_activo {
             match tecla.code {
                 KeyCode::Esc => {
@@ -5303,7 +5660,10 @@ impl App {
             .map(|info| info.estado)
             .unwrap_or(protocolo::EstadoTunelRemoto::Inactivo);
         let mut lineas = vec![
-            format!("Host        {}", tunel.host_nombre),
+            format!(
+                "Host        {}",
+                crate::ui::snippets::limpio(&tunel.host_nombre)
+            ),
             format!(
                 "Tipo        {} · {}",
                 tunel.tipo.etiqueta(),
@@ -5349,18 +5709,37 @@ impl App {
                 crate::archivos::tamano_legible(info.bytes_bajados),
                 crate::archivos::tamano_legible(info.bytes_subidos)
             ));
-            lineas.push(format!(
-                "Último error  {}",
-                info.ultimo_error.as_deref().unwrap_or("\u{2014}")
-            ));
+            // El error viene del servidor y puede ser largo: saneado y partido
+            // a lo ancho del diálogo (que no parte líneas), para que se vea
+            // entero como en el panel inferior.
+            let error = info
+                .ultimo_error
+                .as_deref()
+                .map(crate::ui::snippets::limpio)
+                .unwrap_or_else(|| "\u{2014}".to_string());
+            for (indice, trozo) in crate::ui::snippets::partir(&error, 68 - 14)
+                .into_iter()
+                .enumerate()
+            {
+                let rotulo = if indice == 0 { "Último error" } else { "" };
+                lineas.push(format!("{rotulo:<14}{trozo}"));
+            }
         }
         if estado == protocolo::EstadoTunelRemoto::Caido {
             lineas.push(String::new());
             lineas.push("r relanzar   espacio descartar el error".to_string());
         }
+        // En modo ASCII, sin flechas, puntos medios ni rayas.
+        let ascii = self.tema.ascii;
         self.dialogo = Some(Dialogo::Detalle {
-            titulo: format!("TÚNEL · {}", tunel.nombre),
-            lineas,
+            titulo: crate::ui::disposicion::adaptar(
+                &format!("TÚNEL · {}", crate::ui::snippets::limpio(&tunel.nombre)),
+                ascii,
+            ),
+            lineas: lineas
+                .iter()
+                .map(|linea| crate::ui::disposicion::adaptar(linea, ascii))
+                .collect(),
             tunel_caido: (estado == protocolo::EstadoTunelRemoto::Caido).then_some(tunel.id),
         });
     }
@@ -5477,10 +5856,34 @@ impl App {
         match tecla.code {
             KeyCode::Char('j') | KeyCode::Down => self.mover_seleccion_identidad(1),
             KeyCode::Char('k') | KeyCode::Up => self.mover_seleccion_identidad(-1),
-            KeyCode::PageDown => self.mover_seleccion_identidad(10),
-            KeyCode::PageUp => self.mover_seleccion_identidad(-10),
+            KeyCode::PageDown => {
+                let pagina = self.disposicion.filas(Lista::Identidades) as i32;
+                self.mover_seleccion_identidad(pagina);
+            }
+            KeyCode::PageUp => {
+                let pagina = self.disposicion.filas(Lista::Identidades) as i32;
+                self.mover_seleccion_identidad(-pagina);
+            }
             KeyCode::Home => self.seleccion_identidad = 0,
             KeyCode::End => self.seleccion_identidad = total.saturating_sub(1),
+            KeyCode::Enter => {
+                // El detalle completo en diálogo: con la vista baja el panel
+                // inferior está plegado y esta es la forma de verlo.
+                let ascii = self.tema.ascii;
+                let detalle = self.identidad_seleccionada().map(|identidad| {
+                    (
+                        crate::ui::identidades::titulo_detalle(identidad, ascii),
+                        crate::ui::identidades::lineas_detalle(self, identidad, ascii),
+                    )
+                });
+                if let Some((titulo, lineas)) = detalle {
+                    self.dialogo = Some(Dialogo::Detalle {
+                        titulo,
+                        lineas,
+                        tunel_caido: None,
+                    });
+                }
+            }
             KeyCode::Char('n') => {
                 self.dialogo = Some(Dialogo::GenerarClave {
                     estado: EstadoGeneracion::nuevo(),
@@ -5839,7 +6242,7 @@ impl App {
     }
 
     fn sondear_hosts(&mut self, ids: Vec<i64>) {
-        if ids.is_empty() {
+        if ids.is_empty() || !self.efectos_externos {
             return;
         }
         let todos: HashMap<i64, Host> = self
@@ -6041,10 +6444,12 @@ impl App {
                 self.seleccion_flota = self.seleccion_flota.saturating_sub(1);
             }
             KeyCode::PageDown => {
-                self.seleccion_flota = (self.seleccion_flota + 10).min(total.saturating_sub(1));
+                let pagina = self.disposicion.filas(Lista::Flota);
+                self.seleccion_flota = (self.seleccion_flota + pagina).min(total.saturating_sub(1));
             }
             KeyCode::PageUp => {
-                self.seleccion_flota = self.seleccion_flota.saturating_sub(10);
+                let pagina = self.disposicion.filas(Lista::Flota);
+                self.seleccion_flota = self.seleccion_flota.saturating_sub(pagina);
             }
             KeyCode::Home => self.seleccion_flota = 0,
             KeyCode::End => self.seleccion_flota = total.saturating_sub(1),
@@ -6074,6 +6479,19 @@ impl App {
                 self.filtro_activo = true;
                 self.filtro.clear();
                 self.seleccion_flota = 0;
+                // El filtro se escribe en la lista: en estrecho se queda a la
+                // vista también al terminar.
+                if self.disposicion.estrecho() {
+                    self.panel_flota = PanelFlota::Lista;
+                }
+            }
+            // En estrecho se ve un solo panel: `Tab` alterna lista y detalle.
+            // En normal se ven los dos y no hace nada.
+            KeyCode::Tab | KeyCode::BackTab if self.disposicion.estrecho() => {
+                self.panel_flota = match self.panel_flota {
+                    PanelFlota::Lista => PanelFlota::Detalle,
+                    PanelFlota::Detalle => PanelFlota::Lista,
+                };
             }
             KeyCode::Char('e') => {
                 if let Some(id) = self.host_flota_seleccionado().map(|host| host.id) {
@@ -6182,8 +6600,14 @@ impl App {
         match tecla.code {
             KeyCode::Char('j') | KeyCode::Down => self.mover_seleccion_registro(1),
             KeyCode::Char('k') | KeyCode::Up => self.mover_seleccion_registro(-1),
-            KeyCode::PageDown => self.mover_seleccion_registro(10),
-            KeyCode::PageUp => self.mover_seleccion_registro(-10),
+            KeyCode::PageDown => {
+                let pagina = self.disposicion.filas(Lista::Registro) as i32;
+                self.mover_seleccion_registro(pagina);
+            }
+            KeyCode::PageUp => {
+                let pagina = self.disposicion.filas(Lista::Registro) as i32;
+                self.mover_seleccion_registro(-pagina);
+            }
             KeyCode::Home => {
                 self.registro.seleccion = 0;
             }
@@ -6212,29 +6636,33 @@ impl App {
     }
 
     fn abrir_detalle_registro(&mut self) {
+        use crate::ui::snippets::{limpio, partir};
         let Some(entrada) = self.registro.entrada_seleccionada() else {
             return;
         };
-        let lineas = vec![
+        let opcional = |texto: Option<&str>| texto.map(limpio).unwrap_or_else(|| "—".to_string());
+        let mut lineas = vec![
             format!(
                 "Fecha:     {}",
                 crate::ui::registro::formatear_fecha_larga(&entrada.fecha)
             ),
-            format!("Tipo:      {}", entrada.tipo),
-            format!(
-                "Host:      {}",
-                entrada.host_nombre.as_deref().unwrap_or("—")
-            ),
+            format!("Tipo:      {}", limpio(&entrada.tipo)),
+            format!("Host:      {}", opcional(entrada.host_nombre.as_deref())),
             format!(
                 "Identidad: {}",
-                entrada.identidad_alias.as_deref().unwrap_or("—")
+                opcional(entrada.identidad_alias.as_deref())
             ),
             format!("Resultado: {}", entrada.resultado.como_texto()),
             String::new(),
-            entrada.detalle.clone(),
         ];
+        // El detalle entero, saneado y partido a lo ancho del diálogo (que no
+        // parte líneas): el panel inferior enseña varias líneas y el diálogo
+        // no puede enseñar menos. Se respetan sus saltos de línea.
+        let detalle = crate::snippets::salida::texto_limpio(entrada.detalle.as_bytes());
+        for parrafo in detalle.lines() {
+            lineas.extend(partir(parrafo, 68));
+        }
         // Una deliberación enseña sus comprobaciones, de `DELIBERACIONES`.
-        let mut lineas = lineas;
         if entrada.tipo.starts_with("deliberacion_") {
             if let Some(id) = crate::deliberacion::id_en_detalle(&entrada.detalle) {
                 lineas.push(String::new());
@@ -6246,10 +6674,15 @@ impl App {
                 }
             }
         }
+        // En modo ASCII, sin flechas, puntos medios, rayas ni marcas.
+        let ascii = self.tema.ascii;
         self.dialogo = Some(Dialogo::Detalle {
             tunel_caido: None,
             titulo: "DETALLE DEL REGISTRO".to_string(),
-            lineas,
+            lineas: lineas
+                .iter()
+                .map(|linea| crate::ui::disposicion::adaptar(linea, ascii))
+                .collect(),
         });
     }
 
@@ -6336,14 +6769,56 @@ impl App {
             return;
         }
         if self.ayuda {
-            if matches!(
-                tecla.code,
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-            ) {
-                self.ayuda = false;
+            let pagina = self.disposicion.filas(Lista::Ayuda);
+            match tecla.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.ayuda = false,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.desplazamiento_ayuda = self.desplazamiento_ayuda.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => self.desplazamiento_ayuda += 1,
+                KeyCode::PageUp => {
+                    self.desplazamiento_ayuda = self.desplazamiento_ayuda.saturating_sub(pagina);
+                }
+                KeyCode::PageDown => self.desplazamiento_ayuda += pagina,
+                _ => {}
             }
             return;
         }
+        // Por debajo del mínimo se ve el aviso en lugar de la vista: solo
+        // valen `q`, `F1`-`F8` y `Ctrl+P` (en Sesión todo va al remoto). Los
+        // diálogos, la paleta y la ayuda se pintan encima y ya se han atendido.
+        // Una deliberación tapada por el aviso solo se puede cancelar con
+        // `Esc`, también en Sesión: cualquier otra tecla iría a un diálogo que
+        // no se ve (y `Ctrl+K` ejecuta).
+        let tecla = if self.disposicion.aviso && self.deliberacion.is_some() {
+            if tecla.code != KeyCode::Esc {
+                return;
+            }
+            tecla
+        } else if self.disposicion.aviso && self.vista != Vista::Sesion {
+            let permitida = match tecla.code {
+                KeyCode::Char('q') | KeyCode::F(1..=8) => true,
+                KeyCode::Char('p') => tecla.modifiers.contains(KeyModifiers::CONTROL),
+                _ => false,
+            };
+            if !permitida {
+                return;
+            }
+            if self.vista == Vista::Ficha && tecla.code == KeyCode::Char('q') {
+                // En la ficha `q` es un carácter: con el aviso significa salir,
+                // salvo con cambios sin guardar, que se perderían con una `s`
+                // o un `↵` tecleados a ciegas en la confirmación. Para salir
+                // con cambios quedan `F1`-`F8`, que confirman igual.
+                if self.ficha.as_ref().is_some_and(|ficha| ficha.sucio()) {
+                    return;
+                }
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+            } else {
+                tecla
+            }
+        } else {
+            tecla
+        };
         if self.deliberacion.is_some() {
             self.tecla_deliberacion(tecla);
             return;
@@ -6408,6 +6883,23 @@ impl App {
                 return;
             }
             _ => {}
+        }
+        // `?` abre la ayuda también en Archivos, Transferencias y Sesiones: la
+        // barra termina en «? más» cuando no caben todos los atajos. En
+        // Archivos no mientras se escribe un filtro o hay aviso pendiente.
+        if tecla.code == KeyCode::Char('?')
+            && match self.vista {
+                Vista::Transferencias | Vista::Sesiones => true,
+                Vista::Archivos => self.archivos.as_ref().is_some_and(|estado| {
+                    estado.aviso.is_none()
+                        && !estado.local.filtro_activo
+                        && !estado.remoto.filtro_activo
+                }),
+                _ => false,
+            }
+        {
+            self.ayuda = true;
+            return;
         }
         match self.vista {
             Vista::Archivos => self.tecla_archivos(tecla),
@@ -6502,7 +6994,58 @@ impl App {
             .map(|pestaña| pestaña.sesion_id)
     }
 
+    /// Abre un diálogo y lo deja listo para el próximo pintado (pruebas de
+    /// pintado: los diálogos que no tienen un camino de teclas sencillo).
+    #[doc(hidden)]
+    pub fn abrir_dialogo(&mut self, dialogo: Dialogo) {
+        self.dialogo = Some(dialogo);
+        self.sucio = true;
+        self.vigilar_modales();
+    }
+
+    /// Los diálogos informativos se desplazan con ↑ ↓ PgUp PgDn cuando no
+    /// caben; los de formulario siguen al foco y se quedan con sus teclas.
+    fn dialogo_desplazable(dialogo: &Dialogo) -> bool {
+        matches!(
+            dialogo,
+            Dialogo::Confirmar { .. }
+                | Dialogo::ServidorCaido { .. }
+                | Dialogo::HuellaServidor { .. }
+                | Dialogo::HuellaCambiadaServidor { .. }
+                | Dialogo::HuellaDesconocida { .. }
+                | Dialogo::HuellaCambiada { .. }
+                | Dialogo::ResumenImportacion { .. }
+                | Dialogo::ConflictoImportacion { .. }
+                | Dialogo::Conflicto { .. }
+                | Dialogo::Detalle { .. }
+        )
+    }
+
+    /// ↑ ↓ PgUp PgDn sobre un diálogo informativo: mueven su desplazamiento
+    /// dentro de lo que se vio en el último pintado. Devuelve si la tecla
+    /// era de desplazamiento.
+    fn desplazar_dialogo(&mut self, tecla: &KeyEvent) -> bool {
+        if !self.dialogo.as_ref().is_some_and(Self::dialogo_desplazable) {
+            return false;
+        }
+        let ventana = self.disposicion.lista(Lista::Modal).unwrap_or_default();
+        let maximo = ventana.total.saturating_sub(ventana.filas);
+        let pagina = self.disposicion.filas(Lista::Modal);
+        let actual = self.desplazamiento_modal.min(maximo);
+        self.desplazamiento_modal = match tecla.code {
+            KeyCode::Up => actual.saturating_sub(1),
+            KeyCode::Down => (actual + 1).min(maximo),
+            KeyCode::PageUp => actual.saturating_sub(pagina),
+            KeyCode::PageDown => (actual + pagina).min(maximo),
+            _ => return false,
+        };
+        true
+    }
+
     fn tecla_dialogo(&mut self, tecla: KeyEvent) {
+        if self.desplazar_dialogo(&tecla) {
+            return;
+        }
         let Some(dialogo) = self.dialogo.take() else {
             return;
         };
@@ -6547,6 +7090,9 @@ impl App {
                     }
                 };
                 self.dialogo = None;
+                // El conflicto siguiente es otro diálogo aunque sea de la
+                // misma variante: empieza arriba, con el nombre a la vista.
+                self.desplazamiento_modal = 0;
                 if let Some((politica, todos)) = decision {
                     let mut operacion = self
                         .archivos
@@ -6573,6 +7119,8 @@ impl App {
                 accion,
             } => match tecla.code {
                 KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+                    // Si la acción abre otra confirmación, empieza arriba.
+                    self.desplazamiento_modal = 0;
                     self.ejecutar_accion(accion);
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
@@ -7120,6 +7668,9 @@ impl App {
                         .insert(nombre, decision.unwrap_or(false));
                     importacion.indice += 1;
                 }
+                // El conflicto siguiente es otro diálogo de la misma
+                // variante: empieza arriba, con el nombre del host a la vista.
+                self.desplazamiento_modal = 0;
                 self.mostrar_conflicto_actual();
             }
         }
@@ -7306,43 +7857,6 @@ impl App {
     }
 }
 
-fn lanzar_hilo_teclas(
-    tx: mpsc::UnboundedSender<Evento>,
-    salir: Arc<AtomicBool>,
-    pausa: Arc<AtomicBool>,
-) {
-    std::thread::spawn(move || {
-        while !salir.load(Ordering::Relaxed) {
-            // Con el paginador en primer plano las teclas son suyas: se
-            // drenan y se tiran, para que no revienten al volver.
-            if pausa.load(Ordering::Relaxed) {
-                let _ = crossterm::event::poll(Duration::ZERO);
-                let _ = crossterm::event::read();
-                std::thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-            match crossterm::event::poll(Duration::from_millis(100)) {
-                Ok(true) => match crossterm::event::read() {
-                    Ok(crossterm::event::Event::Key(tecla)) => {
-                        if tx.send(Evento::Tecla(tecla)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(crossterm::event::Event::Resize(cols, filas)) => {
-                        if tx.send(Evento::Redimension(cols, filas)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => break,
-                },
-                Ok(false) => {}
-                Err(_) => break,
-            }
-        }
-    });
-}
-
 fn lanzar_tick(runtime: &tokio::runtime::Runtime, tx: mpsc::UnboundedSender<Evento>) {
     runtime.spawn(async move {
         let mut intervalo = tokio::time::interval(Duration::from_millis(200));
@@ -7526,11 +8040,11 @@ impl App {
 
     /// Altura útil de un panel, para mover el cursor dentro de la ventana.
     fn alto_panel(&self) -> usize {
-        let con_cola = self
-            .archivos
-            .as_ref()
-            .is_some_and(|estado| !estado.cola.is_empty());
-        crate::ui::archivos::alto_panel(self.terminal_alto, con_cola)
+        let lista = match self.archivos.as_ref().map(|estado| estado.activo) {
+            Some(crate::archivos::panel::Lado::Remoto) => Lista::ArchivosRemoto,
+            _ => Lista::ArchivosLocal,
+        };
+        self.disposicion.filas(lista)
     }
 
     /// Host con el que abrir Archivos: el de la pestaña activa de Sesión o el
@@ -7893,7 +8407,7 @@ impl App {
             .as_ref()
             .map(|estado| estado.cola.len())
             .unwrap_or(0);
-        let altura = crate::ui::transferencias::alto_lista(self.terminal_alto);
+        let altura = self.disposicion.filas(Lista::Transferencias);
         match tecla.code {
             KeyCode::Esc | KeyCode::Char('q') => self.vista = Vista::Archivos,
             KeyCode::Up | KeyCode::Char('k') => {

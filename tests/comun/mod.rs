@@ -204,6 +204,11 @@ pub struct Observado {
     pub exec_max: AtomicUsize,
     /// Comandos `exec` recibidos, en orden.
     pub comandos: Mutex<Vec<String>>,
+    /// Tamaño pedido en cada `pty-req` (canal, columnas, filas).
+    pub ptys: Mutex<Vec<(u32, u32, u32)>>,
+    /// Cada `window-change` recibido (canal, columnas, filas), en orden: es lo
+    /// que vería `vim` o `htop` como SIGWINCH en un host real.
+    pub tamanos: Mutex<Vec<(u32, u32, u32)>>,
     mangos: Mutex<Vec<russh::server::Handle>>,
 }
 
@@ -218,6 +223,26 @@ impl Observado {
 
     pub fn shell(&self) -> String {
         String::from_utf8_lossy(&self.shell.lock().expect("shell")).to_string()
+    }
+
+    /// Los `window-change` recibidos, en orden, como (columnas, filas).
+    pub fn tamanos(&self) -> Vec<(u32, u32)> {
+        self.tamanos
+            .lock()
+            .expect("tamaños")
+            .iter()
+            .map(|(_, cols, filas)| (*cols, *filas))
+            .collect()
+    }
+
+    /// El tamaño de cada `pty-req`, en orden, como (columnas, filas).
+    pub fn ptys(&self) -> Vec<(u32, u32)> {
+        self.ptys
+            .lock()
+            .expect("ptys")
+            .iter()
+            .map(|(_, cols, filas)| (*cols, *filas))
+            .collect()
     }
 
     /// Corta todas las conexiones abiertas, como una caída de red.
@@ -366,14 +391,39 @@ impl russh::server::Handler for HandlerSesion {
         &mut self,
         canal: russh::ChannelId,
         _: &str,
-        _: u32,
-        _: u32,
+        cols: u32,
+        filas: u32,
         _: u32,
         _: u32,
         _: &[(russh::Pty, u32)],
         sesion: &mut russh::server::Session,
     ) -> Result<(), Self::Error> {
+        self.observado
+            .ptys
+            .lock()
+            .expect("ptys")
+            .push((u32::from(canal), cols, filas));
         let _ = sesion.channel_success(canal);
+        Ok(())
+    }
+
+    /// Hace de `vim` o `stty size`: registra el tamaño nuevo y lo escribe en la
+    /// pestaña, para que la prueba lo vea también en la pantalla del cliente.
+    async fn window_change_request(
+        &mut self,
+        canal: russh::ChannelId,
+        cols: u32,
+        filas: u32,
+        _: u32,
+        _: u32,
+        sesion: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        self.observado
+            .tamanos
+            .lock()
+            .expect("tamaños")
+            .push((u32::from(canal), cols, filas));
+        let _ = sesion.data(canal, format!("TAM {cols}x{filas}\r\n").into_bytes());
         Ok(())
     }
 
@@ -847,6 +897,8 @@ type LectorProtocolo =
 /// servidor de sesiones en proceso y un cliente del protocolo ya saludado.
 pub struct Escenario {
     pub entorno: Entorno,
+    /// Id que el servidor dio al cliente del escenario.
+    pub cliente_id: u32,
     pub hosts: Vec<i64>,
     pub observado: Arc<Observado>,
     pub reenvios: Arc<Reenvios>,
@@ -865,6 +917,38 @@ impl Drop for Escenario {
     fn drop(&mut self) {
         self.tarea_ssh.abort();
         self.tarea_magi.abort();
+    }
+}
+
+/// Una ventana extra conectada al servidor de sesiones del escenario.
+pub struct Ventana {
+    pub cliente_id: u32,
+    pub escritura: tokio::net::unix::OwnedWriteHalf,
+    pub lector: LectorProtocolo,
+}
+
+impl Ventana {
+    pub async fn enviar(&mut self, mensaje: &MensajeCliente) {
+        enviar_a(&mut self.escritura, mensaje).await;
+    }
+
+    /// Lee hasta un mensaje que cumpla el predicado, con plazo de 10 s.
+    pub async fn esperar<F>(&mut self, mut vale: F) -> magi::protocolo::MensajeServidor
+    where
+        F: FnMut(&magi::protocolo::MensajeServidor) -> bool,
+    {
+        let fin = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let restante = fin.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(restante, siguiente_framed(&mut self.lector)).await {
+                Ok(mensaje) if vale(&mensaje) => return mensaje,
+                Ok(_) => {}
+                Err(_) => panic!(
+                    "la ventana {} no recibió lo esperado en 10 s",
+                    self.cliente_id
+                ),
+            }
+        }
     }
 }
 
@@ -979,10 +1063,13 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
     let (lectura, escritura) = stream.into_split();
     let mut lector = tokio_util::codec::FramedRead::new(lectura, magi::protocolo::codec());
     let bienvenida: MensajeServidor = siguiente_framed(&mut lector).await;
-    assert!(matches!(bienvenida, MensajeServidor::Bienvenida { .. }));
+    let MensajeServidor::Bienvenida { cliente_id, .. } = bienvenida else {
+        panic!("se esperaba Bienvenida y llegó {bienvenida:?}");
+    };
 
     Escenario {
         entorno,
+        cliente_id,
         hosts: ids,
         observado,
         reenvios,
@@ -999,6 +1086,33 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
 impl Escenario {
     pub fn rutas(&self) -> &Rutas {
         &self.entorno.rutas
+    }
+
+    /// Otra ventana de MAGI conectada al mismo servidor, ya saludada.
+    pub async fn otra_ventana(&self) -> Ventana {
+        use magi::protocolo::{MensajeServidor, VERSION_PROTOCOLO};
+        let mut stream = UnixStream::connect(magi::servidor::ruta_socket(self.rutas()))
+            .await
+            .expect("conectando la segunda ventana");
+        enviar(
+            &mut stream,
+            &MensajeCliente::Hola {
+                version: VERSION_PROTOCOLO,
+                pid: 43,
+            },
+        )
+        .await;
+        let (lectura, escritura) = stream.into_split();
+        let mut lector = tokio_util::codec::FramedRead::new(lectura, magi::protocolo::codec());
+        let bienvenida: MensajeServidor = siguiente_framed(&mut lector).await;
+        let MensajeServidor::Bienvenida { cliente_id, .. } = bienvenida else {
+            panic!("se esperaba Bienvenida y llegó {bienvenida:?}");
+        };
+        Ventana {
+            cliente_id,
+            escritura,
+            lector,
+        }
     }
 
     pub async fn enviar(&mut self, mensaje: &MensajeCliente) {

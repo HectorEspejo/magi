@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · RESULTADOS · 1 en curso · 0 hoy ──────────────────────────────────────────────────────────┐
+│   HORA   SNIPPET              HOSTS    ✓   ✕   …  ESTADO                                         │
+│ ▸ 22:25  reiniciar nginx          3    2   1   0  terminada ⚑                                    │
+│   22:24  espacio en disco         2    0   0   2  en curso                                       │
+│   22:23  actualizar paquetes      2    2   0   0  terminada                                      │
+│   22:22  espacio en disco         2    2   0   0  terminada                                      │
+│   22:21  actualizar paquetes      2    2   0   0  terminada                                      │
+│   22:20  espacio en disco         2    2   0   0  terminada                                      │
+│── HOSTS · reiniciar nginx ───────────────────────────────────────────────────────────────────────│
+│   ● hetzner-01    ok            0     1,2 s     212 B                                            │
+│ ▸ ✕ hetzner-02    fallo         1    800 ms      1 kB  Job for nginx.service failed because the …│
+│   ● vps-openclaw  ok            0     1,2 s     212 B                                            │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⇥ panel  ↵ salida  s guardar  r repetir  x cancelar  C limpiar  q volver  ? ayuda

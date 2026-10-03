@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · HOSTS ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts ─┐
+│  ▼ produccion                                                     (3)                                                                                                                                │
+│▸   ○ hetzner-01                 10.0.1.11            root       22                                                                                                                                   │
+│    ○ hetzner-02                 10.0.1.12            deploy     2222                                                                                                                                 │
+│    ○ vps-openclaw               203.0.113.40         admin      22                                                                                                                                   │
+│  ▼ casa                                                           (2)                                                                                                                                │
+│    ○ dgx-spark                  192.168.1.30         hector     22                                                                                                                                   │
+│    ○ mac-mini-m1                192.168.1.20         hector     22                                                                                                                                   │
+│  ▼ sin grupo                                                      (2)                                                                                                                                │
+│    ○ backup-nas                 192.168.1.40         backup     22                                                                                                                                   │
+│    ○ rincon-dev                 dev.rincon.example   hector     2200                                                                                                                                 │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                    ┌ AYUDA · HOSTS ─────────────────────────────────────────────┐                                                                    │
+│                                                                    │                                                            │                                                                    │
+│                                                                    │  ↑ ↓ / j k     mover la selección                          │                                                                    │
+│                                                                    │  ← → / h l     plegar o desplegar el grupo                 │                                                                    │
+│                                                                    │  ↵             conectar con el host                        │                                                                    │
+│                                                                    │  e             editar la ficha                             │                                                                    │
+│                                                                    │  n             nuevo host                                  │                                                                    │
+│                                                                    │  g             menú de grupos                              │                                                                    │
+│                                                                    │  x             borrar host                                 │                                                                    │
+│                                                                    │  ⇥             alternar usuario·puerto / etiquetas         │                                                                    │
+│                                                                    │  /             filtro incremental                          │                                                                    │
+│                                                                    │  !             snippets que apuntan al host                │                                                                    │
+│                                                                    │  I             importar ~/.ssh/config                      │                                                                    │
+│                                                                    │  E             exportar magi_config                        │                                                                    │
+│                                                                    │  F2 / F3       ir a Hosts / a la sesión                    │                                                                    │
+│                                                                    │  ^p            paleta de comandos                          │                                                                    │
+│                                                                    │  q             volver o salir                              │                                                                    │
+│                                                                    │  ↑↓ PgUp PgDn  desplazar diálogos y esta ayuda             │                                                                    │
+│                                                                    │                                                            │                                                                    │
+│                                                                    │  esc o ? para cerrar                                       │                                                                    │
+│                                                                    │                                                            │                                                                    │
+│                                                                    └────────────────────────────────────────────────────────────┘                                                                    │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

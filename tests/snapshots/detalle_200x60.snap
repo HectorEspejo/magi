@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          ┌ DETALLE DEL REGISTRO ──────────────────────────────────────────────────┐                                                              │
+│                ○ dgx-spark    FRÍA                           │  línea 11 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                ● hetzner-01   NOMINAL                        │  línea 12 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                ● hetzner-02   NOMINAL                        │  línea 13 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                ◐ mac-mini-m1  CARGA                          │  línea 14 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                ✕ rincon-dev   CAÍDA                          │  línea 15 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                ● vps-openclaw NOMINAL                        │  línea 16 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 17 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 18 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 19 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 20 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 21 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 22 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 23 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 24 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 25 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 26 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 27 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 28 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 29 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 30 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 31 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 32 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 33 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 34 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 35 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 36 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 37 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 38 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 39 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 40 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 41 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 42 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 43 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 44 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 45 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 46 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 47 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 48 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 49 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 50 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 51 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 52 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 53 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 54 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 55 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 56 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 57 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 58 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 59 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 60 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 61 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 62 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 63 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │  línea 64 · sondeo de hetzner-01 con carga 0.42                        │                                                              │
+│                                                              │                                                                        │                                                              │
+│                                                              │  ↵ / esc cerrar                                                        │                                                              │
+└──────────────────────────────────────────────────────────────└────────────────────────────────────────────────────────────── ↑↓ 11/11 ┘──────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

@@ -1,0 +1,25 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ──────────────────────────── local ⇄ hetzner-01 ─ [remoto] ⇥ ┐
+│ /var/www/cooperapp                                                           │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│    ..                                                                        │
+│    app                     — 2025                                            │
+│    static                  — 2025                                            │
+│ ▸  backup.tar.gz      1.1 MB 2025   ✕                                        │
+│    config.yaml          1 kB 2025   ≠                                        │
+│    main.py             14 kB 2025   ≠                                        │
+│    README.md            3 kB 2025                                            │
+│    requirements.txt    300 B 2025   ✕                                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 8 elementos · 1.1 MB  ·  ↑ 78 % main.py · 2 en cola                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ local  ↵ abrir  c copiar  m mover  x borrar  r renombrar  d dir  ? más

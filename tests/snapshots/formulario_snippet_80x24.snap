@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · SNIPPETS · 3 ─────────────────────────────────────────────────────────┐
+│┌ NUEVO SNIPPET ─────────────────────────────────────────────────────────────┐│
+││                                                                            ││
+││  Nombre        [ ┃                                                      ]  ││
+││  Comando       │                                                           ││
+││                │                                                           ││
+││                │                                                           ││
+││  Descripción   [                                                        ]  ││
+││  Etiquetas     [                                                        ]  ││
+││  Destinos      etiquetas de host y hosts sueltos (al menos uno)            ││
+││    etiquetas   [                                                        ]  ││
+││                                                                            ││
+││    hosts       [ ninguno                                                ]  ││
+││  Crítico       [ ] siempre pide la deliberación MAGI                       ││
+││  Timeout       [ 60     ] segundos (5-3600)                                ││
+││  Parar         [ ] al primer fallo                                         ││
+││                                                                            ││
+││  → sin destinos: añade una etiqueta de host o un host                      ││
+││  variables: ninguna                                                        ││
+││                                                                            ││
+││  ^s guardar  ⇥ campo  esc cancelar                                         ││
+││                                                                            ││
+└└────────────────────────────────────────────────────────────────────────────┘┘
+ ↵ ejecutar  a en todos  p en pestaña  / buscar  t resultados  ? más

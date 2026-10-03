@@ -119,7 +119,9 @@ impl App {
     /// Acota la selección a lo visible y la deja dentro de la ventana.
     fn ajustar_snippets(&mut self) {
         let total = self.snippets_visibles().len();
-        let altura = crate::ui::snippets::alto_lista(self.terminal_alto);
+        let altura = self
+            .disposicion
+            .filas(crate::ui::disposicion::Lista::Snippets);
         let estado = &mut self.snippets;
         if estado.seleccion >= total {
             estado.seleccion = total.saturating_sub(1);
@@ -164,7 +166,9 @@ impl App {
 
     /// Teclas de la vista Snippets.
     pub(super) fn tecla_snippets(&mut self, tecla: KeyEvent) {
-        let altura = crate::ui::snippets::alto_lista(self.terminal_alto);
+        let altura = self
+            .disposicion
+            .filas(crate::ui::disposicion::Lista::Snippets);
         let seleccion = self.snippets.seleccion;
         if self.snippets.filtro_activo {
             match tecla.code {
@@ -200,6 +204,24 @@ impl App {
             KeyCode::Char('e') => self.editar_snippet_seleccionado(),
             KeyCode::Char('x') => self.confirmar_borrado_snippet(),
             KeyCode::Char('t') => self.ir_a_resultados(),
+            // `↵` ejecuta: el detalle completo (plegado con la vista baja) se
+            // abre con `i`.
+            KeyCode::Char('i') => {
+                let ascii = self.tema.ascii;
+                let detalle = self.snippet_seleccionado().map(|snippet| {
+                    (
+                        crate::ui::snippets::titulo_detalle(snippet, ascii),
+                        crate::ui::snippets::lineas_detalle(self, snippet, ascii),
+                    )
+                });
+                if let Some((titulo, lineas)) = detalle {
+                    self.dialogo = Some(Dialogo::Detalle {
+                        titulo,
+                        lineas,
+                        tunel_caido: None,
+                    });
+                }
+            }
             KeyCode::Enter => self.lanzar_seleccionado(OrigenLanzamiento::Dialogo),
             KeyCode::Char('a') => self.lanzar_seleccionado(OrigenLanzamiento::Todos),
             KeyCode::Char('p') => self.lanzar_seleccionado(OrigenLanzamiento::Pestanas),

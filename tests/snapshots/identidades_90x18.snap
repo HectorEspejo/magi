@@ -1,0 +1,21 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · IDENTIDADES ────────────────────────────────────────────────────────────────────┐
+│  ALIAS    TIPO                        USADA EN  ORIGEN                                 │
+│▸ trabajo  ssh-ed25519                 —         fichero                                │
+│  yubikey  sk-ssh-ed25519@openssh.com  —         agente                                 │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└ ↵ detalle ──────────────────────────────────────────────────────────────────2 clave(s) ┘
+ n generar  i importar  c copiar pública  e alias  x revocar  q salir  ↵ detalle  ? más

@@ -43,6 +43,7 @@ zeroize = "1"
 security-framework = "3"
 
 [dev-dependencies]
+insta = { version = "1", features = ["filters"] }
 tempfile = "3"
 
 [profile.release]

@@ -102,6 +102,60 @@ apagar el servidor. `↵` en Hosts y Flota abre siempre una sesión nueva; `q`
 sale sin confirmar avisando de las sesiones que siguen abiertas.
 `magi conectar <host>` abre una sesión desde un lanzador o atajo.
 
+## Tamaño de la terminal
+
+MAGI se adapta a cualquier cambio de tamaño: mosaico de Hyprland, mover la
+ventana, pantalla completa o zoom de fuente de Alacritty (`Ctrl+=` `Ctrl+-`
+`Ctrl+0`). Los cambios se agrupan (50 ms sin eventos) y se aplica solo el
+último: una limpieza de pantalla y un repintado por tamaño, sin pulsar ninguna
+tecla, aunque una animación mande treinta. Al volver del visor (`F4`) se lee
+el tamaño real.
+
+En la vista Sesión el remoto recibe el tamaño nuevo (`window-change`, el
+SIGWINCH de `vim` o `htop`) en cuanto se aplica. Una pestaña abierta en varias
+ventanas usa el mínimo de todas: la mayor rellena con `░` lo que sobra y la
+barra de estado dice `cols×filas (mín. ventana N)`; cuando la pequeña crece,
+sale de la pestaña o se cierra, el remoto vuelve a crecer.
+
+**Modo estrecho** (menos de 100 columnas):
+
+- Flota y Archivos enseñan un solo panel y `Tab` alterna. La cabecera dice cuál
+  se ve: `⇥ detalle` / `⇥ lista`, `[local]` / `[remoto]`.
+- Las tablas ocultan columnas por prioridad: Hosts, la dirección por debajo de
+  80 columnas y usuario·puerto por debajo de 60. El nombre y el glifo de estado
+  no se ocultan nunca.
+- La barra inferior muestra los atajos más importantes y termina en `? más`;
+  la ayuda (`?`) los lista todos.
+
+**Vistas bajas** (menos de 20 filas):
+
+- Los detalles inferiores de Transferencias, Túneles, Registro, Identidades y
+  Snippets se pliegan. Se abren en un diálogo con `↵` (`i` en Snippets, donde
+  `↵` ejecuta).
+- En Resultados, con menos de 24 filas, la salida solo se ve con `↵`.
+- Diálogos, paleta y ayuda se recolocan y encogen; lo que no cabe se desplaza
+  con `↑` `↓` `PgUp` `PgDn`.
+
+En ventanas muy grandes (200×60 o más) los paneles de detalle y los diálogos
+tienen ancho máximo y van centrados.
+
+**Tamaños mínimos.** Por debajo del mínimo se ve un aviso con el tamaño actual,
+el mínimo y la vista que lo exige. Con el aviso siguen activas `q`, `F1`-`F8` y
+`Ctrl+P`; en Sesión las teclas siguen yendo al remoto y este recibe su tamaño
+real. Con menos de 20×3 solo se pinta `MAGI cols×filas`.
+
+| Vista | Mínimo |
+|---|---|
+| Flota, Hosts, Sesiones (y cualquier otra) | 40×12 |
+| Sesión | 40×8 |
+| Ficha, Archivos | 50×14 |
+| Transferencias, Túneles, Registro, Identidades, Snippets | 50×12 |
+| Resultados | 60×14 |
+| Diálogo MAGI | 50×12 |
+
+El modo ASCII (`MAGI_ASCII=1` o `terminal_ascii = true`) degrada todos los
+glifos en todos los modos, también en el aviso.
+
 ## Archivos
 
 `F4` (o `s` en Hosts y Flota, o el prefijo `f` en Sesión, o `sftp · <host>` en
@@ -382,8 +436,9 @@ Snippets · `Ctrl+P` paleta · `?` ayuda · `Esc` cierra diálogos y filtros ·
 
 Flota: `↑` `↓` / `j` `k` mover · `↵` conectar · `r` sondear el host · `R`
 sondear todos los visibles · `e` editar la ficha · `/` filtro · `a`
-activar/pausar el auto-refresco · `!` snippets del host · las teclas de
-`[flota.atajos]`, que aparecen en la barra. `↵` abre siempre una sesión nueva.
+activar/pausar el auto-refresco · `!` snippets del host · `Tab` alterna
+lista y detalle en modo estrecho · las teclas de `[flota.atajos]`, que
+aparecen en la barra. `↵` abre siempre una sesión nueva.
 
 Hosts: `↑` `↓` / `j` `k` mover · `←` `→` / `h` `l` plegar grupo · `↵`
 conectar (siempre sesión nueva) · `e` editar · `n` nuevo · `g` menú de
@@ -392,7 +447,8 @@ grupos · `x` borrar · `Tab` alternar usuario·puerto / etiquetas · `/` filtro
 indica N sesiones vivas.
 
 Identidades: `n` generar · `i` importar · `c` copiar la pública · `e` alias ·
-`x` revocar/reactivar · `s` reescanear · `v` ver revocadas.
+`x` revocar/reactivar · `s` reescanear · `v` ver revocadas · `↵` detalle
+(con la vista baja).
 
 Registro: `↵` detalle · `/` filtrar · `t` ciclar el tipo · `p` purgar >90
 días · `x` exportar CSV/JSON.
@@ -424,11 +480,13 @@ error · `n` nuevo · `e` editar · `x` borrar · `a` automático · `r` relanza
 
 Snippets: `↑` `↓` / `j` `k` mover · `↵` ejecutar (diálogo) · `a` en todos los
 destinos · `p` en pestañas · `n` nuevo · `e` editar · `x` borrar · `/`
-filtro · `t` Resultados · `q` volver. En el formulario, `Ctrl+S` guarda.
+filtro · `t` Resultados · `i` detalle (con la vista baja) · `q` volver. En el
+formulario, `Ctrl+S` guarda.
 
 Resultados: `↑` `↓` / `j` `k` mover · `Tab` panel · `↵` ver la salida (`Tab`
-alterna stdout/stderr) · `s` guardar la salida · `x` cancelar · `r` repetir ·
-`C` limpiar terminadas · `q` volver.
+alterna stdout/stderr; con menos de 24 filas es la única forma de verla) ·
+`s` guardar la salida · `x` cancelar · `r` repetir · `C` limpiar terminadas ·
+`q` volver.
 
 Deliberación: `Ctrl+K` ejecutar (solo con consenso o forzada) · `f` forzar con
 motivo · `↑` `↓` recorrer hosts · `Esc` cancelar o salir del motivo.
@@ -519,6 +577,17 @@ que atiende `exec`: varios hosts, código ≠ 0, timeout con el pool vivo, parar
 al primer fallo, cancelación, tope de 1 MiB, anotaciones sin salida y
 deliberaciones. La deliberación tiene pruebas de las tres comprobaciones
 (CASPER-3 con `true`, `false` y `sleep 3` reales) y del diálogo.
+
+El redimensionado (`tests/redimensionado.rs`) reproduce los dos fallos de la
+Fase 7 contra el servidor SSH de pruebas, que registra cada `window-change`.
+Prueba la tubería de tamaño con un `TestBackend` que cuenta las limpiezas y la
+App real contra el servidor en proceso, con una y con dos ventanas. Además
+compara instantáneas `insta` de todas las vistas y diálogos a 40×12, 80×24 y
+200×60 (en `tests/snapshots/`), recorre una rejilla de tamaños sin pánico y
+comprueba que las secuencias de cambio conservan el estado. Tras un cambio
+visual deliberado, se regeneran con `INSTA_UPDATE=always cargo test --test
+redimensionado` y se revisan con `git diff tests/snapshots` (o con `cargo insta
+review`).
 
 Las pruebas de archivos (`tests/sftp.rs`) levantan un servidor SSH en proceso
 que sirve el subsistema `sftp` con el **`sftp-server` real de OpenSSH**: listar,

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ EJECUTAR · espacio en disco ───────┐│
+││                                    ││
+││  Hosts (2)                         ││
+││   [x] hetzner-01                   ││
+││   [x] backup-nas                   ││
+││  [ ] parar al primer fallo         ││
+││                                    ││
+││  ↵ continuar  esc cancelar         ││
+││                                    ││
+│└────────────────────────────────────┘│
+└──────────────────────────────────────┘

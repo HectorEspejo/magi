@@ -1058,38 +1058,15 @@ async fn manejar_mensaje(
 /// que solicitó y difundir el cambio.
 async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id: u32) {
     let mut estado_bloqueado = estado.lock().await;
-    let mut cambios_tamano: Vec<(u32, ComandoSesion)> = Vec::new();
-    for (sesion_id, sesion) in estado_bloqueado.sesiones.iter_mut() {
-        if sesion.adjuntos.remove(&cliente_id).is_some() {
-            let nuevo = sesiones::tamano_minimo(&sesion.adjuntos, sesion.tamano);
-            if nuevo != sesion.tamano {
-                sesion.tamano = nuevo;
-                cambios_tamano.push((
-                    *sesion_id,
-                    ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas),
-                ));
-            }
-        }
-    }
-    for (sesion_id, comando) in cambios_tamano {
-        let (ids, tamano) = {
-            let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
-                continue;
-            };
-            let _ = sesion.tx_comandos.send(comando);
-            let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
-            (ids, sesion.tamano)
-        };
-        difusion::difundir_a_adjuntos(
-            &estado_bloqueado.clientes,
-            &ids,
-            MensajeServidor::Redimensionada {
-                sesion_id,
-                cols: tamano.cols,
-                filas: tamano.filas,
-                ventana_minima: None,
-            },
-        );
+    // Las pestañas a las que estaba adjunta recalculan su tamaño: si imponía
+    // el mínimo, el remoto vuelve al de las ventanas que quedan.
+    let adjuntas: Vec<u32> = estado_bloqueado
+        .sesiones
+        .iter_mut()
+        .filter_map(|(sesion_id, sesion)| sesion.adjuntos.remove(&cliente_id).map(|_| *sesion_id))
+        .collect();
+    for sesion_id in adjuntas {
+        aplicar_tamano(&mut estado_bloqueado, sesion_id, None).await;
     }
     // Diálogos que solo esta ventana podía contestar (sesiones, SFTP,
     // túneles, ejecuciones): se sueltan y sus aperturas fallan enseguida en
@@ -1213,6 +1190,7 @@ async fn abrir_sesion(
         cols: cols.max(2),
         filas: filas.max(1),
     };
+    let (cols, filas) = (tamano.cols, tamano.filas);
     let pantalla = crate::conexion::terminal::nuevo(filas, cols);
     let cancelar = tokio_util::sync::CancellationToken::new();
     estado_bloqueado.sesiones.insert(
@@ -1235,6 +1213,7 @@ async fn abrir_sesion(
             reconectando: false,
             comandos_iniciales: comandos_iniciales.clone(),
             tamano,
+            ventana_minima: HashMap::new(),
             pantalla: pantalla.clone(),
             tx_comandos,
         },
@@ -1262,35 +1241,52 @@ async fn abrir_sesion(
     sesiones::difundir_lista(&mut estado_bloqueado);
 }
 
-/// Recalcula el tamaño de la sesión y lo aplica si cambió.
-async fn aplicar_tamano(estado_bloqueado: &mut EstadoServidor, sesion_id: u32) {
+/// Recalcula el tamaño de la sesión con el mínimo de sus adjuntos. Si cambia,
+/// lo aplica al remoto (`window-change` y parser) y lo difunde a todos los
+/// adjuntos; si solo cambia la ventana que lo impone, lo difunde también.
+/// `avisar_a` recibe `Redimensionada` aunque nada cambie: la ventana que se
+/// acaba de adjuntar necesita saber el tamaño vigente y quién lo impone.
+async fn aplicar_tamano(
+    estado_bloqueado: &mut EstadoServidor,
+    sesion_id: u32,
+    avisar_a: Option<u32>,
+) {
     let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
         return;
     };
     let nuevo = sesiones::tamano_minimo(&sesion.adjuntos, sesion.tamano);
-    if nuevo != sesion.tamano {
+    let cambia_tamano = nuevo != sesion.tamano;
+    if cambia_tamano {
         sesion.tamano = nuevo;
         let _ = sesion
             .tx_comandos
             .send(ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas));
-        let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
-        // La ventana que impone el mínimo, para el aviso de la barra.
-        let minima = sesion
-            .adjuntos
-            .iter()
-            .filter(|(_, tamano)| tamano.cols == nuevo.cols && tamano.filas == nuevo.filas)
-            .map(|(cliente_id, _)| *cliente_id)
-            .min();
-        difusion::difundir_a_adjuntos(
-            &estado_bloqueado.clientes,
-            &ids,
-            MensajeServidor::Redimensionada {
-                sesion_id,
-                cols: nuevo.cols,
-                filas: nuevo.filas,
-                ventana_minima: minima,
-            },
-        );
+    }
+    // Cada adjunto recibe quién explica su relleno: con el tamaño nuevo todos;
+    // si no, los que cambian de ventana mínima y la que se acaba de adjuntar.
+    let mut envios: Vec<(u32, Option<u32>)> = Vec::new();
+    for cliente_id in sesion.adjuntos.keys().copied() {
+        let minima = sesiones::ventana_minima_para(&sesion.adjuntos, nuevo, cliente_id);
+        let anterior = sesion.ventana_minima.insert(cliente_id, minima);
+        if cambia_tamano || anterior != Some(minima) || avisar_a == Some(cliente_id) {
+            envios.push((cliente_id, minima));
+        }
+    }
+    sesion
+        .ventana_minima
+        .retain(|cliente_id, _| sesion.adjuntos.contains_key(cliente_id));
+    for (cliente_id, minima) in envios {
+        if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+            difusion::enviar(
+                cliente,
+                MensajeServidor::Redimensionada {
+                    sesion_id,
+                    cols: nuevo.cols,
+                    filas: nuevo.filas,
+                    ventana_minima: minima,
+                },
+            );
+        }
     }
 }
 
@@ -1311,18 +1307,21 @@ async fn adjuntar(
         };
         sesion.adjuntos.insert(cliente_id, tamano);
         sesion.actividad_no_vista = false;
+        // El volcado declara el tamaño del parser del que sale, no el de la
+        // sesión: pueden diferir (sesión caída, o un AplicarTamano aún en
+        // cola) y el cliente partiría las líneas. El Redimensionada que va
+        // detrás lo lleva después al tamaño vigente.
+        let tamano_sesion = (sesion.tamano.cols, sesion.tamano.filas);
         sesion
             .pantalla
             .lock()
-            .map(|parser| parser.screen().contents_formatted())
-            .unwrap_or_default()
+            .map(|parser| {
+                let (filas, cols) = parser.screen().size();
+                (parser.screen().contents_formatted(), (cols, filas))
+            })
+            .unwrap_or((Vec::new(), tamano_sesion))
     };
-    let (cols, filas) = {
-        let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
-            return;
-        };
-        (sesion.tamano.cols, sesion.tamano.filas)
-    };
+    let (volcado, (cols, filas)) = volcado;
     if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
         difusion::enviar(
             cliente,
@@ -1334,7 +1333,7 @@ async fn adjuntar(
             },
         );
     }
-    aplicar_tamano(&mut estado_bloqueado, sesion_id).await;
+    aplicar_tamano(&mut estado_bloqueado, sesion_id, Some(cliente_id)).await;
     sesiones::difundir_lista(&mut estado_bloqueado);
 }
 
@@ -1347,7 +1346,7 @@ async fn desadjuntar(
     if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
         sesion.adjuntos.remove(&cliente_id);
     }
-    aplicar_tamano(&mut estado_bloqueado, sesion_id).await;
+    aplicar_tamano(&mut estado_bloqueado, sesion_id, None).await;
     sesiones::difundir_lista(&mut estado_bloqueado);
 }
 
@@ -1367,7 +1366,7 @@ async fn redimensionar_adjunto(
             sesion.adjuntos.insert(cliente_id, tamano);
         }
     }
-    aplicar_tamano(&mut estado_bloqueado, sesion_id).await;
+    aplicar_tamano(&mut estado_bloqueado, sesion_id, None).await;
 }
 
 /// Cierra una sesión: si abría, cancela; si está caída, se elimina; si está

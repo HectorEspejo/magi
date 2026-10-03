@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ TÚNELES · 4 · 2 activos ───────────────────────┐
+│     ESCUCHA → DESTINO                HOST     a│
+│  ●  127.0.0.1:5432 → 127.0.0.1:5432  hetz-01  a│
+│▸ ✕  127.0.0.1:3000 → 10.0.1.50:3000  hetz-02   │
+│  ◐  0.0.0.0:8080 → 127.0.0.1:8080    ma-m-m1   │
+│  ○  127.0.0.1:1080  (socks5)         vps-ope   │
+│                                                │
+│                                                │
+│                                                │
+│                                                │
+└ 4 · ↵ detalle ─────────────────────────────────┘
+ espacio activar/parar  n nuevo  ↵ detalle  ? más

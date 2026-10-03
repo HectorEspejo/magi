@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · HOSTS ────────────── 7 hosts ─┐
+│┌ AYUDA · HOSTS ─────────────────────┐│
+││ ↑ ↓ / j k     mover la selección   ││
+││ ← → / h l     plegar o desplegar   ││
+││               el grupo             ││
+││ ↵             conectar con el host ││
+││ e             editar la ficha      ││
+││ n             nuevo host           ││
+││                                    ││
+││ esc o ? para cerrar                ││
+└└─────────────────────────── ↑↓ 1/18 ┘┘
+ ↵ conectar  e editar  / filtrar  ? más

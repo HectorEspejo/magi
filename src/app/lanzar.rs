@@ -25,7 +25,9 @@ use super::{AccionDialogo, AccionPaleta, App, Dialogo, EntradaPaleta};
 /// Con más pestañas que estas, `p` pide confirmación (antes de deliberar).
 pub const MAX_PESTANAS_SIN_CONFIRMAR: usize = 5;
 
-/// Columnas de la rejilla de hosts del diálogo EJECUTAR.
+/// Columnas de la rejilla de hosts del diálogo EJECUTAR, como mucho: con
+/// menos ancho se pintan menos (`ui::ejecutar::columnas_rejilla`) y las
+/// flechas usan las del último pintado.
 pub const COLUMNAS_HOSTS: usize = 3;
 
 /// Plazo del seguimiento de una pestaña abierta con `p`: pasado, cuenta como
@@ -282,9 +284,9 @@ impl DialogoEjecutar {
     // ------------------------------------------------------------ teclas
 
     /// `↵` continúa desde cualquier campo; `Esc` cancela; `Tab` y
-    /// `Shift+Tab` cambian de zona; `↑↓←→` mueven por la rejilla de hosts y
-    /// `espacio` marca.
-    pub fn manejar_tecla(&mut self, tecla: &KeyEvent) -> AccionEjecutar {
+    /// `Shift+Tab` cambian de zona; `↑↓←→` mueven por la rejilla de hosts
+    /// (de `columnas` columnas, las que se ven) y `espacio` marca.
+    pub fn manejar_tecla(&mut self, tecla: &KeyEvent, columnas: usize) -> AccionEjecutar {
         match tecla.code {
             KeyCode::Esc => return AccionEjecutar::Cancelar,
             KeyCode::Enter => {
@@ -307,7 +309,7 @@ impl DialogoEjecutar {
             }
             KeyCode::Tab => self.mover_zona(1, true),
             _ => match self.estado.foco {
-                FocoEjecutar::Hosts => self.tecla_hosts(tecla.code),
+                FocoEjecutar::Hosts => self.tecla_hosts(tecla.code, columnas),
                 FocoEjecutar::Variable(indice) => self.tecla_variable(indice, tecla),
                 FocoEjecutar::Parar => self.tecla_parar(tecla.code),
             },
@@ -348,26 +350,27 @@ impl DialogoEjecutar {
         self.estado.foco = zonas[siguiente as usize];
     }
 
-    /// Rejilla de `COLUMNAS_HOSTS` columnas: flechas y espacio.
-    fn tecla_hosts(&mut self, codigo: KeyCode) {
+    /// Rejilla de `columnas` columnas: flechas y espacio.
+    fn tecla_hosts(&mut self, codigo: KeyCode, columnas: usize) {
         let total = self.estado.hosts.len();
         if total == 0 {
             return;
         }
+        let columnas = columnas.clamp(1, COLUMNAS_HOSTS);
         let cursor = self.estado.cursor_host.min(total - 1);
         match codigo {
             KeyCode::Left => self.estado.cursor_host = cursor.saturating_sub(1),
             KeyCode::Right => self.estado.cursor_host = (cursor + 1).min(total - 1),
             KeyCode::Up => {
-                if cursor >= COLUMNAS_HOSTS {
-                    self.estado.cursor_host = cursor - COLUMNAS_HOSTS;
+                if cursor >= columnas {
+                    self.estado.cursor_host = cursor - columnas;
                 }
             }
             KeyCode::Down => {
-                let fila = cursor / COLUMNAS_HOSTS;
-                if fila + 1 < total.div_ceil(COLUMNAS_HOSTS) {
+                let fila = cursor / columnas;
+                if fila + 1 < total.div_ceil(columnas) {
                     // En una última fila incompleta, al último host.
-                    self.estado.cursor_host = (cursor + COLUMNAS_HOSTS).min(total - 1);
+                    self.estado.cursor_host = (cursor + columnas).min(total - 1);
                 } else {
                     // Bajar desde la última fila pasa a las variables.
                     self.estado.cursor_host = cursor;
@@ -993,11 +996,22 @@ impl App {
     /// Tecla con el diálogo EJECUTAR abierto (sacado del hueco: si sigue
     /// abierto, hay que devolverlo a `self.dialogo`).
     pub(super) fn tecla_dialogo_ejecutar(&mut self, mut dialogo: DialogoEjecutar, tecla: KeyEvent) {
-        match dialogo.manejar_tecla(&tecla) {
+        match dialogo.manejar_tecla(&tecla, self.columnas_rejilla()) {
             AccionEjecutar::Nada => self.dialogo = Some(Dialogo::Ejecutar(dialogo)),
             AccionEjecutar::Cancelar => {}
             AccionEjecutar::Continuar(plan) => self.plan_listo(plan),
         }
+    }
+
+    /// Columnas de la rejilla de hosts del diálogo EJECUTAR en el último
+    /// pintado: las registradas en la disposición o, si el diálogo aún no
+    /// las registró, las que salen del área pintada (solo dependen del
+    /// ancho).
+    #[doc(hidden)]
+    pub fn columnas_rejilla(&self) -> usize {
+        self.disposicion
+            .columnas_rejilla
+            .unwrap_or_else(|| crate::ui::ejecutar::columnas_rejilla(self.disposicion.area))
     }
 
     /// Plan armado: `p` con más de cinco hosts se confirma antes de deliberar.
@@ -1454,13 +1468,13 @@ mod pruebas {
 
     fn escribir(dialogo: &mut DialogoEjecutar, texto: &str) {
         for caracter in texto.chars() {
-            dialogo.manejar_tecla(&tecla(KeyCode::Char(caracter)));
+            dialogo.manejar_tecla(&tecla(KeyCode::Char(caracter)), COLUMNAS_HOSTS);
         }
     }
 
     fn borrar(dialogo: &mut DialogoEjecutar, veces: usize) {
         for _ in 0..veces {
-            dialogo.manejar_tecla(&tecla(KeyCode::Backspace));
+            dialogo.manejar_tecla(&tecla(KeyCode::Backspace), COLUMNAS_HOSTS);
         }
     }
 
@@ -1479,7 +1493,7 @@ mod pruebas {
     }
 
     fn continuar(dialogo: &mut DialogoEjecutar) -> Option<PlanEjecucion> {
-        match dialogo.manejar_tecla(&tecla(KeyCode::Enter)) {
+        match dialogo.manejar_tecla(&tecla(KeyCode::Enter), COLUMNAS_HOSTS) {
             AccionEjecutar::Continuar(plan) => Some(plan),
             AccionEjecutar::Nada => None,
             AccionEjecutar::Cancelar => panic!("↵ no cancela"),
@@ -1508,15 +1522,15 @@ mod pruebas {
         let mut dialogo =
             dialogo_de(preparar(&snippet, hosts(5), &OrigenLanzamiento::Dialogo).unwrap());
         // Desmarca h2 (→ espacio) y h5 (↓ → espacio).
-        dialogo.manejar_tecla(&tecla(KeyCode::Right));
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
-        dialogo.manejar_tecla(&tecla(KeyCode::Down));
+        dialogo.manejar_tecla(&tecla(KeyCode::Right), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 4);
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
         // Y cambia «parar al primer fallo».
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Parar);
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
         let plan = continuar(&mut dialogo).unwrap();
         assert_eq!(
             plan.hosts,
@@ -1538,15 +1552,15 @@ mod pruebas {
         let snippet = snippet("uptime");
         let mut dialogo =
             dialogo_de(preparar(&snippet, hosts(2), &OrigenLanzamiento::Dialogo).unwrap());
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
-        dialogo.manejar_tecla(&tecla(KeyCode::Right));
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Right), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
         assert_eq!(dialogo.marcados(), 0);
         assert!(continuar(&mut dialogo).is_none());
         assert_eq!(dialogo.error(), Some("marca al menos un host"));
         assert_eq!(dialogo.foco(), FocoEjecutar::Hosts);
         // La siguiente tecla retira el error.
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
         assert_eq!(dialogo.error(), None);
         assert!(continuar(&mut dialogo).is_some());
     }
@@ -1557,7 +1571,7 @@ mod pruebas {
         let mut dialogo =
             dialogo_de(preparar(&snippet, hosts(1), &OrigenLanzamiento::Dialogo).unwrap());
         // Lleva el foco a «parar»: ↵ vale desde cualquier campo.
-        dialogo.manejar_tecla(&tecla(KeyCode::BackTab));
+        dialogo.manejar_tecla(&tecla(KeyCode::BackTab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Parar);
         assert!(continuar(&mut dialogo).is_none());
         assert_eq!(dialogo.error(), Some("falta el valor de «servicio»"));
@@ -1602,7 +1616,7 @@ mod pruebas {
         let snippet = snippet("grep \"{{patron}}\" /var/log/syslog");
         let mut dialogo =
             dialogo_de(preparar(&snippet, hosts(1), &OrigenLanzamiento::Dialogo).unwrap());
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
         escribir(&mut dialogo, "x");
         assert!(continuar(&mut dialogo).is_none());
         assert!(
@@ -1645,10 +1659,10 @@ mod pruebas {
         assert!(!dialogo.hosts_editables());
         assert_eq!(dialogo.modo(), ModoLanzamiento::Pestanas);
         // En pestaña no hay «parar al primer fallo»: Tab no sale de la variable.
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Variable(0));
         // Las flechas no tocan los hosts fijos.
-        dialogo.manejar_tecla(&tecla(KeyCode::Up));
+        dialogo.manejar_tecla(&tecla(KeyCode::Up), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Variable(0));
         let plan = continuar(&mut dialogo).unwrap();
         assert_eq!(plan.hosts.len(), 3);
@@ -1736,45 +1750,67 @@ mod pruebas {
         assert_eq!(plan.hosts, vec![(2, "h2".to_string())]);
     }
 
+    /// Con menos ancho la rejilla tiene menos columnas (Fase 7) y las
+    /// flechas recorren la que se ve.
+    #[test]
+    fn la_rejilla_usa_las_columnas_que_se_ven() {
+        let snippet = snippet("uptime");
+        let mut dialogo =
+            dialogo_de(preparar(&snippet, hosts(5), &OrigenLanzamiento::Dialogo).unwrap());
+        // Una columna: ↓ baja de uno en uno.
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), 1);
+        assert_eq!(dialogo.cursor_host(), 1);
+        // Dos columnas: h1 h2 / h3 h4 / h5.
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), 2);
+        assert_eq!(dialogo.cursor_host(), 3);
+        dialogo.manejar_tecla(&tecla(KeyCode::Up), 2);
+        assert_eq!(dialogo.cursor_host(), 1);
+        // Fuera de rango se acota a entre una y tres columnas.
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), 0);
+        assert_eq!(dialogo.cursor_host(), 2);
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), 9);
+        assert_eq!(dialogo.cursor_host(), 4);
+    }
+
     #[test]
     fn la_rejilla_de_hosts_se_recorre_con_flechas() {
         let snippet = snippet("uptime {{x:1}}");
         let mut dialogo =
             dialogo_de(preparar(&snippet, hosts(7), &OrigenLanzamiento::Dialogo).unwrap());
         // 3 columnas: h1 h2 h3 / h4 h5 h6 / h7.
-        dialogo.manejar_tecla(&tecla(KeyCode::Down));
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 3);
-        dialogo.manejar_tecla(&tecla(KeyCode::Right));
-        dialogo.manejar_tecla(&tecla(KeyCode::Right));
+        dialogo.manejar_tecla(&tecla(KeyCode::Right), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Right), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 5);
         // A la última fila incompleta: al último host.
-        dialogo.manejar_tecla(&tecla(KeyCode::Down));
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 6);
-        dialogo.manejar_tecla(&tecla(KeyCode::Right));
+        dialogo.manejar_tecla(&tecla(KeyCode::Right), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 6);
-        dialogo.manejar_tecla(&tecla(KeyCode::Up));
+        dialogo.manejar_tecla(&tecla(KeyCode::Up), COLUMNAS_HOSTS);
         assert_eq!(dialogo.cursor_host(), 3);
         // Desde la última fila, ↓ pasa a las variables; ↑ vuelve.
-        dialogo.manejar_tecla(&tecla(KeyCode::Down));
-        dialogo.manejar_tecla(&tecla(KeyCode::Down));
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Down), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Variable(0));
-        dialogo.manejar_tecla(&tecla(KeyCode::Up));
+        dialogo.manejar_tecla(&tecla(KeyCode::Up), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Hosts);
         // Tab recorre las zonas y vuelve a empezar; Shift+Tab al revés.
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Parar);
-        dialogo.manejar_tecla(&tecla(KeyCode::Tab));
+        dialogo.manejar_tecla(&tecla(KeyCode::Tab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Hosts);
-        dialogo.manejar_tecla(&tecla(KeyCode::BackTab));
+        dialogo.manejar_tecla(&tecla(KeyCode::BackTab), COLUMNAS_HOSTS);
         assert_eq!(dialogo.foco(), FocoEjecutar::Parar);
         // El espacio en una variable es texto, no marca.
-        dialogo.manejar_tecla(&tecla(KeyCode::BackTab));
-        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')));
+        dialogo.manejar_tecla(&tecla(KeyCode::BackTab), COLUMNAS_HOSTS);
+        dialogo.manejar_tecla(&tecla(KeyCode::Char(' ')), COLUMNAS_HOSTS);
         assert_eq!(dialogo.valor(0).unwrap().texto, "1 ");
         assert_eq!(dialogo.marcados(), 7);
         assert_eq!(
-            dialogo.manejar_tecla(&tecla(KeyCode::Esc)),
+            dialogo.manejar_tecla(&tecla(KeyCode::Esc), COLUMNAS_HOSTS),
             AccionEjecutar::Cancelar
         );
     }

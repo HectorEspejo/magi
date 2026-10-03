@@ -1,0 +1,12 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+
+ ┌ BORRAR HOST ─────────────┐
+ │                          │
+ │ ¿Borrar el host          │
+ │ «hetzner-01»?            │
+ │                          │
+ │ s confirmar              │
+ │ n / esc cancelar         │
+ └──────────────────────────┘

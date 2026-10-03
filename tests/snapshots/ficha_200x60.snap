@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│                                        IDENTIFICACIÓN                                                                                                                                                │
+│                                         Nombre       [ hetzner-01┃ ]                                                                                                                                 │
+│                                         Dirección    [ 10.0.1.11 ]                                                                                                                                   │
+│                                         Puerto       [ 22 ]     Grupo produccion                 ▾                                                                                                   │
+│                                         Etiquetas    [ web ]                                                                                                                                         │
+│                                                                                                                                                                                                      │
+│                                        ACCESO                                                                                                                                                        │
+│                                         Usuario      [ root ]                                                                                                                                        │
+│                                         Identidad    [ auto                                     ▾ ]                                                                                                  │
+│                                         Salto vía    [ ninguno                                  ▾ ]                                                                                                  │
+│                                                                                                                                                                                                      │
+│                                        AL CONECTAR                                                                                                                                                   │
+│                                         Snippet      [ ninguno                                  ▾ ]                                                                                                  │
+│                                         Multiplexar   [ ] ControlMaster auto al exportar                                                                                                             │
+│                                         Mantener      [x] keepalive cada [ 30 ] s                                                                                                                    │
+│                                                                                                                                                                                                      │
+│                                        VERIFICACIONES PREVIAS (deliberación MAGI)                                                                                                                    │
+│                                         [ ] salud del host (último sondeo NOMINAL < 5 min)                                                                                                           │
+│                                         [ ] backup reciente   ruta [  ]                                                                                                                              │
+│                                                               patrón [  ]  (< 24 h)                                                                                                                  │
+│                                         [ ] tests en verde    [  ]                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│                                         TÚNELES                                                                                                       n nuevo                                        │
+│                                             [a] local    127.0.0.1:5432 → 127.0.0.1:5432                                                              postgres                                       │
+│                                       ┌ SERVICIOS (systemd, una por línea) ──────────────────────┐┌ OPCIONES EXTRA (ssh_config, una por línea) ──────────────┐                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  ^t probar conexión  esc descartar

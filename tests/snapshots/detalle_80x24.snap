@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  ┌ DETALLE DEL REGISTRO ──────────────────────────────────────────────────┐  │
+│  │  línea 19 · sondeo de hetzner-01 con carga 0.42                        │  │
+│▸ │  línea 20 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 21 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 22 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 23 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 24 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 25 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 26 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 27 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 28 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 29 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 30 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 31 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 32 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 33 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 34 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 35 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │  línea 36 · sondeo de hetzner-01 con carga 0.42                        │  │
+│  │                                                                        │  │
+│  │  ↵ / esc cerrar                                                        │  │
+└──└────────────────────────────────────────────────────────────── ↑↓ 19/47 ┘──┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

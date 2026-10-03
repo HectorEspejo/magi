@@ -1,9 +1,11 @@
 pub mod archivos;
+pub mod aviso_tamano;
 pub mod ayuda;
 pub mod barra;
 pub mod componentes;
 pub mod deliberacion;
 pub mod dialogos;
+pub mod disposicion;
 pub mod ejecutar;
 pub mod ficha;
 pub mod flota;
@@ -37,6 +39,7 @@ use ratatui::{Frame, Terminal};
 
 use crate::app::App;
 use crate::tema::Tema;
+use disposicion::Disposicion;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vista {
@@ -74,50 +77,65 @@ pub fn restaurar_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
 }
 
-pub fn dibujar(marco: &mut Frame, app: &App) {
+/// Pinta la pantalla entera y devuelve su disposición (modo, aviso y ventanas
+/// de las listas), que el bucle guarda para las teclas de página.
+pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
     let area = marco.area();
-    let trozos = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(area);
-    match app.vista {
-        Vista::Flota => flota::dibujar(marco, trozos[0], app),
-        Vista::Hosts => hosts::dibujar(marco, trozos[0], app),
-        Vista::Ficha => ficha::dibujar(marco, trozos[0], app),
-        Vista::Sesion => sesion::dibujar(marco, trozos[0], app),
-        Vista::Sesiones => sesiones::dibujar(marco, trozos[0], app),
-        Vista::Identidades => identidades::dibujar(marco, trozos[0], app),
-        Vista::Registro => registro::dibujar(marco, trozos[0], app),
-        Vista::Archivos => archivos::dibujar(marco, trozos[0], app),
-        Vista::Transferencias => transferencias::dibujar(marco, trozos[0], app),
-        Vista::Tuneles => tuneles::dibujar(marco, trozos[0], app),
-        Vista::Snippets => snippets::dibujar(marco, trozos[0], app),
-        Vista::Resultados => resultados::dibujar(marco, trozos[0], app),
+    let minimo = disposicion::minimo_de(app.vista, app.deliberacion.is_some());
+    let mut disp = Disposicion::nueva(area, minimo);
+    if disp.aviso {
+        // Por debajo del mínimo: el aviso sustituye a la vista y a la barra.
+        aviso_tamano::dibujar(marco, area, &app.tema, &minimo);
+    } else {
+        let trozos = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(area);
+        let vista = trozos[0];
+        match app.vista {
+            Vista::Flota => flota::dibujar(marco, vista, app, &mut disp),
+            Vista::Hosts => hosts::dibujar(marco, vista, app, &mut disp),
+            Vista::Ficha => ficha::dibujar(marco, vista, app, &mut disp),
+            Vista::Sesion => sesion::dibujar(marco, vista, app, &mut disp),
+            Vista::Sesiones => sesiones::dibujar(marco, vista, app, &mut disp),
+            Vista::Identidades => identidades::dibujar(marco, vista, app, &mut disp),
+            Vista::Registro => registro::dibujar(marco, vista, app, &mut disp),
+            Vista::Archivos => archivos::dibujar(marco, vista, app, &mut disp),
+            Vista::Transferencias => transferencias::dibujar(marco, vista, app, &mut disp),
+            Vista::Tuneles => tuneles::dibujar(marco, vista, app, &mut disp),
+            Vista::Snippets => snippets::dibujar(marco, vista, app, &mut disp),
+            Vista::Resultados => resultados::dibujar(marco, vista, app, &mut disp),
+        }
+        barra::dibujar(marco, trozos[1], app, &mut disp);
+        // La deliberación es modal sobre cualquier vista; su mínimo entra en
+        // el de la pantalla, así que con aviso no se pinta.
+        if let Some(abierta) = &app.deliberacion {
+            deliberacion::dibujar(marco, area, app, abierta, &mut disp);
+        }
     }
-    barra::dibujar(marco, trozos[1], app);
-    // La deliberación es modal sobre cualquier vista; una pregunta del
-    // servidor, la paleta o la ayuda van encima.
-    if let Some(abierta) = &app.deliberacion {
-        deliberacion::dibujar(marco, area, app, abierta);
-    }
+    // Una pregunta del servidor, la paleta o la ayuda van encima incluso del
+    // aviso: encogen con desplazamiento y nunca deben quedar bloqueadas.
     if let Some(dialogo) = &app.dialogo {
-        dialogos::dibujar(marco, area, app, dialogo);
+        dialogos::dibujar(marco, area, app, dialogo, &mut disp);
     } else if app.paleta.is_some() {
-        paleta::dibujar(marco, area, app);
+        paleta::dibujar(marco, area, app, &mut disp);
     } else if app.ayuda {
-        ayuda::dibujar(marco, area, app);
+        ayuda::dibujar(marco, area, app, &mut disp);
     }
+    disp
 }
 
+/// Centra un diálogo de `ancho`×`alto` dejando un margen de una celda; en
+/// áreas pequeñas encoge sin salirse nunca del área.
 pub fn centrar(area: Rect, ancho: u16, alto: u16) -> Rect {
-    let ancho = ancho.min(area.width.saturating_sub(2)).max(10);
-    let alto = alto.min(area.height.saturating_sub(2)).max(3);
-    Rect {
-        x: area.x + (area.width.saturating_sub(ancho)) / 2,
-        y: area.y + (area.height.saturating_sub(alto)) / 2,
-        width: ancho,
-        height: alto,
-    }
+    let ancho = ancho
+        .min(disposicion::ANCHO_MAX_DIALOGO)
+        .min(area.width.saturating_sub(2))
+        .max(area.width.min(10));
+    let alto = alto
+        .min(area.height.saturating_sub(2))
+        .max(area.height.min(3));
+    disposicion::centrar_limitado(area, ancho, alto)
 }
 
 pub fn bloque(titulo: &str, tema: &Tema) -> Block<'static> {

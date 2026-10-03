@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_g.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ○┌ PALETA · ^p ─────────────────────────────────────────────────────────┐   │
+│  ●│  ❯ ┃                                                                 │   │
+│  ●│ ▸ conectar · backup-nas                                         host │   │
+│  ◐│   editar host · backup-nas                                    acción │   │
+│  ✕│   sftp · backup-nas                                         archivos │   │
+│  ●│   conectar · dgx-spark                                          host │   │
+│   │   editar host · dgx-spark                                     acción │   │
+│   │   sftp · dgx-spark                                          archivos │   │
+│   │   conectar · hetzner-01                                         host │   │
+│   │   editar host · hetzner-01                                    acción │   │
+│   │   sftp · hetzner-01                                         archivos │   │
+│   │   conectar · hetzner-02                                         host │   │
+│   │   editar host · hetzner-02                                    acción │   │
+│   │   sftp · hetzner-02                                         archivos │   │
+│   │   conectar · mac-mini-m1                                        host │   │
+│   └───────────────────────────────────────────────────────────── ↑↓ 1/50 ┘   │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

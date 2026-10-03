@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ TRANSFERENCIAS · 1 en curso · 2 en cola ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                           ESTADO    DIRECCIÓN ORIGEN → DESTINO                                                               PROGRESO                                                │
+│                                       ▸ ◐ en curso  ↑ subida  /home/hector/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py          78 %  1.1 MB                                           │
+│                                         ○ en cola   ↑ subida  /home/hector/cooperapp/static → hetzner-01:/var/www/cooperapp/static             0 %  0 B                                              │
+│                                         ○ en cola   ↓ bajada  /var/log/nginx/access.log → hetzner-01:/home/hector/access.log                   0 %  0 B                                              │
+│                                         ● hecha     ↑ subida  /home/hector/cooperapp/config.yaml → hetzner-01:/var/www/cooperapp/config.yaml 100 %  2 kB                                             │
+│                                         ✕ error     ↓ bajada  /root/backup.tgz → hetzner-02:/home/hector/backup.tgz                          permiso denegado                                        │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────                                       │
+│                                         /home/hector/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py                                                                                       │
+│                                         1.1 MB de 1.4 MB · 0 fichero(s)                                                                                                                              │
+│                                         ahora: main.py                                                                                                                                               │
+└ 5 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↓↑ mover  x cancelar  C limpiar  ↵ detalle  q volver  ? ayuda

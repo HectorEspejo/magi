@@ -1,15 +1,77 @@
+//! Ayuda `?` de cada vista. Encoge al área como un diálogo más (Fase 7): la
+//! columna de teclas se estrecha, las descripciones largas continúan
+//! sangradas y, si no cabe todo, se desplaza con ↑ ↓ PgUp PgDn desde
+//! `App::desplazamiento_ayuda` (registrada como `Lista::Ayuda`).
+
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::ui::{centrar, Vista};
+use crate::ui::dialogos::{self, Hoja};
+use crate::ui::disposicion::{Disposicion, Lista};
+use crate::ui::Vista;
 
-pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
+/// Ancho deseado de la ayuda.
+const ANCHO_AYUDA: u16 = 62;
+/// Columna de teclas con sitio de sobra.
+const COLUMNA_TECLAS: usize = 16;
+
+pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
-    let (titulo, atajos): (&str, Vec<(&str, &str)>) = if app.deliberacion.is_some() {
+    let (titulo, mut atajos) = atajos_de(app);
+    // Común a todas las vistas: los diálogos y la propia ayuda se desplazan.
+    atajos.push(("↑↓ PgUp PgDn", "desplazar diálogos y esta ayuda"));
+    let (_, ancho_texto) = dialogos::medidas(area, ANCHO_AYUDA);
+    let teclas: Vec<String> = atajos
+        .iter()
+        .map(|(tecla, _)| dialogos::texto_de(tecla, tema.ascii))
+        .collect();
+    // La columna de teclas se estrecha con la ayuda y nunca pasa de la mitad.
+    let mas_larga = teclas
+        .iter()
+        .map(|tecla| tecla.chars().count())
+        .max()
+        .unwrap_or(0);
+    let columna = (mas_larga + 2)
+        .min(COLUMNA_TECLAS)
+        .min(ancho_texto / 2)
+        .max(1);
+    let mut cuerpo = Vec::new();
+    for (tecla, (_, descripcion)) in teclas.iter().zip(&atajos) {
+        let tecla = if tecla.chars().count() < columna {
+            format!("{tecla:<columna$}")
+        } else {
+            format!("{tecla} ")
+        };
+        let linea = Line::from(vec![
+            Span::styled(
+                tecla,
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                dialogos::texto_de(descripcion, tema.ascii),
+                Style::default().fg(tema.paleta.texto),
+            ),
+        ]);
+        cuerpo.extend(dialogos::envolver(&linea, ancho_texto, columna));
+    }
+    let pie = vec![Line::from(Span::styled(
+        "esc o ? para cerrar",
+        Style::default().fg(tema.paleta.inactivo),
+    ))];
+    Hoja::nueva(titulo, cuerpo, pie)
+        .lista(Lista::Ayuda)
+        .ancla(app.desplazamiento_ayuda)
+        .pintar(marco, area, ANCHO_AYUDA, tema, disp);
+}
+
+/// Título y atajos de la ayuda de la vista actual (o de la deliberación).
+fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
+    if app.deliberacion.is_some() {
         (
             "AYUDA · DELIBERACIÓN MAGI",
             vec![
@@ -138,6 +200,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 "AYUDA · IDENTIDADES",
                 vec![
                     ("↑ ↓ / j k", "mover la selección"),
+                    ("↵", "detalle"),
                     ("n", "generar una clave nueva"),
                     ("i", "importar una clave de fichero"),
                     ("c", "copiar la clave pública"),
@@ -178,6 +241,7 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                     ("x", "borrar (confirma)"),
                     ("/", "filtrar por nombre, comando o etiqueta"),
                     ("t", "ir a Resultados"),
+                    ("i", "detalle (vista baja)"),
                     ("q", "volver"),
                 ],
             ),
@@ -186,7 +250,10 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                 vec![
                     ("↑ ↓ / j k", "mover la selección"),
                     ("⇥", "cambiar de panel (ejecuciones ⇄ hosts)"),
-                    ("↵", "ver la salida del host (stdout y stderr)"),
+                    (
+                        "↵",
+                        "ver la salida del host (stdout y stderr); en vista baja, solo así",
+                    ),
                     ("s", "guardar la salida en un fichero"),
                     ("x", "cancelar la ejecución (confirma)"),
                     ("r", "repetir con los mismos hosts y variables"),
@@ -207,36 +274,9 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App) {
                     ("!", "snippets que apuntan al host"),
                     ("atajos", "[flota.atajos]: snippet sobre el host"),
                     ("F8", "Snippets"),
+                    ("⇥", "alternar lista y detalle (estrecho)"),
                 ],
             ),
         }
-    };
-    let alto = atajos.len() as u16 + 4;
-    let recta = centrar(area, 62, alto);
-    let mut lineas = Vec::new();
-    for (tecla, descripcion) in atajos {
-        lineas.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                format!("{tecla:<16}"),
-                Style::default()
-                    .fg(tema.paleta.acento)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                descripcion.to_string(),
-                Style::default().fg(tema.paleta.texto),
-            ),
-        ]));
     }
-    lineas.push(Line::from(""));
-    lineas.push(Line::from(Span::styled(
-        "  esc o ? para cerrar",
-        Style::default().fg(tema.paleta.inactivo),
-    )));
-    marco.render_widget(Clear, recta);
-    marco.render_widget(
-        Paragraph::new(lineas).block(super::bloque(titulo, tema)),
-        recta,
-    );
 }
