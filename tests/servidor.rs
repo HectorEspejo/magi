@@ -119,6 +119,29 @@ async fn un_cliente_de_la_version_tres_no_coopera() {
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
 }
 
+/// Un cliente de la versión 4 (la de las Fases 6 y 7) no coopera con este
+/// servidor v5: `Hecho` lleva `detalle`, `Transferir` y las entradas cambian y
+/// hay mensajes nuevos (`StatRemoto`, `CambiarPermisos`, `ListarArbol`).
+#[tokio::test]
+async fn un_cliente_de_la_version_cuatro_no_coopera() {
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    let tarea = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    let mut lector = cliente(&servidor::ruta_socket(&rutas), 4).await;
+    let respuesta: MensajeServidor = siguiente(&mut lector).await;
+    match respuesta {
+        MensajeServidor::VersionIncompatible { version, pid } => {
+            assert_eq!(version, VERSION_PROTOCOLO);
+            assert_eq!(version, 5);
+            assert_eq!(pid, Some(std::process::id()));
+        }
+        otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
+}
+
 /// Un servidor v2 no coopera con un cliente v1: el protocolo cambió y el
 /// cliente antiguo no lo entendería.
 #[tokio::test]

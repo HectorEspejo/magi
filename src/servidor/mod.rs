@@ -70,6 +70,12 @@ pub enum OrdenBd {
         deliberacion_id: i64,
         resultado: crate::deliberacion::EjecucionResultado,
     },
+    /// Escribe `SINCRONIZACIONES_DIR.ultimo_resultado` al terminar una
+    /// sincronización guardada (Fase 8, D101: amplía la excepción de T18).
+    ResultadoSincronizacion {
+        sincronizacion_id: i64,
+        resultado: crate::modelo::ResultadoSincronizacion,
+    },
 }
 
 /// Plazo para que el escritor confirme una barrera (el doble del
@@ -189,8 +195,10 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     let almacen =
         Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
     let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
-    // Los temporales de una ejecución anterior interrumpida no se heredan.
+    // Los temporales de una ejecución anterior interrumpida no se heredan (los
+    // de edición sí: pueden tener cambios sin subir).
     sftp::preparar_temporales(&rutas);
+    sftp::vaciar_temporales(&rutas);
     let estado = Arc::new(tokio::sync::Mutex::new(EstadoServidor {
         rutas: rutas.clone(),
         gracia: config.servidor.gracia_apagado_seg,
@@ -428,6 +436,14 @@ fn ejecutar_orden_bd(conexion: &rusqlite::Connection, orden: OrdenBd) -> Result<
             resultado,
         )
         .map(|_| ()),
+        OrdenBd::ResultadoSincronizacion {
+            sincronizacion_id,
+            resultado,
+        } => crate::almacen::sincronizaciones::fijar_resultado(
+            conexion,
+            sincronizacion_id,
+            resultado,
+        ),
         OrdenBd::Barrera(listo) | OrdenBd::Terminar(listo) => {
             let _ = listo.send(());
             Ok(())
@@ -586,10 +602,14 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
             let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
         }
         // Una transferencia en curso se queda sin canal: pasa a error y el
-        // motor borra su parcial.
-        estado_bloqueado
+        // motor borra su parcial. Su cierre (REGISTRO, `ultimo_resultado`,
+        // deliberación) sale aquí: el motor ya no llegará a hacerlo.
+        for cierre in estado_bloqueado
             .transferencias
-            .abortar_todas("servidor detenido");
+            .abortar_todas("servidor detenido")
+        {
+            transferencias::emitir_cierre(&bd, cierre);
+        }
         estado_bloqueado.pendientes.clear();
         estado_bloqueado.clientes.clear();
         (
@@ -904,19 +924,27 @@ async fn manejar_mensaje(
             elementos,
             politica,
             borrar_origen,
+            peticion_id,
+            borrar_al_terminar,
+            deliberacion,
+            sincronizacion,
+            etiqueta,
         } => {
             let estado_tarea = estado.clone();
             tokio::spawn(async move {
-                transferir(
-                    &estado_tarea,
-                    cliente_id,
+                let peticion = transferencias::PeticionTransferir {
                     host_id,
                     direccion,
                     elementos,
                     politica,
                     borrar_origen,
-                )
-                .await;
+                    peticion_id,
+                    borrar_al_terminar,
+                    deliberacion,
+                    sincronizacion,
+                    etiqueta,
+                };
+                transferir(&estado_tarea, cliente_id, peticion).await;
             });
         }
         MensajeCliente::CancelarTransferencia { id } => {
@@ -962,15 +990,72 @@ async fn manejar_mensaje(
             host_id,
             ruta,
             peticion_id,
+            edicion,
         } => {
             let estado_tarea = estado.clone();
             tokio::spawn(async move {
-                descargar_temporal(&estado_tarea, cliente_id, host_id, ruta, peticion_id).await;
+                descargar_temporal(
+                    &estado_tarea,
+                    cliente_id,
+                    host_id,
+                    ruta,
+                    peticion_id,
+                    edicion,
+                )
+                .await;
             });
         }
         MensajeCliente::BorrarTemporal { ruta } => {
             let estado_tarea = estado.clone();
             tokio::spawn(async move { borrar_temporal(&estado_tarea, cliente_id, ruta).await });
+        }
+        MensajeCliente::StatRemoto {
+            peticion_id,
+            host_id,
+            ruta,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                stat_remoto(&estado_tarea, cliente_id, host_id, ruta, peticion_id).await;
+            });
+        }
+        MensajeCliente::CambiarPermisos {
+            peticion_id,
+            host_id,
+            rutas,
+            modo,
+            mascara,
+            alcance,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                let peticion = sftp::PeticionPermisos {
+                    rutas,
+                    modo,
+                    mascara,
+                    alcance,
+                };
+                cambiar_permisos(&estado_tarea, cliente_id, host_id, peticion, peticion_id).await;
+            });
+        }
+        MensajeCliente::ListarArbol {
+            peticion_id,
+            host_id,
+            ruta,
+            exclusiones,
+            usar_magiignore,
+            exclusiones_extra,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                let peticion = sftp::PeticionArbol {
+                    ruta,
+                    exclusiones,
+                    usar_magiignore,
+                    exclusiones_extra,
+                };
+                listar_arbol(&estado_tarea, cliente_id, host_id, peticion, peticion_id).await;
+            });
         }
         // Una ejecución abre conexiones y espera a los hosts: en su tarea.
         MensajeCliente::LanzarEjecucion {
@@ -1000,7 +1085,10 @@ async fn manejar_mensaje(
                         responder(
                             &estado_tarea,
                             cliente_id,
-                            MensajeServidor::Hecho { peticion_id },
+                            MensajeServidor::Hecho {
+                                peticion_id,
+                                detalle: None,
+                            },
                         )
                         .await;
                     }
@@ -1718,7 +1806,17 @@ async fn activar_tunel(
     // La respuesta sale con la anotación ya escrita (T21).
     confirmar_escritura(estado).await;
     match resultado {
-        Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
+        Ok(()) => {
+            responder(
+                estado,
+                cliente_id,
+                MensajeServidor::Hecho {
+                    peticion_id,
+                    detalle: None,
+                },
+            )
+            .await
+        }
         Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
     }
 }
@@ -1745,7 +1843,15 @@ async fn parar_tunel(
             .ok();
     }
     confirmar_escritura(estado).await;
-    responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
+    responder(
+        estado,
+        cliente_id,
+        MensajeServidor::Hecho {
+            peticion_id,
+            detalle: None,
+        },
+    )
+    .await;
 }
 
 /// `RelanzarTunel`: vuelve a levantar un túnel caído, con los contadores a cero.
@@ -1758,7 +1864,17 @@ async fn relanzar_tunel(
     let resultado = tuneles::relanzar(estado, tunel_id, cliente_id).await;
     confirmar_escritura(estado).await;
     match resultado {
-        Ok(()) => responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await,
+        Ok(()) => {
+            responder(
+                estado,
+                cliente_id,
+                MensajeServidor::Hecho {
+                    peticion_id,
+                    detalle: None,
+                },
+            )
+            .await
+        }
         Err(motivo) => responder_error(estado, cliente_id, motivo, Some(peticion_id)).await,
     }
 }
@@ -1774,6 +1890,7 @@ async fn abrir_sftp(
 ) {
     match sftp::asegurar(estado, host_id, cliente_id, modo).await {
         Ok((_, dir_inicio)) => {
+            let (usuario_conexion, uid_conexion) = sftp::datos_conexion(estado, host_id).await;
             responder(
                 estado,
                 cliente_id,
@@ -1781,6 +1898,8 @@ async fn abrir_sftp(
                     host_id,
                     dir_inicio,
                     peticion_id,
+                    usuario_conexion,
+                    uid_conexion,
                 },
             )
             .await;
@@ -1835,7 +1954,10 @@ async fn listar_dir(
         return;
     };
     match sftp::listar(&sesion, &ruta).await {
-        Ok(entradas) => {
+        Ok(mut entradas) => {
+            sftp::nombres(estado, host_id)
+                .await
+                .nombrar_entradas(&mut entradas);
             responder(
                 estado,
                 cliente_id,
@@ -1889,7 +2011,15 @@ async fn borrar_remoto(
     // `Hecho` sale con la fila ya escrita (T21): quien lo reciba puede leer
     // `REGISTRO` y encontrarla.
     confirmar_escritura(estado).await;
-    responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
+    responder(
+        estado,
+        cliente_id,
+        MensajeServidor::Hecho {
+            peticion_id,
+            detalle: None,
+        },
+    )
+    .await;
 }
 
 async fn renombrar_remoto(
@@ -1905,7 +2035,15 @@ async fn renombrar_remoto(
     };
     match sftp::renombrar(&sesion, &de, &a).await {
         Ok(()) => {
-            responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
+            responder(
+                estado,
+                cliente_id,
+                MensajeServidor::Hecho {
+                    peticion_id,
+                    detalle: None,
+                },
+            )
+            .await;
         }
         Err(motivo) => {
             let motivo = fallo_sftp(estado, host_id, motivo).await;
@@ -1926,7 +2064,15 @@ async fn crear_dir_remoto(
     };
     match sftp::crear_dir(&sesion, &ruta).await {
         Ok(()) => {
-            responder(estado, cliente_id, MensajeServidor::Hecho { peticion_id }).await;
+            responder(
+                estado,
+                cliente_id,
+                MensajeServidor::Hecho {
+                    peticion_id,
+                    detalle: None,
+                },
+            )
+            .await;
         }
         Err(motivo) => {
             let motivo = fallo_sftp(estado, host_id, motivo).await;
@@ -1941,12 +2087,13 @@ async fn descargar_temporal(
     host_id: i64,
     ruta: String,
     peticion_id: u64,
+    edicion: bool,
 ) {
     let Some(sesion) = sesion_o_error(estado, cliente_id, host_id, peticion_id).await else {
         return;
     };
     let rutas = estado.lock().await.rutas.clone();
-    match sftp::copia_temporal(&rutas, &sesion, &ruta, peticion_id).await {
+    match sftp::copia_temporal(&rutas, &sesion, &ruta, edicion).await {
         Ok(temporal) => {
             responder(
                 estado,
@@ -1965,6 +2112,159 @@ async fn descargar_temporal(
     }
 }
 
+/// `StatRemoto`: metadatos de una ruta sin seguir enlaces; sin entrada si no
+/// existe.
+async fn stat_remoto(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    host_id: i64,
+    ruta: String,
+    peticion_id: u64,
+) {
+    let Some(sesion) = sesion_o_error(estado, cliente_id, host_id, peticion_id).await else {
+        return;
+    };
+    match sftp::stat(&sesion, &ruta).await {
+        Ok(mut entrada) => {
+            if let Some(entrada) = entrada.as_mut() {
+                let nombres = sftp::nombres(estado, host_id).await;
+                entrada.propietario = nombres.nombrar(entrada.propietario.take());
+            }
+            responder(
+                estado,
+                cliente_id,
+                MensajeServidor::Stat {
+                    peticion_id,
+                    entrada,
+                },
+            )
+            .await;
+        }
+        Err(motivo) => {
+            let motivo = fallo_sftp(estado, host_id, motivo).await;
+            responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+        }
+    }
+}
+
+/// `CambiarPermisos`: aplica el modo con su máscara, anota `permisos_cambiados`
+/// cuando el efecto se ha producido y contesta `Hecho` con afectados y errores
+/// tras la barrera del hilo escritor.
+async fn cambiar_permisos(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    host_id: i64,
+    peticion: sftp::PeticionPermisos,
+    peticion_id: u64,
+) {
+    if peticion.rutas.is_empty() {
+        let motivo = "no hay rutas a las que cambiar los permisos".to_string();
+        responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+        return;
+    }
+    let Some(sesion) = sesion_o_error(estado, cliente_id, host_id, peticion_id).await else {
+        return;
+    };
+    let resultado = sftp::cambiar_permisos(&sesion, &peticion).await;
+    // Se anota si hubo efecto (aunque la conexión se cayera a medias) o si se
+    // intentó y falló: el registro dice lo que pasó de verdad.
+    if resultado.afectados > 0 || resultado.caida.is_none() {
+        let estado_bloqueado = estado.lock().await;
+        let _ = estado_bloqueado.bd.send(OrdenBd::Anotar {
+            tipo: crate::registro::PERMISOS_CAMBIADOS.to_string(),
+            host_id: Some(host_id),
+            identidad_id: None,
+            detalle: resultado.detalle_registro(&peticion),
+            resultado: if resultado.errores.is_empty() && resultado.caida.is_none() {
+                ResultadoRegistro::Ok
+            } else {
+                ResultadoRegistro::Error
+            },
+        });
+    }
+    // `Hecho` (o el error) sale con la fila ya escrita (T21).
+    confirmar_escritura(estado).await;
+    if let Some(motivo) = resultado.caida.clone() {
+        let motivo = fallo_sftp(estado, host_id, motivo).await;
+        let motivo = format!("{motivo} ({} antes de caer)", resultado.detalle());
+        responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+        return;
+    }
+    responder(
+        estado,
+        cliente_id,
+        MensajeServidor::Hecho {
+            peticion_id,
+            detalle: Some(resultado.detalle()),
+        },
+    )
+    .await;
+}
+
+/// `ListarArbol`: recorre el directorio remoto y contesta por bloques. Abre el
+/// canal si hace falta (como `Transferir`): una sincronización guardada se
+/// puede planificar sin haber pasado por Archivos.
+async fn listar_arbol(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    host_id: i64,
+    peticion: sftp::PeticionArbol,
+    peticion_id: u64,
+) {
+    // Una ruta vacía sería la raíz del host entero: nunca es lo que se quiso.
+    if peticion.ruta.trim().is_empty() {
+        let motivo = "falta la ruta del directorio".to_string();
+        responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+        return;
+    }
+    let sesion = match sftp::asegurar(estado, host_id, cliente_id, sftp::ModoSftp::Archivos).await {
+        Ok((sesion, _)) => sesion,
+        Err(motivo) => {
+            responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+            return;
+        }
+    };
+    let nombres = sftp::nombres(estado, host_id).await;
+    let (mut recorrido, mut magiignore) =
+        match sftp::RecorridoArbol::abrir(&sesion, &peticion, nombres).await {
+            Ok(abierto) => abierto,
+            Err(motivo) => {
+                let motivo = fallo_sftp(estado, host_id, motivo).await;
+                responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+                return;
+            }
+        };
+    loop {
+        let (entradas, fin) = match recorrido.siguiente(&sesion).await {
+            Ok(bloque) => bloque,
+            Err(motivo) => {
+                let motivo = fallo_sftp(estado, host_id, motivo).await;
+                responder_error(estado, cliente_id, motivo, Some(peticion_id)).await;
+                return;
+            }
+        };
+        let mensaje = MensajeServidor::Arbol {
+            peticion_id,
+            entradas,
+            magiignore: magiignore.take(),
+            excluidos: if fin { recorrido.excluidos() } else { 0 },
+            fin,
+        };
+        // Si la ventana que lo pidió ya no está, no se sigue leyendo el host
+        // para nadie.
+        {
+            let estado_bloqueado = estado.lock().await;
+            let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) else {
+                return;
+            };
+            difusion::enviar(cliente, mensaje);
+        }
+        if fin {
+            return;
+        }
+    }
+}
+
 async fn borrar_temporal(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
@@ -1979,42 +2279,45 @@ async fn borrar_temporal(
 async fn transferir(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
-    host_id: i64,
-    direccion: crate::protocolo::Direccion,
-    elementos: Vec<crate::protocolo::ElementoTransferencia>,
-    politica: crate::protocolo::Politica,
-    borrar_origen: bool,
+    peticion: transferencias::PeticionTransferir,
 ) {
+    let host_id = peticion.host_id;
+    let peticion_id = peticion.peticion_id;
+    // Una petición mal formada (rutas de borrado fuera de la raíz…) se
+    // rechaza antes de abrir nada.
+    if let Err(motivo) = transferencias::validar_peticion(&peticion) {
+        responder_error(estado, cliente_id, motivo, peticion_id).await;
+        return;
+    }
     // El canal debe estar abierto: la vista Archivos lo pide al entrar.
     if sftp::canal_abierto(estado, host_id).await.is_none() {
         if let Err(motivo) =
             sftp::asegurar(estado, host_id, cliente_id, sftp::ModoSftp::Archivos).await
         {
-            responder_error(estado, cliente_id, motivo, None).await;
+            responder_error(estado, cliente_id, motivo, peticion_id).await;
             return;
         }
     }
-    match transferencias::encolar(
-        estado,
-        cliente_id,
-        host_id,
-        direccion,
-        elementos,
-        politica,
-        borrar_origen,
-    )
-    .await
-    {
-        Ok(_) => {}
-        Err(motivo) => responder_error(estado, cliente_id, motivo, None).await,
+    match transferencias::encolar(estado, cliente_id, peticion).await {
+        Ok(_) => {
+            if let Some(peticion_id) = peticion_id {
+                responder(
+                    estado,
+                    cliente_id,
+                    MensajeServidor::Hecho {
+                        peticion_id,
+                        detalle: None,
+                    },
+                )
+                .await;
+            }
+        }
+        Err(motivo) => responder_error(estado, cliente_id, motivo, peticion_id).await,
     }
 }
 
 async fn cancelar_transferencia(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, id: u32) {
-    let mut estado_bloqueado = estado.lock().await;
-    if estado_bloqueado.transferencias.cancelar(id) {
-        estado_bloqueado.difusion_cola.marcar(true);
-    }
+    transferencias::cancelar(estado, id).await;
 }
 
 async fn limpiar_transferencias(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {

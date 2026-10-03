@@ -179,7 +179,7 @@ fn peticion_de_respuesta(mensaje: &MensajeServidor) -> Option<u64> {
     let peticion_id = match mensaje {
         MensajeServidor::Ejecutado { peticion_id, .. }
         | MensajeServidor::SinSesion { peticion_id, .. }
-        | MensajeServidor::Hecho { peticion_id }
+        | MensajeServidor::Hecho { peticion_id, .. }
         | MensajeServidor::DirListado { peticion_id, .. } => *peticion_id,
         MensajeServidor::Error {
             peticion_id: Some(peticion_id),

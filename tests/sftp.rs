@@ -8,6 +8,16 @@
 
 mod comun;
 
+// Fase 8: cada bloque en su fichero (comparten el montaje de aquí).
+#[path = "sftp/arbol.rs"]
+mod arbol;
+#[path = "sftp/permisos.rs"]
+mod permisos;
+#[path = "sftp/sincronizacion.rs"]
+mod sincronizacion;
+#[path = "sftp/temporales.rs"]
+mod temporales;
+
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -191,6 +201,11 @@ impl Montaje {
             elementos,
             politica,
             borrar_origen,
+            peticion_id: None,
+            borrar_al_terminar: Vec::new(),
+            deliberacion: None,
+            sincronizacion: None,
+            etiqueta: None,
         })
         .await;
         let plazo = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -503,7 +518,7 @@ async fn borrar_remoto_es_recursivo_y_anota_el_borrado() {
         })
         .await
     {
-        MensajeServidor::Hecho { peticion_id } => assert_eq!(peticion_id, 5),
+        MensajeServidor::Hecho { peticion_id, .. } => assert_eq!(peticion_id, 5),
         otro => panic!("se esperaba Hecho, llegó {otro:?}"),
     }
     assert!(!ruta.exists(), "el directorio entero se ha borrado");
@@ -555,7 +570,7 @@ async fn renombrar_y_crear_directorio_remotos_responden_hecho() {
         })
         .await
     {
-        MensajeServidor::Hecho { peticion_id } => assert_eq!(peticion_id, 11),
+        MensajeServidor::Hecho { peticion_id, .. } => assert_eq!(peticion_id, 11),
         otro => panic!("se esperaba Hecho, llegó {otro:?}"),
     }
     assert!(remoto.join("despues.txt").exists());
@@ -568,7 +583,7 @@ async fn renombrar_y_crear_directorio_remotos_responden_hecho() {
         })
         .await;
     match montaje
-        .esperar(|mensaje| matches!(mensaje, MensajeServidor::Hecho { peticion_id } if *peticion_id == 12))
+        .esperar(|mensaje| matches!(mensaje, MensajeServidor::Hecho { peticion_id, .. } if *peticion_id == 12))
         .await
     {
         MensajeServidor::Hecho { .. } => {}
@@ -593,6 +608,7 @@ async fn descargar_temporal_usa_permisos_estrechos_y_borrar_lo_quita() {
             host_id,
             ruta: origen.display().to_string(),
             peticion_id: 21,
+            edicion: false,
         })
         .await;
     let temporal = match montaje
@@ -670,6 +686,7 @@ async fn subir_y_bajar_un_fichero_conserva_el_mtime() {
                 bytes: 22,
                 es_directorio: false,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -697,6 +714,7 @@ async fn subir_y_bajar_un_fichero_conserva_el_mtime() {
                 bytes: 22,
                 es_directorio: false,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -710,6 +728,52 @@ async fn subir_y_bajar_un_fichero_conserva_el_mtime() {
         filetime::FileTime::from_last_modification_time(&metadatos).unix_seconds(),
         1_700_000_000,
         "el mtime del origen se conserva en la bajada"
+    );
+}
+
+/// Fase 8: sobrescribir un fichero que ya existe en el remoto. El `rename`
+/// de SFTP v3 de OpenSSH es `link()`+`unlink()` y falla si el destino existe:
+/// la subida tiene que reemplazarlo igualmente, sin perder el original si algo
+/// sale mal.
+#[tokio::test]
+async fn subir_con_sobrescribir_sobre_un_fichero_existente() {
+    let Some(mut montaje) = montar(true).await else {
+        return;
+    };
+    let remoto = montaje.remoto();
+    let local = montaje.local();
+    let origen = local.join("nginx.conf");
+    std::fs::write(&origen, b"version nueva").unwrap();
+    let destino = remoto.join("nginx.conf");
+    std::fs::write(&destino, b"version vieja").unwrap();
+    montaje.abrir_sftp().await;
+
+    let id = montaje
+        .transferir(
+            Direccion::Subida,
+            vec![ElementoTransferencia {
+                origen: origen.display().to_string(),
+                destino: destino.display().to_string(),
+                bytes: 13,
+                es_directorio: false,
+                politica: Some(Politica::Sobrescribir),
+                permisos: None,
+            }],
+            Politica::Sobrescribir,
+            false,
+        )
+        .await;
+    let fila = montaje.esperar_terminada(id).await;
+    assert_eq!(fila.estado, EstadoTransferencia::Hecha, "{fila:?}");
+    assert_eq!(leer(&destino), "version nueva");
+    let restos: Vec<String> = std::fs::read_dir(&remoto)
+        .unwrap()
+        .map(|entrada| entrada.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        restos,
+        vec!["nginx.conf".to_string()],
+        "sin parciales ni viejos"
     );
 }
 
@@ -735,6 +799,7 @@ async fn bajar_un_directorio_lo_recorre_entero() {
                 bytes: 0,
                 es_directorio: true,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -773,6 +838,7 @@ async fn mover_con_omitir_no_borra_del_origen_lo_que_se_omite() {
                 bytes: 0,
                 es_directorio: true,
                 politica: Some(Politica::Omitir),
+                permisos: None,
             }],
             Politica::Omitir,
             true,
@@ -817,6 +883,7 @@ async fn bajar_un_directorio_omite_los_enlaces_a_directorio() {
                 bytes: 0,
                 es_directorio: true,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -861,6 +928,7 @@ async fn con_politica_omitir_copia_lo_que_falta_y_cuenta_los_omitidos() {
             bytes: elemento.bytes,
             es_directorio: elemento.es_dir,
             politica: Some(Politica::Omitir),
+            permisos: None,
         })
         .collect();
     let id = montaje
@@ -897,6 +965,7 @@ async fn una_transferencia_terminada_anota_en_el_registro() {
                 bytes: 1,
                 es_directorio: false,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -963,6 +1032,7 @@ async fn subir_un_directorio_crea_los_directorios_que_falten() {
             bytes: elemento.bytes,
             es_directorio: elemento.es_dir,
             politica: None,
+            permisos: None,
         })
         .collect();
     // Los directorios primero: se crean antes de sus ficheros.
@@ -1001,6 +1071,7 @@ async fn cancelar_una_transferencia_deja_su_estado_y_no_el_parcial() {
                 bytes: grande.len() as u64,
                 es_directorio: false,
                 politica: None,
+                permisos: None,
             }],
             Politica::Sobrescribir,
             false,
@@ -1047,6 +1118,7 @@ async fn una_segunda_ventana_ve_la_cola_en_la_bienvenida() {
             bytes: elemento.bytes,
             es_directorio: false,
             politica: None,
+            permisos: None,
         })
         .collect();
     let id = montaje

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ PERMISOS · 2 elementos ────────────┐│
+││ u     [x] [x] [ ]                  ││
+││ g     [x] [ ] [ ]                  ││
+││ o     [x] [ ] [ ]                  ││
+││ octal [ 0644 ]                     ││
+││ [x] recursivo                      ││
+││ (•) todo   ( ) dirs   ( ) ficheros ││
+││                                    ││
+││ ^s aplicar   esc cancelar          ││
+│└─────────────────────────────── 2/4 ┘│
+└──────────────────────────────────────┘

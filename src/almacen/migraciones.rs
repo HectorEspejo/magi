@@ -9,6 +9,7 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_3_ARCHIVOS,
     MIGRACION_4_TUNELES,
     MIGRACION_5_SNIPPETS,
+    MIGRACION_6_SINCRONIZACIONES,
 ];
 
 const MIGRACION_1_INICIAL: &str = r#"
@@ -199,6 +200,32 @@ CREATE INDEX idx_deliberaciones_fecha ON DELIBERACIONES(fecha);
 
 ALTER TABLE HOSTS ADD COLUMN snippet_al_conectar_id INTEGER
     REFERENCES SNIPPETS(id) ON DELETE SET NULL;
+"#;
+
+/// Fase 8: sincronizaciones de directorio guardadas por host. El nombre es
+/// único por host; `direccion` (`subida` | `bajada`) y `ultimo_resultado`
+/// (`ok` | `parcial` | `error` | `cancelada`) se validan en código, no con
+/// `CHECK`. `exclusiones` son patrones de gitignore, uno por línea.
+/// `ultima_ejecucion_en` la escribe el cliente al lanzar y `ultimo_resultado`
+/// el servidor al terminar.
+const MIGRACION_6_SINCRONIZACIONES: &str = r#"
+CREATE TABLE SINCRONIZACIONES_DIR (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id             INTEGER NOT NULL REFERENCES HOSTS(id) ON DELETE CASCADE,
+    nombre              TEXT    NOT NULL,
+    ruta_local          TEXT    NOT NULL,
+    ruta_remota         TEXT    NOT NULL,
+    direccion           TEXT    NOT NULL,
+    borrar              INTEGER NOT NULL DEFAULT 0,
+    exclusiones         TEXT    NOT NULL DEFAULT '',
+    ultima_ejecucion_en TEXT,
+    ultimo_resultado    TEXT,
+    creado_en           TEXT    NOT NULL,
+    actualizado_en      TEXT    NOT NULL,
+    UNIQUE(host_id, nombre)
+);
+
+CREATE INDEX idx_sincronizaciones_dir_host ON SINCRONIZACIONES_DIR(host_id);
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {

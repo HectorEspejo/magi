@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ───────────────────────────── local ⇄ hetzner-01 ─ [local] ⇥ ┐
+│ [tmp]/hogar                                                        │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▸  ..                                                                        │
+│    app                — 2025                                                 │
+│    static             — 2025                                                 │
+│    config.yaml     2 kB 2025   ≠                                             │
+│   ┌ MAGI · SINCRONIZACIONES · hetzner-01 ──────────────────────────── 3 ─┐   │
+│   │  NOMBRE     DIR.  LOCAL → REMOTO                              ÚLTIMA │   │
+│   │▸ estaticos  ↑ −   ~/web/static → /srv/static                  ✕ 2025 │   │
+│   │  logs       ↓     ~/logs/hetz01 ← /var/log/nginx              ✓ hoy  │   │
+│   │  web-prod   ↑     ~/proyectos/cooperapp → /var/www/cooperapp  ✓ ayer │   │
+│   │  ──────────────────────────────────────────────────────────────────  │   │
+│   │  estaticos · subida · borra en destino lo que sobra                  │   │
+│   ├──────────────────────────────────────────────────────────────────────┤   │
+│   │ ↵ ejecutar  n nueva  e editar  x borrar  q volver                    │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 7 elementos · 20 kB                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ remoto  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  ? más

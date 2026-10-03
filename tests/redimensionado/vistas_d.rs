@@ -44,12 +44,21 @@ const LOCALES: [(&str, Option<u64>, i64); 7] = [
 /// Ficheros del hogar con tamaños y fechas fijos. Los directorios se fechan
 /// al final: crear algo dentro les cambiaría la fecha.
 fn preparar_hogar(hogar: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
     fs::create_dir_all(hogar).unwrap();
     for (nombre, tamano, _) in LOCALES {
         let ruta = hogar.join(nombre);
+        // Modos explícitos: la umask es del proceso y el servidor en proceso de
+        // otras pruebas la pone en 077 un instante al crear su socket.
         match tamano {
-            None => fs::create_dir_all(&ruta).unwrap(),
-            Some(bytes) => fs::write(&ruta, vec![b'x'; bytes as usize]).unwrap(),
+            None => {
+                fs::create_dir_all(&ruta).unwrap();
+                fs::set_permissions(&ruta, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            Some(bytes) => {
+                fs::write(&ruta, vec![b'x'; bytes as usize]).unwrap();
+                fs::set_permissions(&ruta, fs::Permissions::from_mode(0o644)).unwrap();
+            }
         }
     }
     for (nombre, _, mtime) in LOCALES {
@@ -68,7 +77,12 @@ fn entrada(nombre: &str, tamano: Option<u64>, mtime: i64) -> Entrada {
         tamano: tamano.unwrap_or(4_096),
         mtime,
         permisos: Some(0o644),
-        propietario: Some("deploy".to_string()),
+        propietario: Some(magi::archivos::Propietario {
+            uid: Some(1001),
+            gid: Some(1001),
+            usuario: Some("deploy".to_string()),
+            grupo: Some("deploy".to_string()),
+        }),
         enlace: None,
         marca: Marca::Ninguna,
     }
@@ -121,6 +135,8 @@ fn abrir_archivos_con(prueba: &mut AppPrueba, sembrado: &Sembrado, entradas: Vec
         host_id,
         dir_inicio: RUTA_REMOTA.to_string(),
         peticion_id: None,
+        usuario_conexion: Some("deploy".to_string()),
+        uid_conexion: Some(1001),
     });
     let peticion_id = prueba
         .enviados()
@@ -189,6 +205,10 @@ fn transferencia(
         solicitante: 99,
         creada_en: FECHA,
         terminada_en: estado.terminada().then_some(FECHA),
+        peticion_id: None,
+        etiqueta: None,
+        borrados: 0,
+        borrados_total: 0,
     }
 }
 

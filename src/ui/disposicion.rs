@@ -170,6 +170,51 @@ pub fn minimo_de(vista: Vista, deliberacion: bool) -> Minimo {
     }
 }
 
+/// Mínimos de los diálogos de la Fase 8 (T45). Un diálogo encoge con
+/// desplazamiento dentro de su hoja y debe verse entero a 40×12; por debajo
+/// de su mínimo entra en el de la pantalla, como el diálogo MAGI.
+pub const MINIMO_EDICION: Tamano = Tamano::new(40, 12);
+pub const MINIMO_PERMISOS: Tamano = Tamano::new(40, 12);
+pub const MINIMO_SINCRONIZAR: Tamano = Tamano::new(40, 12);
+pub const MINIMO_VISTA_PREVIA: Tamano = Tamano::new(40, 12);
+pub const MINIMO_SINCRONIZACIONES: Tamano = Tamano::new(40, 12);
+
+/// Por debajo de estos anchos, cada diálogo pasa a su modo estrecho (rótulos
+/// cortos, columnas de menos).
+pub const ESTRECHO_EDICION: u16 = 60;
+pub const ESTRECHO_PERMISOS: u16 = 60;
+pub const ESTRECHO_SINCRONIZAR: u16 = 64;
+pub const ESTRECHO_VISTA_PREVIA: u16 = 80;
+pub const ESTRECHO_SINCRONIZACIONES: u16 = 70;
+
+/// Mínimo que declara el diálogo abierto, si es de los que lo declaran.
+pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
+    use crate::app::Dialogo;
+    match dialogo {
+        Dialogo::Edicion(dialogo) => Some(crate::ui::edicion::minimo(dialogo)),
+        Dialogo::Permisos(dialogo) => Some(crate::ui::permisos::minimo(dialogo)),
+        Dialogo::Sincronizar(dialogo) => Some(crate::ui::sincronizar::minimo(dialogo)),
+        Dialogo::Guardadas(dialogo) => Some(crate::ui::sincronizaciones::minimo(dialogo)),
+        _ => None,
+    }
+}
+
+/// El mínimo de la pantalla con el del diálogo abierto si es mayor.
+pub fn con_dialogo(minimo: Minimo, dialogo: Option<&crate::app::Dialogo>) -> Minimo {
+    match dialogo.and_then(minimo_dialogo) {
+        Some(propio)
+            if !(minimo.tamano.cols >= propio.tamano.cols
+                && minimo.tamano.filas >= propio.tamano.filas) =>
+        {
+            Minimo {
+                tamano: minimo.tamano.max(propio.tamano),
+                exige: propio.exige,
+            }
+        }
+        _ => minimo,
+    }
+}
+
 // ---------------------------------------------------------------- columnas
 
 /// Una columna de tabla con su prioridad (1 = imprescindible: nunca se oculta).
@@ -408,7 +453,7 @@ pub fn texto_ascii(texto: &str) -> String {
             continue;
         }
         let sustituto = match caracter {
-            '·' | '—' | '–' | '─' | '━' => "-",
+            '·' | '—' | '–' | '─' | '━' | '−' => "-",
             '…' => "~",
             '×' => "x",
             '→' => "->",
@@ -437,6 +482,7 @@ pub fn texto_ascii(texto: &str) -> String {
             '≥' => ">=",
             '≤' => "<=",
             '≠' => "!=",
+            '⚠' => "!",
             '░' | '▒' => ".",
             '█' | '▓' => "#",
             '\u{a0}' => " ",
@@ -477,6 +523,8 @@ pub enum Lista {
     Ayuda,
     Modal,
     DeliberacionHosts,
+    /// Lista del plan en la vista previa de una sincronización (Fase 8).
+    VistaPrevia,
 }
 
 /// Lo que se ve de una lista en el último pintado.

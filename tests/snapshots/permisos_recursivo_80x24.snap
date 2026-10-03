@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ──────────────────────────── local ⇄ hetzner-01 ─ [remoto] ⇥ ┐
+│ /srv/web                                                                     │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▸  ..                                                                        │
+│  • app                — 2025   ✕                                             │
+│    st┌ PERMISOS · 2 elementos (1 fichero, 1 directorio) ──────────────┐      │
+│    co│                                                                │      │
+│    en│              leer   escribir   ejecutar                        │      │
+│  • ma│  usuario     [x]    [x]        [ ]                             │      │
+│    ru│  grupo       [x]    [ ]        [ ]                             │      │
+│    ww│  otros       [x]    [ ]        [ ]                             │      │
+│      │  octal       [ 0644 ]                                          │      │
+│      │  [x] recursivo   (•) todo   ( ) solo dirs   ( ) solo ficheros  │      │
+│      │  ⚠ 0644 en directorios impide entrar en ellos                  │      │
+│      │                                                                │      │
+│      │  ^s aplicar   ⇥ campo   espacio marcar   esc cancelar          │      │
+│      │                                                                │      │
+│      └────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 8 elementos · 17 kB · 2 marcado(s)                                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ local  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  ? más

@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ───────────────────────────── local ⇄ hetzner-01 ─ [local] ⇥ ┐
+│ [tmp]/hogar                                                        │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▸  ..                                                                        │
+│    app                — 2025                                                 │
+│┌ SINCRONIZAR · web-prod ── ~/proyectos/cooperapp → hetzner-01:/var/www/coo… ┐│
+││ + 2 crear  ~ 2 actualizar  − 2 borrar  118 kB  37 excluidos  1 omitido     ││
+││ ────────────────────────────────────────────────────────────────────────── ││
+││ ~ config.yaml                         2 kB  (era 1 kB)                     ││
+││ ~ main.py                            14 kB  (era 12 kB, hace 2 días)       ││
+││ · static/compartido                         enlace a directorio: omitido   ││
+││ + static/img/logo.svg                14 kB                                 ││
+││ + static/js/app.js                   88 kB                                 ││
+││ − static/old.css                      3 kB                                 ││
+││ − tmp/                                      (directorio vacío tras borrar) ││
+││ ────────────────────────────────────────────────────────────────────────── ││
+││ ⚠ borrará 2 elementos en el destino · requerirá deliberación MAGI          ││
+││ ↵ continuar  f filtrar  ↑↓ PgUp PgDn  esc cancelar                         ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 7 elementos · 20 kB                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ remoto  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  ? más

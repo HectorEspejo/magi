@@ -204,7 +204,28 @@ pub struct SeccionArchivos {
     pub mostrar_ocultos: bool,
     /// Visor de ficheros; vacío usa `$PAGER` y, si no hay, `less`.
     pub pager: String,
+    /// Editor de `E` (programa y argumentos, sin shell); vacío usa `$VISUAL`,
+    /// `$EDITOR`, `nvim` y `vi`, por ese orden.
+    pub editor: String,
+    /// Exclusiones por defecto de una sincronización, con sintaxis de
+    /// gitignore. Lo excluido no se crea, no se actualiza y nunca se borra.
+    pub excluir: Vec<String>,
+    /// Por encima de este tamaño, `E` pide confirmación antes de bajar el
+    /// fichero.
+    pub editar_max_mb: u64,
 }
+
+/// Exclusiones por defecto de `[archivos] excluir`. El `.magiignore` va
+/// también: no se sincroniza salvo que se quite de la lista (§7.2, decisión
+/// de Hector).
+pub const EXCLUIR_POR_DEFECTO: [&str; 6] = [
+    ".git/",
+    "target/",
+    "node_modules/",
+    "__pycache__/",
+    ".DS_Store",
+    ".magiignore",
+];
 
 impl Default for SeccionArchivos {
     fn default() -> Self {
@@ -215,6 +236,12 @@ impl Default for SeccionArchivos {
                 .collect(),
             mostrar_ocultos: false,
             pager: String::new(),
+            editor: String::new(),
+            excluir: EXCLUIR_POR_DEFECTO
+                .iter()
+                .map(|patron| patron.to_string())
+                .collect(),
+            editar_max_mb: 10,
         }
     }
 }
@@ -347,6 +374,38 @@ backup_horas = 48
         assert_eq!(config.deliberacion.motivo_min, 10);
         let vacia = Config::default();
         assert!(vacia.flota.atajos.is_empty());
+    }
+
+    /// Fase 8: `[archivos] editor`, `excluir` y `editar_max_mb`, con sus
+    /// valores por defecto si faltan (un `config.toml` anterior no los trae).
+    #[test]
+    fn las_claves_de_archivos_de_la_fase_8_se_leen_y_tienen_defectos() {
+        let config: Config = toml::from_str(
+            r#"
+[archivos]
+editor = "hx"
+excluir = ["*.log"]
+editar_max_mb = 3
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.archivos.editor, "hx");
+        assert_eq!(config.archivos.excluir, vec!["*.log".to_string()]);
+        assert_eq!(config.archivos.editar_max_mb, 3);
+        let anterior: Config = toml::from_str("[archivos]\npager = \"less\"\n").unwrap();
+        assert_eq!(anterior.archivos.editor, "");
+        assert_eq!(anterior.archivos.editar_max_mb, 10);
+        assert_eq!(
+            anterior.archivos.excluir,
+            vec![
+                ".git/",
+                "target/",
+                "node_modules/",
+                "__pycache__/",
+                ".DS_Store",
+                ".magiignore"
+            ]
+        );
     }
 
     #[test]

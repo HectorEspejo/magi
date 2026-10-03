@@ -7,12 +7,17 @@
 //! La `marca` la calcula siempre el cliente comparando los dos paneles: por el
 //! cable va siempre sin marca.
 
+pub mod edicion;
+pub mod exclusiones;
+pub mod listado;
 pub mod local;
 pub mod marcas;
 pub mod panel;
+pub mod permisos;
+pub mod plan;
 pub mod sensibles;
 
-pub use marcas::{Entrada, Marca, TipoEntrada};
+pub use marcas::{Entrada, Marca, Propietario, TipoEntrada};
 pub use panel::{EstadoArchivos, Lado, Panel, Peticion};
 
 /// Fecha relativa de una entrada del panel: `hoy`, `ayer`, `12 sep` o `2025`.

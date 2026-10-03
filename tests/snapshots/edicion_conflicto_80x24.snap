@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ──────────────────────────── local ⇄ hetzner-01 ─ [remoto] ⇥ ┐
+│ /var/www/cooperapp                                                           │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│    ..                                                                        │
+│    static              — 2025   ✕                                            │
+│    actual.py@        9 B 2025   ✕                                            │
+│    com┌ EL FICHERO CAMBIÓ EN EL HOST ────────────────────────────────┐       │
+│ ▸  mai│                                                              │       │
+│    ngi│  hetzner-01:/var/www/cooperapp/main.py                       │       │
+│    ser│    al abrirlo   14 bytes   12 sep 2025 09:41:07              │       │
+│    vol│    ahora        16 bytes   13 sep 2025 09:41:07              │       │
+│       │                                                              │       │
+│       │  Nada se sobrescribe si no eliges «s».                       │       │
+│       │                                                              │       │
+│       │  s sobrescribir   c guardar mi versión como copia local      │       │
+│       │  d descartar mis cambios   esc volver                        │       │
+│       │                                                              │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 8 elementos · 12.0 MB                                                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ✕ hetzner-01:/var/www/cooperapp/main.py cambió en el host mientras lo editabas

@@ -21,10 +21,10 @@ use crate::app::{App, DeliberacionAbierta};
 use crate::deliberacion::estado::Fase;
 use crate::deliberacion::{Comprobacion, ComprobacionesHost, Veredicto};
 use crate::tema::Tema;
+use crate::ui::centrar;
 use crate::ui::dialogos::{atajo, modal};
 use crate::ui::disposicion::{self, Atajo, Disposicion, Lista, VentanaLista, ANCHO_MAX_DIALOGO};
 use crate::ui::ejecutar::{campo_visible, pie_por_prioridad};
-use crate::ui::{centrar, tecla};
 
 /// Ancho de la columna de hosts y largo de la barra de consenso.
 const ANCHO_HOST: usize = 16;
@@ -137,25 +137,11 @@ pub fn lineas(
     let tenue = Style::default().fg(tema.paleta.inactivo);
     let negrita = texto.add_modifier(Modifier::BOLD);
     let mut lineas = Vec::new();
-    let plan = &deliberacion.plan;
-    let destino = match plan.hosts.as_slice() {
-        [(_, host)] => host.clone(),
-        hosts => format!("{} hosts", hosts.len()),
-    };
-    let pestana = if plan.modo == crate::app::lanzar::ModoLanzamiento::Pestanas {
-        " (en pestaña)"
-    } else {
-        ""
-    };
     lineas.push(Line::from(vec![
         Span::styled("ACCIÓN: ", negrita),
         Span::styled(
             recortar(
-                &format!(
-                    "{} {} {destino}{pestana}",
-                    plan.nombre,
-                    tecla(tema, "→", "->")
-                ),
+                &deliberacion.plan.accion_visible(ascii),
                 ancho.saturating_sub(8),
                 ascii,
             ),
@@ -563,13 +549,8 @@ fn dibujar_compacto(
 /// ` DELIBERACIÓN MAGI ─ reiniciar nginx → 3 `: la acción recortada a lo
 /// que quepa en el borde de `ancho` columnas.
 fn titulo_compacto(deliberacion: &DeliberacionAbierta, tema: &Tema, ancho: usize) -> String {
-    let plan = &deliberacion.plan;
-    let destino = match plan.hosts.as_slice() {
-        [(_, host)] => host.clone(),
-        hosts => hosts.len().to_string(),
-    };
     let cabeza = format!(" DELIBERACIÓN MAGI {} ", tema.glifos.linea);
-    let accion = format!("{} {} {destino}", plan.nombre, tecla(tema, "→", "->"));
+    let accion = deliberacion.plan.accion_compacta(tema.ascii);
     // Esquinas y un espacio al final.
     let hueco = ancho.saturating_sub(2 + cabeza.chars().count() + 1);
     if hueco < 4 {

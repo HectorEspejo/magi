@@ -46,7 +46,7 @@ pub(crate) fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
 
 /// Línea de teclas del pie: `tecla texto`, separadas por tres espacios (el
 /// reparto en renglones prefiere cortar ahí).
-fn teclas(pares: &[(&str, &str)], tema: &Tema) -> Line<'static> {
+pub(crate) fn teclas(pares: &[(&str, &str)], tema: &Tema) -> Line<'static> {
     let mut spans = Vec::new();
     for (indice, (tecla, texto)) in pares.iter().enumerate() {
         if indice > 0 {
@@ -279,6 +279,16 @@ pub fn dibujar(
         }
         Dialogo::Ejecutar(dialogo) => {
             crate::ui::ejecutar::dibujar_con_disposicion(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Edicion(dialogo) => crate::ui::edicion::dibujar(marco, area, app, dialogo, disp),
+        Dialogo::Permisos(dialogo) => {
+            crate::ui::permisos::dibujar(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Sincronizar(dialogo) => {
+            crate::ui::sincronizar::dibujar(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Guardadas(dialogo) => {
+            crate::ui::sincronizaciones::dibujar(marco, area, app, dialogo, disp);
         }
         Dialogo::Confirmar {
             titulo,

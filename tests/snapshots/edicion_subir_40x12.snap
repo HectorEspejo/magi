@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ SUBIR CAMBIOS ─────────────────────┐│
+││                                    ││
+││ ¿Subir cambios a                   ││
+││ hetzner-01:/var/www/cooperapp/main ││
+││ .py?                               ││
+││                                    ││
+││ s subir   n no subir               ││
+││                                    ││
+│└────────────────────────────────────┘│
+│                                      │
+└──────────────────────────────────────┘

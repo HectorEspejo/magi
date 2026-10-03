@@ -305,6 +305,7 @@ impl AppPrueba {
             Lista::VisorSalida,
             Lista::VisorErrores,
             Lista::DeliberacionHosts,
+            Lista::VistaPrevia,
             Lista::Modal,
             Lista::Ayuda,
         ] {

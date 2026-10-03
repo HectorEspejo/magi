@@ -268,6 +268,9 @@ pub enum MotivoDeliberacion {
     VariosHosts(usize),
     /// Hosts con alguna verificación previa activa.
     Verificaciones(Vec<String>),
+    /// Sincronización con «borrar» marcado (Fase 8): lo que borrará en el
+    /// destino.
+    Borrar(usize),
 }
 
 impl MotivoDeliberacion {
@@ -278,6 +281,7 @@ impl MotivoDeliberacion {
             MotivoDeliberacion::Verificaciones(hosts) => {
                 format!("verificaciones en {}", hosts.join(", "))
             }
+            MotivoDeliberacion::Borrar(cuantos) => format!("borrar en destino ({cuantos})"),
         }
     }
 }

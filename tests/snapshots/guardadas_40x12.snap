@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ SINCRONIZACIONES · hetzner-01 ─ 3 ─┐│
+││  NOMBRE     DIR.  ÚLTIMA           ││
+││▸ estaticos  ↑ −   ✕ 2025           ││
+││  logs       ↓     ✓ hoy            ││
+││  web-prod   ↑     ✓ ayer           ││
+││  ────────────────────────────────  ││
+││  estaticos · subida · borra en d…  ││
+│├────────────────────────────────────┤│
+││ ↵ ejecutar  n nueva  q volver      ││
+│└────────────────────────────────────┘│
+└──────────────────────────────────────┘

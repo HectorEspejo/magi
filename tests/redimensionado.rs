@@ -27,6 +27,15 @@ mod vistas_e;
 mod vistas_f;
 #[path = "redimensionado/vistas_g.rs"]
 mod vistas_g;
+// Fase 8: edición, permisos, sincronizar y guardadas.
+#[path = "redimensionado/vistas_h.rs"]
+mod vistas_h;
+#[path = "redimensionado/vistas_i.rs"]
+mod vistas_i;
+#[path = "redimensionado/vistas_j.rs"]
+mod vistas_j;
+#[path = "redimensionado/vistas_k.rs"]
+mod vistas_k;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

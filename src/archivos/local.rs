@@ -9,7 +9,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::archivos::marcas::{ordenar, Entrada, TipoEntrada};
+use crate::archivos::marcas::{ordenar, Entrada, Propietario, TipoEntrada};
 
 /// Elemento de una subida preparada por el cliente: su ruta de origen y su
 /// ruta relativa al directorio elegido, que es la que se usa en el destino.
@@ -84,19 +84,22 @@ pub fn mtime_de(metadata: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// `usuario:grupo` si se pueden resolver los nombres; si no, los números.
-fn propietario_de(metadata: &fs::Metadata) -> Option<String> {
+/// uid y gid con sus nombres si el sistema local los resuelve.
+pub fn propietario_de(metadata: &fs::Metadata) -> Option<Propietario> {
     let usuario = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(metadata.uid()))
         .ok()
         .flatten()
-        .map(|usuario| usuario.name)
-        .unwrap_or_else(|| metadata.uid().to_string());
+        .map(|usuario| usuario.name);
     let grupo = nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(metadata.gid()))
         .ok()
         .flatten()
-        .map(|grupo| grupo.name)
-        .unwrap_or_else(|| metadata.gid().to_string());
-    Some(format!("{usuario}:{grupo}"))
+        .map(|grupo| grupo.name);
+    Some(Propietario {
+        uid: Some(metadata.uid()),
+        gid: Some(metadata.gid()),
+        usuario,
+        grupo,
+    })
 }
 
 /// Recorre un directorio entero para preparar una subida: primero los

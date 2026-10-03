@@ -101,6 +101,13 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ("c", "copiar al otro panel"),
                     ("m", "mover al otro panel"),
                     ("x", "borrar (sin papelera, con confirmación)"),
+                    (
+                        "E",
+                        "editar el fichero con tu editor (remoto: baja, edita y sube)",
+                    ),
+                    ("p", "permisos de los marcados (rwx, octal, recursivo)"),
+                    ("S", "sincronizar este directorio con el del otro panel"),
+                    ("L", "sincronizaciones guardadas del host"),
                     ("r", "renombrar"),
                     ("d", "crear directorio"),
                     (".", "mostrar u ocultar los ocultos"),

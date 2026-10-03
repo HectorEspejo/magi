@@ -263,6 +263,103 @@ pub struct DatosTunel {
     pub automatico: bool,
 }
 
+/// Resultado de la última ejecución de una sincronización guardada
+/// (`SINCRONIZACIONES_DIR.ultimo_resultado`, lo escribe el servidor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultadoSincronizacion {
+    Ok,
+    /// Algún fichero falló: lo copiado se queda y no se borra nada (D95).
+    Parcial,
+    Error,
+    Cancelada,
+}
+
+impl ResultadoSincronizacion {
+    pub fn como_texto(self) -> &'static str {
+        match self {
+            ResultadoSincronizacion::Ok => "ok",
+            ResultadoSincronizacion::Parcial => "parcial",
+            ResultadoSincronizacion::Error => "error",
+            ResultadoSincronizacion::Cancelada => "cancelada",
+        }
+    }
+
+    pub fn desde_texto(texto: &str) -> Option<Self> {
+        match texto {
+            "ok" => Some(ResultadoSincronizacion::Ok),
+            "parcial" => Some(ResultadoSincronizacion::Parcial),
+            "error" => Some(ResultadoSincronizacion::Error),
+            "cancelada" => Some(ResultadoSincronizacion::Cancelada),
+            _ => None,
+        }
+    }
+
+    /// `✓` ok, `~` parcial, `✕` error, `⊘` cancelada (ASCII `* ~ x -`).
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (ResultadoSincronizacion::Ok, false) => "✓",
+            (ResultadoSincronizacion::Parcial, _) => "~",
+            (ResultadoSincronizacion::Error, false) => "✕",
+            (ResultadoSincronizacion::Cancelada, false) => "⊘",
+            (ResultadoSincronizacion::Ok, true) => "*",
+            (ResultadoSincronizacion::Error, true) => "x",
+            (ResultadoSincronizacion::Cancelada, true) => "-",
+        }
+    }
+}
+
+/// Sincronización de directorio guardada (`SINCRONIZACIONES_DIR`), con el
+/// nombre del host ya resuelto.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sincronizacion {
+    pub id: i64,
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub nombre: String,
+    pub ruta_local: String,
+    pub ruta_remota: String,
+    /// Subida: local → remoto; bajada: remoto → local.
+    pub direccion: crate::protocolo::Direccion,
+    /// Borrar en el destino lo que no está en el origen.
+    pub borrar: bool,
+    /// Patrones extra (gitignore), además de `[archivos] excluir` y el
+    /// `.magiignore` del origen.
+    pub exclusiones: Vec<String>,
+    pub ultima_ejecucion_en: Option<String>,
+    /// Ninguno si nunca terminó (o si el texto guardado no se entiende).
+    pub ultimo_resultado: Option<ResultadoSincronizacion>,
+    pub creado_en: String,
+    pub actualizado_en: String,
+}
+
+/// Datos editables de una sincronización guardada, sin id ni fechas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatosSincronizacion {
+    pub host_id: i64,
+    pub nombre: String,
+    pub ruta_local: String,
+    pub ruta_remota: String,
+    pub direccion: crate::protocolo::Direccion,
+    pub borrar: bool,
+    pub exclusiones: Vec<String>,
+}
+
+/// Valida una sincronización guardada: nombre `[A-Za-z0-9._-]+`, host y rutas
+/// no vacías. Devuelve el primer error legible.
+pub fn validar_sincronizacion(datos: &DatosSincronizacion) -> Result<(), String> {
+    validar_nombre(&datos.nombre)?;
+    if datos.host_id <= 0 {
+        return Err("la sincronización necesita un host".to_string());
+    }
+    if datos.ruta_local.trim().is_empty() {
+        return Err("falta la ruta local".to_string());
+    }
+    if datos.ruta_remota.trim().is_empty() {
+        return Err("falta la ruta remota".to_string());
+    }
+    Ok(())
+}
+
 /// Dirección y puerto de una escucha o un destino. El puerto 0 significa «el
 /// que asigne el sistema» (como `ssh -L 0:`), útil sobre todo en remoto.
 pub fn partir_direccion_puerto(texto: &str) -> Option<(String, u16)> {

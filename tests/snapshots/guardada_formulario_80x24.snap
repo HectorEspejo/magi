@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · ARCHIVOS ───────────────────────────── local ⇄ hetzner-01 ─ [local] ⇥ ┐
+│ [tmp]/hogar                                                        │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▸  ..                                                                        │
+│   ┌ SINCRONIZACIÓN GUARDADA · editar ────────────────────────────────────┐   │
+│   │                                                                      │   │
+│   │  host       hetzner-01                                               │   │
+│   │  nombre     [ web-prod┃ ]                                            │   │
+│   │  local      [ ~/proyectos/cooperapp ]                                │   │
+│   │  remoto     [ /var/www/cooperapp ]                                   │   │
+│   │  dirección  (•) subida   ( ) bajada   local → remoto                 │   │
+│   │             [ ] borrar en destino lo que no está en origen           │   │
+│   │  excluir    [ *.log ]                                                │   │
+│   │             separados por espacios; además de .git/ target/ … y el   │   │
+│   │             .magiignore del origen                                   │   │
+│   │                                                                      │   │
+│   │  ^s/↵ guardar  ⇥ campo  espacio marcar  esc volver                   │   │
+│   │                                                                      │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ 7 elementos · 20 kB                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ remoto  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  ? más

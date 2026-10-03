@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ EL FICHERO CAMBIÓ EN EL HOST ──────┐│
+││                                    ││
+││ hetzner-01:/var/www/cooperapp/main ││
+││ .py                                ││
+││ antes 14 B  12 sep 09:41:07        ││
+││ ahora 16 B  13 sep 09:41:07        ││
+││                                    ││
+││ s sobrescribir   c copia local     ││
+││ d descartar   esc volver           ││
+│└────────────────────────────────────┘│
+└──────────────────────────────────────┘

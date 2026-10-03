@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub use tokio_util::codec::LinesCodec;
 use zeroize::Zeroizing;
 
-use crate::archivos::Entrada;
+use crate::archivos::{Entrada, Propietario, TipoEntrada};
 
 /// Versión del protocolo. Se negocia en el saludo `Hola`/`Bienvenida`;
 /// versiones distintas no cooperan.
@@ -33,7 +33,15 @@ use crate::archivos::Entrada;
 /// `CancelarEjecucion`, `LimpiarEjecuciones`, `PedirSalida` → `Salida`, la
 /// difusión `Ejecuciones{lista}` (también en `Bienvenida`) y los comandos
 /// iniciales de `AbrirSesion`.
-pub const VERSION_PROTOCOLO: u32 = 4;
+///
+/// v5 (Fase 8): archivos, segunda vuelta. `StatRemoto` → `Stat`,
+/// `CambiarPermisos` (con máscara y alcance recursivo) y `ListarArbol` →
+/// `Arbol` en bloques; `Hecho` gana `detalle`; `Transferir` gana permisos por
+/// elemento, `peticion_id` (contestado con `Hecho`/`Error`), `borrar_al_terminar`,
+/// deliberación, sincronización y etiqueta; la cola gana la fase `Borrando`;
+/// las entradas llevan uid, gid y sus nombres; `SftpAbierto` dice el usuario
+/// de la conexión; `DescargarTemporal` distingue los temporales de edición.
+pub const VERSION_PROTOCOLO: u32 = 5;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -144,6 +152,15 @@ impl Direccion {
         }
     }
 
+    /// La inversa de `texto` (`SINCRONIZACIONES_DIR.direccion`).
+    pub fn desde_texto(texto: &str) -> Option<Self> {
+        match texto {
+            "subida" => Some(Direccion::Subida),
+            "bajada" => Some(Direccion::Bajada),
+            _ => None,
+        }
+    }
+
     /// Glifo de la cola: hacia el remoto o hacia el local.
     pub fn glifo(self, ascii: bool) -> &'static str {
         match (self, ascii) {
@@ -168,6 +185,9 @@ pub enum Politica {
 pub enum EstadoTransferencia {
     EnCola,
     EnCurso,
+    /// La copia terminó sin errores y se están borrando en el destino las
+    /// rutas de `borrar_al_terminar` (sincronización con «borrar»).
+    Borrando,
     Hecha,
     Error,
     Cancelada,
@@ -178,6 +198,7 @@ impl EstadoTransferencia {
         match self {
             EstadoTransferencia::EnCola => "en cola",
             EstadoTransferencia::EnCurso => "en curso",
+            EstadoTransferencia::Borrando => "borrando",
             EstadoTransferencia::Hecha => "hecha",
             EstadoTransferencia::Error => "error",
             EstadoTransferencia::Cancelada => "cancelada",
@@ -189,11 +210,13 @@ impl EstadoTransferencia {
         match (self, ascii) {
             (EstadoTransferencia::EnCola, false) => "○",
             (EstadoTransferencia::EnCurso, false) => "◐",
+            (EstadoTransferencia::Borrando, false) => "◑",
             (EstadoTransferencia::Hecha, false) => "●",
             (EstadoTransferencia::Error, false) => "✕",
             (EstadoTransferencia::Cancelada, false) => "⊘",
             (EstadoTransferencia::EnCola, true) => "o",
             (EstadoTransferencia::EnCurso, true) => "o",
+            (EstadoTransferencia::Borrando, true) => "o",
             (EstadoTransferencia::Hecha, true) => "*",
             (EstadoTransferencia::Error, true) => "x",
             (EstadoTransferencia::Cancelada, true) => "-",
@@ -221,6 +244,88 @@ pub struct ElementoTransferencia {
     pub es_directorio: bool,
     /// Política decidida para este elemento; sin ella manda la del mensaje.
     pub politica: Option<Politica>,
+    /// Permisos que se aplican al destino tras el `rename` del parcial (o al
+    /// crear el directorio). Sin ellos, los que deje el sistema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permisos: Option<u32>,
+}
+
+/// Para qué es una transferencia, más allá de copiar lo marcado. Cambia cómo
+/// se anota y, en una sincronización, que la lista llega ya plana (el servidor
+/// no expande directorios: un directorio es solo «crearlo»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EtiquetaTransferencia {
+    /// La subida de una edición remota (`E`).
+    Edicion,
+    /// La ejecución de un plan de sincronización (`S`, `L`).
+    Sincronizacion,
+}
+
+impl EtiquetaTransferencia {
+    pub fn texto(self) -> &'static str {
+        match self {
+            EtiquetaTransferencia::Edicion => "edición",
+            EtiquetaTransferencia::Sincronizacion => "sincronización",
+        }
+    }
+}
+
+/// Datos de la sincronización que lanza una transferencia: con ellos el
+/// servidor anota `sincronizacion` y, si es una guardada, escribe su
+/// `ultimo_resultado` al terminar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SincronizacionLanzada {
+    /// Fila de `SINCRONIZACIONES_DIR`; ninguna si es «ad hoc».
+    pub id: Option<i64>,
+    /// Nombre de la guardada; ninguno si es «ad hoc».
+    pub nombre: Option<String>,
+    /// Recuentos del plan fijado por el cliente.
+    pub creados: u32,
+    pub actualizados: u32,
+    pub omitidos: u32,
+    /// Raíces del origen y del destino: el servidor rechaza cualquier ruta de
+    /// `borrar_al_terminar` o de destino que no cuelgue de `raiz_destino`, y
+    /// la cola las enseña como «origen → destino».
+    pub raiz_origen: String,
+    pub raiz_destino: String,
+}
+
+/// Alcance recursivo de `CambiarPermisos`. Sin alcance, solo las rutas
+/// marcadas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlcancePermisos {
+    /// Las rutas y todo lo que contienen.
+    Todo,
+    /// Los directorios marcados y sus subdirectorios.
+    Directorios,
+    /// Los ficheros marcados y los ficheros que contienen los directorios.
+    Ficheros,
+}
+
+impl AlcancePermisos {
+    pub fn texto(self) -> &'static str {
+        match self {
+            AlcancePermisos::Todo => "todo",
+            AlcancePermisos::Directorios => "solo directorios",
+            AlcancePermisos::Ficheros => "solo ficheros",
+        }
+    }
+}
+
+/// Una entrada de `Arbol`: la ruta va relativa a la raíz pedida, con `/`.
+/// Un enlace a fichero viaja como `Enlace` con el tamaño y la fecha de su
+/// destino; uno a directorio, con `enlace_a_dir` (el plan lo omite).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntradaArbol {
+    pub ruta: String,
+    pub tipo: TipoEntrada,
+    pub tamano: u64,
+    pub mtime: i64,
+    pub permisos: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propietario: Option<Propietario>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enlace_a_dir: bool,
 }
 
 /// Fila de la cola de transferencias que ve el cliente. No lleva la lista de
@@ -249,6 +354,17 @@ pub struct InfoTransferencia {
     pub solicitante: u32,
     pub creada_en: i64,
     pub terminada_en: Option<i64>,
+    /// El de la `Transferir` que la creó: con `solicitante`, la ventana que
+    /// la pidió reconoce su fila en la difusión.
+    #[serde(default)]
+    pub peticion_id: Option<u64>,
+    #[serde(default)]
+    pub etiqueta: Option<EtiquetaTransferencia>,
+    /// Rutas de `borrar_al_terminar` ya borradas y su total.
+    #[serde(default)]
+    pub borrados: u32,
+    #[serde(default)]
+    pub borrados_total: u32,
 }
 
 impl InfoTransferencia {
@@ -608,7 +724,8 @@ pub enum MensajeCliente {
     },
     /// Encola una transferencia. `elementos` es la lista de primer nivel; en
     /// una subida el cliente ya la ha expandido (incluidos los directorios) y
-    /// en una bajada la expande el servidor.
+    /// en una bajada la expande el servidor (salvo en una sincronización, que
+    /// llega plana).
     Transferir {
         host_id: i64,
         direccion: Direccion,
@@ -616,6 +733,21 @@ pub enum MensajeCliente {
         /// Política por defecto de los elementos que no traigan la suya.
         politica: Politica,
         borrar_origen: bool,
+        /// Con él, el servidor contesta `Hecho` al encolar o `Error` si la
+        /// rechaza, y la fila de la cola lo lleva.
+        #[serde(default)]
+        peticion_id: Option<u64>,
+        /// Rutas absolutas del destino que se borran solo si la copia termina
+        /// sin errores: ficheros primero, directorios después (de más profundo
+        /// a menos, y solo si quedan vacíos). Las fija el cliente en el plan.
+        #[serde(default)]
+        borrar_al_terminar: Vec<String>,
+        #[serde(default)]
+        deliberacion: Option<DeliberacionLanzada>,
+        #[serde(default)]
+        sincronizacion: Option<SincronizacionLanzada>,
+        #[serde(default)]
+        etiqueta: Option<EtiquetaTransferencia>,
     },
     CancelarTransferencia {
         id: u32,
@@ -638,15 +770,50 @@ pub enum MensajeCliente {
         ruta: String,
         peticion_id: u64,
     },
-    /// Copia un fichero remoto a un temporal local para verlo con `$PAGER`.
+    /// Copia un fichero remoto a un temporal local para verlo con `$PAGER`
+    /// o, con `edicion`, para editarlo: ese temporal vive aparte y el servidor
+    /// nunca lo borra por su cuenta.
     DescargarTemporal {
         host_id: i64,
         ruta: String,
         peticion_id: u64,
+        #[serde(default)]
+        edicion: bool,
     },
     /// Borra un temporal creado por `DescargarTemporal`.
     BorrarTemporal {
         ruta: String,
+    },
+    /// Metadatos de una ruta remota sin seguir enlaces. Contesta `Stat`.
+    StatRemoto {
+        peticion_id: u64,
+        host_id: i64,
+        ruta: String,
+    },
+    /// `chmod` remoto: a cada ruta (y, con alcance, a lo que contiene) se le
+    /// aplica `(viejo & !mascara) | (modo & mascara)`. Los enlaces nunca se
+    /// tocan. Contesta `Hecho{detalle}` con afectados y errores.
+    CambiarPermisos {
+        peticion_id: u64,
+        host_id: i64,
+        rutas: Vec<String>,
+        modo: u32,
+        mascara: u32,
+        alcance: Option<AlcancePermisos>,
+    },
+    /// Recorre un directorio remoto entero. Contesta con `Arbol` en bloques
+    /// de 1000 entradas, el último con `fin`.
+    ListarArbol {
+        peticion_id: u64,
+        host_id: i64,
+        ruta: String,
+        /// Patrones de gitignore que se podan al recorrer, en este orden:
+        /// `exclusiones`, el `.magiignore` de la raíz (si `usar_magiignore`) y
+        /// `exclusiones_extra` (§7.2: por defecto → `.magiignore` → extras).
+        exclusiones: Vec<String>,
+        usar_magiignore: bool,
+        #[serde(default)]
+        exclusiones_extra: Vec<String>,
     },
     /// Levanta un túnel de `TUNELES` (abre la conexión del host si hace
     /// falta; los diálogos de conexión van al solicitante).
@@ -803,6 +970,12 @@ pub enum MensajeServidor {
         dir_inicio: String,
         #[serde(default)]
         peticion_id: Option<u64>,
+        /// Usuario con el que está abierta la conexión y su uid en el host
+        /// (del `/etc/passwd` remoto o, si no está, el dueño de `dir_inicio`).
+        #[serde(default)]
+        usuario_conexion: Option<String>,
+        #[serde(default)]
+        uid_conexion: Option<u32>,
     },
     DirListado {
         host_id: i64,
@@ -836,9 +1009,29 @@ pub enum MensajeServidor {
         truncada: bool,
     },
     /// Operación remota terminada (`BorrarRemoto`, `RenombrarRemoto`,
-    /// `CrearDirRemoto`).
+    /// `CrearDirRemoto`, `CambiarPermisos`, `Transferir` encolada…).
     Hecho {
         peticion_id: u64,
+        /// Resumen legible (afectados y errores de `CambiarPermisos`).
+        #[serde(default)]
+        detalle: Option<String>,
+    },
+    /// Respuesta de `StatRemoto`: sin entrada si la ruta no existe.
+    Stat {
+        peticion_id: u64,
+        entrada: Option<Entrada>,
+    },
+    /// Un bloque del recorrido de `ListarArbol`. El primero trae el texto del
+    /// `.magiignore` si se pidió y existe; el último, `fin` y el recuento de
+    /// lo que se dejó fuera por las exclusiones.
+    Arbol {
+        peticion_id: u64,
+        entradas: Vec<EntradaArbol>,
+        #[serde(default)]
+        magiignore: Option<String>,
+        #[serde(default)]
+        excluidos: u32,
+        fin: bool,
     },
     RutaTemporal {
         ruta: String,
@@ -962,9 +1155,15 @@ mod pruebas {
                 bytes: 4096,
                 es_directorio: true,
                 politica: Some(Politica::Omitir),
+                permisos: None,
             }],
             politica: Politica::Sobrescribir,
             borrar_origen: false,
+            peticion_id: None,
+            borrar_al_terminar: Vec::new(),
+            deliberacion: None,
+            sincronizacion: None,
+            etiqueta: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::CancelarTransferencia { id: 2 });
         ida_y_vuelta_cliente(MensajeCliente::LimpiarTransferencias);
@@ -988,6 +1187,7 @@ mod pruebas {
             host_id: 7,
             ruta: "/var/log/nginx/error.log".to_string(),
             peticion_id: 8,
+            edicion: false,
         });
         ida_y_vuelta_cliente(MensajeCliente::BorrarTemporal {
             ruta: "/run/magi/tmp/8-error.log".to_string(),
@@ -997,6 +1197,8 @@ mod pruebas {
             host_id: 7,
             peticion_id: Some(1 << 48),
             dir_inicio: "/home/hector".to_string(),
+            usuario_conexion: None,
+            uid_conexion: None,
         });
         ida_y_vuelta_servidor(MensajeServidor::DirListado {
             host_id: 7,
@@ -1008,7 +1210,12 @@ mod pruebas {
                     tamano: 4096,
                     mtime: 1_700_000_000,
                     permisos: Some(0o755),
-                    propietario: Some("hector:hector".to_string()),
+                    propietario: Some(crate::archivos::Propietario {
+                        uid: Some(1000),
+                        gid: Some(1000),
+                        usuario: Some("hector".to_string()),
+                        grupo: Some("hector".to_string()),
+                    }),
                     enlace: None,
                     marca: Default::default(),
                 },
@@ -1046,9 +1253,16 @@ mod pruebas {
                 solicitante: 1,
                 creada_en: 1_700_000_000,
                 terminada_en: None,
+                peticion_id: None,
+                etiqueta: None,
+                borrados: 0,
+                borrados_total: 0,
             }],
         });
-        ida_y_vuelta_servidor(MensajeServidor::Hecho { peticion_id: 5 });
+        ida_y_vuelta_servidor(MensajeServidor::Hecho {
+            peticion_id: 5,
+            detalle: None,
+        });
         ida_y_vuelta_servidor(MensajeServidor::RutaTemporal {
             ruta: "/run/magi/tmp/8-error.log".to_string(),
             peticion_id: 8,
@@ -1057,6 +1271,158 @@ mod pruebas {
             mensaje: "la ruta no existe".to_string(),
             peticion_id: Some(4),
         });
+    }
+
+    /// Los mensajes que estrena la Fase 8 (v5) y las ampliaciones de los de
+    /// archivos hacen ida y vuelta.
+    #[test]
+    fn los_mensajes_de_la_fase_8_hacen_ida_y_vuelta() {
+        ida_y_vuelta_cliente(MensajeCliente::StatRemoto {
+            peticion_id: (1 << 42) + 1,
+            host_id: 7,
+            ruta: "/etc/nginx/nginx.conf".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::CambiarPermisos {
+            peticion_id: (1 << 42) + 2,
+            host_id: 7,
+            rutas: vec!["/var/www".to_string(), "/var/www/index.html".to_string()],
+            modo: 0o644,
+            mascara: 0o777,
+            alcance: Some(AlcancePermisos::Ficheros),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::ListarArbol {
+            peticion_id: (1 << 42) + 3,
+            host_id: 7,
+            ruta: "/var/www/app".to_string(),
+            exclusiones: vec![".git/".to_string(), "*.log".to_string()],
+            usar_magiignore: true,
+            exclusiones_extra: vec!["tmp/".to_string()],
+        });
+        ida_y_vuelta_cliente(MensajeCliente::DescargarTemporal {
+            host_id: 7,
+            ruta: "/etc/hosts".to_string(),
+            peticion_id: (1 << 42) + 4,
+            edicion: true,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::Transferir {
+            host_id: 7,
+            direccion: Direccion::Subida,
+            elementos: vec![ElementoTransferencia {
+                origen: "/home/hector/web/index.html".to_string(),
+                destino: "/var/www/index.html".to_string(),
+                bytes: 120,
+                es_directorio: false,
+                politica: Some(Politica::Sobrescribir),
+                permisos: Some(0o644),
+            }],
+            politica: Politica::Sobrescribir,
+            borrar_origen: false,
+            peticion_id: Some((1 << 42) + 5),
+            borrar_al_terminar: vec!["/var/www/viejo.css".to_string()],
+            deliberacion: Some(DeliberacionLanzada {
+                id: 3,
+                forzada: false,
+                motivo: None,
+            }),
+            sincronizacion: Some(SincronizacionLanzada {
+                id: Some(2),
+                nombre: Some("web-prod".to_string()),
+                creados: 1,
+                actualizados: 0,
+                omitidos: 0,
+                raiz_origen: "/home/hector/web".to_string(),
+                raiz_destino: "/var/www".to_string(),
+            }),
+            etiqueta: Some(EtiquetaTransferencia::Sincronizacion),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Stat {
+            peticion_id: (1 << 42) + 1,
+            entrada: Some(Entrada {
+                nombre: "nginx.conf".to_string(),
+                tipo: TipoEntrada::Fichero,
+                tamano: 2041,
+                mtime: 1_700_000_000,
+                permisos: Some(0o100644),
+                propietario: Some(Propietario {
+                    uid: Some(0),
+                    gid: Some(0),
+                    usuario: Some("root".to_string()),
+                    grupo: None,
+                }),
+                enlace: None,
+                marca: Default::default(),
+            }),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Stat {
+            peticion_id: (1 << 42) + 1,
+            entrada: None,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Arbol {
+            peticion_id: (1 << 42) + 3,
+            entradas: vec![
+                EntradaArbol {
+                    ruta: "static/app.js".to_string(),
+                    tipo: TipoEntrada::Fichero,
+                    tamano: 88_000,
+                    mtime: 1_700_000_000,
+                    permisos: Some(0o100644),
+                    propietario: None,
+                    enlace_a_dir: false,
+                },
+                EntradaArbol {
+                    ruta: "static/compartido".to_string(),
+                    tipo: TipoEntrada::Enlace,
+                    tamano: 0,
+                    mtime: 0,
+                    permisos: None,
+                    propietario: None,
+                    enlace_a_dir: true,
+                },
+            ],
+            magiignore: Some("*.log\n".to_string()),
+            excluidos: 0,
+            fin: false,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Arbol {
+            peticion_id: (1 << 42) + 3,
+            entradas: Vec::new(),
+            magiignore: None,
+            excluidos: 37,
+            fin: true,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Hecho {
+            peticion_id: (1 << 42) + 2,
+            detalle: Some("2 afectados · 0 errores".to_string()),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
+            host_id: 7,
+            dir_inicio: "/home/deploy".to_string(),
+            peticion_id: None,
+            usuario_conexion: Some("deploy".to_string()),
+            uid_conexion: Some(1001),
+        });
+    }
+
+    /// Un `Transferir` de la v4 (sin los campos nuevos) se lee con sus
+    /// valores por defecto: los campos nuevos son opcionales en el cable.
+    #[test]
+    fn un_transferir_sin_los_campos_nuevos_se_lee_con_defectos() {
+        let linea = r#"{"tipo":"Transferir","host_id":7,"direccion":"Subida","elementos":[],"politica":"Omitir","borrar_origen":false}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::Transferir {
+                peticion_id,
+                borrar_al_terminar,
+                deliberacion,
+                sincronizacion,
+                etiqueta,
+                ..
+            } => {
+                assert_eq!(peticion_id, None);
+                assert!(borrar_al_terminar.is_empty());
+                assert!(deliberacion.is_none() && sincronizacion.is_none() && etiqueta.is_none());
+            }
+            otro => panic!("{otro:?}"),
+        }
     }
 
     /// Un `Error` sin `peticion_id` (el que manda la versión 1 del protocolo)
@@ -1074,8 +1440,8 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_cuatro() {
-        assert_eq!(VERSION_PROTOCOLO, 4);
+    fn la_version_del_protocolo_es_la_cinco() {
+        assert_eq!(VERSION_PROTOCOLO, 5);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
