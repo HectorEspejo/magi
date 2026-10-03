@@ -33,10 +33,14 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 pub mod dialogo_magi;
+pub mod edicion;
 pub mod formulario_snippet;
 pub mod geometria;
+pub mod guardadas;
 pub mod lanzar;
+pub mod permisos;
 mod resultados;
+pub mod sincronizar;
 mod snippets;
 pub mod teclado;
 
@@ -48,6 +52,43 @@ pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, Estado
 
 /// Entradas que carga cada página de la vista Registro.
 pub const REGISTRO_PAGINA: i64 = 200;
+
+/// Primer `peticion_id` de las operaciones de Archivos que viven en la `App`
+/// (edición, permisos y sincronización, Fase 8): su rango no se cruza con el
+/// del panel (desde 0, se reinicia al cambiar de host), los túneles (2^40) ni
+/// las ejecuciones (2^44).
+pub const RANGO_ARCHIVOS_APP: u64 = 1 << 42;
+
+/// Operación de Archivos de la Fase 8 en vuelo, por `peticion_id`. Cada
+/// módulo define la suya y recibe aquí su respuesta.
+#[derive(Debug)]
+pub enum PeticionArchivos {
+    Edicion(edicion::PeticionEdicion),
+    Permisos(permisos::PeticionPermisosCliente),
+    Sincronizacion(sincronizar::PeticionSincronizacion),
+}
+
+/// Lo que el servidor contesta a una `PeticionArchivos`.
+#[derive(Debug)]
+pub enum RespuestaArchivos {
+    Hecho(Option<String>),
+    Error(String),
+    Stat(Option<crate::archivos::Entrada>),
+    Arbol {
+        entradas: Vec<protocolo::EntradaArbol>,
+        magiignore: Option<String>,
+        excluidos: u32,
+        fin: bool,
+    },
+    RutaTemporal(String),
+}
+
+/// Resultado de un hilo de la vista Archivos (recorridos y `chmod` locales).
+#[derive(Debug)]
+pub enum EventoArchivos {
+    Permisos(permisos::EventoPermisos),
+    Sincronizacion(sincronizar::EventoSincronizacion),
+}
 
 pub struct EstadoRegistro {
     pub entradas: Vec<EntradaRegistro>,
@@ -508,6 +549,8 @@ pub enum Evento {
     Sondeo(Sondeo),
     /// Resultado de una comprobación de la deliberación MAGI.
     Deliberacion(crate::deliberacion::ResultadoComprobacion),
+    /// Resultado de un hilo de Archivos (Fase 8).
+    Archivos(EventoArchivos),
     ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
 }
 
@@ -1546,6 +1589,14 @@ pub enum AccionDialogo {
     Lanzar(AccionLanzar),
     /// Vista Resultados (Fase 6): cancelar, sobrescribir la salida.
     Resultados(AccionResultados),
+    /// Edición remota (Fase 8): descartar, sobrescribir tras un conflicto…
+    Edicion(edicion::AccionEdicion),
+    /// `chmod` recursivo (Fase 8).
+    Permisos(permisos::AccionPermisos),
+    /// Sincronizar directorio (Fase 8).
+    Sincronizar(sincronizar::AccionSincronizar),
+    /// Sincronizaciones guardadas (Fase 8): borrar una.
+    Guardadas(guardadas::AccionGuardadas),
 }
 
 pub enum EntradaTextoAccion {
@@ -1574,6 +1625,14 @@ pub enum EntradaTextoAccion {
 pub enum Dialogo {
     /// Diálogos de la vista Snippets (formulario).
     Snippets(DialogoSnippets),
+    /// Edición remota (Fase 8): subir, conflicto, fallo de la subida…
+    Edicion(edicion::DialogoEdicion),
+    /// Diálogo PERMISOS (Fase 8).
+    Permisos(permisos::DialogoPermisos),
+    /// SINCRONIZAR y vista previa del plan (Fase 8).
+    Sincronizar(sincronizar::DialogoSincronizar),
+    /// Lista de sincronizaciones guardadas y su formulario (Fase 8).
+    Guardadas(guardadas::DialogoGuardadas),
     /// Diálogo EJECUTAR: hosts, variables y «parar al primer fallo».
     Ejecutar(DialogoEjecutar),
     Confirmar {
@@ -1787,6 +1846,8 @@ pub enum AccionPaleta {
     Snippets(AccionPaletaSnippets),
     /// `snippet · <nombre>` y `snippet · <nombre> · <host>`.
     Lanzar(AccionPaletaLanzar),
+    /// `sync · <host> · <nombre>`, `sincronizar directorio`, `editar fichero`.
+    Archivos(guardadas::AccionPaletaArchivos),
 }
 
 pub struct PaletaCmd {
@@ -1979,6 +2040,19 @@ pub struct App {
     /// Diálogos tapados por una pregunta del servidor (huella, frase,
     /// contraseña): vuelven al cerrarse la de encima, en vez de perderse.
     pila_dialogos: Vec<Dialogo>,
+    /// Ediciones remotas en marcha (Fase 8).
+    pub ediciones: edicion::Ediciones,
+    /// Fichero que hay que abrir con el editor en cuanto el bucle pueda
+    /// suspender la TUI (como `peticion_pager`).
+    pub peticion_editor: Option<edicion::PeticionEditor>,
+    /// Planes de sincronización y sincronizaciones lanzadas (Fase 8).
+    pub sincronizar: sincronizar::EstadoSincronizar,
+    /// Operaciones de Archivos de la Fase 8 en vuelo, por `peticion_id`.
+    pub peticiones_archivos: HashMap<u64, PeticionArchivos>,
+    // TODO(fase8): quitar el `allow` al integrar (lo usan edición, permisos y
+    // sincronización).
+    #[allow(dead_code)]
+    siguiente_peticion_archivos: u64,
 }
 
 impl App {
@@ -2139,6 +2213,11 @@ impl App {
             resultados: EstadoResultados::default(),
             lanzar: EstadoLanzar::default(),
             pila_dialogos: Vec::new(),
+            ediciones: edicion::Ediciones::default(),
+            peticion_editor: None,
+            sincronizar: sincronizar::EstadoSincronizar::default(),
+            peticiones_archivos: HashMap::new(),
+            siguiente_peticion_archivos: RANGO_ARCHIVOS_APP,
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
@@ -2192,6 +2271,10 @@ impl App {
             // y no dentro del despacho de la tecla.
             if let Some(peticion) = self.peticion_pager.take() {
                 self.ver_en_paginador(&mut terminal, &peticion)?;
+            }
+            // Lo mismo con el editor de `E`.
+            if let Some(peticion) = self.peticion_editor.take() {
+                self.ver_en_editor(&mut terminal, peticion)?;
             }
         }
         crate::ui::restaurar_terminal();
@@ -2509,6 +2592,13 @@ impl App {
             Evento::ServidorCaido => {
                 self.sucio = true;
                 self.servidor_caido();
+            }
+            Evento::Archivos(evento) => {
+                self.sucio = true;
+                match evento {
+                    EventoArchivos::Permisos(evento) => self.evento_permisos(evento),
+                    EventoArchivos::Sincronizacion(evento) => self.evento_sincronizacion(evento),
+                }
             }
             Evento::ServidorConectado(resultado) => {
                 self.sucio = true;
@@ -3382,6 +3472,11 @@ impl App {
                 // Una operación de túnel con respuesta pendiente no es un
                 // error de la vista Archivos.
                 if let Some(peticion_id) = peticion_id {
+                    if self
+                        .respuesta_archivos(peticion_id, RespuestaArchivos::Error(mensaje.clone()))
+                    {
+                        return;
+                    }
                     if let Some(peticion) = self.peticiones_tunel.remove(&peticion_id) {
                         self.mensaje(format!("{}: {mensaje}", peticion.etiqueta()), true);
                         return;
@@ -3406,8 +3501,10 @@ impl App {
                 host_id,
                 dir_inicio,
                 peticion_id: None,
+                usuario_conexion,
+                uid_conexion,
             } => {
-                self.sftp_abierto(host_id, dir_inicio);
+                self.sftp_abierto(host_id, dir_inicio, usuario_conexion, uid_conexion);
             }
             protocolo::MensajeServidor::SftpAbierto { .. } => {}
             protocolo::MensajeServidor::DirListado {
@@ -3419,12 +3516,22 @@ impl App {
                 self.dir_listado(host_id, ruta, entradas, peticion_id);
             }
             protocolo::MensajeServidor::Transferencias { lista } => {
+                // Ediciones y sincronizaciones viven fuera de la vista: miran
+                // la cola aunque Archivos esté cerrada.
+                self.cola_de_ediciones(&lista);
+                self.cola_de_sincronizaciones(&lista);
                 self.actualizar_cola(lista);
             }
             protocolo::MensajeServidor::Tuneles { lista } => {
                 self.actualizar_tuneles(lista);
             }
-            protocolo::MensajeServidor::Hecho { peticion_id } => {
+            protocolo::MensajeServidor::Hecho {
+                peticion_id,
+                detalle,
+            } => {
+                if self.respuesta_archivos(peticion_id, RespuestaArchivos::Hecho(detalle)) {
+                    return;
+                }
                 // Las peticiones de túnel se resuelven aquí; el resto son de
                 // la vista Archivos.
                 if self.peticiones_tunel.remove(&peticion_id).is_none()
@@ -3432,6 +3539,34 @@ impl App {
                 {
                     self.hecho_de_archivos(peticion_id);
                 }
+            }
+            protocolo::MensajeServidor::Stat {
+                peticion_id,
+                entrada,
+            } => {
+                self.respuesta_archivos(peticion_id, RespuestaArchivos::Stat(entrada));
+            }
+            protocolo::MensajeServidor::Arbol {
+                peticion_id,
+                entradas,
+                magiignore,
+                excluidos,
+                fin,
+            } => {
+                self.respuesta_archivos(
+                    peticion_id,
+                    RespuestaArchivos::Arbol {
+                        entradas,
+                        magiignore,
+                        excluidos,
+                        fin,
+                    },
+                );
+            }
+            protocolo::MensajeServidor::RutaTemporal { ruta, peticion_id }
+                if self.peticiones_archivos.contains_key(&peticion_id) =>
+            {
+                self.respuesta_archivos(peticion_id, RespuestaArchivos::RutaTemporal(ruta));
             }
             protocolo::MensajeServidor::RutaTemporal { ruta, peticion_id } => {
                 let es_lo_que_esperaba = self
@@ -3776,6 +3911,38 @@ impl App {
     }
 
     /// EOF del socket sin `Adios`: el servidor ha caído.
+    /// Registra una operación de Archivos de la Fase 8 y devuelve su
+    /// `peticion_id` (rango propio, ver `RANGO_ARCHIVOS_APP`).
+    #[allow(dead_code)]
+    pub(crate) fn nueva_peticion_archivos(&mut self, peticion: PeticionArchivos) -> u64 {
+        self.siguiente_peticion_archivos += 1;
+        let id = self.siguiente_peticion_archivos;
+        self.peticiones_archivos.insert(id, peticion);
+        id
+    }
+
+    /// Entrega una respuesta del servidor a la operación de Archivos que la
+    /// espera. Devuelve `false` si no es de ninguna (la trata otro). La
+    /// petición sale del mapa: quien espere más bloques (`Arbol`) la vuelve a
+    /// meter con el mismo id.
+    fn respuesta_archivos(&mut self, peticion_id: u64, respuesta: RespuestaArchivos) -> bool {
+        let Some(peticion) = self.peticiones_archivos.remove(&peticion_id) else {
+            return false;
+        };
+        match peticion {
+            PeticionArchivos::Edicion(peticion) => {
+                self.respuesta_edicion(peticion_id, peticion, respuesta)
+            }
+            PeticionArchivos::Permisos(peticion) => {
+                self.respuesta_permisos(peticion_id, peticion, respuesta)
+            }
+            PeticionArchivos::Sincronizacion(peticion) => {
+                self.respuesta_sincronizacion(peticion_id, peticion, respuesta)
+            }
+        }
+        true
+    }
+
     fn servidor_caido(&mut self) {
         self.servidor = cliente::Cliente::sin_servidor();
         self.servidor_caido = true;
@@ -3785,6 +3952,10 @@ impl App {
         self.tuneles_activos.clear();
         self.peticiones_tunel.clear();
         self.resultados_servidor_caido();
+        // Ediciones y sincronizaciones: ninguna respuesta va a llegar.
+        self.ediciones_servidor_caido();
+        self.sincronizaciones_servidor_caido();
+        self.peticiones_archivos.clear();
         // Las preguntas del servidor ya no tienen a quién contestar.
         self.pila_dialogos.retain(|dialogo| {
             !matches!(
@@ -4827,6 +4998,7 @@ impl App {
         });
         entradas.extend(self.entradas_paleta_snippets());
         entradas.extend(self.entradas_paleta_lanzar());
+        entradas.extend(self.entradas_paleta_archivos());
         entradas.push(EntradaPaleta {
             etiqueta: "ir a registro".to_string(),
             categoria: "acción",
@@ -5095,6 +5267,11 @@ impl App {
                         let accion = accion.clone();
                         self.paleta = None;
                         self.accion_paleta_lanzar(accion);
+                    }
+                    Some(AccionPaleta::Archivos(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_archivos(accion);
                     }
                     Some(AccionPaleta::ApagarServidor) => {
                         self.paleta = None;
@@ -7052,6 +7229,10 @@ impl App {
         match dialogo {
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
+            Dialogo::Edicion(dialogo) => self.tecla_dialogo_edicion(dialogo, tecla),
+            Dialogo::Permisos(dialogo) => self.tecla_dialogo_permisos(dialogo, tecla),
+            Dialogo::Sincronizar(dialogo) => self.tecla_dialogo_sincronizar(dialogo, tecla),
+            Dialogo::Guardadas(dialogo) => self.tecla_dialogo_guardadas(dialogo, tecla),
             Dialogo::Conflicto {
                 nombre,
                 es_dir,
@@ -7682,6 +7863,10 @@ impl App {
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
             AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
+            AccionDialogo::Edicion(accion) => self.ejecutar_accion_edicion(accion),
+            AccionDialogo::Permisos(accion) => self.ejecutar_accion_permisos(accion),
+            AccionDialogo::Sincronizar(accion) => self.ejecutar_accion_sincronizar(accion),
+            AccionDialogo::Guardadas(accion) => self.ejecutar_accion_guardadas(accion),
             AccionDialogo::BorrarHost(id) => {
                 if let Err(error) = self.almacen.borrar_host(id) {
                     self.mensaje(error.to_string(), true);
@@ -8119,6 +8304,8 @@ impl App {
             aviso: None,
             muestras: HashMap::new(),
             viendo: None,
+            usuario_conexion: None,
+            uid_conexion: None,
         };
         if estado.sensibles.vacia() {
             self.mensaje(
@@ -8393,6 +8580,10 @@ impl App {
             KeyCode::Char('x') => self.pedir_borrado(),
             KeyCode::Char('c') => self.copiar_al_otro_panel(false),
             KeyCode::Char('m') => self.copiar_al_otro_panel(true),
+            KeyCode::Char('E') => self.editar_entrada(),
+            KeyCode::Char('p') => self.abrir_permisos(),
+            KeyCode::Char('S') => self.abrir_sincronizar(),
+            KeyCode::Char('L') => self.abrir_sincronizaciones(),
             _ => {}
         }
     }
@@ -8643,6 +8834,7 @@ impl App {
                 host_id,
                 ruta: ruta.to_string(),
                 peticion_id: peticion,
+                edicion: false,
             });
     }
 
@@ -8693,7 +8885,16 @@ impl App {
                 "Propietario {}",
                 entrada
                     .propietario
-                    .clone()
+                    .as_ref()
+                    .map(|propietario| propietario.usuario_legible())
+                    .unwrap_or_else(|| "—".to_string())
+            ),
+            format!(
+                "Grupo       {}",
+                entrada
+                    .propietario
+                    .as_ref()
+                    .map(|propietario| propietario.grupo_legible())
                     .unwrap_or_else(|| "—".to_string())
             ),
             format!("Ruta        {ruta}"),
@@ -9255,6 +9456,7 @@ impl App {
                                 bytes: plano.bytes,
                                 es_directorio: plano.es_dir,
                                 politica: Some(suya.unwrap_or(politica)),
+                                permisos: None,
                             });
                         }
                     }
@@ -9270,6 +9472,7 @@ impl App {
                     bytes: elemento.bytes,
                     es_directorio: elemento.es_dir,
                     politica: Some(suya.unwrap_or(politica)),
+                    permisos: None,
                 });
             }
         }
@@ -9300,6 +9503,11 @@ impl App {
             elementos,
             politica,
             borrar_origen: operacion.borrar_origen,
+            peticion_id: None,
+            borrar_al_terminar: Vec::new(),
+            deliberacion: None,
+            sincronizacion: None,
+            etiqueta: None,
         });
         self.mensaje(
             match operacion.borrar_origen {
@@ -9357,7 +9565,13 @@ fn nombre_de_ruta(ruta: &str) -> String {
 
 impl App {
     /// El canal SFTP del host está listo: se pide el primer listado remoto.
-    fn sftp_abierto(&mut self, host_id: i64, dir_inicio: String) {
+    fn sftp_abierto(
+        &mut self,
+        host_id: i64,
+        dir_inicio: String,
+        usuario_conexion: Option<String>,
+        uid_conexion: Option<u32>,
+    ) {
         let guardada = self
             .hosts
             .iter()
@@ -9373,6 +9587,8 @@ impl App {
             .peticiones
             .retain(|_, peticion| !matches!(peticion, crate::archivos::Peticion::AbrirSftp));
         estado.dir_inicio = dir_inicio.clone();
+        estado.usuario_conexion = usuario_conexion;
+        estado.uid_conexion = uid_conexion;
         // La ruta guardada manda; si ya no existe, el error del listado cae al
         // directorio de inicio.
         let ruta = guardada.unwrap_or(dir_inicio);

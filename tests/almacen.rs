@@ -3,7 +3,11 @@ use magi::deliberacion::{
     ComprobacionesHost, DatosVerificaciones, EjecucionResultado, NuevaDeliberacion,
     ResultadoDeliberacion, Veredicto,
 };
-use magi::modelo::{DatosHost, DatosTunel, IdentidadRef, Origen, TipoTunel, UltimoEstado};
+use magi::modelo::{
+    DatosHost, DatosSincronizacion, DatosTunel, IdentidadRef, Origen, ResultadoSincronizacion,
+    TipoTunel, UltimoEstado,
+};
+use magi::protocolo::Direccion;
 use magi::snippets::{DatosSnippet, Destino};
 
 fn datos(nombre: &str) -> DatosHost {
@@ -42,6 +46,7 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         "SNIPPET_DESTINOS",
         "VERIFICACIONES_HOST",
         "DELIBERACIONES",
+        "SINCRONIZACIONES_DIR",
     ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
@@ -77,7 +82,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
@@ -692,7 +697,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
@@ -1374,4 +1379,186 @@ fn el_resultado_de_la_ejecucion_solo_se_fija_una_vez() {
     assert!(!almacen
         .fijar_resultado_deliberacion(id + 100, EjecucionResultado::Error)
         .unwrap());
+}
+
+// ---------------------------------------------------------------- Fase 8
+
+fn sincronizacion_de(host_id: i64, nombre: &str) -> DatosSincronizacion {
+    DatosSincronizacion {
+        host_id,
+        nombre: nombre.to_string(),
+        ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+        ruta_remota: "/var/www/cooperapp".to_string(),
+        direccion: Direccion::Subida,
+        borrar: false,
+        exclusiones: vec!["*.log".to_string(), "tmp/".to_string()],
+    }
+}
+
+/// Una base de la fase 7 (cinco migraciones) sube a la 6 sin perder hosts,
+/// túneles, snippets ni deliberaciones, y estrena `SINCRONIZACIONES_DIR` vacía
+/// y usable.
+#[test]
+fn migracion_desde_fase7_estrena_las_sincronizaciones() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        for migracion in &magi::almacen::migraciones::MIGRACIONES[..5] {
+            conexion.execute_batch(migracion).unwrap();
+        }
+        conexion.pragma_update(None, "user_version", 5).unwrap();
+        conexion
+            .execute(
+                "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
+                                    creado_en, actualizado_en, servicios)
+                 VALUES ('fase7', '10.0.0.8', 22, '', 'manual',
+                         '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00', 'nginx')",
+                [],
+            )
+            .unwrap();
+        conexion
+            .execute(
+                "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
+                                      creado_en, actualizado_en)
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 0,
+                         '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00')",
+                [],
+            )
+            .unwrap();
+        conexion
+            .execute(
+                "INSERT INTO SNIPPETS (nombre, comando, creado_en, actualizado_en)
+                 VALUES ('uptime', 'uptime',
+                         '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00')",
+                [],
+            )
+            .unwrap();
+    }
+    let almacen = Almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 6);
+    let hosts = almacen.listar_hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].servicios, "nginx");
+    assert_eq!(almacen.tuneles_de_host(hosts[0].id).unwrap().len(), 1);
+    assert_eq!(almacen.listar_snippets().unwrap().len(), 1);
+    assert!(almacen.listar_sincronizaciones().unwrap().is_empty());
+
+    let id = almacen
+        .crear_sincronizacion(&sincronizacion_de(hosts[0].id, "web-prod"))
+        .unwrap();
+    let guardada = almacen.obtener_sincronizacion(id).unwrap();
+    assert_eq!(guardada.host_nombre, "fase7");
+    assert_eq!(guardada.direccion, Direccion::Subida);
+    assert_eq!(guardada.exclusiones, vec!["*.log", "tmp/"]);
+    assert_eq!(guardada.ultima_ejecucion_en, None);
+    assert_eq!(guardada.ultimo_resultado, None);
+}
+
+/// Las sincronizaciones de un host caen con él (ON DELETE CASCADE) y su
+/// nombre es único por host, pero se repite entre hosts.
+#[test]
+fn las_sincronizaciones_caen_con_su_host_y_el_nombre_no_se_repite() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let id = almacen
+        .crear_host(&datos("con-sync"), Origen::Manual)
+        .unwrap();
+    let otro = almacen.crear_host(&datos("otro"), Origen::Manual).unwrap();
+    almacen
+        .crear_sincronizacion(&sincronizacion_de(id, "web-prod"))
+        .unwrap();
+    let mut logs = sincronizacion_de(id, "logs");
+    logs.direccion = Direccion::Bajada;
+    logs.borrar = true;
+    almacen.crear_sincronizacion(&logs).unwrap();
+    almacen
+        .crear_sincronizacion(&sincronizacion_de(otro, "web-prod"))
+        .unwrap();
+
+    let repetida = almacen.crear_sincronizacion(&sincronizacion_de(id, "web-prod"));
+    assert!(
+        repetida.unwrap_err().to_string().contains("web-prod"),
+        "el error dice qué nombre choca"
+    );
+    let del_host = almacen.sincronizaciones_de_host(id).unwrap();
+    assert_eq!(
+        del_host
+            .iter()
+            .map(|s| s.nombre.as_str())
+            .collect::<Vec<_>>(),
+        vec!["logs", "web-prod"],
+        "por nombre"
+    );
+    assert!(del_host[0].borrar);
+    assert_eq!(del_host[0].direccion, Direccion::Bajada);
+
+    almacen.borrar_host(id).unwrap();
+    assert!(almacen.sincronizaciones_de_host(id).unwrap().is_empty());
+    assert_eq!(almacen.sincronizaciones_de_host(otro).unwrap().len(), 1);
+}
+
+/// Validación en código (sin `CHECK`): nombre `[A-Za-z0-9._-]+` y rutas no
+/// vacías; una dirección desconocida escrita a mano no se interpreta.
+#[test]
+fn las_sincronizaciones_se_validan_en_codigo() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("h"), Origen::Manual).unwrap();
+    let mut mal = sincronizacion_de(host, "con espacios");
+    assert!(almacen.crear_sincronizacion(&mal).is_err());
+    mal.nombre = "bien".to_string();
+    mal.ruta_local = "  ".to_string();
+    assert!(almacen.crear_sincronizacion(&mal).is_err());
+    mal.ruta_local = "/tmp".to_string();
+    mal.ruta_remota = String::new();
+    assert!(almacen.crear_sincronizacion(&mal).is_err());
+
+    let id = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "buena"))
+        .unwrap();
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE SINCRONIZACIONES_DIR SET direccion = 'lateral' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+    assert!(
+        almacen.sincronizaciones_de_host(host).unwrap().is_empty(),
+        "una fila con dirección desconocida se salta"
+    );
+}
+
+/// `ultima_ejecucion_en` la escribe el cliente al lanzar y `ultimo_resultado`
+/// el servidor al terminar; editar no los toca.
+#[test]
+fn la_ultima_ejecucion_y_su_resultado_se_guardan_aparte() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("h"), Origen::Manual).unwrap();
+    let id = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web-prod"))
+        .unwrap();
+    almacen.marcar_ejecucion_sincronizacion(id).unwrap();
+    magi::almacen::sincronizaciones::fijar_resultado(
+        almacen.conexion(),
+        id,
+        ResultadoSincronizacion::Parcial,
+    )
+    .unwrap();
+    let mut datos = sincronizacion_de(host, "web-prod-2");
+    datos.borrar = true;
+    almacen.actualizar_sincronizacion(id, &datos).unwrap();
+    let guardada = almacen.obtener_sincronizacion(id).unwrap();
+    assert_eq!(guardada.nombre, "web-prod-2");
+    assert!(guardada.borrar);
+    assert!(guardada.ultima_ejecucion_en.is_some());
+    assert_eq!(
+        guardada.ultimo_resultado,
+        Some(ResultadoSincronizacion::Parcial)
+    );
+    almacen.borrar_sincronizacion(id).unwrap();
+    assert!(almacen.actualizar_sincronizacion(id, &datos).is_err());
 }

@@ -1186,7 +1186,9 @@ impl Escenario {
         use magi::protocolo::MensajeServidor;
         loop {
             match self.siguiente().await {
-                MensajeServidor::Hecho { peticion_id: id } if id == peticion_id => return None,
+                MensajeServidor::Hecho {
+                    peticion_id: id, ..
+                } if id == peticion_id => return None,
                 MensajeServidor::Error {
                     mensaje,
                     peticion_id: Some(id),

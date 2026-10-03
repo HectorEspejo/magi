@@ -225,7 +225,9 @@ async fn pestana_sftp_y_tunel_a_la_vez_comparten_una_conexion() {
     while !(sesion && sftp && tunel_listo) {
         match escenario.siguiente().await {
             MensajeServidor::SftpAbierto { .. } => sftp = true,
-            MensajeServidor::Hecho { peticion_id: 900 } => tunel_listo = true,
+            MensajeServidor::Hecho {
+                peticion_id: 900, ..
+            } => tunel_listo = true,
             MensajeServidor::Error { mensaje, .. } => panic!("falló una apertura: {mensaje}"),
             _ => {}
         }

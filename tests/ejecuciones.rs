@@ -12,8 +12,9 @@ use magi::almacen::{deliberaciones, Almacen};
 use magi::deliberacion::{ComprobacionesHost, NuevaDeliberacion, ResultadoDeliberacion, Veredicto};
 use magi::modelo::IdentidadRef;
 use magi::protocolo::{
-    ComandoInicial, DeliberacionLanzada, EstadoEjecucion, EstadoHostEjecucion, InfoEjecucion,
-    MensajeCliente, MensajeServidor, Secreto,
+    ComandoInicial, DeliberacionLanzada, Direccion, ElementoTransferencia, EstadoEjecucion,
+    EstadoHostEjecucion, EtiquetaTransferencia, InfoEjecucion, MensajeCliente, MensajeServidor,
+    Politica, Secreto, SincronizacionLanzada,
 };
 
 use comun::*;
@@ -502,6 +503,79 @@ async fn una_deliberacion_inexistente_incoherente_o_ya_usada_se_rechaza() {
     .await;
     assert!(repetida.is_err());
     esperar_terminada(&mut escenario, 22).await;
+}
+
+/// Fase 8: una deliberación vale para una sola cosa. La que autorizó la
+/// transferencia de una sincronización no autoriza después una ejecución, y
+/// es la transferencia la que la cierra.
+#[tokio::test]
+async fn una_deliberacion_usada_por_una_transferencia_no_vale_para_una_ejecucion() {
+    if !hay_sftp_server() {
+        return;
+    }
+    let mut escenario = escenario(OpcionesEscenario::default()).await;
+    let hosts = escenario.hosts.clone();
+    let id = deliberacion(&escenario, hosts[0], false);
+    let local = tempfile::tempdir().unwrap();
+    let remoto = tempfile::tempdir().unwrap();
+    let origen = local.path().join("a.txt");
+    std::fs::write(&origen, b"a").unwrap();
+    let lanzada = DeliberacionLanzada {
+        id,
+        forzada: false,
+        motivo: None,
+    };
+    escenario
+        .enviar(&MensajeCliente::Transferir {
+            host_id: hosts[0],
+            direccion: Direccion::Subida,
+            elementos: vec![ElementoTransferencia {
+                origen: origen.display().to_string(),
+                destino: remoto.path().join("a.txt").display().to_string(),
+                bytes: 1,
+                es_directorio: false,
+                politica: None,
+                permisos: Some(0o644),
+            }],
+            politica: Politica::Sobrescribir,
+            borrar_origen: false,
+            peticion_id: Some(100),
+            borrar_al_terminar: Vec::new(),
+            deliberacion: Some(lanzada.clone()),
+            sincronizacion: Some(SincronizacionLanzada {
+                id: None,
+                nombre: None,
+                creados: 1,
+                actualizados: 0,
+                omitidos: 0,
+                raiz_origen: local.path().display().to_string(),
+                raiz_destino: remoto.path().display().to_string(),
+            }),
+            etiqueta: Some(EtiquetaTransferencia::Sincronizacion),
+        })
+        .await;
+    assert_eq!(escenario.esperar_respuesta(100).await, None, "se encola");
+    let reutilizada = lanzar(
+        &mut escenario,
+        101,
+        Lanzamiento {
+            deliberacion: Some(lanzada),
+            ..Lanzamiento::nuevo(&hosts, "true")
+        },
+    )
+    .await;
+    assert!(reutilizada.is_err(), "{reutilizada:?}");
+    assert!(
+        escenario
+            .hasta(Duration::from_secs(10), |e| resultado_deliberacion(e, id)
+                .is_some())
+            .await
+    );
+    assert_eq!(
+        resultado_deliberacion(&escenario, id).as_deref(),
+        Some("ok")
+    );
+    assert_eq!(escenario.anotaciones("snippet_ejecutado"), 0);
 }
 
 #[tokio::test]

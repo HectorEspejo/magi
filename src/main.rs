@@ -601,7 +601,9 @@ async fn esperar_tunel(
         match mensaje {
             MensajeServidor::Bienvenida { tuneles, .. } => ultima = Some(tuneles),
             MensajeServidor::Tuneles { lista } => ultima = Some(lista),
-            MensajeServidor::Hecho { peticion_id: id } if id == peticion_id => {
+            MensajeServidor::Hecho {
+                peticion_id: id, ..
+            } if id == peticion_id => {
                 return Ok(DesenlaceTunel::Hecho(sufijo_estado(
                     ultima.as_deref(),
                     tunel_id,

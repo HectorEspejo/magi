@@ -96,8 +96,9 @@ impl SalidaHost {
 
 // ---------------------------------------------------------------- estado
 
-/// La deliberación que autorizó la ejecución, leída y validada al lanzar y
-/// fijada: al terminar no se relee (T33).
+/// La deliberación que autorizó la ejecución (o, desde la Fase 8, la
+/// transferencia de una sincronización), leída y validada al lanzar y fijada:
+/// al terminar no se relee (T33).
 #[derive(Debug, Clone)]
 pub struct DeliberacionFijada {
     pub registro: RegistroDeliberacion,
@@ -233,7 +234,8 @@ impl Ejecuciones {
             .any(|ejecucion| ejecucion.estado == EstadoEjecucion::EnCurso)
     }
 
-    /// ¿Usa ya alguna ejecución esta deliberación?
+    /// ¿Usa ya alguna ejecución esta deliberación? (La guarda completa, que
+    /// mira también las transferencias, es `deliberacion_usada`.)
     fn deliberacion_usada(&self, deliberacion_id: i64) -> bool {
         self.lista.values().any(|ejecucion| {
             ejecucion
@@ -578,11 +580,8 @@ pub async fn lanzar(
             return Err(conexiones::APAGANDO.to_string());
         }
         if let Some(fijada) = &ejecucion.deliberacion {
-            if estado_bloqueado
-                .ejecuciones
-                .deliberacion_usada(fijada.registro.id)
-            {
-                return Err("esa deliberación ya autorizó otra ejecución".to_string());
+            if deliberacion_usada(&estado_bloqueado, fijada.registro.id) {
+                return Err(YA_USADA.to_string());
             }
         }
         estado_bloqueado.vacio_desde = None;
@@ -609,9 +608,22 @@ pub async fn lanzar(
     Ok(id)
 }
 
+/// Motivo del rechazo de una deliberación que ya autorizó otra cosa.
+pub(crate) const YA_USADA: &str = "esa deliberación ya autorizó otra ejecución o transferencia";
+
+/// ¿Autorizó ya esta deliberación una ejecución o una transferencia de las que
+/// el servidor tiene en memoria? Una deliberación vale para una sola cosa: la
+/// guarda cubre las dos colas en los dos sentidos (Fase 8). Se mira con el
+/// estado bloqueado, en el mismo bloqueo que la inserción.
+pub(crate) fn deliberacion_usada(estado: &EstadoServidor, deliberacion_id: i64) -> bool {
+    estado.ejecuciones.deliberacion_usada(deliberacion_id)
+        || estado.transferencias.deliberacion_usada(deliberacion_id)
+}
+
 /// Lee y valida la fila de la deliberación: la escribió otro proceso y lo que
-/// autoriza es una ejecución (T38).
-fn validar_deliberacion(
+/// autoriza es una ejecución o la transferencia de una sincronización (T38).
+/// Se llama sin el mutex del estado: es E/S de SQLite.
+pub(crate) fn validar_deliberacion(
     lectura: &crate::almacen::Almacen,
     lanzada: &DeliberacionLanzada,
 ) -> Result<DeliberacionFijada, String> {
@@ -917,12 +929,22 @@ async fn cerrar(estado: &Arc<Mutex<EstadoServidor>>, id: u32) {
 }
 
 fn anotar_cierre(bd: &std::sync::mpsc::Sender<OrdenBd>, cierre: CierreEjecucion) {
-    let Some(fijada) = cierre.deliberacion else {
-        return;
-    };
+    if let Some(fijada) = cierre.deliberacion {
+        anotar_deliberacion(bd, &fijada, cierre.resultado);
+    }
+}
+
+/// Cierra una deliberación usada: rellena `DELIBERACIONES.ejecucion_resultado`
+/// y anota `deliberacion_aprobada` o `deliberacion_forzada` con el resultado.
+/// Lo comparten las ejecuciones y las transferencias (Fase 8).
+pub(crate) fn anotar_deliberacion(
+    bd: &std::sync::mpsc::Sender<OrdenBd>,
+    fijada: &DeliberacionFijada,
+    resultado: EjecucionResultado,
+) {
     let _ = bd.send(OrdenBd::ResultadoDeliberacion {
         deliberacion_id: fijada.registro.id,
-        resultado: cierre.resultado,
+        resultado,
     });
     let _ = bd.send(OrdenBd::Anotar {
         tipo: if fijada.forzada {
@@ -932,8 +954,8 @@ fn anotar_cierre(bd: &std::sync::mpsc::Sender<OrdenBd>, cierre: CierreEjecucion)
         },
         host_id: None,
         identidad_id: None,
-        detalle: detalle_registro(&fijada.registro, Some(cierre.resultado)),
-        resultado: if cierre.resultado == EjecucionResultado::Ok {
+        detalle: detalle_registro(&fijada.registro, Some(resultado)),
+        resultado: if resultado == EjecucionResultado::Ok {
             ResultadoRegistro::Ok
         } else {
             ResultadoRegistro::Error

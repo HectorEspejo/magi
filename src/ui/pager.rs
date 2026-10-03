@@ -80,6 +80,42 @@ pub fn suspender_y_ver(
     aviso.or(aviso_visor)
 }
 
+/// Suspende la TUI, abre el editor sobre `ruta` y la restaura (Fase 8). El
+/// hilo de teclas ya está en pausa con acuse. Devuelve el aviso de la barra si
+/// el editor no se pudo lanzar o la interfaz no se pudo restaurar; que el
+/// editor salga con error no es un fallo de MAGI.
+pub fn suspender_y_editar(
+    terminal: &mut TerminalMagi,
+    config: &Config,
+    ruta: &std::path::Path,
+) -> Option<String> {
+    let (programa, argumentos) = visor::editor(&config.archivos.editor);
+    crate::ui::restaurar_terminal();
+    let resultado = std::process::Command::new(&programa)
+        .args(&argumentos)
+        // La ruta va siempre como argumento suelto: nada de interpolarla.
+        .arg(ruta)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+    let restaurado = crate::ui::iniciar_terminal();
+    let mut aviso = match &resultado {
+        Err(error) => Some(format!(
+            "no se pudo abrir el editor «{programa}»: {error} (configura [archivos] editor)"
+        )),
+        Ok(_) => None,
+    };
+    if let Ok(nueva) = restaurado {
+        *terminal = nueva;
+        let _ = terminal.clear();
+        let _ = terminal.autoresize();
+    } else {
+        aviso = Some("no se pudo restaurar la interfaz tras el editor".to_string());
+    }
+    aviso
+}
+
 /// Cadena para el paginador de la barra de atajos, según lo configurado.
 pub fn etiqueta(config: &Config) -> String {
     if !config.archivos.pager.trim().is_empty() {

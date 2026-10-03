@@ -60,4 +60,4 @@ source: tests/redimensionado/arnes.rs
  ↑ main.py → hetzner-01:main.py ████████████████░░░░  78 % · 1.1 MB de 1.4 MB
   en cola 2 · 3.4 MB
   t transferencias: x cancelar · C limpiar
- ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda
+ ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  p permisos  L guardadas  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda

@@ -12,6 +12,7 @@ pub mod hosts;
 pub mod identidades;
 pub mod migraciones;
 pub mod registro;
+pub mod sincronizaciones;
 pub mod snippets;
 pub mod sondeos;
 pub mod tuneles;
@@ -277,6 +278,43 @@ impl Almacen {
 
     pub fn alternar_tunel_automatico(&self, id: i64, automatico: bool) -> Result<()> {
         tuneles::alternar_automatico(&self.conexion, id, automatico)
+    }
+
+    // Sincronizaciones guardadas (Fase 8) ------------------------------------
+
+    pub fn listar_sincronizaciones(&self) -> Result<Vec<crate::modelo::Sincronizacion>> {
+        sincronizaciones::listar(&self.conexion)
+    }
+
+    pub fn sincronizaciones_de_host(
+        &self,
+        host_id: i64,
+    ) -> Result<Vec<crate::modelo::Sincronizacion>> {
+        sincronizaciones::de_host(&self.conexion, host_id)
+    }
+
+    pub fn obtener_sincronizacion(&self, id: i64) -> Result<crate::modelo::Sincronizacion> {
+        sincronizaciones::obtener(&self.conexion, id)
+    }
+
+    pub fn crear_sincronizacion(&self, datos: &crate::modelo::DatosSincronizacion) -> Result<i64> {
+        sincronizaciones::crear(&self.conexion, datos)
+    }
+
+    pub fn actualizar_sincronizacion(
+        &self,
+        id: i64,
+        datos: &crate::modelo::DatosSincronizacion,
+    ) -> Result<()> {
+        sincronizaciones::actualizar(&self.conexion, id, datos)
+    }
+
+    pub fn borrar_sincronizacion(&self, id: i64) -> Result<()> {
+        sincronizaciones::borrar(&self.conexion, id)
+    }
+
+    pub fn marcar_ejecucion_sincronizacion(&self, id: i64) -> Result<()> {
+        sincronizaciones::marcar_ejecucion(&self.conexion, id)
     }
 
     // Grupos ----------------------------------------------------------------

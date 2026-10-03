@@ -181,7 +181,9 @@ impl Montaje {
     async fn esperar_respuesta(&mut self, peticion_id: u64) -> Option<String> {
         loop {
             match self.siguiente().await {
-                MensajeServidor::Hecho { peticion_id: id } if id == peticion_id => return None,
+                MensajeServidor::Hecho {
+                    peticion_id: id, ..
+                } if id == peticion_id => return None,
                 MensajeServidor::Error {
                     mensaje,
                     peticion_id: Some(id),

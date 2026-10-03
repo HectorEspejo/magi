@@ -280,6 +280,16 @@ pub fn dibujar(
         Dialogo::Ejecutar(dialogo) => {
             crate::ui::ejecutar::dibujar_con_disposicion(marco, area, app, dialogo, disp);
         }
+        Dialogo::Edicion(dialogo) => crate::ui::edicion::dibujar(marco, area, app, dialogo, disp),
+        Dialogo::Permisos(dialogo) => {
+            crate::ui::permisos::dibujar(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Sincronizar(dialogo) => {
+            crate::ui::sincronizar::dibujar(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Guardadas(dialogo) => {
+            crate::ui::sincronizaciones::dibujar(marco, area, app, dialogo, disp);
+        }
         Dialogo::Confirmar {
             titulo,
             lineas,

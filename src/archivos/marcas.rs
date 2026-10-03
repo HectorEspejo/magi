@@ -69,6 +69,43 @@ impl Marca {
     }
 }
 
+/// Propietario y grupo de una entrada: los números que da el sistema (SFTP v3
+/// solo manda números) y, si se resuelven, sus nombres. En remoto los nombres
+/// salen del `/etc/passwd` y el `/etc/group` del host (§7.5); los usuarios de
+/// LDAP/SSSD se quedan con el número (R46).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Propietario {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usuario: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grupo: Option<String>,
+}
+
+impl Propietario {
+    /// `www-data (33)`, `33` o `—` si no se sabe nada.
+    pub fn usuario_legible(&self) -> String {
+        legible(self.usuario.as_deref(), self.uid)
+    }
+
+    /// Como `usuario_legible`, para el grupo.
+    pub fn grupo_legible(&self) -> String {
+        legible(self.grupo.as_deref(), self.gid)
+    }
+}
+
+fn legible(nombre: Option<&str>, id: Option<u32>) -> String {
+    match (nombre, id) {
+        (Some(nombre), Some(id)) => format!("{nombre} ({id})"),
+        (Some(nombre), None) => nombre.to_string(),
+        (None, Some(id)) => id.to_string(),
+        (None, None) => "—".to_string(),
+    }
+}
+
 /// Entrada de un panel: la misma para el lado local y el remoto. La `marca` la
 /// rellena el cliente al comparar los dos listados, nunca el servidor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,7 +116,8 @@ pub struct Entrada {
     /// Época en segundos; cero si el otro extremo no la dio.
     pub mtime: i64,
     pub permisos: Option<u32>,
-    pub propietario: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propietario: Option<Propietario>,
     /// Destino del enlace simbólico, si la entrada es un enlace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enlace: Option<String>,

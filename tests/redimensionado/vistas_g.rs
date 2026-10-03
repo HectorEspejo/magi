@@ -675,6 +675,18 @@ pub(crate) type FabricaDialogo = Box<dyn Fn() -> Dialogo>;
 pub(crate) fn todos_los_dialogos(
     hosts: Vec<magi::modelo::Host>,
 ) -> Vec<(&'static str, FabricaDialogo)> {
+    let mut dialogos = todos_los_dialogos_hasta_fase_7(hosts);
+    // Los de la Fase 8, cada uno en el fichero de su vista.
+    dialogos.extend(super::vistas_h::dialogos());
+    dialogos.extend(super::vistas_i::dialogos());
+    dialogos.extend(super::vistas_j::dialogos());
+    dialogos.extend(super::vistas_k::dialogos());
+    dialogos
+}
+
+fn todos_los_dialogos_hasta_fase_7(
+    hosts: Vec<magi::modelo::Host>,
+) -> Vec<(&'static str, FabricaDialogo)> {
     vec![
         ("DETALLE DEL REGISTRO", Box::new(detalle_largo)),
         (

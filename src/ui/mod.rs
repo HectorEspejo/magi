@@ -6,6 +6,7 @@ pub mod componentes;
 pub mod deliberacion;
 pub mod dialogos;
 pub mod disposicion;
+pub mod edicion;
 pub mod ejecutar;
 pub mod ficha;
 pub mod flota;
@@ -14,10 +15,13 @@ pub mod hosts;
 pub mod identidades;
 pub mod pager;
 pub mod paleta;
+pub mod permisos;
 pub mod registro;
 pub mod resultados;
 pub mod sesion;
 pub mod sesiones;
+pub mod sincronizaciones;
+pub mod sincronizar;
 pub mod snippets;
 pub mod transferencias;
 pub mod tuneles;
@@ -81,7 +85,10 @@ pub fn restaurar_terminal() {
 /// de las listas), que el bucle guarda para las teclas de página.
 pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
     let area = marco.area();
-    let minimo = disposicion::minimo_de(app.vista, app.deliberacion.is_some());
+    let minimo = disposicion::con_dialogo(
+        disposicion::minimo_de(app.vista, app.deliberacion.is_some()),
+        app.dialogo.as_ref(),
+    );
     let mut disp = Disposicion::nueva(area, minimo);
     if disp.aviso {
         // Por debajo del mínimo: el aviso sustituye a la vista y a la barra.

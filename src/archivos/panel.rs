@@ -318,6 +318,10 @@ pub struct EstadoArchivos {
     pub muestras: HashMap<u32, (std::time::Instant, u64)>,
     /// Fichero remoto que se está trayendo para verlo.
     pub viendo: Option<String>,
+    /// Usuario de la conexión SFTP y su uid en el host (aviso de propietario
+    /// al subir una edición).
+    pub usuario_conexion: Option<String>,
+    pub uid_conexion: Option<u32>,
 }
 
 /// Aviso de subida de ficheros sensibles, esperando un sí o un no.
@@ -596,6 +600,8 @@ mod pruebas_marcas_sin_remoto {
             aviso: None,
             muestras: std::collections::HashMap::new(),
             viendo: None,
+            usuario_conexion: None,
+            uid_conexion: None,
         }
     }
 

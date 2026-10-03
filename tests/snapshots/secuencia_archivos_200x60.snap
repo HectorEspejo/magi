@@ -60,4 +60,4 @@ source: tests/redimensionado/arnes.rs
 │                                                                                                  ││                                                                                                  │
 │                                                                                                  ││                                                                                                  │
 └ 7 elementos · 20 kB ─────────────────────────────────────────────────────────────────────────────┘└ 8 elementos · 1.1 MB · 2 marcado(s) ─────────────────────────────────────────────────────────────┘
- ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda
+ ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  p permisos  L guardadas  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda

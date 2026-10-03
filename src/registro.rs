@@ -44,8 +44,13 @@ pub const DELIBERACION_APROBADA: &str = "deliberacion_aprobada";
 pub const DELIBERACION_FORZADA: &str = "deliberacion_forzada";
 /// Fase 6: el usuario canceló una deliberación.
 pub const DELIBERACION_CANCELADA: &str = "deliberacion_cancelada";
+/// Fase 8: una sincronización de directorio terminó (nombre o «ad hoc»,
+/// dirección, creados, actualizados, borrados, omitidos, bytes, resultado).
+pub const SINCRONIZACION: &str = "sincronizacion";
+/// Fase 8: `chmod` remoto (host, rutas, modo, alcance, afectados).
+pub const PERMISOS_CAMBIADOS: &str = "permisos_cambiados";
 
-pub const TIPOS: [&str; 25] = [
+pub const TIPOS: [&str; 27] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -71,6 +76,8 @@ pub const TIPOS: [&str; 25] = [
     DELIBERACION_APROBADA,
     DELIBERACION_FORZADA,
     DELIBERACION_CANCELADA,
+    SINCRONIZACION,
+    PERMISOS_CAMBIADOS,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
@@ -98,7 +105,15 @@ pub const FILTROS: [(&str, &[&str]); 8] = [
     ),
     ("importación", &[IMPORTACION, EXPORTACION]),
     ("sondeos", &[SONDEO_FALLIDO, SONDEO_RECUPERADO]),
-    ("archivos", &[TRANSFERENCIA, BORRADO_REMOTO]),
+    (
+        "archivos",
+        &[
+            TRANSFERENCIA,
+            BORRADO_REMOTO,
+            SINCRONIZACION,
+            PERMISOS_CAMBIADOS,
+        ],
+    ),
     (
         "snippets",
         &[

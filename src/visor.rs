@@ -57,6 +57,34 @@ pub fn disponible(programa: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// El editor de `E` (Fase 8): `[archivos] editor` → `$VISUAL` → `$EDITOR` →
+/// `nvim` (si está) → `vi`. Programa y argumentos, sin shell (T30); el
+/// fichero se añade siempre como argumento suelto.
+pub fn editor(configurado: &str) -> (String, Vec<String>) {
+    editor_con(
+        configurado,
+        std::env::var("VISUAL").ok().as_deref(),
+        std::env::var("EDITOR").ok().as_deref(),
+        disponible("nvim"),
+    )
+}
+
+/// `editor` sin leer el entorno, para poder probarlo.
+pub fn editor_con(
+    configurado: &str,
+    visual: Option<&str>,
+    editor: Option<&str>,
+    hay_nvim: bool,
+) -> (String, Vec<String>) {
+    for candidato in [Some(configurado), visual, editor].into_iter().flatten() {
+        if let Some(par) = comando(candidato) {
+            return par;
+        }
+    }
+    let programa = if hay_nvim { "nvim" } else { "vi" };
+    (programa.to_string(), Vec::new())
+}
+
 /// Paginador alternativo instalado, si lo hay: `less` primero y `more` después.
 pub fn alternativas() -> Vec<&'static str> {
     ["less", "more"]
@@ -81,6 +109,27 @@ pub fn efectivo(pager: &str) -> Option<(String, Vec<String>)> {
 #[cfg(test)]
 mod pruebas {
     use super::*;
+
+    #[test]
+    fn el_editor_sigue_el_orden_de_la_configuracion() {
+        let par = |programa: &str, argumentos: &[&str]| {
+            (
+                programa.to_string(),
+                argumentos.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            editor_con("hx", Some("code -w"), Some("nano"), true),
+            par("hx", &[])
+        );
+        assert_eq!(
+            editor_con("  ", Some("code -w"), Some("nano"), true),
+            par("code", &["-w"])
+        );
+        assert_eq!(editor_con("", None, Some("nano"), true), par("nano", &[]));
+        assert_eq!(editor_con("", Some(""), None, true), par("nvim", &[]));
+        assert_eq!(editor_con("", None, None, false), par("vi", &[]));
+    }
 
     #[test]
     fn el_pager_se_parte_en_programa_y_argumentos_sin_shell() {

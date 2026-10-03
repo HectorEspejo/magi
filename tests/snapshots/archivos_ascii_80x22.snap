@@ -22,4 +22,4 @@ source: tests/redimensionado/arnes.rs
 | ---------------------------------------------------------------------------- |
 | 8 elementos - 1.1 MB  -  ^ 78 % main.py - 2 en cola                          |
 +------------------------------------------------------------------------------+
- tab local  enter abrir  c copiar  m mover  x borrar  r renombrar  d dir  ? más
+ tab local  enter abrir  c copiar  m mover  x borrar  E editar  d dir  ? más
