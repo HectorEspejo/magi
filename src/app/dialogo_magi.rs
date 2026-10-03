@@ -5,7 +5,8 @@
 //! La deliberación vive en `App.deliberacion` (no en el hueco de diálogos):
 //! una pregunta del servidor puede taparla un momento sin perderla. Lleva
 //! fijado el plan desde que se abre (T33); los resultados de otra
-//! deliberación (otro `token`) se descartan.
+//! deliberación (otro `token`) se descartan. El plan es un snippet (F6) o una
+//! sincronización de directorio (F8, `snippet_id` NULL en `DELIBERACIONES`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +26,8 @@ use crate::protocolo::DeliberacionLanzada;
 use crate::snippets::MotivoDeliberacion;
 use crate::ui::disposicion::Lista;
 
-use super::lanzar::PlanEjecucion;
+use super::lanzar::{ModoLanzamiento, PlanEjecucion};
+use super::sincronizar::PlanSincronizacion;
 use super::{App, Evento};
 
 /// Largo máximo del dato de una celda al guardarlo (viene del remoto o de un
@@ -47,10 +49,101 @@ impl Drop for TareasComprobacion {
     }
 }
 
+/// Lo que se delibera: la ejecución de un snippet (F6) o una sincronización
+/// de directorio (F8). Fijado al abrir la deliberación (T33).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanDeliberado {
+    Snippet(PlanEjecucion),
+    Sincronizacion(Box<PlanSincronizacion>),
+}
+
+impl From<PlanEjecucion> for PlanDeliberado {
+    fn from(plan: PlanEjecucion) -> Self {
+        PlanDeliberado::Snippet(plan)
+    }
+}
+
+impl From<PlanSincronizacion> for PlanDeliberado {
+    fn from(plan: PlanSincronizacion) -> Self {
+        PlanDeliberado::Sincronizacion(Box::new(plan))
+    }
+}
+
+impl PlanDeliberado {
+    /// La acción que queda en `DELIBERACIONES`: «reiniciar nginx →
+    /// hetzner-01, hetzner-02» o «sync web-prod → hetzner-01: 15 ficheros, 2
+    /// borrados».
+    pub fn accion(&self) -> String {
+        match self {
+            PlanDeliberado::Snippet(plan) => plan.accion(),
+            PlanDeliberado::Sincronizacion(plan) => plan.accion(false),
+        }
+    }
+
+    /// Hosts que se comprueban, en el orden del plan.
+    pub fn hosts(&self) -> Vec<(i64, String)> {
+        match self {
+            PlanDeliberado::Snippet(plan) => plan.hosts.clone(),
+            PlanDeliberado::Sincronizacion(plan) => vec![plan.host()],
+        }
+    }
+
+    /// El snippet que se ejecuta; ninguno en una sincronización.
+    pub fn snippet_id(&self) -> Option<i64> {
+        match self {
+            PlanDeliberado::Snippet(plan) => Some(plan.snippet_id),
+            PlanDeliberado::Sincronizacion(_) => None,
+        }
+    }
+
+    /// La acción del diálogo: «reiniciar nginx → 3 hosts (en pestaña)» o la
+    /// de la sincronización entera.
+    pub fn accion_visible(&self, ascii: bool) -> String {
+        match self {
+            PlanDeliberado::Snippet(plan) => {
+                let destino = match plan.hosts.as_slice() {
+                    [(_, host)] => host.clone(),
+                    hosts => format!("{} hosts", hosts.len()),
+                };
+                let pestana = if plan.modo == ModoLanzamiento::Pestanas {
+                    " (en pestaña)"
+                } else {
+                    ""
+                };
+                format!(
+                    "{} {} {destino}{pestana}",
+                    plan.nombre,
+                    if ascii { "->" } else { "→" }
+                )
+            }
+            PlanDeliberado::Sincronizacion(plan) => plan.accion(ascii),
+        }
+    }
+
+    /// La acción del título compacto: «reiniciar nginx → 3» o «sync web-prod
+    /// → hetzner-01».
+    pub fn accion_compacta(&self, ascii: bool) -> String {
+        match self {
+            PlanDeliberado::Snippet(plan) => {
+                let destino = match plan.hosts.as_slice() {
+                    [(_, host)] => host.clone(),
+                    hosts => hosts.len().to_string(),
+                };
+                format!(
+                    "{} {} {destino}",
+                    plan.nombre,
+                    if ascii { "->" } else { "→" }
+                )
+            }
+            PlanDeliberado::Sincronizacion(plan) => plan.accion_corta(ascii),
+        }
+    }
+}
+
 /// Una deliberación abierta.
 pub struct DeliberacionAbierta {
     pub token: u64,
-    pub plan: PlanEjecucion,
+    pub plan: PlanDeliberado,
     /// Por qué hay que deliberar («crítico», «3 hosts»…).
     pub motivos: Vec<String>,
     /// Una fila por host, en el orden del plan.
@@ -100,7 +193,7 @@ impl DeliberacionAbierta {
         NuevaDeliberacion {
             snippet_id,
             accion: self.plan.accion(),
-            hosts: self.plan.hosts.clone(),
+            hosts: self.plan.hosts(),
             comprobaciones: self.filas.clone(),
             resultado,
             bloqueada: self.consenso().rechazos > 0,
@@ -146,13 +239,15 @@ fn rechazo(detalle: &str) -> Celda {
 }
 
 impl App {
-    /// El plan necesita deliberación (crítico, más de un host o hosts con
-    /// verificaciones): abre el diálogo MAGI y lanza las comprobaciones.
+    /// El plan necesita deliberación (crítico, más de un host, hosts con
+    /// verificaciones o una sincronización que borra): abre el diálogo MAGI y
+    /// lanza las comprobaciones.
     pub(super) fn abrir_deliberacion(
         &mut self,
-        plan: PlanEjecucion,
+        plan: impl Into<PlanDeliberado>,
         motivos: Vec<MotivoDeliberacion>,
     ) {
+        let plan = plan.into();
         if self.deliberacion.is_some() {
             self.mensaje("ya hay una deliberación MAGI abierta", true);
             return;
@@ -177,7 +272,7 @@ impl App {
             .collect();
         let mut filas = Vec::new();
         let mut trabajos = Vec::new();
-        for (host_id, nombre) in &plan.hosts {
+        for (host_id, nombre) in &plan.hosts() {
             let verificacion = verificaciones.get(host_id).cloned().unwrap_or_default();
             let mut celdas = Vec::new();
             for comprobacion in Comprobacion::TODAS {
@@ -331,6 +426,12 @@ impl App {
             .map(|snippet| snippet.id)
     }
 
+    /// El snippet del plan si aún existe (ninguno en una sincronización).
+    fn snippet_del_plan(&self, plan: &PlanDeliberado) -> Option<i64> {
+        plan.snippet_id()
+            .and_then(|snippet_id| self.snippet_vigente(snippet_id))
+    }
+
     /// `Ctrl+K` con consenso o forzada: inserta la fila y lanza el plan con
     /// la deliberación que lo autoriza.
     fn confirmar_deliberacion(&mut self, forzada: bool, motivo: Option<String>) {
@@ -342,20 +443,23 @@ impl App {
         } else {
             ResultadoDeliberacion::Aprobada
         };
-        let snippet_id = self.snippet_vigente(abierta.plan.snippet_id);
+        let snippet_id = self.snippet_del_plan(&abierta.plan);
         let nueva = abierta.nueva(snippet_id, resultado, motivo.clone());
         match self.almacen.crear_deliberacion(&nueva) {
             Ok(id) => {
                 let plan = abierta.plan.clone();
                 drop(abierta);
-                self.lanzar_plan(
-                    plan,
-                    Some(DeliberacionLanzada {
-                        id,
-                        forzada,
-                        motivo,
-                    }),
-                );
+                let deliberacion = Some(DeliberacionLanzada {
+                    id,
+                    forzada,
+                    motivo,
+                });
+                match plan {
+                    PlanDeliberado::Snippet(plan) => self.lanzar_plan(plan, deliberacion),
+                    PlanDeliberado::Sincronizacion(plan) => {
+                        self.lanzar_sincronizacion(*plan, deliberacion)
+                    }
+                }
             }
             Err(error) => {
                 // Sin fila el servidor rechazaría la ejecución: no se lanza.
@@ -375,7 +479,7 @@ impl App {
         let Some(abierta) = self.deliberacion.take() else {
             return;
         };
-        let snippet_id = self.snippet_vigente(abierta.plan.snippet_id);
+        let snippet_id = self.snippet_del_plan(&abierta.plan);
         let nueva = abierta.nueva(snippet_id, ResultadoDeliberacion::Cancelada, None);
         drop(abierta);
         match self.almacen.crear_deliberacion(&nueva) {
@@ -406,13 +510,13 @@ impl DeliberacionAbierta {
     /// las pruebas de `tests/`).
     #[doc(hidden)]
     pub fn de_prueba(
-        plan: PlanEjecucion,
+        plan: impl Into<PlanDeliberado>,
         filas: Vec<ComprobacionesHost>,
         motivo_min: usize,
     ) -> Self {
         let mut abierta = Self {
             token: 0,
-            plan,
+            plan: plan.into(),
             motivos: vec!["crítico".to_string()],
             filas,
             maquina: MaquinaDeliberacion::nueva(motivo_min),

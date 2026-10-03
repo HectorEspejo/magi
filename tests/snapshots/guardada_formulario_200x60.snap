@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ [tmp]/hogar ───────────────────────────────────────────────────────────────────────────┐┌ /var/www/cooperapp ──────────────────────────────────────────────────────────────────────────────┐
+│▸  ..                                                                                             ││   ..                                                                                             │
+│   app                — 2025                                                                      ││   app                     — 2025                                                                 │
+│   static             — 2025                                                                      ││   static                  — 2025                                                                 │
+│   config.yaml     2 kB 2025   ≠                                                                  ││   backup.tar.gz      1.1 MB 2025   ✕                                                             │
+│   main.py        14 kB 2025   ≠                                                                  ││   config.yaml          1 kB 2025   ≠                                                             │
+│   notas.md       512 B 2025   ✕                                                                  ││   main.py             14 kB 2025   ≠                                                             │
+│   README.md       3 kB 2025                                                                      ││   README.md            3 kB 2025                                                                 │
+│                                                                                                  ││   requirements.txt    300 B 2025   ✕                                                             │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                               ┌ SINCRONIZACIÓN GUARDADA · editar ────────────────────────────────────┐                                                               │
+│                                                               │                                                                      │                                                               │
+│                                                               │  host       hetzner-01                                               │                                                               │
+│                                                               │  nombre     [ web-prod┃ ]                                            │                                                               │
+│                                                               │  local      [ ~/proyectos/cooperapp ]                                │                                                               │
+│                                                               │  remoto     [ /var/www/cooperapp ]                                   │                                                               │
+│                                                               │  dirección  (•) subida   ( ) bajada   local → remoto                 │                                                               │
+│                                                               │             [ ] borrar en destino lo que no está en origen           │                                                               │
+│                                                               │  excluir    [ *.log ]                                                │                                                               │
+│                                                               │             separados por espacios; además de .git/ target/ … y el   │                                                               │
+│                                                               │             .magiignore del origen                                   │                                                               │
+│                                                               │                                                                      │                                                               │
+│                                                               │  ^s/↵ guardar  ⇥ campo  espacio marcar  esc volver                   │                                                               │
+│                                                               │                                                                      │                                                               │
+│                                                               └──────────────────────────────────────────────────────────────────────┘                                                               │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+└ 7 elementos · 20 kB ─────────────────────────────────────────────────────────────────────────────┘└ 8 elementos · 1.1 MB ────────────────────────────────────────────────────────────────────────────┘
+ ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  p permisos  L guardadas  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda

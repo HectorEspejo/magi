@@ -11,5 +11,5 @@ source: tests/redimensionado/vistas_g.rs
 ││   editar host · dgx-spark          ││
 ││   sftp · dgx-spark                 ││
 ││   conectar · hetzner-01            ││
-└└─────────────────────────── ↑↓ 1/56 ┘┘
+└└─────────────────────────── ↑↓ 1/58 ┘┘
  ↵ ssh  r sondear  ⇥ detalle  ? más

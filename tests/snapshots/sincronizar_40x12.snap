@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ SINCRONIZAR · subida ──────────────┐│
+││ de ~/proyectos/cooperapp           ││
+││ a  hetzner-01:/var/www/cooperapp   ││
+││ [ ] borrar lo que sobra en destino ││
+││ excluir además:                    ││
+││ [ *.log┃ ]                         ││
+││                                    ││
+││ ↵ planificar   ⇥ campo             ││
+││ espacio marcar   esc cancelar      ││
+│└─────────────────────────────── 1/3 ┘│
+└──────────────────────────────────────┘

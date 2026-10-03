@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ SINCRONIZACIÓN GUARDADA · editar ──┐│
+││ host       hetzner-01              ││
+││ nombre     [ web-prod┃ ]           ││
+││ local      [ ~/proyectos/cooperapp ││
+││            ]                       ││
+││ remoto     [ /var/www/cooperapp ]  ││
+││ dirección  (•) subida              ││
+││                                    ││
+││ ^s/↵ guardar  ⇥ campo  esc volver  ││
+│└────────────────────────────── 1/11 ┘│
+└──────────────────────────────────────┘

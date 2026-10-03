@@ -453,7 +453,7 @@ pub fn texto_ascii(texto: &str) -> String {
             continue;
         }
         let sustituto = match caracter {
-            '·' | '—' | '–' | '─' | '━' => "-",
+            '·' | '—' | '–' | '─' | '━' | '−' => "-",
             '…' => "~",
             '×' => "x",
             '→' => "->",
@@ -523,6 +523,8 @@ pub enum Lista {
     Ayuda,
     Modal,
     DeliberacionHosts,
+    /// Lista del plan en la vista previa de una sincronización (Fase 8).
+    VistaPrevia,
 }
 
 /// Lo que se ve de una lista en el último pintado.

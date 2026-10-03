@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ TRANSFERENCIAS · 1 en curso · 0 en cola ─────────────────────────────────────┐
+│    ESTADO    DIRECCIÓN ORIGEN → DESTINO                 PROGRESO             │
+│▸ ◑ borrando  ↑ subida  cooperapp → hetzner-01:cooperapp borrando 1/2         │
+│  ● hecha     ↑ subida  notas → hetzner-01:notas         15 fichero(s)        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│──────────────────────────────────────────────────────────────────────────────│
+│  /home/hector/proyectos/cooperapp → hetzner-01:/var/www/cooperapp            │
+│  4.2 MB de 4.2 MB · 15 fichero(s) · 1 borrados                               │
+│                                                                              │
+└ 2 ───────────────────────────────────────────────────────────────────────────┘
+ ↓↑ mover  x cancelar  C limpiar  ↵ detalle  q volver  ? ayuda

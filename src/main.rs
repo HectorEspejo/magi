@@ -11,6 +11,7 @@ use tokio_util::codec::FramedRead;
 use magi::almacen;
 use magi::almacen::Almacen;
 use magi::app;
+use magi::archivos;
 use magi::cliente;
 use magi::config::{Config, Rutas};
 use magi::flota::{self, PeticionSondeo};
@@ -75,6 +76,9 @@ enum Comando {
     /// Lista los snippets con sus destinos resueltos, si son críticos y su
     /// último uso.
     Snippets,
+    /// Lista las sincronizaciones guardadas con su host, dirección, rutas,
+    /// borrado y último resultado.
+    Sincronizaciones,
 }
 
 #[derive(Subcommand)]
@@ -219,6 +223,15 @@ fn main() -> anyhow::Result<()> {
             let grupos = almacen.listar_grupos()?;
             almacen.cerrar()?;
             print!("{}", snippets::listado_cli(&snippets, &hosts, &grupos));
+            Ok(())
+        }
+        Some(Comando::Sincronizaciones) => {
+            // Solo lee el inventario: ejecutarlas necesita la TUI (plan y
+            // deliberación), así que tampoco hace falta el servidor.
+            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let sincronizaciones = almacen.listar_sincronizaciones()?;
+            almacen.cerrar()?;
+            print!("{}", archivos::listado::listado_cli(&sincronizaciones));
             Ok(())
         }
         Some(Comando::Conectar { host }) => {

@@ -978,7 +978,7 @@ impl App {
     }
 
     /// Sin servidor (caído o de otra versión) no hay nada que lanzar.
-    fn avisar_si_no_hay_servidor(&mut self) -> bool {
+    pub(super) fn avisar_si_no_hay_servidor(&mut self) -> bool {
         if self.servidor_incompatible.is_some() {
             self.mensaje(
                 "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
@@ -1183,7 +1183,7 @@ impl App {
     /// Rellena `ejecucion_resultado` de una deliberación que no llegó al
     /// servidor (o que abrió pestañas) y anota `deliberacion_aprobada` o
     /// `deliberacion_forzada` con el resultado, como haría el servidor.
-    fn cerrar_deliberacion(
+    pub(super) fn cerrar_deliberacion(
         &mut self,
         deliberacion: &DeliberacionLanzada,
         resultado: crate::deliberacion::EjecucionResultado,

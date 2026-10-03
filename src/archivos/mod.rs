@@ -9,6 +9,7 @@
 
 pub mod edicion;
 pub mod exclusiones;
+pub mod listado;
 pub mod local;
 pub mod marcas;
 pub mod panel;

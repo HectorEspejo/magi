@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ [tmp]/hogar ───────────────────────────────────────────────────────────────────────────┐┌ /var/www/cooperapp ──────────────────────────────────────────────────────────────────────────────┐
+│▸  ..                                                                                             ││   ..                                                                                             │
+│   app                — 2025                                                                      ││   app                     — 2025                                                                 │
+│   static             — 2025                                                                      ││   static                  — 2025                                                                 │
+│   config.yaml     2 kB 2025   ≠                                                                  ││   backup.tar.gz      1.1 MB 2025   ✕                                                             │
+│   main.py        14 kB 2025   ≠                                                                  ││   config.yaml          1 kB 2025   ≠                                                             │
+│   notas.md       512 B 2025   ✕                                                                  ││   main.py             14 kB 2025   ≠                                                             │
+│   README.md       3 kB 2025                                                                      ││   README.md            3 kB 2025                                                                 │
+│                                                                                                  ││   requirements.txt    300 B 2025   ✕                                                             │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                               ┌ MAGI · SINCRONIZACIONES · hetzner-01 ──────────────────────────── 3 ─┐                                                               │
+│                                                               │  NOMBRE     DIR.  LOCAL → REMOTO                              ÚLTIMA │                                                               │
+│                                                               │▸ estaticos  ↑ −   ~/web/static → /srv/static                  ✕ 2025 │                                                               │
+│                                                               │  logs       ↓     ~/logs/hetz01 ← /var/log/nginx              ✓ hoy  │                                                               │
+│                                                               │  web-prod   ↑     ~/proyectos/cooperapp → /var/www/cooperapp  ✓ ayer │                                                               │
+│                                                               │  ──────────────────────────────────────────────────────────────────  │                                                               │
+│                                                               │  estaticos · subida · borra en destino lo que sobra                  │                                                               │
+│                                                               ├──────────────────────────────────────────────────────────────────────┤                                                               │
+│                                                               │ ↵ ejecutar  n nueva  e editar  x borrar  q volver                    │                                                               │
+│                                                               └──────────────────────────────────────────────────────────────────────┘                                                               │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+│                                                                                                  ││                                                                                                  │
+└ 7 elementos · 20 kB ─────────────────────────────────────────────────────────────────────────────┘└ 8 elementos · 1.1 MB ────────────────────────────────────────────────────────────────────────────┘
+ ⇥ panel  ↵ abrir  c copiar  m mover  x borrar  E editar  S sincronizar  p permisos  L guardadas  r renombrar  d dir  . ocultos  / filtrar  g ruta  h host  t cola  q volver  ? ayuda

@@ -38,7 +38,7 @@ source: tests/redimensionado/vistas_g.rs
 │                                                              ││   editar host · hetzner-02                                    acción │                                                               │
 │                                                              ││   sftp · hetzner-02                                         archivos │                                                               │
 │                                                              ││   conectar · mac-mini-m1                                        host │                                                               │
-│                                                              │└───────────────────────────────────────────────────────────── ↑↓ 1/50 ┘                                                               │
+│                                                              │└───────────────────────────────────────────────────────────── ↑↓ 1/52 ┘                                                               │
 │                                                              │                                                                                                                                       │
 │                                                              │                                                                                                                                       │
 │                                                              │                                                                                                                                       │

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌──────────────────────────────────────┐
+│┌ SINCRONIZAR · web-prod ── ~/proye… ┐│
+││ +2 ~2 −2 · 118 kB · 37 excl. · 1 … ││
+││ ────────────────────────────────── ││
+││ ~ config.yaml                 2 kB ││
+││ ~ main.py                    14 kB ││
+││ · static/compartido                ││
+││ ────────────────────────────────── ││
+││ ⚠ borrará 2 · deliberación MAGI    ││
+││ ↵ continuar  esc cancelar          ││
+│└──────────────────────────── ↑↓ 1/5 ┘│
+└──────────────────────────────────────┘

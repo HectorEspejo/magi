@@ -6,6 +6,10 @@
 //! columnas se ocultan por prioridad (el glifo de estado y `origen → destino`
 //! nunca) y, con la vista baja (< 20 filas), el detalle inferior se pliega y
 //! se abre con `↵`.
+//!
+//! Una sincronización con «borrar» (Fase 8) pasa al terminar la copia por la
+//! fase `borrando`, en rojo, con «borrando N/M» en el progreso y «N borrados»
+//! en el detalle.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -47,7 +51,8 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         .map(|archivos| archivos.cola.as_slice())
         .unwrap_or(&[]);
     let cuantas = |estado| filas.iter().filter(|fila| fila.estado == estado).count();
-    let en_curso = cuantas(EstadoTransferencia::EnCurso);
+    // Borrando sigue en curso: la transferencia aún no ha terminado.
+    let en_curso = cuantas(EstadoTransferencia::EnCurso) + cuantas(EstadoTransferencia::Borrando);
     let en_cola = cuantas(EstadoTransferencia::EnCola);
     let titulo = disposicion::recortar(
         &format!("TRANSFERENCIAS {punto} {en_curso} en curso {punto} {en_cola} en cola"),
@@ -255,7 +260,9 @@ fn linea_de(
         estilo
     } else {
         match fila.estado {
-            EstadoTransferencia::Error => Style::default().fg(tema.paleta.critico),
+            EstadoTransferencia::Error | EstadoTransferencia::Borrando => {
+                Style::default().fg(tema.paleta.critico)
+            }
             EstadoTransferencia::Hecha => Style::default().fg(tema.paleta.correcto),
             EstadoTransferencia::EnCurso => Style::default().fg(tema.paleta.acento),
             _ => Style::default().fg(tema.paleta.inactivo),
@@ -290,11 +297,14 @@ fn linea_de(
     Line::from(spans)
 }
 
-/// Columna de progreso: el error si lo hay, los ficheros de un directorio
-/// terminado o el porcentaje y los bytes hechos.
+/// Columna de progreso: el error si lo hay, lo borrado de lo que hay que
+/// borrar, los ficheros de un directorio terminado o el porcentaje y los
+/// bytes hechos.
 fn progreso_de(fila: &InfoTransferencia) -> String {
     if let Some(error) = &fila.error {
         error.clone()
+    } else if fila.estado == EstadoTransferencia::Borrando {
+        format!("borrando {}/{}", fila.borrados, fila.borrados_total)
     } else if fila.es_directorio && fila.estado.terminada() {
         format!("{} fichero(s)", fila.ficheros_hechos)
     } else {
@@ -370,6 +380,9 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, filas: &[InfoTransf
         }
         if fila.omitidos > 0 {
             detalle.push_str(&format!(" {punto} {} omitido(s)", fila.omitidos));
+        }
+        if fila.borrados_total > 0 {
+            detalle.push_str(&format!(" {punto} {} borrados", fila.borrados));
         }
         lineas.push(Line::from(Span::styled(
             recortar(detalle),
