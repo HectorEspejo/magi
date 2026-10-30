@@ -146,7 +146,12 @@ Se hace una sola vez, en este orden, después de completar §2.
    ```
 
    La clave de host de `aur.archlinux.org` la añade el workflow con
-   `ssh-keyscan`; no hace falta versionar `known_hosts`.
+   `ssh-keyscan`, pero **comprueba sus huellas** contra las que AUR publica en
+   <https://aur.archlinux.org> (ED25519, ECDSA y RSA): si un intermediario
+   sirviera otra clave, el job se para. No versionamos `known_hosts`. Si AUR
+   rotara sus claves, actualiza la lista `esperadas` de
+   `.github/workflows/publicar-aur.yml` con las nuevas huellas publicadas; no
+   desactives esa comprobación.
 
 6. **Crear los secretos del repositorio** (Settings → Secrets and variables →
    Actions):
