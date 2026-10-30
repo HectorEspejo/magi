@@ -59,7 +59,7 @@ async fn una_version_distinta_no_coopera() {
     // La versión que viaja es la **del servidor**, que es lo que permite al
     // cliente decir si el viejo es él o el servidor.
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
             // Y su pid, para que un MAGI de otra versión pueda pararlo (3b).
             assert_eq!(pid, Some(std::process::id()));
@@ -110,7 +110,7 @@ async fn un_cliente_de_la_version_tres_no_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 3).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
             assert_eq!(pid, Some(std::process::id()));
         }
@@ -132,9 +132,8 @@ async fn un_cliente_de_la_version_cuatro_no_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 4).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
-            assert_eq!(version, 5);
             assert_eq!(pid, Some(std::process::id()));
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),

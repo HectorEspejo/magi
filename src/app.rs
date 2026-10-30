@@ -40,6 +40,7 @@ pub mod guardadas;
 pub mod lanzar;
 pub mod permisos;
 mod resultados;
+pub mod servidor_anterior;
 pub mod sincronizar;
 mod snippets;
 pub mod teclado;
@@ -2243,9 +2244,9 @@ impl App {
                 self.servidor = servidor;
                 self.servidor_desde = Some(Instant::now());
             }
-            Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
-                self.servidor_incompatible = Some(version);
-                self.pid_incompatible = pid;
+            Err(cliente::FalloConexion::VersionIncompatible(rechazo)) => {
+                self.servidor_incompatible = Some(rechazo.version);
+                self.pid_incompatible = rechazo.pid;
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
                 self.mensaje(motivo, true);

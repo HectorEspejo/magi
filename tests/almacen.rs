@@ -1562,3 +1562,62 @@ fn la_ultima_ejecucion_y_su_resultado_se_guardan_aparte() {
     almacen.borrar_sincronizacion(id).unwrap();
     assert!(almacen.actualizar_sincronizacion(id, &datos).is_err());
 }
+
+/// Una `magi.db` con `user_version` mayor que la que conoce el binario no se
+/// abre ni se toca (Fase 9): las migraciones solo van hacia delante.
+#[test]
+fn una_base_de_datos_de_version_futura_no_se_abre_ni_se_toca() {
+    let directorio = tempfile::tempdir().unwrap();
+    let ruta = directorio.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+    }
+    let antes = std::fs::read(&ruta).unwrap();
+    let error = match Almacen::abrir(&ruta) {
+        Ok(_) => panic!("una versión futura no se abre"),
+        Err(error) => error,
+    };
+    let mensaje = format!("{error:#}");
+    assert!(
+        mensaje.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{mensaje}"
+    );
+    // Ni contenido, ni diario WAL, ni permisos: el fichero queda igual.
+    assert_eq!(
+        std::fs::read(&ruta).unwrap(),
+        antes,
+        "el fichero queda intacto"
+    );
+    assert!(!directorio.path().join("magi.db-wal").exists());
+    let conexion = rusqlite::Connection::open(&ruta).unwrap();
+    let version: i64 = conexion
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 99);
+    let marca: String = conexion
+        .query_row("SELECT valor FROM MARCA", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(marca, "intacta");
+}
+
+/// La versión de esquema que conoce el binario sí se abre (control del test
+/// anterior).
+#[test]
+fn la_version_de_esquema_actual_se_abre() {
+    let directorio = tempfile::tempdir().unwrap();
+    let ruta = directorio.path().join("magi.db");
+    Almacen::abrir(&ruta).unwrap().cerrar().unwrap();
+    let almacen = Almacen::abrir(&ruta).expect("la versión actual se abre");
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
+}

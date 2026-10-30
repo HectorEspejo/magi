@@ -671,6 +671,9 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 MensajeServidor::VersionIncompatible {
                     version: VERSION_PROTOCOLO,
                     pid: Some(std::process::id()),
+                    version_app: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    clientes: None,
+                    trabajo: None,
                 },
             );
             return;
@@ -747,6 +750,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
     };
     let mensaje = MensajeServidor::Bienvenida {
         version: VERSION_PROTOCOLO,
+        version_app: env!("CARGO_PKG_VERSION").to_string(),
         pid: std::process::id(),
         cliente_id,
         clientes: estado_bloqueado.clientes.len() as u32,
@@ -2518,7 +2522,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             imprime_ejecuciones(&ejecuciones);
             Ok(0)
         }
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             let pid = pid.or(pid_par);
             println!(
                 "El servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir.",
@@ -2572,7 +2576,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count(),
         ),
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             drop(stream);
             // El pid del kernel antes que el que dice el propio servidor.
             return parar_otra_version(rutas, version, pid_par.or(pid), si).await;

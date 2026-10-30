@@ -194,13 +194,45 @@ fn peticion_de_respuesta(mensaje: &MensajeServidor) -> Option<u64> {
     (peticion_id >= RANGO_ESPERAS).then_some(peticion_id)
 }
 
+/// Rechazo del saludo por otra versión de protocolo, leído del JSON
+/// genérico de la primera respuesta: así se entiende igual a un servidor
+/// anterior (v5 o menos), al actual y a uno futuro. Los campos que falten se
+/// quedan en `None` («recuento desconocido»), salvo dentro de `trabajo`, donde
+/// un campo ausente vale 1 (hay trabajo) para no parar nada por error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RechazoVersion {
+    /// Protocolo que habla el servidor.
+    pub version: u32,
+    /// Versión de la app del servidor, si la informa.
+    pub version_app: Option<String>,
+    /// Pid del servidor: del mensaje o, si es antiguo, del socket.
+    pub pid: Option<u32>,
+    /// Ventanas adjuntas además de la que pregunta.
+    pub clientes: Option<u32>,
+    /// Lo que custodia; `None` si su versión no lo informa.
+    pub trabajo: Option<crate::protocolo::TrabajoServidor>,
+}
+
+impl RechazoVersion {
+    /// Rechazo mínimo, para pruebas y para servidores muy antiguos.
+    pub fn nueva(version: u32) -> Self {
+        Self {
+            version,
+            version_app: None,
+            pid: None,
+            clientes: None,
+            trabajo: None,
+        }
+    }
+}
+
 /// Conecta con el servidor, lanzándolo si no está; errores legibles.
 #[derive(Debug)]
 pub enum FalloConexion {
-    /// El servidor habla otra versión de protocolo: la TUI arranca sin
-    /// sesiones y lo explica en la barra. Lleva la versión **del servidor** y
-    /// su pid (del mensaje o, si es antiguo, del socket).
-    VersionIncompatible { version: u32, pid: Option<u32> },
+    /// El servidor habla otra versión de protocolo. La decisión (sustituirlo,
+    /// preguntar o rendirse ante uno más nuevo) la toma el cliente en
+    /// `app::servidor_anterior`.
+    VersionIncompatible(RechazoVersion),
     /// No hay manera de llegar a un servidor.
     Inaccesible(String),
 }
@@ -299,10 +331,17 @@ async fn saludar(
             ))
         }
     };
-    match decodificar::<MensajeServidor>(&linea)
-        .map_err(|error| FalloConexion::Inaccesible(error.to_string()))?
-    {
-        mensaje @ MensajeServidor::Bienvenida { .. } => {
+    // La primera respuesta se lee como JSON genérico (contrato estable,
+    // Fase 9): un rechazo de cualquier versión —pasada o futura— se entiende
+    // sin conocer su forma exacta.
+    let valor: serde_json::Value = serde_json::from_str(&linea).map_err(|error| {
+        FalloConexion::Inaccesible(format!("respuesta no válida del servidor: {error}"))
+    })?;
+    match valor.get("tipo").and_then(serde_json::Value::as_str) {
+        Some("Bienvenida") => {
+            let mensaje: MensajeServidor = serde_json::from_value(valor).map_err(|error| {
+                FalloConexion::Inaccesible(format!("bienvenida del servidor no válida: {error}"))
+            })?;
             // La bienvenida también va a la UI: con ella reconcilia las
             // sesiones que el servidor ya custodiaba.
             let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
@@ -319,15 +358,51 @@ async fn saludar(
             ));
             Ok(cliente)
         }
-        MensajeServidor::VersionIncompatible { version, pid } => {
-            Err(FalloConexion::VersionIncompatible {
-                version,
-                pid: pid.or(pid_par),
-            })
-        }
+        Some("VersionIncompatible") => Err(FalloConexion::VersionIncompatible(leer_rechazo(
+            &valor, pid_par,
+        ))),
         otro => Err(FalloConexion::Inaccesible(format!(
             "respuesta inesperada al saludo: {otro:?}"
         ))),
+    }
+}
+
+/// Extrae de un `VersionIncompatible` genérico lo que hace falta para decidir.
+fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersion {
+    let version = valor
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    let version_app = valor
+        .get("version_app")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let pid = valor
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .map(|pid| pid as u32)
+        .or(pid_par);
+    let clientes = valor
+        .get("clientes")
+        .and_then(serde_json::Value::as_u64)
+        .map(|clientes| clientes as u32);
+    // Si `trabajo` está pero no se entiende, vale como «todo lleno»: nunca se
+    // para un servidor por una lectura optimista.
+    let trabajo = valor.get("trabajo").map(|trabajo| {
+        serde_json::from_value::<crate::protocolo::TrabajoServidor>(trabajo.clone())
+            .unwrap_or(crate::protocolo::TrabajoServidor {
+                sesiones: 1,
+                transferencias: 1,
+                tuneles: 1,
+                ejecuciones: 1,
+            })
+    });
+    RechazoVersion {
+        version,
+        version_app,
+        pid,
+        clientes,
+        trabajo,
     }
 }
 
@@ -504,17 +579,20 @@ pub async fn esperar_socket(ruta: &std::path::Path, plazo: Duration) -> bool {
 /// Comprueba la conexión y devuelve el error legible para mensajes.
 pub fn describe_fallo(fallo: &FalloConexion) -> String {
     match fallo {
-        FalloConexion::VersionIncompatible { version, pid } => {
-            let pid = pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default();
-            if *version < crate::protocolo::VERSION_PROTOCOLO {
+        FalloConexion::VersionIncompatible(rechazo) => {
+            let pid = rechazo
+                .pid
+                .map(|pid| format!(" (pid {pid})"))
+                .unwrap_or_default();
+            if rechazo.version < VERSION_PROTOCOLO {
                 format!(
-                    "el servidor{pid} habla el protocolo {version} y esta MAGI el {}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
-                    crate::protocolo::VERSION_PROTOCOLO
+                    "el servidor{pid} habla el protocolo {} y esta MAGI el {VERSION_PROTOCOLO}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
+                    rechazo.version
                 )
             } else {
                 format!(
-                    "el servidor{pid} habla el protocolo {version}, más nuevo que el {} de esta MAGI",
-                    crate::protocolo::VERSION_PROTOCOLO
+                    "el servidor{pid} habla el protocolo {}, más nuevo que el {VERSION_PROTOCOLO} de esta MAGI",
+                    rechazo.version
                 )
             }
         }

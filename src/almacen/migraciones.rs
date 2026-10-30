@@ -12,6 +12,20 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_6_SINCRONIZACIONES,
 ];
 
+/// Versión de esquema que conoce este binario (el número de migraciones).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64;
+
+/// Rechaza una base de datos creada por una versión más nueva de MAGI: las
+/// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
+/// de activar WAL o ajustar permisos, para no modificarlo siquiera.
+pub fn comprobar_version(conexion: &Connection) -> Result<()> {
+    let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
+    if version > VERSION_BD {
+        anyhow::bail!("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI");
+    }
+    Ok(())
+}
+
 const MIGRACION_1_INICIAL: &str = r#"
 CREATE TABLE GRUPOS (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +243,7 @@ CREATE INDEX idx_sincronizaciones_dir_host ON SINCRONIZACIONES_DIR(host_id);
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {
+    comprobar_version(conexion)?;
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
     for (indice, sql) in MIGRACIONES.iter().enumerate() {
         let numero = indice as i64 + 1;

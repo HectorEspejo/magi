@@ -348,6 +348,7 @@ pub fn texto_de(backend: &TestBackend) -> String {
 pub fn bienvenida(cliente_id: u32, sesiones: Vec<InfoSesion>) -> MensajeServidor {
     MensajeServidor::Bienvenida {
         version: magi::protocolo::VERSION_PROTOCOLO,
+        version_app: "1.0.0".to_string(),
         pid: 4242,
         cliente_id,
         clientes: 1,
