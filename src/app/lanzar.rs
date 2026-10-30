@@ -979,11 +979,8 @@ impl App {
 
     /// Sin servidor (caído o de otra versión) no hay nada que lanzar.
     pub(super) fn avisar_si_no_hay_servidor(&mut self) -> bool {
-        if self.servidor_incompatible.is_some() {
-            self.mensaje(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
-                true,
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
             return true;
         }
         if self.servidor_caido {

@@ -2689,8 +2689,22 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count(),
         ),
-        MensajeServidor::VersionIncompatible { version, pid, .. } => {
+        MensajeServidor::VersionIncompatible {
+            version,
+            pid,
+            version_app,
+            ..
+        } => {
             drop(stream);
+            // Un servidor más nuevo que este binario no se para nunca desde
+            // aquí: podría custodiar trabajo que esta versión no entiende.
+            if version > VERSION_PROTOCOLO {
+                let app = version_app.map(|app| format!(" {app}")).unwrap_or_default();
+                println!(
+                    "El servidor{app} habla la versión de protocolo {version}, más nueva que la {VERSION_PROTOCOLO} de este MAGI: no se para desde un binario más antiguo. Actualiza MAGI."
+                );
+                return Ok(1);
+            }
             // El pid del kernel antes que el que dice el propio servidor.
             return parar_otra_version(rutas, version, pid_par.or(pid), si).await;
         }
@@ -2739,6 +2753,14 @@ async fn parar_otra_version(
     pid: Option<u32>,
     si: bool,
 ) -> Result<i32> {
+    // Defensa en profundidad: nunca se manda SIGTERM a un servidor más nuevo
+    // que este binario (podría custodiar trabajo que esta versión no entiende).
+    if version > VERSION_PROTOCOLO {
+        println!(
+            "El servidor habla la versión de protocolo {version}, más nueva que la {VERSION_PROTOCOLO} de este MAGI: no se para desde un binario más antiguo. Actualiza MAGI."
+        );
+        return Ok(1);
+    }
     let Some(pid) = pid else {
         println!(
             "El servidor en marcha habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}, y no se pudo averiguar su pid. Búscalo con «pgrep -f 'magi --servidor'» y páralo con «kill <pid>»."

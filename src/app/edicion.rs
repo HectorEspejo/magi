@@ -1167,11 +1167,8 @@ impl App {
 
     /// Por qué no se puede hablar con el servidor ahora, si es el caso.
     fn motivo_sin_servidor(&self) -> Option<String> {
-        if self.servidor_incompatible.is_some() {
-            return Some(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir"
-                    .to_string(),
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            return Some(motivo);
         }
         if self.servidor_caido {
             return Some("el servidor de sesiones ha caído; relánzalo primero".to_string());

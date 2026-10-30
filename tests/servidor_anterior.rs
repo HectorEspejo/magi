@@ -6,6 +6,7 @@ use std::io::BufRead as _;
 use std::path::Path;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 use tokio::sync::mpsc;
 
 use magi::cliente::{self, FalloSustitucion, RechazoVersion};
@@ -99,6 +100,60 @@ async fn un_servidor_que_no_libera_el_lock_no_se_sustituye() {
     assert!(hijo.try_wait().expect("estado del ayudante").is_none());
     let _ = hijo.kill();
     let _ = hijo.wait();
+}
+
+/// `magi servidor parar --si` no para un servidor más nuevo que este
+/// binario: podría custodiar trabajo que esta versión no entiende. Se comprueba
+/// que devuelve error, que el socket sigue donde estaba y que un proceso
+/// inocente con el pid que anuncia el rechazo no recibe ninguna señal.
+#[tokio::test]
+async fn parar_no_toca_un_servidor_mas_nuevo() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let rutas = rutas_de(temporal.path());
+    std::fs::create_dir_all(rutas.dir_runtime()).expect("runtime");
+    // Si el guardia fallara y se mandara SIGTERM al pid anunciado, moriría.
+    let mut victima = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("proceso víctima");
+    let pid_victima = victima.id();
+    let ruta = magi::servidor::ruta_socket(&rutas);
+    let escucha = tokio::net::UnixListener::bind(&ruta).expect("socket falso");
+    let tarea = tokio::spawn(async move {
+        let (stream, _) = escucha.accept().await.expect("conexión del CLI");
+        let (lectura, mut escritura) = stream.into_split();
+        let mut lector = tokio::io::BufReader::new(lectura);
+        let mut saludo = String::new();
+        let _ = lector.read_line(&mut saludo).await;
+        let respuesta = format!(
+            r#"{{"tipo":"VersionIncompatible","version":99,"pid":{pid_victima},"version_app":"9.9.9","clientes":0,"trabajo":{{"sesiones":0,"transferencias":0,"tuneles":0,"ejecuciones":0}}}}"#
+        );
+        escritura
+            .write_all(respuesta.as_bytes())
+            .await
+            .expect("escribiendo el rechazo");
+        escritura
+            .write_all(b"\n")
+            .await
+            .expect("escribiendo el salto");
+        let _ = escritura.shutdown().await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    });
+    let codigo = magi::servidor::parar_cli(&rutas, true)
+        .await
+        .expect("parar_cli no debe fallar");
+    assert_eq!(codigo, 1, "un servidor más nuevo no se para");
+    let _ = tokio::time::timeout(Duration::from_secs(2), tarea).await;
+    assert!(
+        victima.try_wait().expect("estado de la víctima").is_none(),
+        "se mandó SIGTERM al pid anunciado por un servidor más nuevo"
+    );
+    assert!(
+        ruta.exists(),
+        "el socket de un servidor más nuevo no se toca"
+    );
+    let _ = victima.kill();
+    let _ = victima.wait();
 }
 
 /// Test de apoyo: cuando la prueba de arriba lo lanza con

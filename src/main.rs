@@ -754,13 +754,26 @@ async fn esperar_tunel(
             | MensajeServidor::HuellaDesconocida { .. }
             | MensajeServidor::HuellaCambiada { .. } => return Ok(DesenlaceTunel::SinCredenciales),
             MensajeServidor::VersionIncompatible { version, pid, .. } => {
-                anyhow::bail!(
-                    "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
-                    pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
-                );
+                return Err(error_servidor_incompatible(version, pid));
             }
             _ => {}
         }
+    }
+}
+
+/// Error de los comandos de CLI cuando el servidor habla otra versión de
+/// protocolo. A un servidor anterior se le puede parar a mano; uno más nuevo
+/// no se toca desde este binario: se actualiza MAGI.
+fn error_servidor_incompatible(version: u32, pid: Option<u32>) -> anyhow::Error {
+    let pid = pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default();
+    if version > VERSION_PROTOCOLO {
+        anyhow::anyhow!(
+            "el servidor{pid} habla la versión de protocolo {version}, más nueva que la {VERSION_PROTOCOLO} de este MAGI: actualiza MAGI"
+        )
+    } else {
+        anyhow::anyhow!(
+            "el servidor{pid} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir"
+        )
     }
 }
 
@@ -917,10 +930,7 @@ async fn leer_tuneles(stream: &mut UnixStream) -> anyhow::Result<Option<Vec<Info
                 MensajeServidor::Bienvenida { tuneles, .. } => return Ok(Some(tuneles)),
                 MensajeServidor::Tuneles { lista } => return Ok(Some(lista)),
                 MensajeServidor::VersionIncompatible { version, pid, .. } => {
-                    anyhow::bail!(
-                        "el servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir",
-                        pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
-                    );
+                    return Err(error_servidor_incompatible(version, pid));
                 }
                 _ => {}
             }

@@ -2261,6 +2261,12 @@ impl App {
     /// §7.2): uno más nuevo se avisa y no se toca nunca; uno sin trabajo ni
     /// ventanas se sustituye sin preguntar; con trabajo o recuento
     /// desconocido decide el usuario en el diálogo.
+    /// Motivo por el que las operaciones que necesitan servidor no pueden
+    /// seguir, o `None` si el servidor es de la misma versión.
+    fn motivo_servidor_incompatible(&self) -> Option<String> {
+        servidor_anterior::motivo_sin_servidor(self.servidor_incompatible.as_ref())
+    }
+
     fn rechazo_del_servidor(&mut self, rechazo: cliente::RechazoVersion) {
         self.servidor_incompatible = Some(rechazo.clone());
         match servidor_anterior::decidir(&rechazo) {
@@ -3133,11 +3139,8 @@ impl App {
         host_id: i64,
         comandos_iniciales: Vec<protocolo::ComandoInicial>,
     ) -> bool {
-        if self.servidor_incompatible.is_some() {
-            self.mensaje(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
-                true,
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
             return false;
         }
         if self.servidor_caido {
@@ -5683,11 +5686,8 @@ impl App {
 
     /// Pide una operación de túnel al servidor y la deja anotada como en vuelo.
     pub fn pedir_tunel(&mut self, tunel_id: i64, que: PeticionTunel) {
-        if self.servidor_incompatible.is_some() {
-            self.mensaje(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
-                true,
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
             return;
         }
         if self.servidor_caido {

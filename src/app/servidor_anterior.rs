@@ -158,6 +158,19 @@ pub fn aviso_barra(rechazo: &RechazoVersion) -> String {
     )
 }
 
+/// Por qué no se puede usar el servidor para una operación que lo necesita
+/// (abrir sesión, túnel, edición remota…). `None` si no hay incompatibilidad
+/// de versión. Un servidor más nuevo nunca se para desde este binario: se
+/// actualiza MAGI; un servidor anterior sin sustituir se para a mano.
+pub fn motivo_sin_servidor(rechazo: Option<&RechazoVersion>) -> Option<String> {
+    let rechazo = rechazo?;
+    Some(if es_mas_nuevo(rechazo) {
+        "este magi es más antiguo que su servidor; actualiza magi".to_string()
+    } else {
+        "servidor de otra versión de protocolo: «magi servidor parar» y volver a abrir".to_string()
+    })
+}
+
 /// Lo que se perderá al pararlo, para la confirmación: «cerrará 2 sesiones y
 /// 1 túnel». Sin recuento conocido se avisa de que no se sabe.
 pub fn confirmacion(rechazo: &RechazoVersion) -> String {
@@ -373,5 +386,24 @@ mod pruebas {
         }
         assert!(DialogoServidorAnterior::Sustituyendo(original.clone()).sustituyendo());
         assert!(!DialogoServidorAnterior::Aviso(original).sustituyendo());
+    }
+
+    #[test]
+    fn las_operaciones_que_necesitan_servidor_distinguen_mas_nuevo_de_anterior() {
+        assert_eq!(motivo_sin_servidor(None), None);
+        let mas_nuevo = rechazo(7, Some(trabajo(0, 0, 0, 0)), Some(0));
+        assert_eq!(
+            motivo_sin_servidor(Some(&mas_nuevo)).as_deref(),
+            Some("este magi es más antiguo que su servidor; actualiza magi")
+        );
+        let anterior = rechazo(5, Some(trabajo(0, 0, 0, 0)), Some(0));
+        let motivo = motivo_sin_servidor(Some(&anterior)).unwrap();
+        assert!(motivo.contains("magi servidor parar"), "{motivo}");
+        assert!(
+            !motivo_sin_servidor(Some(&mas_nuevo))
+                .unwrap()
+                .contains("servidor parar"),
+            "un servidor más nuevo nunca se para desde aquí"
+        );
     }
 }
