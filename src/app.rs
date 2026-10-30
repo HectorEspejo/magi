@@ -2298,19 +2298,25 @@ impl App {
                 self.servidor = servidor;
                 self.servidor_desde = Some(Instant::now());
                 self.servidor_incompatible = None;
+                // La versión que corre ahora es la de este binario; la del
+                // rechazo era la del servidor viejo.
                 self.mensaje(
-                    format!(
-                        "servidor de sesiones actualizado a {}",
-                        servidor_anterior::version_app(&rechazo)
-                    ),
+                    format!("servidor de sesiones actualizado a {}", crate::VERSION_APP),
                     false,
                 );
             }
             Err(fallo) => {
+                let anterior_parado = matches!(fallo, cliente::FalloSustitucion::Parado(_));
+                if anterior_parado {
+                    // El viejo ya no está: la barra no puede seguir diciendo
+                    // que hay un servidor anterior sin sustituir.
+                    self.servidor_incompatible = None;
+                }
                 self.dialogo = Some(Dialogo::ServidorAnterior(
                     servidor_anterior::DialogoServidorAnterior::Error {
                         rechazo,
                         motivo: fallo.texto(),
+                        anterior_parado,
                     },
                 ));
             }
@@ -2352,26 +2358,31 @@ impl App {
                 self.servidor_incompatible = None;
                 self.servidor_caido = false;
                 self.dialogo = None;
-                let version = rechazo
-                    .as_ref()
-                    .map(servidor_anterior::version_app)
-                    .unwrap_or_else(|| "la nueva".to_string());
+                // La versión nueva es la de este binario (la del rechazo era
+                // la del servidor anterior).
                 self.mensaje(
-                    format!("servidor de sesiones actualizado a {version}"),
+                    format!("servidor de sesiones actualizado a {}", crate::VERSION_APP),
                     false,
                 );
             }
-            Err(fallo) => match rechazo {
-                Some(rechazo) => {
-                    self.dialogo = Some(Dialogo::ServidorAnterior(
-                        servidor_anterior::DialogoServidorAnterior::Error {
-                            rechazo,
-                            motivo: fallo.texto(),
-                        },
-                    ));
+            Err(fallo) => {
+                let anterior_parado = matches!(fallo, cliente::FalloSustitucion::Parado(_));
+                if anterior_parado {
+                    self.servidor_incompatible = None;
                 }
-                None => self.mensaje(fallo.texto(), true),
-            },
+                match rechazo {
+                    Some(rechazo) => {
+                        self.dialogo = Some(Dialogo::ServidorAnterior(
+                            servidor_anterior::DialogoServidorAnterior::Error {
+                                rechazo,
+                                motivo: fallo.texto(),
+                                anterior_parado,
+                            },
+                        ));
+                    }
+                    None => self.mensaje(fallo.texto(), true),
+                }
+            }
         }
     }
 
@@ -4169,12 +4180,19 @@ impl App {
             Estado::Sustituyendo(rechazo) => {
                 self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Sustituyendo(rechazo)));
             }
-            Estado::Error { rechazo, motivo } => match tecla.code {
+            Estado::Error {
+                rechazo,
+                motivo,
+                anterior_parado,
+            } => match tecla.code {
                 KeyCode::Esc => self.dialogo = None,
                 KeyCode::Char('q') | KeyCode::Char('Q') => self.intentar_salir(),
                 _ => {
-                    self.dialogo =
-                        Some(Dialogo::ServidorAnterior(Estado::Error { rechazo, motivo }));
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Error {
+                        rechazo,
+                        motivo,
+                        anterior_parado,
+                    }));
                 }
             },
         }

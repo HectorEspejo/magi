@@ -882,7 +882,11 @@ pub enum MensajeCliente {
 /// `VersionIncompatible`. Si el JSON del servidor no trae un campo, se lee
 /// como 1 («hay trabajo»): un servidor futuro que añada otro tipo de trabajo
 /// nunca se para por error.
+/// Cualquier campo desconocido lo invalida entero: el cliente lo lee como
+/// «todo lleno» y nunca sustituye un servidor que custodia un trabajo que esta
+/// versión no conoce.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrabajoServidor {
     #[serde(default = "uno")]
     pub sesiones: u32,

@@ -72,10 +72,14 @@ pub fn dibujar(
             Hoja::nueva(TITULO, cuerpo_sustituyendo(rechazo, tema), Vec::new()),
             false,
         ),
-        DialogoServidorAnterior::Error { motivo, .. } => (
+        DialogoServidorAnterior::Error {
+            motivo,
+            anterior_parado,
+            ..
+        } => (
             Hoja::nueva(
                 TITULO,
-                cuerpo_error(rechazo, motivo, estrecho, tema),
+                cuerpo_error(rechazo, motivo, *anterior_parado, estrecho, tema),
                 vec![teclas(
                     &[("esc", "seguir sin sesiones"), ("q", "salir")],
                     tema,
@@ -194,6 +198,7 @@ fn cuerpo_sustituyendo(rechazo: &RechazoVersion, tema: &Tema) -> Vec<Line<'stati
 fn cuerpo_error(
     rechazo: &RechazoVersion,
     motivo: &str,
+    anterior_parado: bool,
     estrecho: bool,
     tema: &Tema,
 ) -> Vec<Line<'static>> {
@@ -211,7 +216,11 @@ fn cuerpo_error(
             .add_modifier(Modifier::BOLD),
     )));
     cuerpo.push(linea(format!("  {motivo}")));
-    cuerpo.push(linea("  El servidor anterior sigue en marcha."));
+    cuerpo.push(linea(if anterior_parado {
+        "  El servidor anterior se paró, pero el nuevo no ha arrancado."
+    } else {
+        "  El servidor anterior sigue en marcha."
+    }));
     cuerpo
 }
 

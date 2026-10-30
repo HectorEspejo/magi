@@ -2524,7 +2524,11 @@ fn imprime_cabecera_servidor(
     let pid = pid.map(|pid| format!(" · pid {pid}")).unwrap_or_default();
     println!("servidor {version_app} · protocolo {version}{pid}");
     let actual = env!("CARGO_PKG_VERSION");
-    if version_app != actual || version != VERSION_PROTOCOLO {
+    if version > VERSION_PROTOCOLO {
+        println!(
+            "! el servidor es más nuevo que este magi ({actual}); actualiza MAGI: este binario no puede ni debe pararlo"
+        );
+    } else if version_app != actual || version != VERSION_PROTOCOLO {
         println!(
             "! el servidor es de otra versión que este magi ({actual}); al abrir magi se sustituirá o te preguntará"
         );
@@ -2654,8 +2658,53 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
     }
 }
 
+/// Trabajo que se perdería al parar el servidor, para el aviso de
+/// `magi servidor parar`. `None` si no hay nada que perder. Incluye las
+/// transferencias en curso o en cola (parar aborta la cola y se pierden) y las
+/// ejecuciones en curso, además de sesiones y túneles.
+fn trabajo_que_se_pierde(
+    sesiones: usize,
+    transferencias: usize,
+    tuneles: usize,
+    ejecuciones: usize,
+) -> Option<String> {
+    if sesiones == 0 && transferencias == 0 && tuneles == 0 && ejecuciones == 0 {
+        return None;
+    }
+    let mut partes = Vec::new();
+    if sesiones > 0 {
+        partes.push(format!("{sesiones} sesión(es) abierta(s)"));
+    }
+    if transferencias > 0 {
+        partes.push(format!(
+            "{transferencias} transferencia(s) en curso o en cola (se cancelarán)"
+        ));
+    }
+    if tuneles > 0 {
+        partes.push(format!("{tuneles} túnel(es) levantado(s)"));
+    }
+    if ejecuciones > 0 {
+        partes.push(format!(
+            "{ejecuciones} ejecución(es) de snippets en curso (se cancelarán)"
+        ));
+    }
+    Some(format!("Hay {}", unir_con_y(&partes)))
+}
+
+fn unir_con_y(partes: &[String]) -> String {
+    match partes {
+        [] => String::new(),
+        [una] => una.clone(),
+        [primera, segunda] => format!("{primera} y {segunda}"),
+        _ => {
+            let (ultima, resto) = partes.split_last().expect("no está vacía");
+            format!("{} y {ultima}", resto.join(", "))
+        }
+    }
+}
+
 /// `magi servidor parar`: cierra las sesiones y apaga el servidor, con
-/// confirmación si hay sesiones vivas (salvo `--si`). Ante un servidor de
+/// confirmación si hay trabajo vivo (salvo `--si`). Ante un servidor de
 /// otra versión, muestra su pid y le envía `SIGTERM` tras confirmar.
 pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     let ruta = ruta_socket(rutas);
@@ -2672,14 +2721,23 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     // El pid del otro extremo del socket, por si no habla nuestro protocolo.
     let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    let (cuantas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(&mut stream).await? {
+    let (cuantas, transferencias_vivas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(
+        &mut stream,
+    )
+    .await?
+    {
         MensajeServidor::Bienvenida {
             sesiones,
+            transferencias,
             tuneles,
             ejecuciones,
             ..
         } => (
             sesiones.len(),
+            transferencias
+                .iter()
+                .filter(|transferencia| !transferencia.estado.terminada())
+                .count(),
             tuneles
                 .iter()
                 .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
@@ -2713,25 +2771,23 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             return Ok(1);
         }
     };
-    if (cuantas > 0 || tuneles_vivos > 0 || ejecuciones_vivas > 0) && !si {
-        let mut aviso = format!("Hay {cuantas} sesión(es) abierta(s)");
-        if tuneles_vivos > 0 {
-            aviso.push_str(&format!(", {tuneles_vivos} túnel(es) levantado(s)"));
-        }
-        if ejecuciones_vivas > 0 {
-            aviso.push_str(&format!(
-                " y {ejecuciones_vivas} ejecución(es) de snippets en curso (se cancelarán)"
-            ));
-        }
-        print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
-        use std::io::Write as _;
-        std::io::stdout().flush().ok();
-        let mut respuesta = String::new();
-        if std::io::stdin().read_line(&mut respuesta).is_err()
-            || !respuesta.trim().eq_ignore_ascii_case("s")
-        {
-            println!("No se ha parado el servidor.");
-            return Ok(0);
+    if !si {
+        if let Some(aviso) = trabajo_que_se_pierde(
+            cuantas,
+            transferencias_vivas,
+            tuneles_vivos,
+            ejecuciones_vivas,
+        ) {
+            print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
+            use std::io::Write as _;
+            std::io::stdout().flush().ok();
+            let mut respuesta = String::new();
+            if std::io::stdin().read_line(&mut respuesta).is_err()
+                || !respuesta.trim().eq_ignore_ascii_case("s")
+            {
+                println!("No se ha parado el servidor.");
+                return Ok(0);
+            }
         }
     }
     let linea = codificar(&MensajeCliente::Parar).context("serializando Parar")?;
@@ -2836,6 +2892,11 @@ pub async fn parar_por_senal(rutas: &Rutas, pid: u32) -> Result<bool> {
 /// nada si el socket o el lock siguen ocupados. La condición de parada es
 /// que el proceso muera, el lock quede libre y el socket deje de atender.
 pub async fn parar_por_senal_en(rutas: &Rutas, pid: u32, plazo: Duration) -> Result<bool> {
+    // Defensa: nunca se manda una señal a pid 0/-1 (grupo de procesos) ni a un
+    // número que no cabe en un pid de Unix ni a nosotros mismos.
+    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+        anyhow::bail!("pid inválido para parar el servidor: {pid}");
+    }
     let pid_nix = nix::unistd::Pid::from_raw(pid as i32);
     match nix::sys::signal::kill(pid_nix, nix::sys::signal::Signal::SIGTERM) {
         Ok(()) => {}
@@ -2845,22 +2906,27 @@ pub async fn parar_por_senal_en(rutas: &Rutas, pid: u32, plazo: Duration) -> Res
             return Err(anyhow::anyhow!("enviando SIGTERM al pid {pid}: {error}"));
         }
     }
+    // La condición de liberación son los recursos, no la existencia del
+    // proceso: un servidor que murió puede quedar zombi si lo lanzó otra
+    // ventana de MAGI viva y esta no lo recolecta, y un zombi no custodia nada.
+    // Libre = nadie tiene el lock y nadie atiende el socket; así no se lanza un
+    // segundo servidor mientras haya quien escuche.
+    let ruta = ruta_socket(rutas);
     let inicio = std::time::Instant::now();
-    while inicio.elapsed() < plazo {
-        let vivo = nix::sys::signal::kill(pid_nix, None).is_ok();
-        if !vivo && crate::cliente::lock_libre(&ruta_lock(rutas)) {
-            let ruta = ruta_socket(rutas);
-            // Un socket huérfano que ya no atiende se borra. Si algo sigue
-            // escuchando, no se da por liberado: el llamador no lanzará un
-            // segundo servidor mientras haya quien atienda.
-            if UnixStream::connect(&ruta).await.is_err() {
-                let _ = std::fs::remove_file(&ruta);
-                return Ok(true);
-            }
+    loop {
+        let libre = crate::cliente::lock_libre(&ruta_lock(rutas))
+            && UnixStream::connect(&ruta).await.is_err();
+        if libre {
+            // No se borra el socket aquí: entre el fallo del connect y el
+            // remove_file otro servidor podría haberlo bindeado. Lo limpia
+            // con el lock en la mano quien arranque el servidor nuevo.
+            return Ok(true);
+        }
+        if inicio.elapsed() >= plazo {
+            return Ok(false);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Ok(false)
 }
 
 async fn saludo_y_envio(stream: &mut UnixStream) -> Result<()> {
@@ -2905,3 +2971,25 @@ fn formato_estado(estado: &crate::protocolo::EstadoSesionRemota) -> &'static str
 }
 
 use std::os::unix::fs::PermissionsExt as _;
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn el_aviso_de_parada_cuenta_las_transferencias() {
+        // Solo transferencias: es trabajo que se pierde y hay que preguntar.
+        let aviso = trabajo_que_se_pierde(0, 2, 0, 0).expect("hay trabajo");
+        assert!(aviso.contains("2 transferencia(s)"), "{aviso}");
+        assert!(aviso.contains("se cancelarán"), "{aviso}");
+        // Sin trabajo no hay aviso.
+        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0), None);
+        // Todo junto se une con comas y «y».
+        let aviso = trabajo_que_se_pierde(1, 1, 1, 1).expect("hay trabajo");
+        assert!(aviso.contains("1 sesión(es)"), "{aviso}");
+        assert!(aviso.contains("1 transferencia(s)"), "{aviso}");
+        assert!(aviso.contains("1 túnel(es)"), "{aviso}");
+        assert!(aviso.contains("1 ejecución(es)"), "{aviso}");
+        assert!(aviso.contains(" y "), "{aviso}");
+    }
+}

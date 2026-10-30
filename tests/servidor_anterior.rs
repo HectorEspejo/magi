@@ -2,7 +2,7 @@
 //! Comprueba que sin pid no se sustituye y que un servidor que ignora
 //! `SIGTERM` y conserva el lock no se sustituye ni se relanza nada.
 
-use std::io::BufRead as _;
+use std::io::{BufRead as _, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
@@ -154,6 +154,130 @@ async fn parar_no_toca_un_servidor_mas_nuevo() {
     );
     let _ = victima.kill();
     let _ = victima.wait();
+}
+
+/// Un zombi (hijo terminado que su padre no ha recogido) no custodia nada:
+/// la sustitución no puede agotar el plazo esperándolo.
+#[tokio::test]
+async fn un_servidor_zombi_no_bloquea_la_sustitucion() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let rutas = rutas_de(temporal.path());
+    std::fs::create_dir_all(rutas.dir_runtime()).expect("runtime");
+    // Hijo que termina sin que lo recojamos: queda en estado Z.
+    let mut hijo = std::process::Command::new("true")
+        .spawn()
+        .expect("proceso que queda zombi");
+    let pid = hijo.id();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let inicio = std::time::Instant::now();
+    let parado = magi::servidor::parar_por_senal_en(&rutas, pid, Duration::from_secs(2))
+        .await
+        .expect("parar_por_senal_en no debe fallar");
+    assert!(parado, "un zombi debe darse por parado");
+    assert!(
+        inicio.elapsed() < Duration::from_secs(2),
+        "esperó al zombi: {:?}",
+        inicio.elapsed()
+    );
+    let _ = hijo.wait();
+}
+
+/// El pid del mensaje de rechazo no puede mandar una señal a un tercero: el
+/// cliente prefiere el pid del kernel (peer_cred) y valida el rango.
+#[tokio::test]
+async fn el_pid_del_rechazo_no_puede_matar_a_un_tercero() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let rutas = rutas_de(temporal.path());
+    std::fs::create_dir_all(rutas.dir_runtime()).expect("runtime");
+    let mut victima = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("proceso víctima");
+    let pid_victima = victima.id();
+    let socket = magi::servidor::ruta_socket(&rutas);
+    let mut falso =
+        std::process::Command::new(std::env::current_exe().expect("binario de pruebas"))
+            .args(["--exact", "ayudante_servidor_falso", "--nocapture"])
+            .env("MAGI_AYUDANTE_FALSO_SOCKET", &socket)
+            .env("MAGI_AYUDANTE_FALSO_PID", pid_victima.to_string())
+            .env("MAGI_AYUDANTE_FALSO_VERSION", "5")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("lanzando el servidor falso");
+    let salida = falso.stdout.take().expect("stdout del falso");
+    let (tx_listo, rx_listo) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for linea in std::io::BufReader::new(salida)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if linea.contains("listo") {
+                let _ = tx_listo.send(());
+                return;
+            }
+        }
+    });
+    rx_listo
+        .recv_timeout(Duration::from_secs(10))
+        .expect("el servidor falso no arrancó");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let rechazo = match cliente::conectar(&rutas, tx).await {
+        Err(cliente::FalloConexion::VersionIncompatible(rechazo)) => rechazo,
+        Ok(_) => panic!("el falso debía rechazar el saludo"),
+        Err(otro) => panic!("se esperaba un rechazo, llegó {otro:?}"),
+    };
+    // El pid del peer (el proceso falso) manda sobre el del mensaje.
+    assert_eq!(rechazo.pid, Some(falso.id()));
+    assert_ne!(rechazo.pid, Some(pid_victima));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let resultado = tokio::time::timeout(
+        Duration::from_secs(30),
+        cliente::sustituir_servidor(&rutas, &rechazo, tx),
+    )
+    .await
+    .expect("la sustitución no terminó");
+    assert!(
+        matches!(resultado, Err(cliente::FalloSustitucion::Parado(_))),
+        "la sustitución debía terminar sin servidor nuevo"
+    );
+    let _ = falso.wait();
+    assert!(
+        victima.try_wait().expect("estado de la víctima").is_none(),
+        "se mandó SIGTERM al pid del mensaje en vez de al del servidor"
+    );
+    let _ = victima.kill();
+    let _ = victima.wait();
+}
+/// Test de apoyo: servidor falso por socket para las pruebas de pid.
+#[test]
+fn ayudante_servidor_falso() {
+    let Ok(ruta) = std::env::var("MAGI_AYUDANTE_FALSO_SOCKET") else {
+        return;
+    };
+    let pid_falso: u32 = std::env::var("MAGI_AYUDANTE_FALSO_PID")
+        .ok()
+        .and_then(|valor| valor.parse().ok())
+        .unwrap_or(0);
+    let version: u32 = std::env::var("MAGI_AYUDANTE_FALSO_VERSION")
+        .ok()
+        .and_then(|valor| valor.parse().ok())
+        .unwrap_or(5);
+    let _ = std::fs::remove_file(&ruta);
+    let escucha = std::os::unix::net::UnixListener::bind(&ruta).expect("socket del falso");
+    println!("listo");
+    let (mut flujo, _) = escucha.accept().expect("conexión del cliente");
+    let mut lector = std::io::BufReader::new(flujo.try_clone().expect("clon del flujo"));
+    let mut saludo = String::new();
+    let _ = lector.read_line(&mut saludo);
+    let respuesta = format!(
+        "{{\"tipo\":\"VersionIncompatible\",\"version\":{version},\"pid\":{pid_falso},\"version_app\":\"0.9.0\",\"clientes\":0,\"trabajo\":{{\"sesiones\":0,\"transferencias\":0,\"tuneles\":0,\"ejecuciones\":0}}}}\n"
+    );
+    let _ = flujo.write_all(respuesta.as_bytes());
+    let _ = flujo.flush();
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
 }
 
 /// Test de apoyo: cuando la prueba de arriba lo lanza con

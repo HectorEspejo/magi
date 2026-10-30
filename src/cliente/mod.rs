@@ -248,8 +248,11 @@ pub enum FalloSustitucion {
     /// El servidor no murió o no liberó socket y lock en 5 s: no se lanzó
     /// nada y sigue siendo el servidor de la versión anterior.
     NoLiberado { pid: Option<u32> },
-    /// No se puede sustituir por otro motivo (sin pid, sin arrancar el nuevo,
-    /// reconexión fallida).
+    /// El servidor anterior ya se paró pero el nuevo no arrancó o no se pudo
+    /// conectar: ahora mismo no hay servidor de sesiones.
+    Parado(String),
+    /// No se puede sustituir por otro motivo (sin pid, error al mandar la
+    /// señal…). El servidor anterior sigue como estaba.
     Inaccesible(String),
 }
 
@@ -261,6 +264,9 @@ impl FalloSustitucion {
                 "el servidor anterior (pid {pid}) no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor. Páralo con «kill {pid}» y vuelve a abrir MAGI"
             ),
             Self::NoLiberado { pid: None } => "el servidor anterior no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor".to_string(),
+            Self::Parado(motivo) => format!(
+                "el servidor anterior se paró, pero el nuevo no ha arrancado: {motivo}"
+            ),
             Self::Inaccesible(motivo) => motivo.clone(),
         }
     }
@@ -347,17 +353,24 @@ pub async fn sustituir_servidor(
         return Err(FalloSustitucion::NoLiberado { pid: Some(pid) });
     }
     // Socket y lock libres: se arranca el servidor nuevo y se reconecta. El
-    // saludo de conectar manda la bienvenida a la UI como siempre.
+    // saludo de conectar manda la bienvenida a la UI como siempre. A partir de
+    // aquí el anterior ya no está: si el nuevo no arranca, se dice que se paró
+    // (no que «sigue en marcha») y no se deja la UI bloqueada.
     lanzar_servidor(rutas);
     let ruta = servidor::ruta_socket(rutas);
-    if !esperar_socket(&ruta, Duration::from_secs(2)).await {
-        return Err(FalloSustitucion::Inaccesible(
-            "el servidor de sesiones nuevo no ha arrancado en 2 s; revisa ~/.local/state/magi/logs/servidor.log".to_string(),
+    if !esperar_socket(&ruta, Duration::from_secs(10)).await {
+        return Err(FalloSustitucion::Parado(
+            "el servidor de sesiones nuevo no ha abierto el socket en 10 s; revisa ~/.local/state/magi/logs/servidor.log".to_string(),
         ));
     }
-    match conectar(rutas, tx_eventos).await {
-        Ok(cliente) => Ok(cliente),
-        Err(fallo) => Err(FalloSustitucion::Inaccesible(describe_fallo(&fallo))),
+    // Plazo duro para el saludo y la reconexión: nunca se queda la UI en
+    // «sustituyendo» si el servidor nuevo no responde.
+    match tokio::time::timeout(Duration::from_secs(10), conectar(rutas, tx_eventos)).await {
+        Ok(Ok(cliente)) => Ok(cliente),
+        Ok(Err(fallo)) => Err(FalloSustitucion::Parado(describe_fallo(&fallo))),
+        Err(_) => Err(FalloSustitucion::Parado(
+            "el servidor de sesiones nuevo no ha respondido al saludo en 10 s".to_string(),
+        )),
     }
 }
 
@@ -434,6 +447,13 @@ async fn saludar(
     }
 }
 
+/// Un pid al que se le puede mandar una señal: ni 1 ni menos, ni fuera del
+/// rango de `i32` (el cast acabaría en negativo y `kill(-1)` señala a todos
+/// los procesos del usuario), ni el nuestro.
+fn es_pid_valido(pid: u32) -> bool {
+    pid > 1 && pid <= i32::MAX as u32 && pid != std::process::id()
+}
+
 /// Extrae de un `VersionIncompatible` genérico lo que hace falta para decidir.
 fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersion {
     let version = valor
@@ -444,11 +464,14 @@ fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersi
         .get("version_app")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    let pid = valor
+    // El pid del kernel (peer_cred) es el único que no puede falsear el otro
+    // extremo del socket; el del mensaje solo se usa si no hay peer y pasa una
+    // validación mínima. Así un rechazo no puede pedir señalar a un tercero.
+    let pid_mensaje = valor
         .get("pid")
         .and_then(serde_json::Value::as_u64)
-        .map(|pid| pid as u32)
-        .or(pid_par);
+        .map(|pid| pid as u32);
+    let pid = pid_par.or(pid_mensaje).filter(|pid| es_pid_valido(*pid));
     let clientes = valor
         .get("clientes")
         .and_then(serde_json::Value::as_u64)

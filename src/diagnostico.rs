@@ -9,11 +9,11 @@
 //! del llavero y no abre conexiones de red.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead as _, IsTerminal as _, Write};
+use std::io::{BufRead as _, IsTerminal as _, Read as _, Write};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::unistd::{access, AccessFlags};
 use rusqlite::{Connection, OpenFlags};
@@ -435,22 +435,94 @@ fn se_puede_crear(ruta: &Path) -> bool {
         })
 }
 
-/// Abre `magi.db` en solo lectura y lee su `user_version`.
-fn observar_base_datos(ruta: &Path) -> ResultadoBaseDatos {
-    if !ruta.exists() {
-        return ResultadoBaseDatos::NoExiste;
-    }
-    let conexion = match Connection::open_with_flags(ruta, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+/// Ruta de un fichero lateral de SQLite (`magi.db-wal`, `-shm`, `-journal`).
+fn ruta_lateral(ruta: &Path, sufijo: &str) -> PathBuf {
+    let mut texto = ruta.as_os_str().to_os_string();
+    texto.push(sufijo);
+    PathBuf::from(texto)
+}
+
+/// ¿La cabecera SQLite dice que la base de datos está en modo WAL? Bytes 18 y
+/// 19 de la cabecera son las versiones de escritura/lectura; 2 = WAL.
+fn cabecera_en_wal(ruta: &Path) -> std::io::Result<bool> {
+    let mut cabecera = [0u8; 20];
+    let mut fichero = std::fs::File::open(ruta)?;
+    let leidos = fichero.read(&mut cabecera)?;
+    Ok(leidos >= 20 && (cabecera[18] == 2 || cabecera[19] == 2))
+}
+
+/// ¿Abrir la base de datos en su sitio podría escribir ficheros laterales?
+/// Con un WAL pendiente o un journal caliente SQLite crea o toca `-wal`,
+/// `-shm` o `-journal` incluso en una conexión de solo lectura.
+fn tiene_laterales(ruta: &Path) -> bool {
+    ["-wal", "-shm", "-journal"]
+        .iter()
+        .any(|sufijo| ruta_lateral(ruta, sufijo).exists())
+        || cabecera_en_wal(ruta).unwrap_or(false)
+}
+
+/// Abre la base de datos en solo lectura y lee su `user_version`.
+fn leer_version(ruta: &Path, solo_lectura: bool) -> ResultadoBaseDatos {
+    let conexion = if solo_lectura {
+        Connection::open_with_flags(ruta, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    } else {
+        Connection::open(ruta)
+    };
+    let conexion = match conexion {
         Ok(conexion) => conexion,
-        Err(error) => {
-            return ResultadoBaseDatos::Error(format!("no se puede abrir en solo lectura: {error}"))
-        }
+        Err(error) => return ResultadoBaseDatos::Error(format!("no se puede abrir: {error}")),
     };
     match conexion.query_row("PRAGMA user_version", [], |fila| fila.get::<_, i64>(0)) {
         Ok(version) if version > VERSION_BD => ResultadoBaseDatos::Futura(version),
         Ok(version) => ResultadoBaseDatos::Version(version),
         Err(error) => ResultadoBaseDatos::Error(error.to_string()),
     }
+}
+
+/// Lee la versión de `magi.db` sin escribir nada en su directorio: si hay
+/// ficheros laterales (WAL, shm o journal) se abre una copia en un directorio
+/// temporal, porque abrir el original crearía o modificaría los laterales
+/// (Fase 9: el diagnóstico no escribe ficheros).
+fn observar_base_datos(ruta: &Path) -> ResultadoBaseDatos {
+    if !ruta.exists() {
+        return ResultadoBaseDatos::NoExiste;
+    }
+    if !tiene_laterales(ruta) {
+        return leer_version(ruta, true);
+    }
+    let marca = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duracion| duracion.as_nanos())
+        .unwrap_or(0);
+    let temporal =
+        std::env::temp_dir().join(format!("magi-diagnostico-{}-{marca}", std::process::id()));
+    if let Err(error) = std::fs::create_dir(&temporal) {
+        return ResultadoBaseDatos::Error(format!(
+            "no se puede crear un temporal para comprobar la base de datos: {error}"
+        ));
+    }
+    let resultado = (|| -> ResultadoBaseDatos {
+        let copia = temporal.join("magi.db");
+        if let Err(error) = std::fs::copy(ruta, &copia) {
+            return ResultadoBaseDatos::Error(format!(
+                "no se puede copiar la base de datos para comprobarla: {error}"
+            ));
+        }
+        for sufijo in ["-wal", "-shm", "-journal"] {
+            let origen = ruta_lateral(ruta, sufijo);
+            if origen.exists() {
+                let destino = ruta_lateral(&copia, sufijo);
+                if let Err(error) = std::fs::copy(&origen, &destino) {
+                    return ResultadoBaseDatos::Error(format!(
+                        "no se puede copiar {sufijo} para comprobar la base de datos: {error}"
+                    ));
+                }
+            }
+        }
+        leer_version(&copia, false)
+    })();
+    let _ = std::fs::remove_dir_all(&temporal);
+    resultado
 }
 
 /// Consulta el servidor por el socket local: nunca lo arranca.
@@ -514,10 +586,23 @@ fn observar_servidor(rutas: &Rutas) -> ServidorObservado {
             ServidorObservado::EnMarcha {
                 version_app,
                 protocolo: version,
+                // Mismo criterio que EstadoServidor::trabajo y servidor
+                // estado: solo lo que está vivo de verdad.
                 sesiones: sesiones.len() as u32,
-                transferencias: transferencias.len() as u32,
-                tuneles: tuneles.len() as u32,
-                ejecuciones: ejecuciones.len() as u32,
+                transferencias: transferencias
+                    .iter()
+                    .filter(|transferencia| !transferencia.estado.terminada())
+                    .count() as u32,
+                tuneles: tuneles
+                    .iter()
+                    .filter(|tunel| tunel.estado.en_marcha())
+                    .count() as u32,
+                ejecuciones: ejecuciones
+                    .iter()
+                    .filter(|ejecucion| {
+                        ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso
+                    })
+                    .count() as u32,
             }
         }
         Some("VersionIncompatible") => {
@@ -539,7 +624,53 @@ fn observar_servidor(rutas: &Rutas) -> ServidorObservado {
     }
 }
 
-/// Cuenta las claves del agente con `ssh-add -l`: no lee ninguna clave.
+/// Ejecuta un programa con plazo duro. Devuelve estado y stdout si termina;
+/// None si no arranca o si vence el plazo (el hijo se mata y se recoge).
+fn ejecutar_con_plazo(
+    programa: &str,
+    argumentos: &[&str],
+    plazo: Duration,
+) -> Option<(ExitStatus, Vec<u8>)> {
+    let mut hijo = Command::new(programa)
+        .args(argumentos)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut salida = hijo.stdout.take()?;
+    let lector = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = salida.read_to_end(&mut buffer);
+        buffer
+    });
+    let inicio = Instant::now();
+    loop {
+        match hijo.try_wait() {
+            Ok(Some(estado)) => {
+                let stdout = lector.join().unwrap_or_default();
+                return Some((estado, stdout));
+            }
+            Ok(None) if inicio.elapsed() >= plazo => {
+                let _ = hijo.kill();
+                let _ = hijo.wait();
+                let _ = lector.join();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                let _ = hijo.kill();
+                let _ = hijo.wait();
+                let _ = lector.join();
+                return None;
+            }
+        }
+    }
+}
+
+/// Cuenta las claves del agente con `ssh-add -l`: no lee ninguna clave. Con
+/// plazo: un agente que acepta la conexión y no responde no debe colgar el
+/// diagnóstico.
 fn observar_agente(variables: &BTreeMap<String, String>) -> AgenteObservado {
     let Some(socket) = variables.get("SSH_AUTH_SOCK") else {
         return AgenteObservado::SinVariable;
@@ -547,27 +678,31 @@ fn observar_agente(variables: &BTreeMap<String, String>) -> AgenteObservado {
     if socket.trim().is_empty() {
         return AgenteObservado::SinVariable;
     }
-    match Command::new("ssh-add").arg("-l").output() {
-        Ok(salida) if salida.status.success() => {
-            let texto = String::from_utf8_lossy(&salida.stdout);
-            let claves = texto
-                .lines()
-                .filter(|linea| !linea.trim().is_empty())
-                .count();
-            if claves == 0 {
-                AgenteObservado::SinClaves("el agente no tiene claves cargadas".to_string())
-            } else {
-                AgenteObservado::Claves(claves)
-            }
+    let Some((estado, stdout)) = ejecutar_con_plazo("ssh-add", &["-l"], Duration::from_secs(2))
+    else {
+        return AgenteObservado::SinClaves(
+            "el agente SSH no ha respondido en 2 s (¿está colgado?)".to_string(),
+        );
+    };
+    if estado.success() {
+        let texto = String::from_utf8_lossy(&stdout);
+        let claves = texto
+            .lines()
+            .filter(|linea| !linea.trim().is_empty())
+            .count();
+        if claves == 0 {
+            AgenteObservado::SinClaves("el agente no tiene claves cargadas".to_string())
+        } else {
+            AgenteObservado::Claves(claves)
         }
-        Ok(salida) => match salida.status.code() {
+    } else {
+        match estado.code() {
             Some(1) => AgenteObservado::SinClaves("el agente no tiene claves cargadas".to_string()),
             Some(2) => {
                 AgenteObservado::SinClaves("no se pudo conectar con el agente SSH".to_string())
             }
-            _ => AgenteObservado::SinClaves(format!("ssh-add salió con {}", salida.status)),
-        },
-        Err(error) => AgenteObservado::SinClaves(format!("no se pudo ejecutar ssh-add: {error}")),
+            _ => AgenteObservado::SinClaves(format!("ssh-add salió con {estado}")),
+        }
     }
 }
 
@@ -861,15 +996,29 @@ fn comprobar_servidor(datos: &Datos) -> Comprobacion {
             let version = version_app
                 .as_deref()
                 .filter(|texto| !texto.is_empty())
-                .unwrap_or("una versión anterior");
-            Comprobacion::aviso(
-                "servidor",
-                format!(
-                    "hay un servidor {version} con protocolo {protocolo} y este MAGI es {} (protocolo {VERSION_PROTOCOLO})",
-                    datos.version_app
-                ),
-                Some("al abrir magi se sustituirá o te preguntará antes de pararlo".to_string()),
-            )
+                .unwrap_or("sin versión");
+            if *protocolo > VERSION_PROTOCOLO {
+                Comprobacion::aviso(
+                    "servidor",
+                    format!(
+                        "hay un servidor {version} con protocolo {protocolo}, más nuevo que este MAGI {} (protocolo {VERSION_PROTOCOLO})",
+                        datos.version_app
+                    ),
+                    Some(
+                        "actualiza MAGI: este binario no puede ni debe parar ese servidor"
+                            .to_string(),
+                    ),
+                )
+            } else {
+                Comprobacion::aviso(
+                    "servidor",
+                    format!(
+                        "hay un servidor {version} con protocolo {protocolo} y este MAGI es {} (protocolo {VERSION_PROTOCOLO})",
+                        datos.version_app
+                    ),
+                    Some("al abrir magi se sustituirá o te preguntará antes de pararlo".to_string()),
+                )
+            }
         }
         ServidorObservado::SinRespuesta => Comprobacion::error(
             "servidor",
@@ -961,6 +1110,7 @@ fn resolver(
     datos: &Datos,
     candidatos: &[(String, &'static str)],
 ) -> Result<(String, &'static str), Option<(String, &'static str)>> {
+    let mut primer_fallo_explicito: Option<(String, &'static str)> = None;
     for (texto, origen) in candidatos {
         let Some((programa, _)) = crate::visor::comando(texto) else {
             continue;
@@ -968,9 +1118,14 @@ fn resolver(
         if datos.disponible(&programa) {
             return Ok((programa, origen));
         }
-        return Err(Some((programa, origen)));
+        // Un candidato configurado o del entorno que no existe se avisa; los
+        // de por defecto se saltan para probar el siguiente (nvim → vi,
+        // less → more): con que haya uno sirve.
+        if *origen != "por defecto" && primer_fallo_explicito.is_none() {
+            primer_fallo_explicito = Some((programa, origen));
+        }
     }
-    Err(None)
+    Err(primer_fallo_explicito)
 }
 
 fn candidatos_de(
@@ -1204,4 +1359,60 @@ pub fn ejecutar() -> anyhow::Result<i32> {
     let es_terminal = salida.is_terminal();
     let mut salida = salida.lock();
     Ok(ejecutar_en(&datos, es_terminal, &mut salida))
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    /// Con un WAL pendiente, comprobar la base de datos no deja laterales
+    /// nuevos junto al original: se lee una copia temporal.
+    #[test]
+    fn comprobar_la_base_de_datos_en_wal_no_crea_ficheros() {
+        let directorio = tempfile::tempdir().unwrap();
+        let origen = directorio.path().join("origen.db");
+        let ruta = directorio.path().join("magi.db");
+        {
+            let conexion = Connection::open(&origen).unwrap();
+            conexion.pragma_update(None, "journal_mode", "WAL").unwrap();
+            conexion
+                .pragma_update(None, "wal_autocheckpoint", 0)
+                .unwrap();
+            conexion
+                .execute_batch(
+                    "CREATE TABLE MARCA (valor TEXT); INSERT INTO MARCA VALUES ('x'); PRAGMA user_version = 6;",
+                )
+                .unwrap();
+            std::fs::copy(&origen, &ruta).unwrap();
+            let mut wal_origen = origen.as_os_str().to_os_string();
+            wal_origen.push("-wal");
+            let mut wal = ruta.as_os_str().to_os_string();
+            wal.push("-wal");
+            std::fs::copy(&wal_origen, &wal).unwrap();
+        }
+        let antes: Vec<_> = std::fs::read_dir(directorio.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect();
+        let resultado = observar_base_datos(&ruta);
+        assert_eq!(resultado, ResultadoBaseDatos::Version(6));
+        let despues: Vec<_> = std::fs::read_dir(directorio.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect();
+        assert_eq!(antes, despues, "el diagnóstico creó ficheros laterales");
+    }
+
+    /// El plazo de ejecutar_con_plazo mata al hijo colgado y no espera.
+    #[test]
+    fn ejecutar_con_plazo_mata_al_hijo_colgado() {
+        let inicio = Instant::now();
+        let salida = ejecutar_con_plazo("sleep", &["5"], Duration::from_millis(150));
+        assert!(salida.is_none(), "debió vencer el plazo");
+        assert!(
+            inicio.elapsed() < Duration::from_secs(2),
+            "tardó {:?}",
+            inicio.elapsed()
+        );
+    }
 }

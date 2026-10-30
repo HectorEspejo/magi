@@ -97,6 +97,7 @@ empaquetado de la Fase 9.
 
 ### Corregido
 
+- **Revisión adversarial de cierre (Fase 9).** El comando servidor parar cuenta las transferencias antes de pedir confirmación; el cliente valida el pid del rechazo y prefiere el del kernel; una magi.db futura con WAL pendiente ya no se modifica al comprobarla (y el diagnóstico no deja -shm/-wal); un servidor anterior zombi no bloquea la actualización; magi diagnostico no se cuelga con un agente SSH mudo y no cuenta el trabajo terminado; el aviso de sustitución dice la versión nueva y distingue «se paró pero el nuevo no arrancó»; TrabajoServidor rechaza campos desconocidos y build.rs no hereda el commit de un repositorio exterior.
 - **Pestañas (Fase 3).** Seis fallos detectados en la validación manual, entre
   ellos la apertura colgada tras autenticar y la pantalla en blanco por parsers
   duplicados; todos con test de regresión.

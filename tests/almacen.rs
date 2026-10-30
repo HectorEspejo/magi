@@ -1607,6 +1607,61 @@ fn una_base_de_datos_de_version_futura_no_se_abre_ni_se_toca() {
     assert_eq!(marca, "intacta");
 }
 
+/// Una magi.db de una versión futura con un WAL pendiente de recuperar tampoco
+/// se abre ni se toca: comprobar la versión abriendo el original aplicaría el
+/// WAL y modificaría el fichero antes de poder rechazarlo (Fase 9).
+#[test]
+fn una_base_de_datos_futura_con_wal_pendiente_no_se_toca() {
+    let origen = tempfile::tempdir().unwrap();
+    let destino = tempfile::tempdir().unwrap();
+    let ruta_origen = origen.path().join("magi.db");
+    let ruta = destino.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta_origen).unwrap();
+        conexion.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conexion
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+        // Copia del par db+wal con la conexión abierta: el WAL contiene la
+        // versión y la cabecera principal todavía puede ser antigua.
+        std::fs::copy(&ruta_origen, &ruta).unwrap();
+        let mut wal_origen = ruta_origen.as_os_str().to_os_string();
+        wal_origen.push("-wal");
+        let mut wal = ruta.as_os_str().to_os_string();
+        wal.push("-wal");
+        std::fs::copy(&wal_origen, &wal).unwrap();
+    }
+    let mut wal = ruta.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = std::path::PathBuf::from(wal);
+    assert!(wal.exists(), "el escenario necesita un WAL pendiente");
+    let db_antes = std::fs::read(&ruta).unwrap();
+    let wal_antes = std::fs::read(&wal).unwrap();
+    let error = match Almacen::abrir(&ruta) {
+        Ok(_) => panic!("una versión futura no se abre"),
+        Err(error) => error,
+    };
+    let mensaje = format!("{error:#}");
+    assert!(
+        mensaje.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{mensaje}"
+    );
+    // El par db+wal queda byte a byte como estaba y el WAL no se recupera.
+    assert_eq!(std::fs::read(&ruta).unwrap(), db_antes, "magi.db intacta");
+    assert_eq!(
+        std::fs::read(&wal).unwrap(),
+        wal_antes,
+        "magi.db-wal intacto"
+    );
+}
+
 /// La versión de esquema que conoce el binario sí se abre (control del test
 /// anterior).
 #[test]

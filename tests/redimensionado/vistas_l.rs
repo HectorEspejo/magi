@@ -193,6 +193,7 @@ fn en_ascii_no_hay_glifos_unicode() {
             Estado::Error {
                 rechazo: rechazo_con_trabajo(),
                 motivo: "el servidor anterior (pid 48211) no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor".to_string(),
+                anterior_parado: false,
             },
         ] {
             let (mut prueba, _) = AppPrueba::con_semilla_y_tema(cols, filas, arnes::tema_ascii());
@@ -311,10 +312,9 @@ fn el_resultado_bueno_cierra_el_dialogo_y_lo_dice_en_la_barra() {
     assert!(prueba.app.dialogo.is_none());
     assert!(prueba.app.servidor_incompatible.is_none());
     let texto = prueba.texto();
-    assert!(
-        texto.contains("servidor de sesiones actualizado a 0.9.0"),
-        "{texto}"
-    );
+    // La versión nueva es la de este binario, no la del servidor rechazado.
+    let esperado = format!("servidor de sesiones actualizado a {}", magi::VERSION_APP);
+    assert!(texto.contains(&esperado), "{texto}");
 }
 
 #[test]
@@ -326,6 +326,7 @@ fn el_error_ensena_el_motivo_y_esc_sigue_sin_sesiones() {
             rechazo: rechazo_con_trabajo(),
             motivo: "el servidor anterior (pid 48211) no ha liberado el socket y el lock en 5 s"
                 .to_string(),
+            anterior_parado: false,
         },
     );
     let texto = prueba.texto();
@@ -337,4 +338,26 @@ fn el_error_ensena_el_motivo_y_esc_sigue_sin_sesiones() {
     prueba.tecla(KeyCode::Esc);
     assert!(prueba.app.dialogo.is_none());
     assert!(prueba.app.servidor_incompatible.is_some());
+}
+
+/// Si el servidor anterior ya se paró y el nuevo no arrancó, el diálogo no
+/// puede decir que el anterior sigue en marcha.
+#[test]
+fn el_error_de_servidor_parado_sin_nuevo_lo_dice_asi() {
+    let (mut prueba, _) = AppPrueba::con_semilla(80, 24);
+    abrir(
+        &mut prueba,
+        Estado::Error {
+            rechazo: rechazo_con_trabajo(),
+            motivo: "el servidor de sesiones nuevo no ha abierto el socket en 10 s".to_string(),
+            anterior_parado: true,
+        },
+    );
+    let texto = prueba.texto();
+    assert!(
+        // El texto se parte al ancho; se comprueba un fragmento que cabe.
+        texto.contains("se paró, pero el nuevo"),
+        "{texto}"
+    );
+    assert!(!texto.contains("sigue en marcha"), "{texto}");
 }

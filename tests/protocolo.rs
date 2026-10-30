@@ -123,6 +123,25 @@ async fn un_trabajo_incompleto_vale_como_lleno() {
     );
 }
 
+/// Un campo desconocido dentro de trabajo se lee como «todo lleno»: un
+/// servidor futuro con otro tipo de trabajo nunca se sustituye por error.
+#[tokio::test]
+async fn un_trabajo_con_campos_desconocidos_vale_como_lleno() {
+    let rechazo = leer_rechazo(
+        r#"{"tipo":"VersionIncompatible","version":6,"clientes":0,"trabajo":{"sesiones":0,"transferencias":0,"tuneles":0,"ejecuciones":0,"sincronizaciones":1}}"#,
+    )
+    .await;
+    assert_eq!(
+        rechazo.trabajo,
+        Some(TrabajoServidor {
+            sesiones: 1,
+            transferencias: 1,
+            tuneles: 1,
+            ejecuciones: 1,
+        })
+    );
+}
+
 /// Levanta un socket falso que contesta al `Hola` con `linea` y devuelve el
 /// rechazo tal como lo lee `cliente::conectar`.
 async fn leer_rechazo(linea: &'static str) -> RechazoVersion {

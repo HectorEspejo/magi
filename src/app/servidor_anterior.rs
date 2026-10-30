@@ -34,10 +34,12 @@ pub enum DialogoServidorAnterior {
     /// `SIGTERM` enviado: se espera a que libere socket y lock (máx. 5 s).
     /// Mientras tanto se ignora el teclado.
     Sustituyendo(RechazoVersion),
-    /// No se pudo sustituir: el servidor anterior sigue como estaba.
+    /// No se pudo sustituir. `anterior_parado` distingue «el servidor anterior
+    /// sigue como estaba» de «se paró, pero el nuevo no arrancó».
     Error {
         rechazo: RechazoVersion,
         motivo: String,
+        anterior_parado: bool,
     },
 }
 
@@ -380,6 +382,7 @@ mod pruebas {
             DialogoServidorAnterior::Error {
                 rechazo: original.clone(),
                 motivo: "no liberó el lock".to_string(),
+                anterior_parado: false,
             },
         ] {
             assert_eq!(dialogo.rechazo(), &original);
