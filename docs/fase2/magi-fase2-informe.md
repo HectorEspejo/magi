@@ -475,7 +475,7 @@ Estado por glifo y palabra. `CARGA` en ámbar cuando un umbral se supera o un se
         ┌─ GENERAR CLAVE ──────────────────────────────┐
         │  Fichero     [ id_ed25519_hetzner          ] │
         │  Tipo        (•) ed25519   ( ) rsa 4096      │
-        │  Comentario  [ hector@omarchy              ] │
+        │  Comentario  [ usuario@equipo              ] │
         │  Frase       [ ••••••••••••               ] │
         │  Repetir     [ ••••••••••••               ] │
         │  [x] añadir al agente                        │
@@ -502,7 +502,7 @@ Estado por glifo y palabra. `CARGA` en ámbar cuando un umbral se supera o un se
 │                                                             │
 │  ─────────────────────────────────────────────────────────  │
 │  sondeo_fallido · rincon-dev · 15 sep 15:40:55              │
-│    timeout tras 5 s (TCP 10.0.0.40:22)                      │
+│    timeout tras 5 s (TCP 192.0.2.40:22)                     │
 ├─────────────────────────────────────────────────────────────┤
 │ ↵ detalle   t tipo   / buscar   p purgar >90 d   x exportar │
 └─────────────────────────────────────────────────────────────┘

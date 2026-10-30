@@ -9,21 +9,89 @@ huellas, **flota con sondeo de carga/memoria/disco/red/servicios**,
 que hace MAGI, **pestañas con servidor de sesiones** (las sesiones sobreviven
 a la ventana y se comparten entre terminales), **túneles** local, remoto y
 SOCKS5 que también siguen vivos al cerrarla, y reconexión tras caída. Sin
-cuenta, sin suscripción y sin telemetría.
+cuenta, sin suscripción y sin telemetría. Primera versión pública: **1.0.0**
+(30 de octubre de 2026), software libre bajo MIT OR Apache-2.0.
 
 ## Requisitos
 
-- Rust stable (edición 2021)
-- Linux o macOS
-- Opcional: `ssh-agent` en `SSH_AUTH_SOCK` para autenticar sin frase
+- Linux (Omarchy/Arch, o cualquier distribución con glibc ≥ 2.35) o macOS.
+- Opcional: `ssh-agent` en `SSH_AUTH_SOCK` para autenticar sin frase.
+- Solo para compilar desde el código: Rust stable (edición 2021, MSRV 1.86).
 
 ## Instalación
 
+MAGI se distribuye como paquete **`magi-ssh`**; el comando sigue siendo
+`magi`. Primera versión pública: **1.0.0**.
+
+### Omarchy y Arch (AUR)
+
 ```sh
-cargo install --path .
+yay -S magi-ssh-bin
 ```
 
-Para desarrollo:
+El paquete instala `/usr/bin/magi`, el autocompletado de bash, zsh y fish, la
+página man, la entrada de escritorio y el icono. Al terminar, `pacman` sugiere
+ejecutar `magi diagnostico`.
+
+### macOS (Homebrew)
+
+```sh
+brew install 4d3-org/tap/magi-ssh
+```
+
+La fórmula instala el binario `magi` en Apple Silicon e Intel y no pasa por
+Gatekeeper, así que no hay que quitar la cuarentena. Si el autocompletado o la
+página man no aparecen en las rutas de Homebrew, actívalos a mano (ver
+[Autocompletado y man en macOS](#autocompletado-y-man-en-macos)).
+
+### Tarball de la última release
+
+Para otras distribuciones de Linux o para macOS sin Homebrew, descarga el
+tarball de [la última release](https://github.com/4d3-org/magi/releases/latest):
+
+| Plataforma | Tarball |
+|---|---|
+| Linux x86_64 | `magi-ssh-x86_64-unknown-linux-gnu.tar.xz` |
+| Linux aarch64 | `magi-ssh-aarch64-unknown-linux-gnu.tar.xz` |
+| macOS Apple Silicon | `magi-ssh-aarch64-apple-darwin.tar.xz` |
+| macOS Intel | `magi-ssh-x86_64-apple-darwin.tar.xz` |
+
+```sh
+tar -xf magi-ssh-x86_64-unknown-linux-gnu.tar.xz
+sudo install -m755 magi-ssh-x86_64-unknown-linux-gnu/magi /usr/local/bin/magi
+```
+
+Los binarios de Linux necesitan **glibc ≥ 2.35** (Ubuntu 22.04 o posterior); en
+Omarchy y Arch usa el paquete de AUR. En macOS, si el tarball lo bajaste con el
+navegador, quita la cuarentena antes de ejecutarlo:
+
+```sh
+xattr -d com.apple.quarantine magi
+```
+
+### Verificación
+
+Cada release publica un `.sha256` por tarball y atestaciones de procedencia de
+GitHub. Verifica ambos antes de instalar:
+
+```sh
+sha256sum -c magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256
+gh attestation verify magi-ssh-x86_64-unknown-linux-gnu.tar.xz --repo 4d3-org/magi
+```
+
+En macOS, si no tienes `sha256sum`, usa `shasum -a 256 -c`. `gh` es el
+[GitHub CLI](https://cli.github.com/); la atestación comprueba que el binario
+salió del CI del repositorio.
+
+### Desde el código
+
+```sh
+cargo install --path .
+# o, para probar sin instalar:
+cargo build --release && ./target/release/magi
+```
+
+## Desarrollo
 
 ```sh
 cargo run                       # abre la TUI en la vista Flota
@@ -31,17 +99,55 @@ cargo run -- importar [ruta]    # importa ~/.ssh/config (o la ruta indicada)
 cargo run -- exportar           # regenera ~/.ssh/magi_config
 cargo run -- sondear [host…]    # sondea la flota sin TUI e imprime la tabla
 cargo run -- registro exportar <ruta> [--json] [--desde AAAA-MM-DD]
-cargo run -- servidor estado    # pid, protocolo, sesiones y clientes del servidor
+cargo run -- diagnostico        # comprueba lo que MAGI necesita, sin escribir nada
+cargo run -- autocompletado bash # escribe el autocompletado en la salida estándar
+cargo run -- man                # escribe la página man en la salida estándar
+cargo run -- servidor estado    # pid, versión, sesiones y clientes del servidor
 cargo run -- servidor parar     # cierra las sesiones y apaga el servidor
 cargo run -- tuneles            # lista los túneles definidos y activos
 cargo run -- tunel activar <host> <nombre>   # levanta ese túnel
 cargo run -- tunel parar <host> <nombre>     # lo para
 cargo run -- conectar <host>    # abre la TUI con una sesión nueva a ese host
 cargo run -- sincronizaciones   # lista las sincronizaciones guardadas
-cargo test                      # tests de almacén, parser, estados, ids y vuelta
+scripts/generar-recursos.sh     # regenera assets/ tras cambiar la CLI
+TZ=UTC cargo test               # suite completa (las pruebas de pintado necesitan TZ=UTC)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+## Primeros pasos
+
+1. Ejecuta `magi diagnostico` para comprobar rutas, permisos, socket, llavero,
+   portapapeles y `~/.ssh/config`; cada aviso trae la instrucción de arreglo.
+2. Arranca `magi` (abre la vista **Flota**). En **Hosts** (`F2`), pulsa `I`
+   para importar `~/.ssh/config` o `magi importar [ruta]` desde fuera de la TUI.
+3. Revisa la ficha con `e` (dirección, usuario, identidad, salto, keepalive,
+   multiplexado, servicios y verificaciones previas) y guarda con `Ctrl+S`.
+4. Conecta con `↵` (siempre abre una sesión nueva) y vuelve a la TUI con el
+   prefijo `Ctrl+]` y `q` (o `Esc`). Cerrar la ventana no cierra las sesiones.
+5. Explora con `Ctrl+P` (paleta) y `?` (ayuda): `F4` Archivos, `F5`
+   Identidades, `F6` Túneles, `F7` Registro y `F8` Snippets.
+6. Si quieres que `ssh <nombre>` vea los hosts de MAGI, exporta con `E` en
+   Hosts (o `magi exportar`) y acepta el `Include` en `~/.ssh/config`.
+
+## Diagnóstico
+
+`magi diagnostico` comprueba, sin escribir nada, sin arrancar el servidor y sin
+leer secretos del llavero:
+
+- versión, protocolo y commit;
+- rutas de datos, configuración, estado y runtime con sus permisos, y la
+  longitud de la ruta del socket;
+- `config.toml`, `magi.db` (en solo lectura) y el servidor de sesiones (si está
+  en marcha, su versión y lo que custodia);
+- agente SSH, llavero, portapapeles, editor, paginador, terminal e `Include` de
+  `magi_config` en `~/.ssh/config`.
+
+Cada línea sale como `✓` correcto, `!` aviso o `✕` error (en ASCII `ok`, `!` y
+`x`), con la instrucción de arreglo; no hay color si `NO_COLOR` está definido o
+la salida no es una terminal. El código de salida es 0 si no hay errores (los
+avisos no cuentan) y 1 si hay alguno. Es la primera comprobación que conviene
+ejecutar tras instalar o actualizar MAGI.
 
 ## El servidor de sesiones
 
@@ -73,11 +179,42 @@ un socket Unix en `$XDG_RUNTIME_DIR/magi/servidor.sock` (macOS:
 - `SIGTERM` para el servidor igual que `magi servidor parar`: cierra sesiones
   y túneles anotándolo y borra socket y lock. Si el servidor en marcha es de
   otra versión (tras actualizar MAGI), `magi servidor parar` muestra su pid y
-  le envía `SIGTERM` tras confirmar (`--si` no pregunta).
+  le envía `SIGTERM` tras confirmar (`--si` no pregunta); al abrir `magi`, el
+  servidor anterior se sustituye solo si no custodia nada y, si no, se pregunta
+  (ver [Actualizar MAGI](#actualizar-magi)).
 - El sondeo de Flota, con sesión viva, ejecuta el script sobre esa conexión;
   sin ella cae a su conexión efímera.
 - El log del servidor va en `~/.local/state/magi/logs/servidor.log.<fecha>`;
   para depurarlo, `cargo run -- --servidor` en primer plano.
+
+## Actualizar MAGI
+
+Con el gestor de paquetes, la actualización es la habitual:
+
+```sh
+yay -Syu                 # Omarchy y Arch (magi-ssh-bin)
+brew upgrade magi-ssh    # macOS (tap 4d3-org/tap)
+```
+
+Con el tarball, descarga la versión nueva, verifícala como en la instalación y
+sustituye el binario.
+
+**Servidor de sesiones anterior.** Si tenías MAGI abierto, el servidor de
+sesiones sigue siendo el del binario anterior. Al abrir el `magi` nuevo:
+
+- si el servidor anterior **no custodia nada** (ninguna sesión, transferencia,
+  túnel, ejecución ni otra ventana), se sustituye solo y la barra lo dice: no se
+  pierde nada porque no había nada;
+- si **custodia algo**, o es una versión que no informa de lo que custodia,
+  aparece el diálogo **SERVIDOR DE SESIONES ANTERIOR** con las dos versiones, el
+  pid y lo que tiene: `p` lo para y arranca el nuevo tras confirmar («cerrará 2
+  sesiones y 1 túnel»), `Esc` sigue sin sesiones y `q` sale. Nunca se para solo;
+- si el servidor es **más nuevo** que el binario, se avisa de que actualices MAGI
+  y no se para desde ese binario.
+
+La actualización no migra nada por sí sola: la migración de `magi.db` ocurre al
+abrir la app, hacia delante. Si vuelves a un binario anterior con una base de
+datos ya migrada, se negará a abrirla (sin tocarla): reinstala la versión nueva.
 
 ## Pestañas
 
@@ -635,7 +772,7 @@ normal, legible y reimportable con `magi importar ~/.ssh/magi_config`.
 ## Tests
 
 ```sh
-cargo test
+TZ=UTC cargo test
 ```
 
 Cubren el almacén (CRUD, cascadas, migración desde vacío), la ida y vuelta
@@ -677,3 +814,65 @@ borrado al terminar solo con éxito y las anotaciones de sincronización y
 deliberación. Si el sistema no trae `sftp-server`, esas pruebas se saltan con
 un aviso en lugar de fallar. El resto (marcas, avisos de sensibles,
 paneles, orden y fechas) son pruebas unitarias puras.
+
+## Autocompletado y man en macOS
+
+La fórmula de Homebrew instala el binario y, si la versión lo incluye, el
+autocompletado y la página man. Si no aparecen, genéralos con el propio binario:
+
+```sh
+# zsh (el shell por defecto de macOS)
+magi autocompletado zsh > "$(brew --prefix)/share/zsh/site-functions/_magi"
+# bash
+magi autocompletado bash > "$(brew --prefix)/etc/bash_completion.d/magi"
+# fish
+magi autocompletado fish > "$(brew --prefix)/share/fish/vendor_completions.d/magi.fish"
+# página man
+magi man > "$(brew --prefix)/share/man/man1/magi.1"
+```
+
+En Linux, el paquete de AUR ya coloca esos ficheros en las rutas del sistema; si
+usas el tarball, instálalos con `sudo install -Dm644` en
+`/usr/share/bash-completion/completions/magi`,
+`/usr/share/zsh/site-functions/_magi`,
+`/usr/share/fish/vendor_completions.d/magi.fish` y
+`/usr/share/man/man1/magi.1`.
+
+## Desinstalación
+
+```sh
+sudo pacman -Rns magi-ssh-bin   # Omarchy y Arch
+brew uninstall magi-ssh         # macOS
+```
+
+Con el tarball, borra el binario (`sudo rm /usr/local/bin/magi`). Desinstalar
+MAGI **no borra los datos del usuario**; quedan en:
+
+| Qué | Dónde |
+|---|---|
+| Inventario | `~/.local/share/magi/` (`magi.db` y sus ficheros WAL) |
+| Configuración | `~/.config/magi/config.toml` |
+| Estado y logs | `~/.local/state/magi/` |
+| `magi_config` | `~/.ssh/magi_config` |
+| `Include` | la línea `Include ~/.ssh/magi_config` de `~/.ssh/config` |
+| Socket y lock | `$XDG_RUNTIME_DIR/magi/` (se borran al parar el servidor) |
+| Copias de seguridad | `~/.ssh/config.bak-<fecha>` y `known_hosts.old` |
+| Contraseñas recordadas | el llavero del sistema (`secret-tool`/Keychain) |
+
+Para empezar de cero: cierra MAGI, para el servidor (`magi servidor parar`),
+borra esas rutas y quita la línea `Include`. MAGI nunca borra claves de `~/.ssh`
+ni entradas de `known_hosts`; si quieres quitar las que aceptaste, usa
+`ssh-keygen -R <host>`.
+
+## Licencia
+
+MAGI es software libre bajo doble licencia **MIT OR Apache-2.0**, a elección de
+quien lo use:
+
+- [LICENSE-MIT](LICENSE-MIT)
+- [LICENSE-APACHE](LICENSE-APACHE)
+
+Salvo que se indique lo contrario, cualquier contribución enviada al proyecto se
+licencia del mismo modo, siguiendo la convención de Rust.
+
+Copyright (c) 2026 Cuatro de Tres S. Coop. And.
