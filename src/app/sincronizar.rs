@@ -1627,7 +1627,7 @@ mod pruebas {
             None,
             "por componentes"
         );
-        assert_eq!(anidadas("/home/hector/web", "/srv/web"), None);
+        assert_eq!(anidadas("/home/usuario/web", "/srv/web"), None);
     }
 
     #[test]
@@ -1716,7 +1716,7 @@ mod pruebas {
             host_nombre: "hetzner-01".to_string(),
             guardada: guardada.then(|| (7, "web-prod".to_string())),
             direccion,
-            ruta_local: "/home/hector/web".to_string(),
+            ruta_local: "/home/usuario/web".to_string(),
             ruta_remota: "/var/www/app".to_string(),
             borrar: true,
             extras: Vec::new(),
@@ -1784,19 +1784,19 @@ mod pruebas {
             resumen,
             vec![
                 (
-                    "/home/hector/web/static",
+                    "/home/usuario/web/static",
                     "/var/www/app/static",
                     true,
                     Some(0o755)
                 ),
                 (
-                    "/home/hector/web/static/app.js",
+                    "/home/usuario/web/static/app.js",
                     "/var/www/app/static/app.js",
                     false,
                     Some(0o644)
                 ),
                 (
-                    "/home/hector/web/main.py",
+                    "/home/usuario/web/main.py",
                     "/var/www/app/main.py",
                     false,
                     Some(0o2640)
@@ -1819,7 +1819,7 @@ mod pruebas {
         );
         assert_eq!(
             (lanzada.raiz_origen.as_str(), lanzada.raiz_destino.as_str()),
-            ("/home/hector/web", "/var/www/app")
+            ("/home/usuario/web", "/var/www/app")
         );
         assert_eq!(
             plan.accion(false),
@@ -1836,10 +1836,10 @@ mod pruebas {
         };
         let elementos = plan.elementos();
         assert_eq!(elementos[1].origen, "/var/www/app/static/app.js");
-        assert_eq!(elementos[1].destino, "/home/hector/web/static/app.js");
+        assert_eq!(elementos[1].destino, "/home/usuario/web/static/app.js");
         assert_eq!(
             plan.borrar_al_terminar(),
-            vec!["/home/hector/web/viejo.css", "/home/hector/web/tmp"]
+            vec!["/home/usuario/web/viejo.css", "/home/usuario/web/tmp"]
         );
         let lanzada = plan.lanzada();
         assert_eq!((lanzada.id, lanzada.nombre), (None, None));

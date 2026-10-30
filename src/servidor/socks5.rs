@@ -184,11 +184,11 @@ mod pruebas {
 
     #[tokio::test]
     async fn un_connect_a_ipv4_e_ipv6_se_entiende() {
-        let mut resto = vec![VERSION, COMANDO_CONNECT, 0x00, TIPO_IPV4, 10, 0, 0, 5];
+        let mut resto = vec![VERSION, COMANDO_CONNECT, 0x00, TIPO_IPV4, 192, 0, 2, 5];
         resto.extend_from_slice(&80u16.to_be_bytes());
         assert_eq!(
             conversar(&[VERSION, 1, METODO_SIN_AUTH], &resto).await,
-            Peticion::Conectar("10.0.0.5".to_string(), 80)
+            Peticion::Conectar("192.0.2.5".to_string(), 80)
         );
 
         let mut resto = vec![VERSION, COMANDO_CONNECT, 0x00, TIPO_IPV6];

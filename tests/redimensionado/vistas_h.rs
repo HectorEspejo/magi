@@ -983,7 +983,7 @@ fn no_subir() -> Dialogo {
     Dialogo::Edicion(DialogoEdicion::NoSubir {
         edicion: 1,
         temporal: "/run/user/1000/magi/ediciones/12-cooperapp".to_string(),
-        dir_local: "/home/hector/proyectos/cooperapp".to_string(),
+        dir_local: "/home/usuario/proyectos/cooperapp".to_string(),
     })
 }
 

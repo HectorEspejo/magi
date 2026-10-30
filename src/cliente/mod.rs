@@ -237,6 +237,35 @@ pub enum FalloConexion {
     Inaccesible(String),
 }
 
+/// Plazo máximo para que un servidor anterior libere socket y lock tras el
+/// `SIGTERM` (Fase 9, §7.2). Pasado, no se lanza ningún servidor nuevo.
+pub const ESPERA_SUSTITUCION: Duration = Duration::from_secs(5);
+
+/// Por qué no se pudo sustituir el servidor de sesiones anterior (Fase 9,
+/// §4.4). El diálogo SERVIDOR DE SESIONES ANTERIOR enseña el motivo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FalloSustitucion {
+    /// El servidor no murió o no liberó socket y lock en 5 s: no se lanzó
+    /// nada y sigue siendo el servidor de la versión anterior.
+    NoLiberado { pid: Option<u32> },
+    /// No se puede sustituir por otro motivo (sin pid, sin arrancar el nuevo,
+    /// reconexión fallida).
+    Inaccesible(String),
+}
+
+impl FalloSustitucion {
+    /// Motivo legible para el diálogo y la barra.
+    pub fn texto(&self) -> String {
+        match self {
+            Self::NoLiberado { pid: Some(pid) } => format!(
+                "el servidor anterior (pid {pid}) no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor. Páralo con «kill {pid}» y vuelve a abrir MAGI"
+            ),
+            Self::NoLiberado { pid: None } => "el servidor anterior no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor".to_string(),
+            Self::Inaccesible(motivo) => motivo.clone(),
+        }
+    }
+}
+
 /// Conecta al socket del servidor; si no existe lo lanza desacoplado y espera
 /// hasta 2 s. Socket presente sin respuesta → huérfano (borrar y relanzar) o
 /// lock ocupado (tres reintentos de 1 s).
@@ -291,6 +320,44 @@ pub async fn conectar(
                 "servidor sin socket: magi servidor parar".to_string(),
             ))
         }
+    }
+}
+
+/// Sustituye el servidor de sesiones de otra versión (Fase 9, §4.4 y §7.2):
+/// SIGTERM a su pid, espera hasta 5 s a que muera y libere socket y lock,
+/// arranca el servidor de este binario y reconecta. Nunca lanza un segundo
+/// servidor mientras el anterior conserve el socket: si no se libera, devuelve
+/// NoLiberado con su pid y no hace nada más.
+pub async fn sustituir_servidor(
+    rutas: &Rutas,
+    rechazo: &RechazoVersion,
+    tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
+) -> Result<Cliente, FalloSustitucion> {
+    let Some(pid) = rechazo.pid else {
+        return Err(FalloSustitucion::Inaccesible(
+            "el servidor anterior no dice su pid, así que no se puede sustituir: ejecuta «magi servidor parar» y vuelve a abrir".to_string(),
+        ));
+    };
+    // SIGTERM y espera a que muera, suelte el lock y deje de atender el
+    // socket. Un ESRCH cuenta como ya parado.
+    let liberado = crate::servidor::parar_por_senal_en(rutas, pid, ESPERA_SUSTITUCION)
+        .await
+        .map_err(|error| FalloSustitucion::Inaccesible(error.to_string()))?;
+    if !liberado {
+        return Err(FalloSustitucion::NoLiberado { pid: Some(pid) });
+    }
+    // Socket y lock libres: se arranca el servidor nuevo y se reconecta. El
+    // saludo de conectar manda la bienvenida a la UI como siempre.
+    lanzar_servidor(rutas);
+    let ruta = servidor::ruta_socket(rutas);
+    if !esperar_socket(&ruta, Duration::from_secs(2)).await {
+        return Err(FalloSustitucion::Inaccesible(
+            "el servidor de sesiones nuevo no ha arrancado en 2 s; revisa ~/.local/state/magi/logs/servidor.log".to_string(),
+        ));
+    }
+    match conectar(rutas, tx_eventos).await {
+        Ok(cliente) => Ok(cliente),
+        Err(fallo) => Err(FalloSustitucion::Inaccesible(describe_fallo(&fallo))),
     }
 }
 
@@ -389,13 +456,14 @@ fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersi
     // Si `trabajo` está pero no se entiende, vale como «todo lleno»: nunca se
     // para un servidor por una lectura optimista.
     let trabajo = valor.get("trabajo").map(|trabajo| {
-        serde_json::from_value::<crate::protocolo::TrabajoServidor>(trabajo.clone())
-            .unwrap_or(crate::protocolo::TrabajoServidor {
+        serde_json::from_value::<crate::protocolo::TrabajoServidor>(trabajo.clone()).unwrap_or(
+            crate::protocolo::TrabajoServidor {
                 sesiones: 1,
                 transferencias: 1,
                 tuneles: 1,
                 ejecuciones: 1,
-            })
+            },
+        )
     });
     RechazoVersion {
         version,
@@ -497,6 +565,35 @@ async fn tarea_lectura(
 }
 
 // ---------------------------------------------------------------- arranque
+
+/// Proceso de apoyo de las pruebas de la Fase 9: se comporta como un
+/// servidor anterior que no atiende SIGTERM y no suelta el lock del
+/// servidor. Bloquea el lock y no vuelve nunca; solo para tests.
+#[doc(hidden)]
+pub fn servidor_que_no_cede(ruta_lock: &std::path::Path) -> ! {
+    // SIGTERM ignorado: como un servidor viejo que no coopera.
+    unsafe {
+        let _ = nix::sys::signal::signal(
+            nix::sys::signal::Signal::SIGTERM,
+            nix::sys::signal::SigHandler::SigIgn,
+        );
+    }
+    let fichero = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(ruta_lock)
+        .expect("abriendo el lock de pruebas");
+    let bloqueo = nix::fcntl::Flock::lock(fichero, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        .unwrap_or_else(|(_fichero, error)| panic!("bloqueando el lock de pruebas: {error}"));
+    // Aviso de que ya está bloqueado (el padre lee esta línea).
+    println!("listo");
+    // El descriptor se queda abierto: el lock dura lo que el proceso.
+    std::mem::forget(bloqueo);
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+}
 
 /// Lanza `magi --servidor` desacoplado: sesión propia (`setsid`), stdio al
 /// log del servidor del día. Devuelve aunque el servidor tarde en arrancar.

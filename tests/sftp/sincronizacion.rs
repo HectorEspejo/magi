@@ -610,7 +610,7 @@ fn deliberacion(montaje: &Montaje) -> i64 {
             resultado: ResultadoDeliberacion::Aprobada,
             bloqueada: false,
             motivo: None,
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         },
     )
     .unwrap();

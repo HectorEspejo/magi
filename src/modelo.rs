@@ -871,9 +871,9 @@ pub(crate) fn host_de_prueba() -> Host {
         id: 1,
         nombre: "Producción-Web".to_string(),
         grupo_id: None,
-        direccion: "10.0.0.1".to_string(),
+        direccion: "192.0.2.1".to_string(),
         puerto: 22,
-        usuario: Some("Héctor".to_string()),
+        usuario: Some("usuario".to_string()),
         identidad_ref: IdentidadRef::Auto,
         salto_host_id: None,
         multiplexar: false,
@@ -902,7 +902,7 @@ mod pruebas {
     fn el_filtro_ignora_mayusculas_y_acentos() {
         let host = host_de_prueba();
         assert!(coincide(&host, "produccion"));
-        assert!(coincide(&host, "HECTOR"));
+        assert!(coincide(&host, "USUARIO"));
         assert!(coincide(&host, "critico"));
         assert!(coincide(&host, "PROD web"));
         assert!(!coincide(&host, "prod base"));
@@ -911,7 +911,7 @@ mod pruebas {
     #[test]
     fn el_filtro_usa_tokens_en_and() {
         let host = host_de_prueba();
-        assert!(coincide(&host, "produccion hector"));
+        assert!(coincide(&host, "produccion usuario"));
         assert!(!coincide(&host, "produccion ausente"));
     }
 
@@ -964,7 +964,7 @@ mod pruebas {
         assert!(validar_opciones_extra("ControlPersist 10m").is_ok());
         // Los reenvíos ya no se rechazan aquí: solo los que MAGI sabe
         // representar, y de eso decide `sshconfig::tuneles::reenvio_gestionado`.
-        assert!(validar_opciones_extra("LocalForward 5432 10.0.0.5:5432").is_ok());
+        assert!(validar_opciones_extra("LocalForward 5432 192.0.2.5:5432").is_ok());
     }
 
     #[test]

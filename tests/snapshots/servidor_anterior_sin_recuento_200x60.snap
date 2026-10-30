@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_l.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.0.2.140:22                                                                                                                      │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │    ┌ SERVIDOR DE SESIONES ANTERIOR ───────────────────────────────┐                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │    Este magi:       1.0.0 · protocolo 6                      │                                                                   │
+│                                                              │    │    Servidor activo: desconocida · protocolo 5 · pid 48211    │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │    Custodia:                                                 │                                                                   │
+│                                                              │    │    la versión anterior no informa de lo que custodia         │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │    Pararlo cierra todo lo anterior.                          │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │  p parar y arrancar el nuevo   esc seguir sin sesiones       │                                                                   │
+│                                                              │    │  q salir                                                     │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    └──────────────────────────────────────────────────────────────┘                                                                   │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ✕ servidor de una versión anterior (desconocida, protocolo 5, pid 48211): sin sustituir; «magi servidor parar» y volver a abrir

@@ -13,8 +13,8 @@ use magi::snippets::{DatosSnippet, Destino};
 fn datos(nombre: &str) -> DatosHost {
     DatosHost {
         nombre: nombre.to_string(),
-        direccion: "10.0.0.1".to_string(),
-        usuario: Some("hector".to_string()),
+        direccion: "192.0.2.1".to_string(),
+        usuario: Some("usuario".to_string()),
         puerto: 2222,
         etiquetas: vec!["web".to_string(), "prod".to_string()],
         ..DatosHost::default()
@@ -71,7 +71,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en)
-                 VALUES ('viejo', '10.0.0.9', 22, '', 'manual',
+                 VALUES ('viejo', '192.0.2.9', 22, '', 'manual',
                          '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00')",
                 [],
             )
@@ -236,22 +236,22 @@ fn crud_de_hosts_conserva_campos_y_etiquetas() {
     let id = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let host = almacen.obtener_host(id).unwrap();
     assert_eq!(host.nombre, "uno");
-    assert_eq!(host.direccion, "10.0.0.1");
-    assert_eq!(host.usuario.as_deref(), Some("hector"));
+    assert_eq!(host.direccion, "192.0.2.1");
+    assert_eq!(host.usuario.as_deref(), Some("usuario"));
     assert_eq!(host.puerto, 2222);
     assert_eq!(host.keepalive_seg, Some(30));
     assert_eq!(host.etiquetas, vec!["prod", "web"]);
     assert_eq!(host.origen, Origen::Manual);
 
     let mut editado = datos("uno");
-    editado.direccion = "10.0.0.2".to_string();
+    editado.direccion = "192.0.2.2".to_string();
     editado.identidad_ref = IdentidadRef::Fichero("~/.ssh/id_ed25519".to_string());
     editado.multiplexar = true;
     editado.keepalive_seg = Some(45);
     editado.etiquetas = vec!["solo".to_string()];
     almacen.actualizar_host(id, &editado).unwrap();
     let host = almacen.obtener_host(id).unwrap();
-    assert_eq!(host.direccion, "10.0.0.2");
+    assert_eq!(host.direccion, "192.0.2.2");
     assert_eq!(
         host.identidad_ref,
         IdentidadRef::Fichero("~/.ssh/id_ed25519".to_string())
@@ -404,7 +404,7 @@ fn tunel_de(host_id: i64, nombre: &str, tipo: TipoTunel, escucha: &str) -> Datos
         tipo,
         escucha: escucha.to_string(),
         destino: if tipo.lleva_destino() {
-            Some("10.0.0.5:5432".to_string())
+            Some("192.0.2.5:5432".to_string())
         } else {
             None
         },
@@ -676,7 +676,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en, servicios, sftp_dir_remoto)
-                 VALUES ('fase5', '10.0.0.7', 22, '', 'manual',
+                 VALUES ('fase5', '192.0.2.7', 22, '', 'manual',
                          '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00',
                          'nginx', '/srv')",
                 [],
@@ -686,7 +686,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
             .execute(
                 "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
                                       creado_en, actualizado_en)
-                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 1,
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '192.0.2.5:5432', 1,
                          '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00')",
                 [],
             )
@@ -810,7 +810,7 @@ fn borrar_un_snippet_deja_a_null_el_snippet_al_conectar_y_la_deliberacion() {
             resultado: ResultadoDeliberacion::Aprobada,
             bloqueada: false,
             motivo: None,
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         })
         .unwrap();
 
@@ -1258,7 +1258,7 @@ fn deliberacion_de(
         resultado,
         bloqueada: true,
         motivo: motivo.map(str::to_string),
-        usuario: "hector".to_string(),
+        usuario: "usuario".to_string(),
     }
 }
 
@@ -1291,7 +1291,7 @@ fn las_deliberaciones_guardan_hosts_y_comprobaciones_de_ida_y_vuelta() {
     assert_eq!(fila.resultado, ResultadoDeliberacion::Forzada);
     assert!(fila.bloqueada);
     assert_eq!(fila.motivo.as_deref(), Some("revisado a mano"));
-    assert_eq!(fila.usuario, "hector");
+    assert_eq!(fila.usuario, "usuario");
     assert_eq!(fila.ejecucion_resultado, None);
     assert_eq!(fila.consenso(), (1, 4));
 
@@ -1387,7 +1387,7 @@ fn sincronizacion_de(host_id: i64, nombre: &str) -> DatosSincronizacion {
     DatosSincronizacion {
         host_id,
         nombre: nombre.to_string(),
-        ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+        ruta_local: "/home/usuario/proyectos/cooperapp".to_string(),
         ruta_remota: "/var/www/cooperapp".to_string(),
         direccion: Direccion::Subida,
         borrar: false,
@@ -1412,7 +1412,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en, servicios)
-                 VALUES ('fase7', '10.0.0.8', 22, '', 'manual',
+                 VALUES ('fase7', '192.0.2.8', 22, '', 'manual',
                          '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00', 'nginx')",
                 [],
             )
@@ -1421,7 +1421,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
             .execute(
                 "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
                                       creado_en, actualizado_en)
-                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 0,
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '192.0.2.5:5432', 0,
                          '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00')",
                 [],
             )

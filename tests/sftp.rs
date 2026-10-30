@@ -311,7 +311,7 @@ async fn montar_con(sftp: bool, por_contrasena: bool) -> Option<Montaje> {
                 nombre: "prueba".to_string(),
                 direccion: "127.0.0.1".to_string(),
                 puerto: puerto_ssh,
-                usuario: Some("hector".to_string()),
+                usuario: Some("usuario".to_string()),
                 identidad_ref: if por_contrasena {
                     IdentidadRef::Contrasena
                 } else {

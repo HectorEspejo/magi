@@ -1957,7 +1957,7 @@ mod pruebas {
             creados: 12,
             actualizados: 3,
             omitidos: 1,
-            raiz_origen: "/home/hector/web".to_string(),
+            raiz_origen: "/home/usuario/web".to_string(),
             raiz_destino: "/var/www/app".to_string(),
         }
     }
@@ -1982,7 +1982,7 @@ mod pruebas {
                 resultado: crate::deliberacion::ResultadoDeliberacion::Aprobada,
                 bloqueada: false,
                 motivo: None,
-                usuario: "hector".to_string(),
+                usuario: "usuario".to_string(),
                 ejecucion_resultado: None,
             },
             forzada: false,
@@ -1999,7 +1999,7 @@ mod pruebas {
             direccion: Direccion::Subida,
             elementos: destinos
                 .iter()
-                .map(|destino| elemento("/home/hector/web/x", destino, 1))
+                .map(|destino| elemento("/home/usuario/web/x", destino, 1))
                 .collect(),
             politica: Politica::Sobrescribir,
             borrar_origen: false,
@@ -2207,12 +2207,12 @@ mod pruebas {
         let id = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras_sincronizacion(Some(4), &["/var/www/app/viejo.css", "/var/www/app/tmp"]),
             Some(EtiquetaTransferencia::Sincronizacion),
         );
         let info = &cola.obtener(id).unwrap().info;
-        assert_eq!(info.origen, "/home/hector/web");
+        assert_eq!(info.origen, "/home/usuario/web");
         assert_eq!(info.destino, "/var/www/app");
         assert!(info.es_directorio);
         assert_eq!(info.borrados_total, 2);
@@ -2242,7 +2242,7 @@ mod pruebas {
         let id = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras,
             Some(EtiquetaTransferencia::Sincronizacion),
         );
@@ -2251,7 +2251,7 @@ mod pruebas {
             let transferencia = cola.obtener_mut(id).unwrap();
             transferencia.escrito.store(true, Ordering::Relaxed);
             transferencia.info.estado = EstadoTransferencia::Error;
-            transferencia.info.error = Some("/home/hector/web/b: permiso denegado".to_string());
+            transferencia.info.error = Some("/home/usuario/web/b: permiso denegado".to_string());
             transferencia.info.bytes_hechos = 4200;
         }
         let cierre = cola.cerrar(id).expect("se cierra");
@@ -2264,7 +2264,7 @@ mod pruebas {
         assert_eq!(
             detalle,
             "«web-prod» · subida · +12 ~3 −0 · 1 omitidos · 4200 B · parcial · \
-             /home/hector/web/b: permiso denegado"
+             /home/usuario/web/b: permiso denegado"
         );
         assert!(cola.cerrar(id).is_none(), "el cierre nunca se duplica");
     }
@@ -2277,7 +2277,7 @@ mod pruebas {
         let id = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras,
             Some(EtiquetaTransferencia::Sincronizacion),
         );
@@ -2306,14 +2306,14 @@ mod pruebas {
         let corre = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras_sincronizacion(Some(1), &[]),
             Some(EtiquetaTransferencia::Sincronizacion),
         );
         let espera = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/b",
+            "/home/usuario/web/b",
             extras_sincronizacion(Some(2), &[]),
             Some(EtiquetaTransferencia::Sincronizacion),
         );
@@ -2353,14 +2353,14 @@ mod pruebas {
         let corre = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras_sincronizacion(Some(1), &["/var/www/app/x"]),
             Some(EtiquetaTransferencia::Sincronizacion),
         );
         let abortada = encolar_con(
             &mut cola,
             2,
-            "/home/hector/web/b",
+            "/home/usuario/web/b",
             extras_sincronizacion(Some(2), &[]),
             Some(EtiquetaTransferencia::Sincronizacion),
         );
@@ -2403,7 +2403,7 @@ mod pruebas {
         let espera = encolar_con(
             &mut cola,
             1,
-            "/home/hector/web/a",
+            "/home/usuario/web/a",
             extras,
             Some(EtiquetaTransferencia::Sincronizacion),
         );

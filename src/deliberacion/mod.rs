@@ -756,7 +756,7 @@ mod pruebas {
             resultado: ResultadoDeliberacion::Forzada,
             bloqueada: true,
             motivo: Some("revisado a mano".to_string()),
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
             ejecucion_resultado: None,
         };
         let detalle = detalle_registro(&deliberacion, Some(EjecucionResultado::Ok));
@@ -792,7 +792,7 @@ mod pruebas {
             resultado: ResultadoDeliberacion::Forzada,
             bloqueada: true,
             motivo: Some("revisado a mano".to_string()),
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
             ejecucion_resultado: Some(EjecucionResultado::Parcial),
         };
         let lineas = lineas_detalle(&deliberacion, 70);

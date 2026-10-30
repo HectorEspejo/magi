@@ -217,9 +217,9 @@ async fn el_listado_y_la_apertura_traen_los_nombres_de_propietario() {
             ..
         } => {
             assert_eq!(peticion_id, Some(5));
-            // El host de las pruebas se conecta como «hector».
-            assert_eq!(usuario_conexion.as_deref(), Some("hector"));
-            let esperado = uid_en_passwd("hector")
+            // El host de las pruebas se conecta como «usuario».
+            assert_eq!(usuario_conexion.as_deref(), Some("usuario"));
+            let esperado = uid_en_passwd("usuario")
                 .or_else(|| std::fs::metadata(&dir_inicio).ok().map(|m| m.uid()));
             assert_eq!(uid_conexion, esperado);
         }

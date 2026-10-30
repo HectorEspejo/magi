@@ -351,7 +351,7 @@ pub fn con_miles(numero: u64) -> String {
     let cifras = numero.to_string();
     let mut texto = String::with_capacity(cifras.len() + cifras.len() / 3);
     for (indice, cifra) in cifras.chars().enumerate() {
-        if indice > 0 && (cifras.len() - indice).is_multiple_of(3) {
+        if indice > 0 && (cifras.len() - indice) % 3 == 0 {
             texto.push(' ');
         }
         texto.push(cifra);

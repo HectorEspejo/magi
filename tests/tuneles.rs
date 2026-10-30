@@ -294,7 +294,7 @@ async fn montar_con(reenvio: ModoReenvio, multiplexar: bool) -> Montaje {
                 nombre: "prueba".to_string(),
                 direccion: "127.0.0.1".to_string(),
                 puerto: puerto_ssh,
-                usuario: Some("hector".to_string()),
+                usuario: Some("usuario".to_string()),
                 identidad_ref: IdentidadRef::Fichero(ruta_clave.display().to_string()),
                 multiplexar,
                 ..DatosHost::default()

@@ -101,7 +101,7 @@ mod pruebas {
             host_id: 1,
             host_nombre: host.to_string(),
             nombre: nombre.to_string(),
-            ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+            ruta_local: "/home/usuario/proyectos/cooperapp".to_string(),
             ruta_remota: "/var/www/cooperapp".to_string(),
             direccion,
             borrar: false,
@@ -127,7 +127,7 @@ mod pruebas {
         subida.ultima_ejecucion_en = Some("2026-10-02T14:31:05+02:00".to_string());
         subida.ultimo_resultado = Some(ResultadoSincronizacion::Ok);
         let mut bajada = guardada("hetzner-01", "logs", Direccion::Bajada);
-        bajada.ruta_local = "/home/hector/logs".to_string();
+        bajada.ruta_local = "/home/usuario/logs".to_string();
         bajada.ruta_remota = "/var/log/nginx".to_string();
         bajada.borrar = true;
         let texto = listado_cli(&[bajada, subida]);
@@ -150,7 +150,7 @@ mod pruebas {
         assert!(lineas[1].contains(" sí "), "{texto}");
         assert!(lineas[1].contains(" nunca "), "{texto}");
         assert!(
-            lineas[1].ends_with("/home/hector/logs ← /var/log/nginx"),
+            lineas[1].ends_with("/home/usuario/logs ← /var/log/nginx"),
             "{texto}"
         );
         assert!(lineas[2].contains(" web-prod "), "{texto}");
@@ -158,7 +158,7 @@ mod pruebas {
         assert!(lineas[2].contains(" no "), "{texto}");
         assert!(lineas[2].contains(" ok · 2026-10-02 14:31 "), "{texto}");
         assert!(
-            lineas[2].ends_with("/home/hector/proyectos/cooperapp → /var/www/cooperapp"),
+            lineas[2].ends_with("/home/usuario/proyectos/cooperapp → /var/www/cooperapp"),
             "{texto}"
         );
     }

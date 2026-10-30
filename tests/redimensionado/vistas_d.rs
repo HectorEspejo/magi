@@ -219,7 +219,7 @@ fn cola() -> Vec<InfoTransferencia> {
         1,
         EstadoTransferencia::EnCurso,
         Direccion::Subida,
-        "/home/hector/cooperapp/main.py",
+        "/home/usuario/cooperapp/main.py",
         "/var/www/cooperapp/main.py",
         (1_153_434, 1_468_006),
     );
@@ -228,7 +228,7 @@ fn cola() -> Vec<InfoTransferencia> {
         2,
         EstadoTransferencia::EnCola,
         Direccion::Subida,
-        "/home/hector/cooperapp/static",
+        "/home/usuario/cooperapp/static",
         "/var/www/cooperapp/static",
         (0, 245_760),
     );
@@ -239,7 +239,7 @@ fn cola() -> Vec<InfoTransferencia> {
         EstadoTransferencia::Error,
         Direccion::Bajada,
         "/root/backup.tgz",
-        "/home/hector/backup.tgz",
+        "/home/usuario/backup.tgz",
         (0, 52_428_800),
     );
     error.host_nombre = "hetzner-02".to_string();
@@ -252,14 +252,14 @@ fn cola() -> Vec<InfoTransferencia> {
             EstadoTransferencia::EnCola,
             Direccion::Bajada,
             "/var/log/nginx/access.log",
-            "/home/hector/access.log",
+            "/home/usuario/access.log",
             (0, 3_355_443),
         ),
         transferencia(
             4,
             EstadoTransferencia::Hecha,
             Direccion::Subida,
-            "/home/hector/cooperapp/config.yaml",
+            "/home/usuario/cooperapp/config.yaml",
             "/var/www/cooperapp/config.yaml",
             (2_048, 2_048),
         ),
@@ -276,7 +276,7 @@ fn cola_larga() -> Vec<InfoTransferencia> {
             EstadoTransferencia::EnCola,
             Direccion::Bajada,
             &format!("/var/log/app/registro-{id:02}.log"),
-            &format!("/home/hector/registros/registro-{id:02}.log"),
+            &format!("/home/usuario/registros/registro-{id:02}.log"),
             (0, 20_480),
         ));
     }

@@ -373,7 +373,7 @@ fn deliberacion(escenario: &Escenario, host_id: i64, forzada: bool) -> i64 {
             },
             bloqueada: forzada,
             motivo: forzada.then(|| "backup revisado a mano".to_string()),
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         },
     )
     .unwrap();

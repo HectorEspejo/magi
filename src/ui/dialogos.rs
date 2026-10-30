@@ -321,6 +321,9 @@ pub fn dibujar(
             )];
             mostrar(70, Hoja::nueva("SERVIDOR CAÍDO", cuerpo, pie).peligro(true));
         }
+        Dialogo::ServidorAnterior(dialogo) => {
+            crate::ui::servidor_anterior::dibujar(marco, area, app, dialogo, disp);
+        }
         Dialogo::HuellaServidor {
             host, tipo, huella, ..
         } => {

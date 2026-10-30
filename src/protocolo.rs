@@ -899,15 +899,11 @@ fn uno() -> u32 {
 }
 
 impl TrabajoServidor {
-    pub const CAMPOS: [&'static str; 4] =
-        ["sesiones", "transferencias", "tuneles", "ejecuciones"];
+    pub const CAMPOS: [&'static str; 4] = ["sesiones", "transferencias", "tuneles", "ejecuciones"];
 
     /// No custodia nada de lo que hoy conoce MAGI.
     pub fn vacio(&self) -> bool {
-        self.sesiones == 0
-            && self.transferencias == 0
-            && self.tuneles == 0
-            && self.ejecuciones == 0
+        self.sesiones == 0 && self.transferencias == 0 && self.tuneles == 0 && self.ejecuciones == 0
     }
 
     /// Suma de todo lo que custodia (para decidir y para el resumen).
@@ -1265,7 +1261,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
             host_id: 7,
             peticion_id: Some(1 << 48),
-            dir_inicio: "/home/hector".to_string(),
+            dir_inicio: "/home/usuario".to_string(),
             usuario_conexion: None,
             uid_conexion: None,
         });
@@ -1282,8 +1278,8 @@ mod pruebas {
                     propietario: Some(crate::archivos::Propietario {
                         uid: Some(1000),
                         gid: Some(1000),
-                        usuario: Some("hector".to_string()),
-                        grupo: Some("hector".to_string()),
+                        usuario: Some("usuario".to_string()),
+                        grupo: Some("usuario".to_string()),
                     }),
                     enlace: None,
                     marca: Default::default(),
@@ -1377,7 +1373,7 @@ mod pruebas {
             host_id: 7,
             direccion: Direccion::Subida,
             elementos: vec![ElementoTransferencia {
-                origen: "/home/hector/web/index.html".to_string(),
+                origen: "/home/usuario/web/index.html".to_string(),
                 destino: "/var/www/index.html".to_string(),
                 bytes: 120,
                 es_directorio: false,
@@ -1399,7 +1395,7 @@ mod pruebas {
                 creados: 1,
                 actualizados: 0,
                 omitidos: 0,
-                raiz_origen: "/home/hector/web".to_string(),
+                raiz_origen: "/home/usuario/web".to_string(),
                 raiz_destino: "/var/www".to_string(),
             }),
             etiqueta: Some(EtiquetaTransferencia::Sincronizacion),
@@ -1557,7 +1553,7 @@ mod pruebas {
             tipo: "local".to_string(),
             escucha: "127.0.0.1:5432".to_string(),
             escucha_efectiva: "127.0.0.1:5432".to_string(),
-            destino: Some("10.0.0.5:5432".to_string()),
+            destino: Some("192.0.2.5:5432".to_string()),
             automatico: true,
             estado: EstadoTunelRemoto::Activo,
             origen: Some(OrigenTunel::Automatico),
@@ -1791,7 +1787,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::PideLlavero {
             sesion_id: 9,
             host: "hetzner-01".to_string(),
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         });
         ida_y_vuelta_servidor(MensajeServidor::Ejecutado {
             host_id: 7,

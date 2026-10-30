@@ -183,14 +183,14 @@ fn con_tuneles_y_reenvio(prueba: &mut AppPrueba) {
                 nombre: format!("extra-{n}"),
                 tipo: TipoTunel::Local,
                 escucha: format!("127.0.0.1:{}", 6000 + n),
-                destino: Some(format!("10.0.0.9:{}", 7000 + n)),
+                destino: Some(format!("192.0.2.9:{}", 7000 + n)),
                 automatico: false,
             })
             .expect("túnel de prueba");
     }
     prueba.app.recargar_tuneles();
     ir_a(prueba, CampoFicha::Opciones);
-    escribir(prueba, "LocalForward 5555 10.0.0.1:5555");
+    escribir(prueba, "LocalForward 5555 192.0.2.1:5555");
 }
 
 /// Con el foco en el bloque de túneles se ven la fila seleccionada y el aviso
@@ -516,8 +516,8 @@ fn el_texto_a_medio_escribir_y_el_foco_se_conservan() {
     let comprobar = |prueba: &AppPrueba| {
         let ficha = ficha(prueba);
         assert_eq!(ficha.campo, CampoFicha::Direccion);
-        assert_eq!(ficha.direccion.texto, "10.0.1.11abc");
-        assert_eq!(ficha.direccion.cursor, 10);
+        assert_eq!(ficha.direccion.texto, "192.0.2.111abc");
+        assert_eq!(ficha.direccion.cursor, 12);
     };
     comprobar(&prueba);
     for (cols, filas) in [(80, 24), (40, 12), (200, 60)] {
@@ -529,7 +529,10 @@ fn el_texto_a_medio_escribir_y_el_foco_se_conservan() {
             comprobar(&prueba);
         } else {
             let texto = prueba.texto();
-            assert!(texto.contains("10.0.1.11a┃bc"), "{cols}×{filas}:\n{texto}");
+            assert!(
+                texto.contains("192.0.2.111a┃bc"),
+                "{cols}×{filas}:\n{texto}"
+            );
         }
     }
 }

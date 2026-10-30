@@ -7,11 +7,11 @@ source: tests/redimensionado/arnes.rs
 │    ○ hetzner-02                 deploy     2222                    │
 │    ○ vps-openclaw               admin      22                      │
 │  ▼ casa                                      (2)                   │
-│    ○ dgx-spark                  hector     22                      │
-│    ○ mac-mini-m1                hector     22                      │
+│    ○ dgx-spark                  usuario    22                      │
+│    ○ mac-mini-m1                usuario    22                      │
 │  ▼ sin grupo                                 (2)                   │
 │    ○ backup-nas                 backup     22                      │
-│    ○ rincon-dev                 hector     2200                    │
+│    ○ rincon-dev                 usuario    2200                    │
 │                                                                    │
 │                                                                    │
 │                                                                    │

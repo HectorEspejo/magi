@@ -11,7 +11,7 @@ source: tests/redimensionado/arnes.rs
 │  ▸   [ ] local    127.0.0.1:6003 → 1…  extra-3 │
 │    ✕ hay 1 reenvío en opciones extra · i impor…│
 │┌ SERVICIOS ───────────┐┌ OPCIONES EXTRA ──────┐│
-││                      ││LocalForward 5555 10.…││
+││                      ││LocalForward 5555 192…││
 │└──────────────────────┘└──────────────────────┘│
 └────────────────────────────────────────────────┘
  ⇥ campo  ^s guardar  esc descartar

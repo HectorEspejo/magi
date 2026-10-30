@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_l.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ○ dgx-spark    FRÍA                                                         │
+│  ● het┌ SERVIDOR DE SESIONES ANTERIOR ───────────────────────────────┐       │
+│  ● het│                                                              │       │
+│  ◐ mac│    Este magi:       1.0.0 · protocolo 6                      │       │
+│  ✕ rin│    Servidor activo: 0.9.0 · protocolo 5 · pid 48211          │       │
+│  ● vps│                                                              │       │
+│       │    Custodia:  2 sesiones · 1 túnel                           │       │
+│       │               0 transferencias · 0 ejecuciones               │       │
+│       │               1 ventana más de la versión anterior           │       │
+│       │                                                              │       │
+│       │    Al pararlo, cerrará 2 sesiones, 1 túnel y 1 ventana más.  │       │
+│       │                                                              │       │
+│       │  s confirmar   n volver                                      │       │
+│       │                                                              │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ✕ servidor de una versión anterior (0.9.0, protocolo 5, pid 48211): sin sustit…

@@ -49,7 +49,7 @@ fn sobrescribir_al_importar_conserva_servicios_y_etiquetas() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config"),
-        "Host uno\n  HostName 10.0.0.1\n  User hector\n",
+        "Host uno\n  HostName 192.0.2.1\n  User usuario\n",
     )
     .unwrap();
     let almacen = Almacen::abrir_en_memoria().unwrap();
@@ -63,8 +63,8 @@ fn sobrescribir_al_importar_conserva_servicios_y_etiquetas() {
         .unwrap();
     let datos = DatosHost {
         nombre: "uno".to_string(),
-        direccion: "10.0.0.1".to_string(),
-        usuario: Some("hector".to_string()),
+        direccion: "192.0.2.1".to_string(),
+        usuario: Some("usuario".to_string()),
         servicios: "nginx.service\npostgresql".to_string(),
         etiquetas: vec!["prod".to_string()],
         grupo_id: host.grupo_id,
@@ -101,7 +101,7 @@ fn ida_y_vuelta_reproduce_el_inventario() {
             &DatosHost {
                 nombre: "vps-intermedio".to_string(),
                 direccion: "49.12.x.x".to_string(),
-                usuario: Some("hector".to_string()),
+                usuario: Some("usuario".to_string()),
                 ..DatosHost::default()
             },
             Origen::Manual,
@@ -109,7 +109,7 @@ fn ida_y_vuelta_reproduce_el_inventario() {
         .unwrap();
     let datos_destino = DatosHost {
         nombre: "backup-nas".to_string(),
-        direccion: "10.0.0.12".to_string(),
+        direccion: "192.0.2.12".to_string(),
         puerto: 2200,
         usuario: Some("admin".to_string()),
         identidad_ref: IdentidadRef::Fichero("~/.ssh/4d3-ed25519".to_string()),
@@ -261,14 +261,14 @@ fn los_reenvios_de_ssh_config_van_a_tuneles() {
         &ruta,
         "\
 Host tunelero
-    HostName 10.0.0.9
-    User hector
-    LocalForward 5432 10.0.0.5:5432
+    HostName 192.0.2.9
+    User usuario
+    LocalForward 5432 192.0.2.5:5432
     RemoteForward 9000 127.0.0.1:9000
     DynamicForward 1080
 
 Host sin-reenvios
-    HostName 10.0.0.10
+    HostName 192.0.2.10
 ",
     )
     .unwrap();
@@ -298,7 +298,7 @@ Host sin-reenvios
         "local-5432",
         TipoTunel::Local,
         "127.0.0.1:5432",
-        Some("10.0.0.5:5432"),
+        Some("192.0.2.5:5432"),
     );
     exigir_tunel(
         &tuneles,
@@ -332,7 +332,7 @@ fn un_reenvio_que_no_se_entiende_se_queda_en_opciones_extra() {
     let ruta = dir.path().join("config");
     fs::write(
         &ruta,
-        "Host raro\n    HostName 10.0.0.11\n    LocalForward 5432\n",
+        "Host raro\n    HostName 192.0.2.11\n    LocalForward 5432\n",
     )
     .unwrap();
     let almacen = Almacen::abrir_en_memoria().unwrap();
@@ -353,9 +353,9 @@ fn ida_y_vuelta_de_los_tres_tipos() {
         &ruta,
         "\
 Host tunelero
-    HostName 10.0.0.9
-    User hector
-    LocalForward 5432 10.0.0.5:5432
+    HostName 192.0.2.9
+    User usuario
+    LocalForward 5432 192.0.2.5:5432
     RemoteForward 9000 127.0.0.1:9000
     DynamicForward 1080
 ",
@@ -388,7 +388,7 @@ Host tunelero
         "local-5432",
         TipoTunel::Local,
         "127.0.0.1:5432",
-        Some("10.0.0.5:5432"),
+        Some("192.0.2.5:5432"),
     );
     exigir_tunel(
         &tuneles,
@@ -415,7 +415,7 @@ fn reimportar_el_mismo_fichero_no_repite_los_tuneles() {
     let ruta = dir.path().join("config");
     fs::write(
         &ruta,
-        "Host tunelero\n    HostName 10.0.0.9\n    LocalForward 5432 10.0.0.5:5432\n",
+        "Host tunelero\n    HostName 192.0.2.9\n    LocalForward 5432 192.0.2.5:5432\n",
     )
     .unwrap();
     let almacen = Almacen::abrir_en_memoria().unwrap();
@@ -437,7 +437,7 @@ fn conexion_no_se_resuelve_si_el_salto_no_existe() {
     let ruta = dir.path().join("config");
     fs::write(
         &ruta,
-        "Host destino\n    HostName 10.0.0.1\n    ProxyJump fantasma\n",
+        "Host destino\n    HostName 192.0.2.1\n    ProxyJump fantasma\n",
     )
     .unwrap();
     let almacen = Almacen::abrir_en_memoria().unwrap();
@@ -457,13 +457,13 @@ Host *
     User root
 
 Host uno dos
-    HostName 1.2.3.4
+    HostName 192.0.2.34
 
 Match host *.example.com
     User nadie
 
 Host simple
-    HostName 5.6.7.8
+    HostName 192.0.2.78
     User admin
 ";
     let parseo = parser::parsear(texto);
@@ -486,14 +486,14 @@ fn include_de_un_nivel_ignora_magi_config() {
     fs::write(
         &principal,
         format!(
-            "Include {}\nInclude {}\nHost propio\n    HostName 1.1.1.1\n",
+            "Include {}\nInclude {}\nHost propio\n    HostName 192.0.2.21\n",
             incluido.display(),
             magi_config.display()
         ),
     )
     .unwrap();
-    fs::write(&incluido, "Host incluido\n    HostName 2.2.2.2\n").unwrap();
-    fs::write(&magi_config, "Host no-importar\n    HostName 3.3.3.3\n").unwrap();
+    fs::write(&incluido, "Host incluido\n    HostName 192.0.2.22\n").unwrap();
+    fs::write(&magi_config, "Host no-importar\n    HostName 192.0.2.23\n").unwrap();
     let parseo = parser::leer_config(&principal, dir.path()).unwrap();
     let nombres: Vec<String> = parseo
         .bloques
@@ -511,7 +511,7 @@ fn incluir_include_crea_copia_y_lo_pone_primero() {
     let ssh = dir.path().join(".ssh");
     fs::create_dir_all(&ssh).unwrap();
     let config = ssh.join("config");
-    fs::write(&config, "Host uno\n    HostName 1.2.3.4\n").unwrap();
+    fs::write(&config, "Host uno\n    HostName 192.0.2.34\n").unwrap();
     let magi_config = ssh.join("magi_config");
     fs::write(&magi_config, "# generado\n").unwrap();
 
@@ -534,7 +534,7 @@ fn conflicto_omitido_por_defecto_y_sobrescrito_con_decision() {
     let ruta = dir.path().join("config");
     fs::write(
         &ruta,
-        "Host existente\n    HostName 9.9.9.9\n    User nuevo\n",
+        "Host existente\n    HostName 192.0.2.29\n    User nuevo\n",
     )
     .unwrap();
     let almacen = Almacen::abrir_en_memoria().unwrap();
@@ -542,7 +542,7 @@ fn conflicto_omitido_por_defecto_y_sobrescrito_con_decision() {
         .crear_host(
             &DatosHost {
                 nombre: "existente".to_string(),
-                direccion: "1.1.1.1".to_string(),
+                direccion: "192.0.2.21".to_string(),
                 usuario: Some("viejo".to_string()),
                 ..DatosHost::default()
             },
@@ -560,14 +560,14 @@ fn conflicto_omitido_por_defecto_y_sobrescrito_con_decision() {
     assert_eq!(resumen.omitidos.len(), 1);
     assert_eq!(
         almacen.listar_hosts().unwrap()[0].direccion,
-        "1.1.1.1".to_string()
+        "192.0.2.21".to_string()
     );
 
     decisiones.insert("existente".to_string(), true);
     let resumen = importar::aplicar(almacen.conexion(), &analisis, &decisiones).unwrap();
     assert_eq!(resumen.sobrescritos, 1);
     let host = almacen.listar_hosts().unwrap().remove(0);
-    assert_eq!(host.direccion, "9.9.9.9");
+    assert_eq!(host.direccion, "192.0.2.29");
     assert_eq!(host.usuario.as_deref(), Some("nuevo"));
     assert_eq!(host.origen, Origen::SshConfig);
 }
@@ -580,7 +580,7 @@ fn un_reenvio_que_no_cabe_en_tuneles_vuelve_a_opciones_extra() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config"),
-        "Host choque\n  HostName 10.0.0.1\n\
+        "Host choque\n  HostName 192.0.2.1\n\
          \x20 LocalForward 5432 db1:5432\n\
          \x20 LocalForward 0.0.0.0:5432 db2:5432\n",
     )
@@ -616,7 +616,7 @@ fn reimportar_el_mismo_fichero_no_cambia_nada() {
     let ruta = dir.path().join("config");
     fs::write(
         &ruta,
-        "Host ida\n  HostName 10.0.0.1\n\
+        "Host ida\n  HostName 192.0.2.1\n\
          \x20 LocalForward 5432 db:5432\n\
          \x20 DynamicForward 1080\n",
     )
@@ -657,8 +657,8 @@ fn el_magi_config_generado_lo_acepta_ssh() {
         .crear_host(
             &DatosHost {
                 nombre: "prueba".to_string(),
-                direccion: "10.0.0.1".to_string(),
-                usuario: Some("hector".to_string()),
+                direccion: "192.0.2.1".to_string(),
+                usuario: Some("usuario".to_string()),
                 ..DatosHost::default()
             },
             Origen::Manual,
@@ -671,13 +671,13 @@ fn el_magi_config_generado_lo_acepta_ssh() {
             "normal",
             TipoTunel::Local,
             "127.0.0.1:5432",
-            Some("10.0.0.5:5432"),
+            Some("192.0.2.5:5432"),
         ),
         (
             "efimero",
             TipoTunel::Local,
             "127.0.0.1:0",
-            Some("10.0.0.5:5432"),
+            Some("192.0.2.5:5432"),
         ),
         ("socks", TipoTunel::Dinamico, "127.0.0.1:1080", None),
         (
@@ -719,7 +719,10 @@ fn el_magi_config_generado_lo_acepta_ssh() {
 
     // Y lo que sí se puede escribir, está.
     let texto = fs::read_to_string(&ruta).unwrap();
-    assert!(texto.contains("LocalForward 5432 10.0.0.5:5432"), "{texto}");
+    assert!(
+        texto.contains("LocalForward 5432 192.0.2.5:5432"),
+        "{texto}"
+    );
     assert!(texto.contains("DynamicForward 1080"), "{texto}");
     assert!(texto.contains("RemoteForward 0 127.0.0.1:9000"), "{texto}");
     // El del puerto 0 en local va comentado, no como línea inválida.
