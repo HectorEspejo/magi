@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="MAGI">
+  <!-- Monograma geométrico original de MAGI, con la paleta de src/tema.rs:
+       fondo de cabina, marco de acento, trazo de texto y nodo correcto.
+       No reproduce ningún logotipo ni pantalla de terceros. -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#0A0A0A" stroke="#FFA000" stroke-width="16"/>
+  <!-- La M: dos trazos verticales y el vértice central. -->
+  <path d="M 136 384 L 136 152 L 256 320 L 376 152 L 376 384" fill="none" stroke="#EDE8DC" stroke-width="40" stroke-linecap="square" stroke-linejoin="miter"/>
+  <!-- Nodo central: el rombo verde de la cabina. -->
+  <path d="M 256 360 L 288 392 L 256 424 L 224 392 Z" fill="#00FF6A"/>
+  <!-- Guía inferior inactiva: el trazo de la cabina. -->
+  <rect x="136" y="448" width="240" height="8" fill="#5A5A5A"/>
+</svg>

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory as _, Parser, Subcommand};
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::UnixStream;
 use tokio_stream::StreamExt as _;
@@ -28,7 +29,8 @@ use magi::tema;
 #[derive(Parser)]
 #[command(
     name = "magi",
-    version,
+    version = env!("CARGO_PKG_VERSION"),
+    long_version = magi::version_larga(),
     about = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
 )]
 struct Cli {
@@ -79,6 +81,16 @@ enum Comando {
     /// Lista las sincronizaciones guardadas con su host, dirección, rutas,
     /// borrado y último resultado.
     Sincronizaciones,
+    /// Comprueba lo que MAGI necesita en este sistema sin modificar nada.
+    Diagnostico,
+    /// Escribe el script de autocompletado de la shell en la salida estándar.
+    Autocompletado {
+        /// Shell del script: bash, zsh o fish.
+        #[arg(value_name = "SHELL", value_parser = shell_soportada)]
+        shell: clap_complete::Shell,
+    },
+    /// Escribe la página man de MAGI en la salida estándar.
+    Man,
 }
 
 #[derive(Subcommand)]
@@ -128,6 +140,12 @@ enum ComandoRegistro {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Diagnóstico, autocompletado y página man no pueden tocar las rutas ni
+    // el log: el diagnóstico no escribe nada y los otros dos solo imprimen.
+    // Se despachan antes de descubrir rutas y abrir el log (Fase 9).
+    if let Some(codigo) = atender_sin_entorno(&cli)? {
+        std::process::exit(codigo);
+    }
     let rutas = Rutas::descubrir()?;
     let log_servidor = cli.servidor;
     let _guardia_log = iniciar_log(
@@ -249,6 +267,10 @@ fn main() -> anyhow::Result<()> {
             };
             app::ejecutar(rutas, config, tema, almacen, aviso, Some(host.id))
         }
+        Some(Comando::Diagnostico) | Some(Comando::Autocompletado { .. }) | Some(Comando::Man) => {
+            // Se atienden al principio, antes de descubrir rutas y abrir el log.
+            unreachable!("los subcomandos sin entorno se despachan al principio")
+        }
         None => {
             app::instalar_hook_panico();
             let almacen = Almacen::abrir(&rutas.base_datos())?;
@@ -261,6 +283,96 @@ fn main() -> anyhow::Result<()> {
             app::ejecutar(rutas, config, tema, almacen, aviso, None)
         }
     }
+}
+
+/// Atiende los subcomandos que no deben tocar las rutas ni el log: el
+/// diagnóstico (que no escribe nada) y los que solo imprimen recursos.
+/// Devuelve su código de salida si era uno de ellos.
+fn atender_sin_entorno(cli: &Cli) -> anyhow::Result<Option<i32>> {
+    match &cli.comando {
+        Some(Comando::Diagnostico) => Ok(Some(magi::diagnostico::ejecutar()?)),
+        Some(Comando::Autocompletado { shell }) => {
+            imprimir_autocompletado(*shell)?;
+            Ok(Some(0))
+        }
+        Some(Comando::Man) => {
+            imprimir_man()?;
+            Ok(Some(0))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Shells con recursos publicados: el paquete instala bash, zsh y fish.
+fn shell_soportada(texto: &str) -> Result<clap_complete::Shell, String> {
+    match texto {
+        "bash" => Ok(clap_complete::Shell::Bash),
+        "zsh" => Ok(clap_complete::Shell::Zsh),
+        "fish" => Ok(clap_complete::Shell::Fish),
+        _ => Err(format!(
+            "shell no soportada: «{texto}» (usa bash, zsh o fish)"
+        )),
+    }
+}
+
+/// Escribe el script de autocompletado de `shell` en la salida estándar.
+fn imprimir_autocompletado(shell: clap_complete::Shell) -> anyhow::Result<()> {
+    // Se genera en memoria y luego se escribe: clap_complete entra en pánico
+    // si el tubo de salida se cierra (por ejemplo, con «| head»).
+    let mut comando = Cli::command();
+    let mut generado = Vec::new();
+    clap_complete::generate(shell, &mut comando, "magi", &mut generado);
+    let mut salida = std::io::stdout().lock();
+    salida.write_all(&generado)?;
+    salida.flush()?;
+    Ok(())
+}
+
+/// Escribe la página man en la salida estándar. Lleva fecha fija (la de la
+/// versión) para que `assets/man/magi.1` sea determinista y el test de
+/// frescura no dependa del día en que se compile.
+fn imprimir_man() -> anyhow::Result<()> {
+    // La versión larga incluye el commit: no puede aparecer en la página man,
+    // o los recursos cambiarían con cada compilación.
+    let comando = Cli::command().long_version(None::<&str>);
+    let pagina = clap_mangen::Man::new(comando)
+        .date(magi::FECHA_DE_VERSION)
+        .source(format!("magi {}", magi::VERSION_APP))
+        .manual("MAGI");
+    let mut salida = Vec::new();
+    pagina.render(&mut salida)?;
+    let texto = String::from_utf8(salida).context("la página man no es UTF-8")?;
+    let texto = traducir_man(&texto);
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(texto.as_bytes())?;
+    stdout.flush()?;
+    Ok(())
+}
+
+/// Traduce al castellano los títulos de sección fijos de `clap_mangen` y los
+/// textos de las opciones que genera clap.
+fn traducir_man(roff: &str) -> String {
+    let mut salida = String::with_capacity(roff.len());
+    for linea in roff.lines() {
+        let traducida = match linea {
+            ".SH NAME" => ".SH NOMBRE",
+            ".SH SYNOPSIS" => ".SH SINOPSIS",
+            ".SH DESCRIPTION" => ".SH DESCRIPCIÓN",
+            ".SH OPTIONS" => ".SH OPCIONES",
+            ".SH SUBCOMMANDS" => ".SH SUBCOMANDOS",
+            ".SH VERSION" => ".SH VERSIÓN",
+            ".SH AUTHORS" => ".SH AUTORES",
+            "Print help" => "Muestra la ayuda",
+            "Print version" => "Muestra la versión, el protocolo y el commit",
+            "Print this message or the help of the given subcommand(s)" => {
+                "Muestra este mensaje o la ayuda del subcomando indicado"
+            }
+            otra => otra,
+        };
+        salida.push_str(traducida);
+        salida.push('\n');
+    }
+    salida.replace("subcommands", "subcomandos")
 }
 
 fn importar(almacen: &Almacen, rutas: &Rutas, ruta: &std::path::Path) -> anyhow::Result<()> {

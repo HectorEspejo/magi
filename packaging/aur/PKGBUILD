@@ -1,0 +1,51 @@
+# Maintainer: Cuatro de Tres S. Coop. And. <4d3-org@users.noreply.github.com>
+#
+# PLANTILLA del paquete AUR magi-ssh-bin (Fase 9).
+#
+# No se edita a mano ni se sube tal cual: packaging/aur/generar.sh rellena
+# @VERSION@, @SHA256_X86_64@ y @SHA256_AARCH64@ con la versión y las sumas de
+# la GitHub Release, y ese resultado es el PKGBUILD que se publica en AUR.
+# Solo se publican versiones estables (las prereleases no tocan AUR).
+#
+# El paquete reempaqueta el binario publicado y atestado (no compila Rust):
+# el comando, la biblioteca, las rutas de datos y el socket se llaman «magi»;
+# el paquete se llama «magi-ssh».
+pkgname=magi-ssh-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Gestor SSH de terminal con estética de cabina técnica"
+arch=('x86_64' 'aarch64')
+url="https://github.com/4d3-org/magi"
+license=('MIT OR Apache-2.0')
+depends=('glibc' 'gcc-libs')
+optdepends=(
+  'wl-clipboard: copiar claves públicas en Wayland'
+  'libsecret: recordar contraseñas en el llavero (secret-tool)'
+  'openssh: usar ~/.ssh/magi_config con ssh fuera de MAGI'
+)
+provides=('magi-ssh')
+conflicts=('magi-ssh')
+install=magi-ssh-bin.install
+source_x86_64=("$url/releases/download/v$pkgver/magi-ssh-x86_64-unknown-linux-gnu.tar.xz")
+source_aarch64=("$url/releases/download/v$pkgver/magi-ssh-aarch64-unknown-linux-gnu.tar.xz")
+sha256sums_x86_64=('@SHA256_X86_64@')
+sha256sums_aarch64=('@SHA256_AARCH64@')
+
+package() {
+  # El tarball de dist lleva un directorio raíz con el objetivo y, dentro, el
+  # binario, README.md, CHANGELOG.md, LICENSE-MIT, LICENSE-APACHE y assets/.
+  cd "magi-ssh-${CARCH}-unknown-linux-gnu"
+
+  install -Dm755 magi "$pkgdir/usr/bin/magi"
+
+  install -Dm644 assets/completions/magi.bash "$pkgdir/usr/share/bash-completion/completions/magi"
+  install -Dm644 assets/completions/_magi "$pkgdir/usr/share/zsh/site-functions/_magi"
+  install -Dm644 assets/completions/magi.fish "$pkgdir/usr/share/fish/vendor_completions.d/magi.fish"
+
+  install -Dm644 assets/man/magi.1 "$pkgdir/usr/share/man/man1/magi.1"
+  install -Dm644 assets/magi.desktop "$pkgdir/usr/share/applications/magi.desktop"
+  install -Dm644 assets/iconos/magi.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/magi.svg"
+
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

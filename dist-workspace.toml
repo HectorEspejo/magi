@@ -1,0 +1,68 @@
+# Configuración de dist (cargo-dist) para MAGI — Fase 9.
+#
+# Los binarios publicados salen solo de CI a partir de un tag vX.Y.Z; este
+# fichero lo lee dist (versión fijada en cargo-dist-version) y genera
+# .github/workflows/release.yml. La plantilla AUR vive en packaging/aur/ y la
+# publica el workflow reutilizable .github/workflows/publicar-aur.yml.
+#
+# Antes de tocar este fichero, lee docs/publicar.md y el informe de la Fase 9
+# (§5.3, §7.5, §7.6 y §8).
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# Versión de dist que usa la CI (se fija para que las releases sean reproducibles).
+cargo-dist-version = "0.33.1"
+# Backend de CI: GitHub Actions.
+ci = "github"
+# Cuatro objetivos: dos Linux con glibc dinámica y dos macOS.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+# La fórmula de Homebrew se publica en el tap propio. Solo en versiones
+# estables: publish-prereleases queda en su valor por defecto (false), así que
+# dist no publica prereleases en Homebrew ni en AUR.
+installers = ["homebrew"]
+tap = "4d3-org/homebrew-tap"
+formula = "magi-ssh"
+# Publicadores: la fórmula de Homebrew (incorporada) y el workflow propio de AUR.
+publish-jobs = ["homebrew", "./publicar-aur"]
+# Integridad: SHA-256 por artefacto y atestaciones de procedencia de GitHub.
+checksum = "sha256"
+github-attestations = true
+# El paquete se llama magi-ssh y publica binario; publish = false en Cargo.toml
+# (es una aplicación, no una biblioteca) hace que dist lo ignore si no se fuerza.
+dist = true
+# Los tarballs van en .tar.xz e incluyen, además del binario, README, CHANGELOG,
+# las dos licencias y assets/ (autocompletado, man, .desktop e iconos). Se
+# listan a mano (auto-includes = false) para que un fichero que falte haga
+# fallar el empaquetado en vez de producir un tarball incompleto.
+unix-archive = ".tar.xz"
+auto-includes = false
+include = [
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  "assets/",
+]
+# En pull_request solo se ejecuta el plan (comprueba la configuración); las
+# compilaciones y publicaciones solo ocurren al empujar un tag de versión.
+pr-run-mode = "plan"
+# release.yml se mantiene a mano para ajustar los permisos mínimos por job
+# (contents: read por defecto; contents: write solo en plan y host) y el
+# workflow de AUR; allow-dirty evita que dist lo regenere o se queje de que no
+# coincide con su plantilla.
+allow-dirty = ["ci"]
+
+# Runners nativos, sin compilación cruzada: Ubuntu 22.04 (glibc ≥ 2.35) para
+# Linux y macOS 14/15 para Apple Silicon e Intel.
+[dist.github-custom-runners]
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"

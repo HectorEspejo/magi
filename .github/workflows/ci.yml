@@ -1,0 +1,143 @@
+# Integración continua de MAGI — Fase 9.
+#
+# Se ejecuta en cada pull request y en cada push a main. La release (compilar
+# los cuatro objetivos, publicar en GitHub Releases, Homebrew y AUR) la lleva
+# .github/workflows/release.yml, generado por dist; aquí solo se comprueba que
+# el árbol está sano antes de mezclar.
+#
+# Permisos: contents: read por defecto; ningún job de este workflow publica.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Una ejecución por rama/PR: al empujar de nuevo se cancela la anterior.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  formato:
+    name: Formato
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  tests-linux:
+    name: Tests Linux (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests-${{ matrix.os }}
+      - name: Instalar el sftp-server de OpenSSH
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          test -x /usr/lib/openssh/sftp-server
+      - name: TZ=UTC cargo test --locked
+        env:
+          TZ: UTC
+          MAGI_SFTP_SERVER: /usr/lib/openssh/sftp-server
+        run: cargo test --locked
+
+  macos:
+    name: macOS (arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build --locked
+        run: cargo build --locked
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: cargo test --lib
+        env:
+          TZ: UTC
+        run: cargo test --lib --locked
+
+  deny:
+    name: Licencias y avisos (cargo-deny)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Instalar cargo-deny 0.20.2
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o cargo-deny.tar.gz \
+            https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          # Suma fijada del binario precompilado (musl, estático).
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  cargo-deny.tar.gz" | sha256sum -c -
+          tar xzf cargo-deny.tar.gz
+          install -m 755 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny "$HOME/.cargo/bin/cargo-deny"
+      - name: cargo deny check
+        run: cargo deny check
+
+  aur-plantilla:
+    name: Plantilla AUR
+    runs-on: ubuntu-22.04
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar namcap
+        run: pacman -Syu --noconfirm --needed namcap
+      - name: Generar el PKGBUILD con versión y sumas ficticias
+        run: |
+          set -euo pipefail
+          ceros_x86_64="$(printf '0%.0s' {1..64})"
+          ceros_aarch64="$(printf '0%.0s' {1..64})"
+          mkdir -p /tmp/aur/magi-ssh-bin
+          cp packaging/aur/magi-ssh-bin.install /tmp/aur/magi-ssh-bin/
+          bash packaging/aur/generar.sh \
+            --version 0.0.0 \
+            --sha256-x86_64 "$ceros_x86_64" \
+            --sha256-aarch64 "$ceros_aarch64" \
+            --salida /tmp/aur/magi-ssh-bin/PKGBUILD
+          # La plantilla no puede llegar al paquete con placeholders sin rellenar.
+          ! grep -q '@VERSION@\|@SHA256_' /tmp/aur/magi-ssh-bin/PKGBUILD
+      - name: makepkg --printsrcinfo como usuario no root
+        run: |
+          set -euo pipefail
+          useradd -m empaquetador
+          chown -R empaquetador /tmp/aur/magi-ssh-bin
+          su empaquetador -c 'cd /tmp/aur/magi-ssh-bin && makepkg --printsrcinfo > .SRCINFO'
+          cat /tmp/aur/magi-ssh-bin/.SRCINFO
+      - name: namcap sobre la plantilla
+        run: namcap /tmp/aur/magi-ssh-bin/PKGBUILD

@@ -1,0 +1,111 @@
+# Publica el paquete magi-ssh-bin en AUR — Fase 9.
+#
+# Workflow reutilizable (workflow_call): lo llama release.yml desde el job
+# custom-publicar-aur, que dist genera a partir de publish-jobs en
+# dist-workspace.toml. Solo se ejecuta en versiones estables: release.yml ya
+# lo salta en las prereleases (publish-prereleases = false) y aquí se vuelve a
+# comprobar el tag por si se invoca de otra forma.
+#
+# Pasos: rellena packaging/aur/PKGBUILD con la versión y las sumas .sha256 de
+# la GitHub Release (packaging/aur/generar.sh), genera .SRCINFO con makepkg en
+# un contenedor Arch como usuario no root, pasa namcap y empuja a
+# ssh://aur@aur.archlinux.org/magi-ssh-bin.git con AUR_SSH_PRIVATE_KEY.
+#
+# Permisos: el job que lo llama fija contents: read, suficiente para el
+# checkout y para descargar los .sha256 de la release con gh.
+
+name: Publicar en AUR
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: Manifiesto de dist (dist-manifest.json) de la release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publicar-aur:
+    name: AUR magi-ssh-bin
+    # Un tag con guion es una prerelease (vX.Y.Z-rc.N): no toca AUR.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-22.04
+    container: archlinux:base-devel
+    env:
+      # El plan (dist-manifest.json) llega como input porque dist lo pasa,
+      # pero para AUR bastan el tag y los .sha256 publicados.
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar herramientas de empaquetado y publicación
+        run: pacman -Syu --noconfirm --needed git openssh github-cli namcap
+      - name: Rellenar el PKGBUILD y generar .SRCINFO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Descarga las sumas que dist publicó junto a los tarballs.
+          mkdir -p /tmp/aur/firmas /tmp/aur/magi-ssh-bin
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/aur/firmas \
+            --pattern '*.sha256'
+          cp packaging/aur/magi-ssh-bin.install /tmp/aur/magi-ssh-bin/
+          bash packaging/aur/generar.sh \
+            --version "$version" \
+            --sha256-x86_64-fichero /tmp/aur/firmas/magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256 \
+            --sha256-aarch64-fichero /tmp/aur/firmas/magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256 \
+            --salida /tmp/aur/magi-ssh-bin/PKGBUILD
+          # makepkg no puede ejecutarse como root: se genera .SRCINFO como
+          # usuario sin privilegios.
+          useradd -m empaquetador
+          chown -R empaquetador /tmp/aur/magi-ssh-bin
+          su empaquetador -c 'cd /tmp/aur/magi-ssh-bin && makepkg --printsrcinfo > .SRCINFO'
+          cat /tmp/aur/magi-ssh-bin/.SRCINFO
+      - name: namcap sobre la plantilla rellena
+        run: namcap /tmp/aur/magi-ssh-bin/PKGBUILD
+      - name: Empujar a AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_GIT_USUARIO: "4d3"
+          AUR_GIT_CORREO: "4d3-org@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+          test -n "${AUR_SSH_PRIVATE_KEY:-}" || { echo 'falta el secreto AUR_SSH_PRIVATE_KEY' >&2; exit 1; }
+          version="${TAG#v}"
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          ssh-keyscan -H aur.archlinux.org >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+
+          # La primera vez el repositorio de AUR no existe: se crea con un
+          # push inicial desde un repositorio local.
+          mkdir -p /tmp/publicar && cd /tmp/publicar
+          if git clone ssh://aur@aur.archlinux.org/magi-ssh-bin.git repo 2>/dev/null; then
+            cd repo
+          else
+            mkdir repo && cd repo
+            git init -q
+            git remote add origin ssh://aur@aur.archlinux.org/magi-ssh-bin.git
+          fi
+
+          git config user.name "$AUR_GIT_USUARIO"
+          git config user.email "$AUR_GIT_CORREO"
+          cp /tmp/aur/magi-ssh-bin/PKGBUILD \
+             /tmp/aur/magi-ssh-bin/.SRCINFO \
+             /tmp/aur/magi-ssh-bin/magi-ssh-bin.install .
+          git add PKGBUILD .SRCINFO magi-ssh-bin.install
+
+          if git diff --cached --quiet; then
+            echo "Nada que publicar: $version ya está en AUR."
+            exit 0
+          fi
+
+          git commit -m "upgpkg: magi-ssh-bin $version"
+          git push origin HEAD:master

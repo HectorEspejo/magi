@@ -1,0 +1,67 @@
+# Configuración de cargo-deny para MAGI — Fase 9 (empaquetado y releases).
+#
+# La CI ejecuta `cargo deny check` con este fichero en cada PR y push a main
+# (ver .github/workflows/ci.yml). Versión de cargo-deny con la que se validó:
+# 0.20.2. Licencias, avisos de RustSec y fuentes de crates; toda excepción lleva
+# su motivo y su fecha, y se revisa al actualizar dependencias.
+#
+# Referencia: docs/fase9/magi-fase9-informe.md §8 y docs/publicar.md.
+
+# Plataformas que se publican: las comprobaciones se limitan a ellas (los
+# árboles de dependencias exclusivos de Windows no forman parte del producto).
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
+
+[advisories]
+ignore = [
+  # 2026-10-30 · rsa 0.10.0-rc.18 es dependencia transitiva obligatoria de
+  # russh 0.63 y ssh-key 0.7.0-rc.11 (fijados por CLAUDE.md). El advisory no
+  # tiene parche (patched = [], a 2026-09-12) y no se puede eliminar sin
+  # cambiar el stack SSH. MAGI usa RSA solo como CLIENTE: firma con su clave
+  # privada y nunca descifra datos cifrados por terceros, que es el escenario
+  # del ataque Marvin; el servidor remoto es un host del inventario del
+  # usuario. Revisar al subir russh/ssh-key.
+  { id = "RUSTSEC-2023-0071", reason = "rsa sin parche, transitiva de russh; MAGI solo firma como cliente" },
+]
+
+[licenses]
+# Licencias permisivas compatibles con MIT OR Apache-2.0 (la del proyecto).
+# Se listan todas las que aparecen en el grafo actual más las habituales del
+# ecosistema Rust que podrían entrar al actualizar.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-1-Clause",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Varias versiones de la misma crate se avisan (no rompen la CI): el lock las
+# fija y actualizarlas es una decisión de dependencias, no de empaquetado.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Solo crates.io: ningún artefacto publicado puede salir de un git o de otra
+# registry (cadena de suministro, §8 del informe).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

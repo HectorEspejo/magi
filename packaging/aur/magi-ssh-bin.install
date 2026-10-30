@@ -1,0 +1,35 @@
+# Hooks de pacman del paquete magi-ssh-bin (Fase 9).
+#
+# Ninguno de los dos hooks para el servidor de sesiones ni toca datos del
+# usuario: instalar o actualizar el paquete no cierra pestañas, túneles,
+# transferencias ni ejecuciones en curso.
+
+post_install() {
+  cat <<'AVISO'
+MAGI se ha instalado (comando: magi).
+
+Ejecuta `magi diagnostico` para comprobar lo que MAGI necesita
+(portapapeles, llavero, agente SSH, rutas, permisos, servidor de sesiones).
+No modifica nada; solo informa, con ok / ! / x y una instrucción de arreglo.
+
+Los datos del usuario (~/.local/share/magi, ~/.config/magi,
+~/.local/state/magi, ~/.ssh/magi_config y la línea Include de ~/.ssh/config)
+no vienen del paquete: no se crean ni se tocan al instalar y se quedan si
+desinstalas.
+AVISO
+}
+
+post_upgrade() {
+  cat <<'AVISO'
+MAGI se ha actualizado.
+
+Si había un servidor de sesiones de la versión anterior en marcha, esta
+actualización NO lo para: las pestañas, transferencias, túneles y ejecuciones
+en curso siguen vivos. Al abrir `magi`, el binario nuevo se entiende con él:
+  - si no custodia nada, lo sustituye solo y lo dice en la barra;
+  - si custodia trabajo o hay otras ventanas, pregunta antes de cerrarlo.
+No hace falta reiniciar ni cerrar la sesión.
+
+Ejecuta `magi diagnostico` si quieres comprobar que todo sigue en orden.
+AVISO
+}
