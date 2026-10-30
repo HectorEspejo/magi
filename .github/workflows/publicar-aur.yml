@@ -23,6 +23,11 @@ on:
         description: Manifiesto de dist (dist-manifest.json) de la release
         required: true
         type: string
+    secrets:
+      # Clave SSH dedicada de la cuenta de AUR (docs/publicar.md). Es el único
+      # secreto que recibe este workflow.
+      AUR_SSH_PRIVATE_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -81,7 +86,29 @@ jobs:
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
           chmod 600 "$HOME/.ssh/aur"
-          ssh-keyscan -H aur.archlinux.org >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+          # Huellas publicadas por AUR en https://aur.archlinux.org (consultadas
+          # el 30-10-2026). `ssh-keyscan` sola es vulnerable a un MITM: se
+          # comprueba que TODAS las claves escaneadas son las publicadas y que
+          # aparecen las tres. Si AUR rota sus claves, actualizar esta lista
+          # (está documentado en docs/publicar.md).
+          ssh-keyscan -H aur.archlinux.org > "$HOME/.ssh/known_hosts" 2>/dev/null
+          huellas="$(ssh-keygen -lf "$HOME/.ssh/known_hosts" | awk '{print $2}' | sort -u)"
+          esperadas="SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI
+          SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8"
+          for huella in $huellas; do
+            printf '%s\n' "$esperadas" | grep -qxF "$huella" || {
+              echo "huella de AUR no publicada: $huella" >&2
+              exit 1
+            }
+          done
+          for huella in $esperadas; do
+            printf '%s\n' "$huellas" | grep -qxF "$huella" || {
+              echo "falta la huella publicada de AUR: $huella" >&2
+              exit 1
+            }
+          done
           export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
 
           # La primera vez el repositorio de AUR no existe: se crea con un

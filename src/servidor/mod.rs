@@ -222,6 +222,17 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         ),
     };
 
+    // La base de datos se abre antes de crear el socket: si es de una versión
+    // más nueva de MAGI, el servidor se niega sin dejar un socket huérfano
+    // (Fase 9). Con el lock en la mano no hay dos servidores migrando a la vez.
+    let almacen =
+        Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
+    let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
+    // Los temporales de una ejecución anterior interrumpida no se heredan (los
+    // de edición sí: pueden tener cambios sin subir).
+    sftp::preparar_temporales(&rutas);
+    sftp::vaciar_temporales(&rutas);
+
     // El socket se crea con umask 077 para que solo el usuario pueda abrirlo.
     let ruta_socket = ruta_socket(&rutas);
     let anterior = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
@@ -232,14 +243,6 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     let listener = UnixListener::bind(&ruta_socket)
         .with_context(|| format!("abriendo el socket {}", ruta_socket.display()))?;
     nix::sys::stat::umask(anterior);
-
-    let almacen =
-        Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
-    let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
-    // Los temporales de una ejecución anterior interrumpida no se heredan (los
-    // de edición sí: pueden tener cambios sin subir).
-    sftp::preparar_temporales(&rutas);
-    sftp::vaciar_temporales(&rutas);
     let estado = Arc::new(tokio::sync::Mutex::new(EstadoServidor {
         rutas: rutas.clone(),
         gracia: config.servidor.gracia_apagado_seg,

@@ -1621,3 +1621,60 @@ fn la_version_de_esquema_actual_se_abre() {
         .unwrap();
     assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
 }
+
+/// El servidor de sesiones también se niega a abrir una `magi.db` de una
+/// versión futura: sale con error, no deja socket huérfano y no toca el
+/// fichero (Fase 9, cliente y servidor).
+#[test]
+fn el_servidor_rechaza_una_base_de_datos_de_version_futura() {
+    let directorio = tempfile::tempdir().unwrap();
+    let raiz = directorio.path();
+    let rutas = magi::config::Rutas {
+        datos: raiz.join("datos").join("magi"),
+        config: raiz.join("config").join("magi"),
+        estado: raiz.join("estado").join("magi"),
+        hogar: raiz.join("hogar"),
+        runtime: raiz.join("runtime").join("magi"),
+    };
+    std::fs::create_dir_all(rutas.base_datos().parent().unwrap()).unwrap();
+    {
+        let conexion = rusqlite::Connection::open(rutas.base_datos()).unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+    }
+    let antes = std::fs::read(rutas.base_datos()).unwrap();
+    let salida = std::process::Command::new(env!("CARGO_BIN_EXE_magi"))
+        .arg("--servidor")
+        .env("HOME", raiz.join("hogar"))
+        .env("XDG_DATA_HOME", raiz.join("datos"))
+        .env("XDG_CONFIG_HOME", raiz.join("config"))
+        .env("XDG_STATE_HOME", raiz.join("estado"))
+        .env("XDG_RUNTIME_DIR", raiz.join("runtime"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("lanzando magi --servidor");
+    assert!(!salida.status.success(), "salida: {:?}", salida.status);
+    let texto = format!(
+        "{}{}",
+        String::from_utf8_lossy(&salida.stdout),
+        String::from_utf8_lossy(&salida.stderr)
+    );
+    assert!(
+        texto.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{texto}"
+    );
+    assert_eq!(
+        std::fs::read(rutas.base_datos()).unwrap(),
+        antes,
+        "el fichero queda intacto"
+    );
+    assert!(
+        !magi::servidor::ruta_socket(&rutas).exists(),
+        "no puede quedar un socket huérfano"
+    );
+}

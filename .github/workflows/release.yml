@@ -15,13 +15,16 @@
 #
 # MAGI: este fichero está generado por dist 0.33.1 a partir de
 # dist-workspace.toml, pero se mantiene a mano (allow-dirty = ["ci"] en la
-# configuración) para dos ajustes que dist no permite declarar:
+# configuración) para estos ajustes que dist no permite declarar:
 #   * permisos mínimos por job: contents: read por defecto y contents: write
-#     solo en los jobs que crean o publican la GitHub Release (plan y host), y
+#     solo en los jobs que crean o publican la GitHub Release (plan y host);
 #   * el permiso de lectura que necesita el job de AUR para descargar los
-#     .sha256 de la release, y
+#     .sha256 de la release;
 #   * una comprobación del formato del tag (vX.Y.Z o vX.Y.Z-<sufijo>) antes de
-#     usar su valor en cualquier script.
+#     usar su valor en cualquier script, que además cierra una inyección de
+#     github.ref_name en run:;
+#   * pasar al workflow de AUR solo el secreto que necesita (AUR_SSH_PRIVATE_KEY)
+#     en vez de todos los secretos del repositorio.
 # Si actualizas dist, regenera el fichero y vuelve a aplicar estos ajustes.
 
 name: Release
@@ -371,7 +374,9 @@ jobs:
     uses: ./.github/workflows/publicar-aur.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    # Solo la clave de AUR: el token del tap de Homebrew no se le pasa.
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
     # El workflow de AUR solo lee el repositorio (checkout de packaging/aur y
     # generación del .SRCINFO) y descarga los .sha256 de la release.
     permissions:
