@@ -350,7 +350,9 @@ fn imprimir_man() -> anyhow::Result<()> {
 }
 
 /// Traduce al castellano los títulos de sección fijos de `clap_mangen` y los
-/// textos de las opciones que genera clap.
+/// textos de las opciones que genera clap. Los subcomandos se referencian como
+/// `magi\-importar(1)`, pero solo se instala la página `magi.1`: se reescriben
+/// como «magi importar» para no mandar al usuario a una página que no existe.
 fn traducir_man(roff: &str) -> String {
     let mut salida = String::with_capacity(roff.len());
     for linea in roff.lines() {
@@ -369,7 +371,15 @@ fn traducir_man(roff: &str) -> String {
             }
             otra => otra,
         };
-        salida.push_str(traducida);
+        // «magi\-importar(1)» → «magi importar»: sin páginas por subcomando.
+        let traducida = match traducida
+            .strip_prefix("magi\\-")
+            .and_then(|resto| resto.strip_suffix("(1)"))
+        {
+            Some(resto) => format!("magi {resto}"),
+            None => traducida.to_string(),
+        };
+        salida.push_str(&traducida);
         salida.push('\n');
     }
     salida.replace("subcommands", "subcomandos")
