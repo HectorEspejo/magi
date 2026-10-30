@@ -26,6 +26,10 @@ ignore = [
   # privada y nunca descifra datos cifrados por terceros, que es el escenario
   # del ataque Marvin; el servidor remoto es un host del inventario del
   # usuario. Revisar al subir russh/ssh-key.
+  # Caducidad de la excepción: 2027-10-30. cargo-deny 0.20.2 no admite
+  # expires en advisories.ignore, así que la fecha la comprueba el job deny de
+  # ci.yml: a partir de ese día la CI falla hasta que se renueve y se vuelva a
+  # justificar.
   { id = "RUSTSEC-2023-0071", reason = "rsa sin parche, transitiva de russh; MAGI solo firma como cliente" },
 ]
 

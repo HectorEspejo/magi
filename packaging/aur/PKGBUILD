@@ -10,6 +10,11 @@
 # El paquete reempaqueta el binario publicado y atestado (no compila Rust):
 # el comando, la biblioteca, las rutas de datos y el socket se llaman «magi»;
 # el paquete se llama «magi-ssh».
+#
+# Ojo: el paquete AUR «magi» (una TUI de Git que no tiene nada que ver) también
+# instala /usr/bin/magi, así que se declara en conflicts además de magi-ssh.
+# Sin eso pacman no podría resolver la instalación conjunta y fallaría por
+# conflicto de ficheros. docs/publicar.md lo deja anotado.
 pkgname=magi-ssh-bin
 pkgver=@VERSION@
 pkgrel=1
@@ -24,7 +29,10 @@ optdepends=(
   'openssh: usar ~/.ssh/magi_config con ssh fuera de MAGI'
 )
 provides=('magi-ssh')
-conflicts=('magi-ssh')
+# «magi» es otro paquete de AUR que instala /usr/bin/magi (conflicto de ficheros).
+conflicts=('magi-ssh' 'magi')
+# Paquete de binario precompilado: no queremos un -debug vacío.
+options=('!debug')
 install=magi-ssh-bin.install
 source_x86_64=("$url/releases/download/v$pkgver/magi-ssh-x86_64-unknown-linux-gnu.tar.xz")
 source_aarch64=("$url/releases/download/v$pkgver/magi-ssh-aarch64-unknown-linux-gnu.tar.xz")

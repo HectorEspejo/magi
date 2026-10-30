@@ -208,17 +208,19 @@ Se hace una sola vez, en este orden, después de completar §2.
    git push origin vX.Y.Z
    ```
 
-5. `release.yml` (generado por `dist`) hace el resto:
+5. `release.yml` (generado por `dist` y con ajustes propios) hace el resto:
    - `plan`: **falla si el tag no coincide con la versión de `Cargo.toml`** y
-     no publica nada;
-   - compila los cuatro objetivos con `--locked` (Linux x86_64 y aarch64 en
-     Ubuntu 22.04; macOS arm64 y x86_64); si falla uno, no hay release;
+     no publica nada; además comprueba que el tag tiene la forma `vX.Y.Z` (o
+     `vX.Y.Z-sufijo`) antes de usar su valor en ningún script y que
+     `Cargo.lock` está al día con `cargo metadata --locked`;
+   - compila los cuatro objetivos (Linux x86_64 y aarch64 en Ubuntu 22.04;
+     macOS arm64 y x86_64); si falla uno, no hay release;
    - crea la GitHub Release con los tarballs, sus `.sha256`, las atestaciones y
      las notas de la sección del CHANGELOG;
    - **solo en versiones estables**, publica la fórmula en el tap de Homebrew y
      llama a `publicar-aur.yml`, que rellena el PKGBUILD con la versión y las
-     sumas, genera `.SRCINFO` en un contenedor Arch, pasa `namcap` y empuja a
-     AUR.
+     sumas, genera `.SRCINFO` en un contenedor Arch, pasa `namcap` (y falla si
+     namcap informa de errores `E:`) y empuja a AUR.
 6. Haz las comprobaciones de §9.
 
 Los binarios publicados salen **solo** del CI a partir del tag: no se suben
@@ -230,15 +232,22 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 |---|---|---|
 | `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux, macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
 | `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` |
-| `publicar-aur.yml` | lo llama `release.yml` | Rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git` |
+| `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
 
 Permisos: `contents: read` por defecto en todos los workflows; `contents:
-write`, `id-token: write` y `attestations: write` solo en los jobs que
-publican. No añadas secretos a `ci.yml`: los PRs de forks no los reciben y no
-los necesitan.
+write` solo en los jobs de `release.yml` que crean o publican la GitHub
+Release, e `id-token: write`/`attestations: write` solo durante la
+compilación que atesta los artefactos. `release.yml` no se dispara en pull
+requests (solo con un tag), así que ningún PR necesita permisos de escritura.
+No añadas secretos a `ci.yml`: los PRs de forks no los reciben y no los
+necesitan.
 
-No edites `release.yml` a mano: se regenera con `dist` (por ejemplo,
-`dist init`) a partir de `dist-workspace.toml`.
+`release.yml` **sí se mantiene a mano** en algunos detalles (está marcado con
+`allow-dirty = ["ci"]` en `dist-workspace.toml`): permisos mínimos por job,
+validación del formato del tag, paso de secretos a AUR y comprobación del lock.
+Si actualizas `dist`, regenera el workflow (`dist init` / `dist generate`) y
+vuelve a aplicar esos ajustes; la cabecera del fichero los lista. No quites
+`allow-dirty` sin reaplicarlos, porque la regeneración los borraría.
 
 ## 7. Si falla un canal
 
@@ -259,9 +268,11 @@ que falló.
   `4d3-org/homebrew-tap`; corrige y relanza el job. Si la fórmula necesita un
   arreglo manual en el tap, hazlo y vuelve a lanzar el job para que quede
   versionada.
-- Si falla AUR: revisa `AUR_SSH_PRIVATE_KEY` (clave registrada en el perfil de
-  AUR), que el nombre `magi-ssh-bin` siga libre, que `.SRCINFO` se genere y
-  que `namcap` pase; relanza el job.
+- Si falla AUR: el workflow tiene dos jobs. Si falla `empaquetar` (contenedor
+  Arch), revisa que `.SRCINFO` se genere, que `namcap` no dé errores `E:` y
+  que el PKGBUILD no tenga placeholders; si falla `publicar`, revisa
+  `AUR_SSH_PRIVATE_KEY` (clave registrada en el perfil de AUR), que el nombre
+  `magi-ssh-bin` siga libre y las huellas de AUR. Relanza el job fallido.
 - Mientras un canal esté roto, sus usuarios siguen en la versión anterior (no
   hay release a medias: cada canal publica la versión completa o no publica).
 - No borres ni reemplaces la GitHub Release para «arreglar» un canal: los
@@ -352,7 +363,10 @@ curl -fsS 'https://archlinux.org/packages/search/json/?name=magi-ssh-bin'
 Resultado:
 
 - AUR: solo `magi` ocupado (TUI de Git); `magi-ssh-bin` y `magi-ssh`
-  libres.
+  libres. Ojo: el paquete `magi` también instala `/usr/bin/magi`, así que el
+  PKGBUILD de `magi-ssh-bin` declara `conflicts=('magi')` además de
+  `conflicts=('magi-ssh')`; si el usuario tiene `magi` instalado, pacman le
+  pedirá quitarlo antes de instalar `magi-ssh-bin`.
 - Repos oficiales de Arch: 0 resultados para `magi`, `magi-ssh` y
   `magi-ssh-bin`; ningún paquete oficial instala `/usr/bin/magi`.
 

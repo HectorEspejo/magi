@@ -50,13 +50,15 @@ include = [
   "LICENSE-APACHE",
   "assets/",
 ]
-# En pull_request solo se ejecuta el plan (comprueba la configuración); las
-# compilaciones y publicaciones solo ocurren al empujar un tag de versión.
-pr-run-mode = "plan"
+# release.yml solo se dispara con un tag: nada de compilar ni publicar en
+# pull requests (así ningún PR recibe permisos de escritura).
+pr-run-mode = "skip"
 # release.yml se mantiene a mano para ajustar los permisos mínimos por job
-# (contents: read por defecto; contents: write solo en plan y host) y el
+# (contents: read por defecto; contents: write solo en plan y host), la
+# validación del tag, la comprobación del lock, el disparo solo con tags y el
 # workflow de AUR; allow-dirty evita que dist lo regenere o se queje de que no
-# coincide con su plantilla.
+# coincide con su plantilla. Si actualizas dist, regenera y vuelve a aplicar
+# esos ajustes (los lista la cabecera de release.yml).
 allow-dirty = ["ci"]
 
 # Runners nativos, sin compilación cruzada: Ubuntu 22.04 (glibc ≥ 2.35) para

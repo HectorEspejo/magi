@@ -33,6 +33,10 @@ El paquete instala `/usr/bin/magi`, el autocompletado de bash, zsh y fish, la
 página man, la entrada de escritorio y el icono. Al terminar, `pacman` sugiere
 ejecutar `magi diagnostico`.
 
+Nota: en AUR existe otro paquete llamado `magi` (una TUI de Git) que también
+instala `/usr/bin/magi`; `magi-ssh-bin` lo declara en `conflicts`, así que
+`pacman` pedirá quitarlo antes de instalar MAGI.
+
 ### macOS (Homebrew)
 
 ```sh

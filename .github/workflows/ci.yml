@@ -109,6 +109,15 @@ jobs:
           install -m 755 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny "$HOME/.cargo/bin/cargo-deny"
       - name: cargo deny check
         run: cargo deny check
+      - name: Caducidad de la excepción RUSTSEC-2023-0071
+        # cargo-deny 0.20.2 no admite expires en advisories.ignore; la fecha
+        # límite vive aquí y se comprueba en cada PR.
+        run: |
+          if [ "$(date -u +%Y-%m-%d)" \> "2027-10-30" ]; then
+            echo "La excepción RUSTSEC-2023-0071 caducó el 2027-10-30: revísala y renuévala." >&2
+            exit 1
+          fi
+          echo "excepción RUSTSEC-2023-0071 vigente hasta 2027-10-30"
 
   aur-plantilla:
     name: Plantilla AUR
@@ -139,5 +148,21 @@ jobs:
           chown -R empaquetador /tmp/aur/magi-ssh-bin
           su empaquetador -c 'cd /tmp/aur/magi-ssh-bin && makepkg --printsrcinfo > .SRCINFO'
           cat /tmp/aur/magi-ssh-bin/.SRCINFO
-      - name: namcap sobre la plantilla
-        run: namcap /tmp/aur/magi-ssh-bin/PKGBUILD
+      - name: namcap sobre la plantilla (gate real)
+        # namcap devuelve 0 aunque encuentre errores de reglas: se parsea la
+        # salida y se falla con cualquier línea E: (los avisos W: se muestran
+        # pero no rompen la validación de la plantilla).
+        run: |
+          set +e
+          salida=$(namcap /tmp/aur/magi-ssh-bin/PKGBUILD 2>&1)
+          codigo=$?
+          set -e
+          printf '%s\n' "$salida"
+          if [ "$codigo" -ne 0 ]; then
+            echo "namcap no pudo analizar el PKGBUILD" >&2
+            exit 1
+          fi
+          if printf '%s\n' "$salida" | grep -q ' E: '; then
+            echo "namcap encontró errores en el PKGBUILD" >&2
+            exit 1
+          fi
