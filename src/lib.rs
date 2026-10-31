@@ -15,6 +15,7 @@ pub mod portapapeles;
 pub mod protocolo;
 pub mod registro;
 pub mod servidor;
+pub mod sincronizacion;
 pub mod snippets;
 pub mod sshconfig;
 pub mod teclas;

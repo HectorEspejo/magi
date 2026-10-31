@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+pub mod conflictos;
+pub mod copias;
 pub mod deliberaciones;
+pub mod equipos;
 pub mod etiquetas;
 pub mod grupos;
 pub mod hosts;
 pub mod identidades;
+pub mod lapidas;
 pub mod migraciones;
 pub mod registro;
 pub mod sincronizaciones;
@@ -17,6 +21,7 @@ pub mod snippets;
 pub mod sondeos;
 pub mod tuneles;
 pub mod verificaciones;
+pub mod versiones;
 
 /// Fichero SQLite del inventario.
 pub struct Almacen {
@@ -463,6 +468,12 @@ impl Almacen {
     pub fn contar_registro_anterior(&self, fecha_corte: &str) -> Result<i64> {
         registro::contar_anteriores(&self.conexion, fecha_corte)
     }
+}
+
+/// Crea un directorio con permisos 0700 si no existe (para copias y
+/// temporales de la sincronización).
+pub fn crear_directorio_privado_publico(ruta: &Path) -> Result<()> {
+    crear_directorio_privado(ruta)
 }
 
 fn crear_directorio_privado(ruta: &Path) -> Result<()> {

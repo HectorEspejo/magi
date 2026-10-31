@@ -50,7 +50,24 @@ pub const SINCRONIZACION: &str = "sincronizacion";
 /// Fase 8: `chmod` remoto (host, rutas, modo, alcance, afectados).
 pub const PERMISOS_CAMBIADOS: &str = "permisos_cambiados";
 
-pub const TIPOS: [&str; 27] = [
+// Fase 10: inventario sincronizado entre equipos.
+/// Una importación aplicada (equipos, creados, actualizados, borrados,
+/// conflictos).
+pub const INVENTARIO_IMPORTADO: &str = "inventario_importado";
+/// Conflicto nuevo detectado al fusionar.
+pub const INVENTARIO_CONFLICTO: &str = "inventario_conflicto";
+/// Se quitó un equipo de la sincronización.
+pub const INVENTARIO_EQUIPO_QUITADO: &str = "inventario_equipo_quitado";
+/// Se rotó la clave de sincronización.
+pub const INVENTARIO_CLAVE_CAMBIADA: &str = "inventario_clave_cambiada";
+/// Se activó la sincronización en este equipo.
+pub const INVENTARIO_SINC_ACTIVADA: &str = "inventario_sinc_activada";
+/// Se desactivó la sincronización en este equipo.
+pub const INVENTARIO_SINC_DESACTIVADA: &str = "inventario_sinc_desactivada";
+/// La sincronización se detuvo o falló (solo al cambiar de estado).
+pub const INVENTARIO_SINC_ERROR: &str = "inventario_sinc_error";
+
+pub const TIPOS: [&str; 34] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -78,10 +95,17 @@ pub const TIPOS: [&str; 27] = [
     DELIBERACION_CANCELADA,
     SINCRONIZACION,
     PERMISOS_CAMBIADOS,
+    INVENTARIO_IMPORTADO,
+    INVENTARIO_CONFLICTO,
+    INVENTARIO_EQUIPO_QUITADO,
+    INVENTARIO_CLAVE_CAMBIADA,
+    INVENTARIO_SINC_ACTIVADA,
+    INVENTARIO_SINC_DESACTIVADA,
+    INVENTARIO_SINC_ERROR,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
-pub const FILTROS: [(&str, &[&str]); 8] = [
+pub const FILTROS: [(&str, &[&str]); 9] = [
     ("todos", &[]),
     (
         "conexiones",
@@ -104,6 +128,18 @@ pub const FILTROS: [(&str, &[&str]); 8] = [
         &[CLAVE_GENERADA, CLAVE_IMPORTADA, REFERENCIA_REVOCADA],
     ),
     ("importación", &[IMPORTACION, EXPORTACION]),
+    (
+        "inventario",
+        &[
+            INVENTARIO_IMPORTADO,
+            INVENTARIO_CONFLICTO,
+            INVENTARIO_EQUIPO_QUITADO,
+            INVENTARIO_CLAVE_CAMBIADA,
+            INVENTARIO_SINC_ACTIVADA,
+            INVENTARIO_SINC_DESACTIVADA,
+            INVENTARIO_SINC_ERROR,
+        ],
+    ),
     ("sondeos", &[SONDEO_FALLIDO, SONDEO_RECUPERADO]),
     (
         "archivos",
@@ -244,6 +280,7 @@ mod pruebas {
             "huellas",
             "claves",
             "importación",
+            "inventario",
             "sondeos",
             "archivos",
             "snippets",
