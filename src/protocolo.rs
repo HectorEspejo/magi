@@ -41,7 +41,14 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// deliberación, sincronización y etiqueta; la cola gana la fase `Borrando`;
 /// las entradas llevan uid, gid y sus nombres; `SftpAbierto` dice el usuario
 /// de la conexión; `DescargarTemporal` distingue los temporales de edición.
-pub const VERSION_PROTOCOLO: u32 = 5;
+///
+/// v6 (Fase 9): actualización segura entre versiones. `Hola` y
+/// `VersionIncompatible` son contrato estable (nunca se quitan ni renombran
+/// campos, solo se añaden opcionales): un binario nuevo puede leer el rechazo
+/// de un servidor anterior y decidir si lo sustituye (sin preguntar solo si no
+/// custodia nada) o pregunta al usuario. `VersionIncompatible` gana
+/// `version_app`, `clientes` y `trabajo`; `Bienvenida` gana `version_app`.
+pub const VERSION_PROTOCOLO: u32 = 6;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -648,6 +655,10 @@ pub struct InfoEjecucion {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tipo")]
 pub enum MensajeCliente {
+    /// Saludo inicial del cliente. **Contrato estable** (Fase 9): no se
+    /// quitan ni renombran campos, solo se añaden opcionales, para que
+    /// cualquier versión del servidor pueda rechazarlo con
+    /// `VersionIncompatible`.
     Hola {
         version: u32,
         pid: u32,
@@ -867,11 +878,55 @@ pub enum MensajeCliente {
 
 // ---------------------------------------------------------------- servidor → cliente
 
+/// Lo que custodia un servidor de sesiones, tal como lo informa en
+/// `VersionIncompatible`. Si el JSON del servidor no trae un campo, se lee
+/// como 1 («hay trabajo»): un servidor futuro que añada otro tipo de trabajo
+/// nunca se para por error.
+/// Cualquier campo desconocido lo invalida entero: el cliente lo lee como
+/// «todo lleno» y nunca sustituye un servidor que custodia un trabajo que esta
+/// versión no conoce.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrabajoServidor {
+    #[serde(default = "uno")]
+    pub sesiones: u32,
+    #[serde(default = "uno")]
+    pub transferencias: u32,
+    #[serde(default = "uno")]
+    pub tuneles: u32,
+    #[serde(default = "uno")]
+    pub ejecuciones: u32,
+}
+
+fn uno() -> u32 {
+    1
+}
+
+impl TrabajoServidor {
+    pub const CAMPOS: [&'static str; 4] = ["sesiones", "transferencias", "tuneles", "ejecuciones"];
+
+    /// No custodia nada de lo que hoy conoce MAGI.
+    pub fn vacio(&self) -> bool {
+        self.sesiones == 0 && self.transferencias == 0 && self.tuneles == 0 && self.ejecuciones == 0
+    }
+
+    /// Suma de todo lo que custodia (para decidir y para el resumen).
+    pub fn total(&self) -> u64 {
+        u64::from(self.sesiones)
+            + u64::from(self.transferencias)
+            + u64::from(self.tuneles)
+            + u64::from(self.ejecuciones)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tipo")]
 pub enum MensajeServidor {
     Bienvenida {
         version: u32,
+        /// Versión de la app del servidor («1.1.0»).
+        #[serde(default)]
+        version_app: String,
         pid: u32,
         /// Id que el servidor asigna a este cliente (para «mín. ventana»).
         cliente_id: u32,
@@ -886,12 +941,26 @@ pub enum MensajeServidor {
         #[serde(default)]
         ejecuciones: Vec<InfoEjecucion>,
     },
+    /// Rechazo del saludo porque el servidor habla otra versión de
+    /// protocolo. **Contrato estable** (Fase 9): no se quitan ni renombran
+    /// campos, solo se añaden opcionales. El cliente lee este mensaje como
+    /// JSON genérico, así entiende el rechazo de cualquier versión, pasada o
+    /// futura.
     VersionIncompatible {
         version: u32,
         /// Pid del servidor, para poder pararlo desde un MAGI de otra versión.
         /// Un servidor anterior a la v4 no lo envía.
         #[serde(default)]
         pid: Option<u32>,
+        /// Versión de la app del servidor, si la informa.
+        #[serde(default)]
+        version_app: Option<String>,
+        /// Ventanas adjuntas además de la que pregunta.
+        #[serde(default)]
+        clientes: Option<u32>,
+        /// Lo que custodia el servidor; `None` si su versión no lo informa.
+        #[serde(default)]
+        trabajo: Option<TrabajoServidor>,
     },
     Sesiones {
         lista: Vec<InfoSesion>,
@@ -1196,7 +1265,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::SftpAbierto {
             host_id: 7,
             peticion_id: Some(1 << 48),
-            dir_inicio: "/home/hector".to_string(),
+            dir_inicio: "/home/usuario".to_string(),
             usuario_conexion: None,
             uid_conexion: None,
         });
@@ -1213,8 +1282,8 @@ mod pruebas {
                     propietario: Some(crate::archivos::Propietario {
                         uid: Some(1000),
                         gid: Some(1000),
-                        usuario: Some("hector".to_string()),
-                        grupo: Some("hector".to_string()),
+                        usuario: Some("usuario".to_string()),
+                        grupo: Some("usuario".to_string()),
                     }),
                     enlace: None,
                     marca: Default::default(),
@@ -1308,7 +1377,7 @@ mod pruebas {
             host_id: 7,
             direccion: Direccion::Subida,
             elementos: vec![ElementoTransferencia {
-                origen: "/home/hector/web/index.html".to_string(),
+                origen: "/home/usuario/web/index.html".to_string(),
                 destino: "/var/www/index.html".to_string(),
                 bytes: 120,
                 es_directorio: false,
@@ -1330,7 +1399,7 @@ mod pruebas {
                 creados: 1,
                 actualizados: 0,
                 omitidos: 0,
-                raiz_origen: "/home/hector/web".to_string(),
+                raiz_origen: "/home/usuario/web".to_string(),
                 raiz_destino: "/var/www".to_string(),
             }),
             etiqueta: Some(EtiquetaTransferencia::Sincronizacion),
@@ -1440,8 +1509,8 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_cinco() {
-        assert_eq!(VERSION_PROTOCOLO, 5);
+    fn la_version_del_protocolo_es_la_seis() {
+        assert_eq!(VERSION_PROTOCOLO, 6);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
@@ -1453,6 +1522,9 @@ mod pruebas {
             MensajeServidor::VersionIncompatible {
                 version: 3,
                 pid: None,
+                version_app: None,
+                clientes: None,
+                trabajo: None,
             }
         );
     }
@@ -1485,7 +1557,7 @@ mod pruebas {
             tipo: "local".to_string(),
             escucha: "127.0.0.1:5432".to_string(),
             escucha_efectiva: "127.0.0.1:5432".to_string(),
-            destino: Some("10.0.0.5:5432".to_string()),
+            destino: Some("192.0.2.5:5432".to_string()),
             automatico: true,
             estado: EstadoTunelRemoto::Activo,
             origen: Some(OrigenTunel::Automatico),
@@ -1502,6 +1574,7 @@ mod pruebas {
         });
         ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
             version: VERSION_PROTOCOLO,
+            version_app: "1.0.0".to_string(),
             pid: 100,
             cliente_id: 3,
             clientes: 2,
@@ -1648,6 +1721,7 @@ mod pruebas {
         }];
         ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
             version: 1,
+            version_app: "0.9.0".to_string(),
             pid: 100,
             cliente_id: 3,
             clientes: 2,
@@ -1659,6 +1733,14 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible {
             version: 99,
             pid: Some(4321),
+            version_app: Some("2.0.0".to_string()),
+            clientes: Some(2),
+            trabajo: Some(TrabajoServidor {
+                sesiones: 2,
+                transferencias: 0,
+                tuneles: 1,
+                ejecuciones: 0,
+            }),
         });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });
         ida_y_vuelta_servidor(MensajeServidor::PantallaCompleta {
@@ -1709,7 +1791,7 @@ mod pruebas {
         ida_y_vuelta_servidor(MensajeServidor::PideLlavero {
             sesion_id: 9,
             host: "hetzner-01".to_string(),
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         });
         ida_y_vuelta_servidor(MensajeServidor::Ejecutado {
             host_id: 7,

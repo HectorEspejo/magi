@@ -42,7 +42,7 @@ fn hosts_con_50_hosts_seleccion_y_filtro() {
                 almacen.conexion(),
                 &DatosHost {
                     nombre: format!("nodo-{numero:02}"),
-                    direccion: format!("10.9.0.{numero}"),
+                    direccion: format!("192.0.2.{numero}"),
                     usuario: Some("ops".to_string()),
                     ..DatosHost::default()
                 },

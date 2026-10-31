@@ -3,7 +3,7 @@ source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
 │                ◐ backup-nas   CARGA                          │   hetzner-01                                                                                                                          │
-│                ○ dgx-spark    FRÍA                           │   10.0.1.11:22                                                                                                                        │
+│                ○ dgx-spark    FRÍA                           │   192.0.2.111:22                                                                                                                      │
 │              ▸ ● hetzner-01   NOMINAL                        │                                                                                                                                       │
 │                ● hetzner-02   NOMINAL                        │   CARGA ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.4/8                                                                               │
 │                ◐ mac-mini-m1  CARGA                          │   MEM   ██████████████████░░░░░░░░░░░░░░░░░░░░░░  45 %                                                                                │

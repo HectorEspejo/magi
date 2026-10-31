@@ -2,8 +2,6 @@
 //! En macOS el Keychain se usa por API (`security-framework`, sin subproceso
 //! y sin argv visible); en Linux con `secret-tool` por stdin.
 
-use std::process::{Command, Stdio};
-
 use zeroize::Zeroizing;
 
 /// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
@@ -27,16 +25,15 @@ mod backend {
     const ITEM_NO_ENCONTRADO: i32 = -25300;
 
     pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
-        keychain::set_generic_password(
-            SERVICIO,
-            cuenta(host, usuario).as_bytes(),
-            contrasena.as_bytes(),
-        )
-        .map_err(|error| format!("Keychain: {error}"))
+        // security-framework 3.x pide service y account como &str.
+        let cuenta = cuenta(host, usuario);
+        keychain::set_generic_password(SERVICIO, &cuenta, contrasena.as_bytes())
+            .map_err(|error| format!("Keychain: {error}"))
     }
 
     pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
-        match keychain::get_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+        let cuenta = cuenta(host, usuario);
+        match keychain::get_generic_password(SERVICIO, &cuenta) {
             Ok(bytes) => {
                 let texto = String::from_utf8_lossy(&bytes).to_string();
                 // La copia devuelta por la API se descarta con zeroize.
@@ -54,7 +51,8 @@ mod backend {
     }
 
     pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
-        match keychain::delete_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+        let cuenta = cuenta(host, usuario);
+        match keychain::delete_generic_password(SERVICIO, &cuenta) {
             Ok(()) => Ok(true),
             Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(false),
             Err(error) => Err(format!("Keychain: {error}")),
@@ -71,8 +69,9 @@ mod backend {
 
 #[cfg(not(target_os = "macos"))]
 mod backend {
-    use super::{Command, Stdio, Zeroizing, SERVICIO};
+    use super::{Zeroizing, SERVICIO};
     use std::io::Write as _;
+    use std::process::{Command, Stdio};
 
     enum Fallo {
         NoExiste,

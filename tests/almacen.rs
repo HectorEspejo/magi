@@ -13,8 +13,8 @@ use magi::snippets::{DatosSnippet, Destino};
 fn datos(nombre: &str) -> DatosHost {
     DatosHost {
         nombre: nombre.to_string(),
-        direccion: "10.0.0.1".to_string(),
-        usuario: Some("hector".to_string()),
+        direccion: "192.0.2.1".to_string(),
+        usuario: Some("usuario".to_string()),
         puerto: 2222,
         etiquetas: vec!["web".to_string(), "prod".to_string()],
         ..DatosHost::default()
@@ -71,7 +71,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en)
-                 VALUES ('viejo', '10.0.0.9', 22, '', 'manual',
+                 VALUES ('viejo', '192.0.2.9', 22, '', 'manual',
                          '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00')",
                 [],
             )
@@ -236,22 +236,22 @@ fn crud_de_hosts_conserva_campos_y_etiquetas() {
     let id = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let host = almacen.obtener_host(id).unwrap();
     assert_eq!(host.nombre, "uno");
-    assert_eq!(host.direccion, "10.0.0.1");
-    assert_eq!(host.usuario.as_deref(), Some("hector"));
+    assert_eq!(host.direccion, "192.0.2.1");
+    assert_eq!(host.usuario.as_deref(), Some("usuario"));
     assert_eq!(host.puerto, 2222);
     assert_eq!(host.keepalive_seg, Some(30));
     assert_eq!(host.etiquetas, vec!["prod", "web"]);
     assert_eq!(host.origen, Origen::Manual);
 
     let mut editado = datos("uno");
-    editado.direccion = "10.0.0.2".to_string();
+    editado.direccion = "192.0.2.2".to_string();
     editado.identidad_ref = IdentidadRef::Fichero("~/.ssh/id_ed25519".to_string());
     editado.multiplexar = true;
     editado.keepalive_seg = Some(45);
     editado.etiquetas = vec!["solo".to_string()];
     almacen.actualizar_host(id, &editado).unwrap();
     let host = almacen.obtener_host(id).unwrap();
-    assert_eq!(host.direccion, "10.0.0.2");
+    assert_eq!(host.direccion, "192.0.2.2");
     assert_eq!(
         host.identidad_ref,
         IdentidadRef::Fichero("~/.ssh/id_ed25519".to_string())
@@ -404,7 +404,7 @@ fn tunel_de(host_id: i64, nombre: &str, tipo: TipoTunel, escucha: &str) -> Datos
         tipo,
         escucha: escucha.to_string(),
         destino: if tipo.lleva_destino() {
-            Some("10.0.0.5:5432".to_string())
+            Some("192.0.2.5:5432".to_string())
         } else {
             None
         },
@@ -676,7 +676,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en, servicios, sftp_dir_remoto)
-                 VALUES ('fase5', '10.0.0.7', 22, '', 'manual',
+                 VALUES ('fase5', '192.0.2.7', 22, '', 'manual',
                          '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00',
                          'nginx', '/srv')",
                 [],
@@ -686,7 +686,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
             .execute(
                 "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
                                       creado_en, actualizado_en)
-                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 1,
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '192.0.2.5:5432', 1,
                          '2026-06-01T00:00:00+02:00', '2026-06-01T00:00:00+02:00')",
                 [],
             )
@@ -810,7 +810,7 @@ fn borrar_un_snippet_deja_a_null_el_snippet_al_conectar_y_la_deliberacion() {
             resultado: ResultadoDeliberacion::Aprobada,
             bloqueada: false,
             motivo: None,
-            usuario: "hector".to_string(),
+            usuario: "usuario".to_string(),
         })
         .unwrap();
 
@@ -1258,7 +1258,7 @@ fn deliberacion_de(
         resultado,
         bloqueada: true,
         motivo: motivo.map(str::to_string),
-        usuario: "hector".to_string(),
+        usuario: "usuario".to_string(),
     }
 }
 
@@ -1291,7 +1291,7 @@ fn las_deliberaciones_guardan_hosts_y_comprobaciones_de_ida_y_vuelta() {
     assert_eq!(fila.resultado, ResultadoDeliberacion::Forzada);
     assert!(fila.bloqueada);
     assert_eq!(fila.motivo.as_deref(), Some("revisado a mano"));
-    assert_eq!(fila.usuario, "hector");
+    assert_eq!(fila.usuario, "usuario");
     assert_eq!(fila.ejecucion_resultado, None);
     assert_eq!(fila.consenso(), (1, 4));
 
@@ -1387,7 +1387,7 @@ fn sincronizacion_de(host_id: i64, nombre: &str) -> DatosSincronizacion {
     DatosSincronizacion {
         host_id,
         nombre: nombre.to_string(),
-        ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+        ruta_local: "/home/usuario/proyectos/cooperapp".to_string(),
         ruta_remota: "/var/www/cooperapp".to_string(),
         direccion: Direccion::Subida,
         borrar: false,
@@ -1412,7 +1412,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
             .execute(
                 "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
                                     creado_en, actualizado_en, servicios)
-                 VALUES ('fase7', '10.0.0.8', 22, '', 'manual',
+                 VALUES ('fase7', '192.0.2.8', 22, '', 'manual',
                          '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00', 'nginx')",
                 [],
             )
@@ -1421,7 +1421,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
             .execute(
                 "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
                                       creado_en, actualizado_en)
-                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '10.0.0.5:5432', 0,
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '192.0.2.5:5432', 0,
                          '2026-09-01T00:00:00+02:00', '2026-09-01T00:00:00+02:00')",
                 [],
             )
@@ -1561,4 +1561,175 @@ fn la_ultima_ejecucion_y_su_resultado_se_guardan_aparte() {
     );
     almacen.borrar_sincronizacion(id).unwrap();
     assert!(almacen.actualizar_sincronizacion(id, &datos).is_err());
+}
+
+/// Una `magi.db` con `user_version` mayor que la que conoce el binario no se
+/// abre ni se toca (Fase 9): las migraciones solo van hacia delante.
+#[test]
+fn una_base_de_datos_de_version_futura_no_se_abre_ni_se_toca() {
+    let directorio = tempfile::tempdir().unwrap();
+    let ruta = directorio.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+    }
+    let antes = std::fs::read(&ruta).unwrap();
+    let error = match Almacen::abrir(&ruta) {
+        Ok(_) => panic!("una versión futura no se abre"),
+        Err(error) => error,
+    };
+    let mensaje = format!("{error:#}");
+    assert!(
+        mensaje.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{mensaje}"
+    );
+    // Ni contenido, ni diario WAL, ni permisos: el fichero queda igual.
+    assert_eq!(
+        std::fs::read(&ruta).unwrap(),
+        antes,
+        "el fichero queda intacto"
+    );
+    assert!(!directorio.path().join("magi.db-wal").exists());
+    let conexion = rusqlite::Connection::open(&ruta).unwrap();
+    let version: i64 = conexion
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 99);
+    let marca: String = conexion
+        .query_row("SELECT valor FROM MARCA", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(marca, "intacta");
+}
+
+/// Una magi.db de una versión futura con un WAL pendiente de recuperar tampoco
+/// se abre ni se toca: comprobar la versión abriendo el original aplicaría el
+/// WAL y modificaría el fichero antes de poder rechazarlo (Fase 9).
+#[test]
+fn una_base_de_datos_futura_con_wal_pendiente_no_se_toca() {
+    let origen = tempfile::tempdir().unwrap();
+    let destino = tempfile::tempdir().unwrap();
+    let ruta_origen = origen.path().join("magi.db");
+    let ruta = destino.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta_origen).unwrap();
+        conexion.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conexion
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+        // Copia del par db+wal con la conexión abierta: el WAL contiene la
+        // versión y la cabecera principal todavía puede ser antigua.
+        std::fs::copy(&ruta_origen, &ruta).unwrap();
+        let mut wal_origen = ruta_origen.as_os_str().to_os_string();
+        wal_origen.push("-wal");
+        let mut wal = ruta.as_os_str().to_os_string();
+        wal.push("-wal");
+        std::fs::copy(&wal_origen, &wal).unwrap();
+    }
+    let mut wal = ruta.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = std::path::PathBuf::from(wal);
+    assert!(wal.exists(), "el escenario necesita un WAL pendiente");
+    let db_antes = std::fs::read(&ruta).unwrap();
+    let wal_antes = std::fs::read(&wal).unwrap();
+    let error = match Almacen::abrir(&ruta) {
+        Ok(_) => panic!("una versión futura no se abre"),
+        Err(error) => error,
+    };
+    let mensaje = format!("{error:#}");
+    assert!(
+        mensaje.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{mensaje}"
+    );
+    // El par db+wal queda byte a byte como estaba y el WAL no se recupera.
+    assert_eq!(std::fs::read(&ruta).unwrap(), db_antes, "magi.db intacta");
+    assert_eq!(
+        std::fs::read(&wal).unwrap(),
+        wal_antes,
+        "magi.db-wal intacto"
+    );
+}
+
+/// La versión de esquema que conoce el binario sí se abre (control del test
+/// anterior).
+#[test]
+fn la_version_de_esquema_actual_se_abre() {
+    let directorio = tempfile::tempdir().unwrap();
+    let ruta = directorio.path().join("magi.db");
+    Almacen::abrir(&ruta).unwrap().cerrar().unwrap();
+    let almacen = Almacen::abrir(&ruta).expect("la versión actual se abre");
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
+}
+
+/// El servidor de sesiones también se niega a abrir una `magi.db` de una
+/// versión futura: sale con error, no deja socket huérfano y no toca el
+/// fichero (Fase 9, cliente y servidor).
+#[test]
+fn el_servidor_rechaza_una_base_de_datos_de_version_futura() {
+    let directorio = tempfile::tempdir().unwrap();
+    let raiz = directorio.path();
+    let rutas = magi::config::Rutas {
+        datos: raiz.join("datos").join("magi"),
+        config: raiz.join("config").join("magi"),
+        estado: raiz.join("estado").join("magi"),
+        hogar: raiz.join("hogar"),
+        runtime: raiz.join("runtime").join("magi"),
+    };
+    std::fs::create_dir_all(rutas.base_datos().parent().unwrap()).unwrap();
+    {
+        let conexion = rusqlite::Connection::open(rutas.base_datos()).unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+    }
+    let antes = std::fs::read(rutas.base_datos()).unwrap();
+    let salida = std::process::Command::new(env!("CARGO_BIN_EXE_magi"))
+        .arg("--servidor")
+        .env("HOME", raiz.join("hogar"))
+        .env("XDG_DATA_HOME", raiz.join("datos"))
+        .env("XDG_CONFIG_HOME", raiz.join("config"))
+        .env("XDG_STATE_HOME", raiz.join("estado"))
+        .env("XDG_RUNTIME_DIR", raiz.join("runtime"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("lanzando magi --servidor");
+    assert!(!salida.status.success(), "salida: {:?}", salida.status);
+    let texto = format!(
+        "{}{}",
+        String::from_utf8_lossy(&salida.stdout),
+        String::from_utf8_lossy(&salida.stderr)
+    );
+    assert!(
+        texto.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{texto}"
+    );
+    assert_eq!(
+        std::fs::read(rutas.base_datos()).unwrap(),
+        antes,
+        "el fichero queda intacto"
+    );
+    assert!(
+        !magi::servidor::ruta_socket(&rutas).exists(),
+        "no puede quedar un socket huérfano"
+    );
 }

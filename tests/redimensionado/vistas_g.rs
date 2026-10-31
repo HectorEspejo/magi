@@ -971,7 +971,7 @@ fn el_conflicto_siguiente_empieza_arriba() {
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(
         &config,
-        "Host hetzner-01\n  HostName 10.9.9.1\n\nHost hetzner-02\n  HostName 10.9.9.2\n",
+        "Host hetzner-01\n  HostName 192.0.2.91\n\nHost hetzner-02\n  HostName 192.0.2.92\n",
     )
     .unwrap();
     a_hosts(&mut prueba);

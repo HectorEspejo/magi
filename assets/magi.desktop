@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MAGI
+GenericName=Gestor SSH de terminal
+Comment=Gestor SSH de terminal (TUI) con estética de cabina técnica
+Exec=magi
+Terminal=true
+Icon=magi
+Categories=Network;RemoteAccess;ConsoleOnly;
+Keywords=ssh;terminal;sesiones;sftp;túneles;

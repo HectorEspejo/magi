@@ -5,7 +5,7 @@ source: tests/redimensionado/arnes.rs
 │                                                                                                                                                                                                      │
 │                                        IDENTIFICACIÓN                                                                                                                                                │
 │                                         Nombre       [ hetzner-01┃ ]                                                                                                                                 │
-│                                         Dirección    [ 10.0.1.11 ]                                                                                                                                   │
+│                                         Dirección    [ 192.0.2.111 ]                                                                                                                                 │
 │                                         Puerto       [ 22 ]     Grupo produccion                 ▾                                                                                                   │
 │                                         Etiquetas    [ web ]                                                                                                                                         │
 │                                                                                                                                                                                                      │

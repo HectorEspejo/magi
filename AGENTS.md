@@ -3,7 +3,8 @@
 ## Contexto
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con app Android prevista. Cliente: 4d3 (producto propio).
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime.
+Desde la Fase 9 es software libre (MIT OR Apache-2.0) en `4d3-org/magi` y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `4d3-org/homebrew-tap` y tarballs de GitHub Releases.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 
 ## Documentación del proyecto
@@ -16,6 +17,7 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/faseN/magi-faseN-prompt.md` — prompt de arranque de la fase
 - `docs/faseN/magi-faseN-prompt-continuacion.md` — prompt de reanudación (si la fase queda a medias)
 - `docs/faseN/magi-faseN-implementacion.md` — informe de implementación (lo escribes tú)
+- `docs/publicar.md` — cómo se publica una versión (lo creas en la Fase 9; lo sigue el desarrollador)
 
 El informe de fase manda sobre tu criterio: si algo te parece incorrecto o
 incompleto, no lo cambies por tu cuenta — impleméntalo como está o párate y
@@ -44,9 +46,13 @@ coméntalo con el desarrollador.
 - Las versiones de `ratatui`, `crossterm`, `tui-term`, `vt100` y `russh` están
   fijadas en `Cargo.toml` y son compatibles entre sí: no subas una sin subir el
   conjunto y repetir las pruebas manuales de la vista Sesión.
-- Comandos: `cargo run` arranca la TUI; `cargo run -- importar [ruta]` y
-  `cargo run -- exportar` son los subcomandos; `cargo test` ejecuta los tests
-  (el crate expone `src/lib.rs` para los de `tests/`);
+- Comandos: `cargo run` arranca la TUI; `cargo run -- importar [ruta]`,
+  `cargo run -- exportar`, `cargo run -- sincronizaciones`, `cargo run --
+  diagnostico`, `cargo run -- autocompletado <shell>` y `cargo run -- man` son
+  subcomandos; `scripts/generar-recursos.sh` regenera `assets/` y `cargo deny
+  check` revisa licencias y avisos;
+  `TZ=UTC cargo test` ejecuta todos los tests (el crate expone `src/lib.rs`
+  para los de `tests/`; las pruebas de pintado necesitan `TZ=UTC`);
   `cargo clippy --all-targets -- -D warnings` y `cargo fmt --check` antes de
   cada commit. Para pruebas aisladas usa `HOME` + `XDG_DATA_HOME` /
   `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
@@ -80,13 +86,16 @@ coméntalo con el desarrollador.
 - Servidor de sesiones (`src/servidor/`): custodia solo sesiones, pool de
   conexiones y lo que deba sobrevivir a la ventana. No dialoga nunca: reenvía
   huellas, frases y contraseñas al cliente solicitante. Escribe en SQLite solo
-  `REGISTRO` (eventos de sesión y servidor) y `HOSTS.ultimo_estado` /
-  `ultima_conexion_en`; el resto lo escribe el cliente. Ambos abren la BD con
+  `REGISTRO` (eventos de sesión y servidor), `HOSTS.ultimo_estado` /
+  `ultima_conexion_en`, `DELIBERACIONES.ejecucion_resultado` y
+  `SINCRONIZACIONES_DIR.ultimo_resultado`; el resto lo escribe el cliente. Ambos abren la BD con
   `busy_timeout = 5000`.
 - Protocolo en `src/protocolo.rs`, `VERSION_PROTOCOLO` explícita: si cambias
   la semántica de un mensaje existente, incrementa la versión. Un mensaje
   desconocido produce `Error` y desconexión, nunca un panic. Nunca mates un
-  servidor con sesiones abiertas sin orden explícita del usuario.
+  servidor con sesiones abiertas sin orden explícita del usuario (la única
+  parada sin preguntar es la de un servidor anterior sin trabajo ni otras
+  ventanas, desde la Fase 9).
 - Secretos por el socket (`Frase`, `Contrasena`) van en `Zeroizing` y no se
   escriben en ningún log; `Datos`/`PantallaCompleta` solo a clientes adjuntos.
 - Depuración del servidor: `cargo run -- --servidor` en primer plano en una
@@ -121,9 +130,104 @@ coméntalo con el desarrollador.
   del pool pero no como pestaña ni SFTP para el ciclo automático. Todo lo que
   escuche en local va en `127.0.0.1` salvo aviso explícito; los canales
   `forwarded-tcpip` con clave no registrada se rechazan.
+- Valida toda fila que el servidor lea de SQLite antes de ejecutarla (la
+  escribe otro proceso). Nunca emitas en `magi_config` una línea que `ssh` no
+  sepa leer: sustitúyela por un comentario y valida el fichero con el `ssh`
+  real en los tests. Los `peticion_id` de subsistemas distintos no comparten
+  rango. Difunde un cambio de estado antes de su efecto lento y retira
+  listeners y reenvíos en todas las ramas de salida, con plazo.
+- Conexiones (desde la corrección 3b de la Fase 6): `conexion_para_canal` con
+  cerrojo por host es la única forma de obtener una conexión para pestañas,
+  SFTP, túneles, `Ejecutar` y ejecuciones de snippets; `usa_pool(host, uso)`
+  decide (todo usa el pool salvo las pestañas sin `multiplexar`). Se toma una
+  `ConexionTomada` y se suelta por identidad. `Pool::guardar` nunca desplaza
+  una entrada viva ni en gracia. No abras conexiones por otra vía.
+- `peticion_id` por rangos: Archivos (panel) desde 0, túneles 2^40,
+  operaciones de Archivos en la `App` (edición, permisos, sincronización) 2^42,
+  ejecuciones 2^44, peticiones esperables del cliente 2^48. El contador del
+  panel se reinicia al cambiar de host: lo que deba sobrevivir a eso vive en la
+  `App` y usa su propio rango. Un `Hecho` que implica filas de
+  `REGISTRO` se envía después de `OrdenBd::Barrera`.
+- Las preguntas del servidor (huella, frase, contraseña) se apilan sobre el
+  diálogo abierto, nunca lo pisan. Una operación masiva pide la contraseña con
+  `PideLlavero`, que nunca abre diálogo. El usuario de auditoría sale del uid.
+- Snippets (`src/servidor/ejecuciones.rs`): el cliente resuelve destinos,
+  variables (escapadas con `shell-escape`) y deliberación; el servidor recibe
+  el comando ya resuelto, lo ejecuta sin diálogos y nunca lee `SNIPPETS`. La
+  salida de comandos remotos jamás va a `REGISTRO` ni al log.
+- Deliberación (`src/deliberacion/`): comprobaciones en paralelo con plazo duro
+  de 2 s; `Ctrl+K` es la única tecla que ejecuta desde el diálogo MAGI (`↵`
+  no). El servidor escribe `DELIBERACIONES.ejecucion_resultado` y las
+  anotaciones `deliberacion_*` al terminar la ejecución, por su hilo escritor.
+- Tamaño de terminal (desde la Fase 7): un solo punto (`Geometria` en `app.rs`)
+  aplica los cambios de tamaño, agrupados 50 ms, y es el único que envía
+  `Redimensionar`. Ninguna vista guarda tamaños entre pintados: todo se deriva
+  del área en cada pintado. Toda vista declara su mínimo y su modo estrecho en
+  `ui/disposicion.rs` y tiene instantáneas `insta` a 40×12, 80×24 y 200×60 en
+  `tests/redimensionado.rs`; si añades una vista, añade sus instantáneas.
+  Tras un cambio visual deliberado: `INSTA_UPDATE=always cargo test --test
+  redimensionado` y revisa con `git diff tests/snapshots` o `cargo insta
+  review`. Las pruebas de pintado corren con `TZ=UTC`.
+- Pruebas de interfaz con `App::de_prueba` (sin hilos, red ni servidor) y el
+  bucle real `ciclo`/`paso` sobre `TestBackend`; `Cliente::de_prueba` captura
+  lo enviado. Esa superficie es `#[doc(hidden)] pub`: no la uses fuera de tests.
+- El hilo de teclas (`src/app/teclado.rs`) nunca lee del tty en pausa; pausa
+  siempre con acuse antes de ceder la terminal (visor, paginador).
+- `Redimensionada` y cualquier cambio que afecte a cómo se interpretan los
+  `Datos` se aplican en la tarea de lectura del cliente, en orden con ellos.
+- Un solo degradador ASCII: `disposicion::texto_ascii`.
+- Archivos (desde la Fase 8): el temporal de una edición remota nunca se borra
+  hasta que la subida termine, el usuario confirme «sin cambios» o descarte; ante
+  cualquier error se conserva y se dice su ruta. Sobrescribir reaplica los
+  permisos del original tras el `rename`. En una sincronización, el cliente
+  planifica y fija las rutas; el servidor solo borra (`borrar_al_terminar`) si la
+  transferencia terminó sin errores y nunca borra rutas excluidas, bajo una ruta
+  omitida ni bajo un enlace.
+- Sobrescribir en remoto pasa siempre por el renombrador de `servidor/sftp.rs`
+  (`posix-rename@openssh.com` por el canal SFTP raw, o tres pasos con deshacer):
+  nunca uses el `rename` de SFTP v3 sobre un destino que puede existir, en
+  OpenSSH da EEXIST. Cada canal SFTP ocupa dos canales de sesión.
+- Temporales: nombre único con `create_new` y 600; los del visor en `tmp`, los de
+  edición en `ediciones`, que no vacía nadie (ni arranque ni apagado). Nunca
+  vacíes uno de esos directorios en bloque; `BorrarTemporal` solo admite ficheros
+  cuyo padre sea exactamente uno de los dos.
+- El servidor valida toda ruta de una transferencia al encolar: absoluta, sin
+  `.` ni `..`, colgando estrictamente de la raíz. No te fíes de `starts_with`
+  sobre rutas sin normalizar.
+- Una deliberación autoriza una sola acción: la validación es común a
+  ejecuciones y transferencias y «ya usada» vale en los dos sentidos. Para una
+  acción nueva, añade una variante a `PlanDeliberado`.
 - Tests aislados: `directories` resuelve el home por uid, así que fija
   `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_RUNTIME_DIR`,
-  no solo `HOME`.
+  no solo `HOME`. La ruta de `XDG_RUNTIME_DIR` debe ser corta: el socket no
+  puede pasar de ~108 bytes o el servidor no arranca. `servidor::arrancar` pone
+  la umask del proceso en 077 un instante: en pruebas que arrancan el servidor
+  en el mismo proceso, fija los modos de los ficheros de prueba de forma
+  explícita.
+- Antes de lanzar pistas en paralelo, fija un contrato compilable (tipos,
+  mensajes, módulos vacíos y enganches) en un commit provisional.
+- La revisión adversarial de cierre no es opcional: si el desarrollador pide
+  saltarla, anótalo como pendiente con lo que queda sin revisar.
+- Distribución (desde la Fase 9): el paquete es `magi-ssh`, pero el comando, la
+  biblioteca, las rutas de datos y el socket se llaman `magi`. Nunca derives una
+  ruta de `CARGO_PKG_NAME`.
+- `Hola` y `VersionIncompatible` son contrato estable: nunca quites ni renombres
+  sus campos, solo añade opcionales. Si el servidor empieza a custodiar un tipo
+  de trabajo nuevo, súmalo a `VersionIncompatible.trabajo`: un servidor
+  anterior solo se sustituye sin preguntar si no custodia nada.
+- Versiones (política en `docs/publicar.md`): MAJOR si cambia algo incompatible
+  para el usuario (config, CLI, formatos exportados); MINOR para funcionalidades,
+  migraciones y cambios de protocolo; PATCH para correcciones. Todo cambio
+  visible añade su línea en la sección «Sin publicar» de `CHANGELOG.md` en el
+  mismo PR. Si cambias la CLI, regenera `assets/` con
+  `scripts/generar-recursos.sh` (un test lo exige).
+- Una `magi.db` con `user_version` mayor que la que conoce el binario no se abre
+  ni se toca: las migraciones solo van hacia delante.
+- Los binarios publicados salen solo de CI a partir de un tag. Tú no etiquetas
+  versiones, no cambias la visibilidad del repositorio, no creas secretos ni
+  cuentas y no subes binarios: tú lo preparas y lo hace el desarrollador.
+- MAGI no comprueba actualizaciones ni abre conexiones salientes que no sean a
+  los hosts del usuario (sin telemetría).
 
 ## Al terminar una fase (o al pausar la sesión)
 

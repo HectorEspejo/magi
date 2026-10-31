@@ -488,13 +488,13 @@ Entradas de la paleta en esta fase: `conectar · <host>`, `editar host · <host>
 │  ▼ 4d3 · producción                                    (4)  │
 │      ● hetzner-01      95.217.x.x        root    22         │
 │    ▸ ○ hetzner-02      95.217.x.x        root    22         │
-│      ○ vps-openclaw    49.12.x.x         hector  2222       │
-│      ○ backup-nas      10.0.0.12         admin   22   ⤴ h1  │
+│      ○ vps-openclaw    49.12.x.x         usuario 2222       │
+│      ○ backup-nas      192.0.2.12        admin   22   ⤴ h1  │
 │                                                             │
 │  ▼ 4d3 · desarrollo                                    (3)  │
-│      ✕ rincon-dev      10.0.0.40         hector  22         │
-│      ○ ci-runner       10.0.0.41         runner  22         │
-│      ○ staging         10.0.0.42         hector  22         │
+│      ✕ rincon-dev      192.0.2.40        usuario 22         │
+│      ○ ci-runner       192.0.2.41        runner  22         │
+│      ○ staging         192.0.2.42        usuario 22         │
 │                                                             │
 │  ▶ ~/.ssh/config                                       (5)  │
 │                                                             │

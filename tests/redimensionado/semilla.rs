@@ -36,25 +36,25 @@ impl Sembrado {
 
 /// Nombre, grupo, dirección, usuario, puerto.
 pub const HOSTS: [(&str, Option<&str>, &str, &str, u16); 7] = [
-    ("hetzner-01", Some("produccion"), "10.0.1.11", "root", 22),
+    ("hetzner-01", Some("produccion"), "192.0.2.111", "root", 22),
     (
         "hetzner-02",
         Some("produccion"),
-        "10.0.1.12",
+        "192.0.2.112",
         "deploy",
         2222,
     ),
     (
         "vps-openclaw",
         Some("produccion"),
-        "203.0.113.40",
+        "192.0.2.40",
         "admin",
         22,
     ),
-    ("mac-mini-m1", Some("casa"), "192.168.1.20", "hector", 22),
-    ("dgx-spark", Some("casa"), "192.168.1.30", "hector", 22),
-    ("rincon-dev", None, "dev.rincon.example", "hector", 2200),
-    ("backup-nas", None, "192.168.1.40", "backup", 22),
+    ("mac-mini-m1", Some("casa"), "192.0.2.120", "usuario", 22),
+    ("dgx-spark", Some("casa"), "192.0.2.130", "usuario", 22),
+    ("rincon-dev", None, "dev.rincon.example", "usuario", 2200),
+    ("backup-nas", None, "192.0.2.140", "backup", 22),
 ];
 
 /// Una fecha RFC 3339 `segundos` atrás.
@@ -151,7 +151,7 @@ pub fn sembrar(rutas: &Rutas) -> Sembrado {
             "grafana",
             TipoTunel::Local,
             "127.0.0.1:3000",
-            Some("10.0.1.50:3000"),
+            Some("192.0.2.150:3000"),
         ),
         (
             "vps-openclaw",

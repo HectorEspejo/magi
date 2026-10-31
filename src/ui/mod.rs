@@ -18,6 +18,7 @@ pub mod paleta;
 pub mod permisos;
 pub mod registro;
 pub mod resultados;
+pub mod servidor_anterior;
 pub mod sesion;
 pub mod sesiones;
 pub mod sincronizaciones;

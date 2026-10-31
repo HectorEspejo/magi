@@ -171,7 +171,7 @@ fn abrir_sesion_usa_el_tamano_aplicado() {
             almacen.conexion(),
             &magi::modelo::DatosHost {
                 nombre: "hetzner-01".to_string(),
-                direccion: "10.0.0.1".to_string(),
+                direccion: "192.0.2.1".to_string(),
                 puerto: 22,
                 ..magi::modelo::DatosHost::default()
             },

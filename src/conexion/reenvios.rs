@@ -43,11 +43,22 @@ impl Contadores {
 
     /// La conexión se cerró. Nunca baja de cero.
     pub fn cerrar(&self) {
-        let _ = self
-            .abiertas
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |valor| {
-                Some(valor.saturating_sub(1))
-            });
+        // compare_exchange y no fetch_update: fetch_update quedó deprecado en
+        // las versiones nuevas de Rust (renombrado a try_update), que aún no
+        // existe con el MSRV del proyecto.
+        let mut actual = self.abiertas.load(Ordering::Relaxed);
+        loop {
+            let nuevo = actual.saturating_sub(1);
+            match self.abiertas.compare_exchange_weak(
+                actual,
+                nuevo,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(leido) => actual = leido,
+            }
+        }
     }
 
     pub fn anotar_error(&self, motivo: String) {

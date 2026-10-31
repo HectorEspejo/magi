@@ -59,10 +59,22 @@ async fn una_version_distinta_no_coopera() {
     // La versión que viaja es la **del servidor**, que es lo que permite al
     // cliente decir si el viejo es él o el servidor.
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible {
+            version,
+            pid,
+            version_app,
+            clientes,
+            trabajo,
+        } => {
             assert_eq!(version, VERSION_PROTOCOLO);
             // Y su pid, para que un MAGI de otra versión pueda pararlo (3b).
             assert_eq!(pid, Some(std::process::id()));
+            // Fase 9: también su versión de app y lo que custodia, para que
+            // el cliente nuevo decida si puede sustituirlo sin perder nada.
+            assert_eq!(version_app.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+            assert_eq!(clientes, Some(0));
+            let trabajo = trabajo.expect("el rechazo informa del trabajo");
+            assert!(trabajo.vacio(), "sin sesiones ni nada abierto: {trabajo:?}");
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
     }
@@ -73,6 +85,40 @@ async fn una_version_distinta_no_coopera() {
         lector.get_mut().read_to_end(&mut resto),
     )
     .await;
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
+}
+
+/// El rechazo cuenta las ventanas adjuntas además de la que pregunta: con
+/// una ventana conectada, un cliente de otra versión ve `clientes = 1`.
+#[tokio::test]
+async fn el_rechazo_cuenta_las_otras_ventanas() {
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    let tarea = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    esperar_socket(&servidor::ruta_socket(&rutas)).await;
+
+    // Una ventana de esta versión, saludada y esperando.
+    let mut ventana = cliente(&servidor::ruta_socket(&rutas), VERSION_PROTOCOLO).await;
+    let bienvenida: MensajeServidor = siguiente(&mut ventana).await;
+    assert!(matches!(bienvenida, MensajeServidor::Bienvenida { .. }));
+
+    // Otra versión pregunta: la ventana anterior cuenta como «otra».
+    let mut viejo = cliente(&servidor::ruta_socket(&rutas), 5).await;
+    let respuesta: MensajeServidor = siguiente(&mut viejo).await;
+    match respuesta {
+        MensajeServidor::VersionIncompatible {
+            version,
+            clientes,
+            trabajo,
+            ..
+        } => {
+            assert_eq!(version, VERSION_PROTOCOLO);
+            assert_eq!(clientes, Some(1));
+            assert!(trabajo.expect("el rechazo informa del trabajo").vacio());
+        }
+        otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
+    }
+    let _ = ventana.get_mut().shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
 }
 
@@ -110,7 +156,7 @@ async fn un_cliente_de_la_version_tres_no_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 3).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
             assert_eq!(pid, Some(std::process::id()));
         }
@@ -132,9 +178,8 @@ async fn un_cliente_de_la_version_cuatro_no_coopera() {
     let mut lector = cliente(&servidor::ruta_socket(&rutas), 4).await;
     let respuesta: MensajeServidor = siguiente(&mut lector).await;
     match respuesta {
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible { version, pid, .. } => {
             assert_eq!(version, VERSION_PROTOCOLO);
-            assert_eq!(version, 5);
             assert_eq!(pid, Some(std::process::id()));
         }
         otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
@@ -292,7 +337,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
                 nombre: "prueba".to_string(),
                 direccion: "127.0.0.1".to_string(),
                 puerto: puerto_ssh,
-                usuario: Some("hector".to_string()),
+                usuario: Some("usuario".to_string()),
                 identidad_ref: IdentidadRef::Contrasena,
                 ..DatosHost::default()
             },
@@ -400,7 +445,29 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
     }
     assert!(abierta);
 
-    // 5. Limpieza: cerrar la sesión y parar el servidor.
+    // 5. Un cliente de otra versión ve lo que custodia ahora mismo: la sesión
+    // abierta y esta ventana (la que pregunta no se cuenta).
+    let mut viejo = cliente(&servidor::ruta_socket(&rutas), 5).await;
+    let rechazo: MensajeServidor = siguiente(&mut viejo).await;
+    match rechazo {
+        MensajeServidor::VersionIncompatible {
+            version_app,
+            clientes,
+            trabajo,
+            ..
+        } => {
+            assert_eq!(version_app.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+            assert_eq!(clientes, Some(1));
+            let trabajo = trabajo.expect("el rechazo informa del trabajo");
+            assert_eq!(trabajo.sesiones, 1);
+            assert_eq!(trabajo.transferencias, 0);
+            assert_eq!(trabajo.tuneles, 0);
+            assert_eq!(trabajo.ejecuciones, 0);
+        }
+        otro => panic!("se esperaba VersionIncompatible, llegó {otro:?}"),
+    }
+
+    // 6. Limpieza: cerrar la sesión y parar el servidor.
     drop(tarea_ssh);
     let _ = escritura.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea_magi).await;
@@ -475,7 +542,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
                 nombre: "prueba".to_string(),
                 direccion: "127.0.0.1".to_string(),
                 puerto: puerto_ssh,
-                usuario: Some("hector".to_string()),
+                usuario: Some("usuario".to_string()),
                 identidad_ref: IdentidadRef::Fichero(ruta_clave.display().to_string()),
                 ..DatosHost::default()
             },

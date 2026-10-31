@@ -1,1 +1,8 @@
+# Artefactos de compilación
 /target
+
+# Instantáneas pendientes de revisar de insta: nunca se versionan
+*.snap.new
+
+# Ruido de macOS
+.DS_Store

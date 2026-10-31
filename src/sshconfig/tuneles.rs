@@ -177,10 +177,10 @@ mod pruebas {
 
     #[test]
     fn reconoce_las_tres_directivas_con_bind_por_defecto() {
-        let local = desde_directiva(&directiva("LocalForward", "5432 10.0.0.5:5432")).unwrap();
+        let local = desde_directiva(&directiva("LocalForward", "5432 192.0.2.5:5432")).unwrap();
         assert_eq!(local.tipo, TipoTunel::Local);
         assert_eq!(local.escucha, "127.0.0.1:5432");
-        assert_eq!(local.destino.as_deref(), Some("10.0.0.5:5432"));
+        assert_eq!(local.destino.as_deref(), Some("192.0.2.5:5432"));
         assert_eq!(local.nombre, "local-5432");
         assert!(local.automatico);
         assert_eq!(local.host_id, 0);
@@ -202,17 +202,17 @@ mod pruebas {
     fn acepta_minusculas_espacios_comillas_e_ipv6() {
         let datos = desde_directiva(&directiva(
             "localforward",
-            "   0.0.0.0:8080   10.0.0.5:80   ",
+            "   0.0.0.0:8080   192.0.2.5:80   ",
         ))
         .unwrap();
         assert_eq!(datos.escucha, "0.0.0.0:8080");
-        assert_eq!(datos.destino.as_deref(), Some("10.0.0.5:80"));
+        assert_eq!(datos.destino.as_deref(), Some("192.0.2.5:80"));
         assert_eq!(datos.nombre, "local-8080");
 
         let citado =
-            desde_directiva(&directiva("LocalForward", "\"5432\"   \"10.0.0.5:5432\"")).unwrap();
+            desde_directiva(&directiva("LocalForward", "\"5432\"   \"192.0.2.5:5432\"")).unwrap();
         assert_eq!(citado.escucha, "127.0.0.1:5432");
-        assert_eq!(citado.destino.as_deref(), Some("10.0.0.5:5432"));
+        assert_eq!(citado.destino.as_deref(), Some("192.0.2.5:5432"));
 
         let ipv6 = desde_directiva(&directiva("DynamicForward", "[::1]:1080")).unwrap();
         assert_eq!(ipv6.escucha, "[::1]:1080");
@@ -227,11 +227,11 @@ mod pruebas {
         // Varios destinos en una misma directiva.
         assert!(desde_directiva(&directiva("LocalForward", "5432 a:80 b:80")).is_none());
         // Sin puerto en el destino.
-        assert!(desde_directiva(&directiva("RemoteForward", "9000 10.0.0.5")).is_none());
+        assert!(desde_directiva(&directiva("RemoteForward", "9000 192.0.2.5")).is_none());
         // Un dinámico no admite destino.
-        assert!(desde_directiva(&directiva("DynamicForward", "1080 10.0.0.5:1080")).is_none());
+        assert!(desde_directiva(&directiva("DynamicForward", "1080 192.0.2.5:1080")).is_none());
         // Puerto fuera de rango.
-        assert!(desde_directiva(&directiva("LocalForward", "70000 10.0.0.5:80")).is_none());
+        assert!(desde_directiva(&directiva("LocalForward", "70000 192.0.2.5:80")).is_none());
         // Valor vacío.
         assert!(desde_directiva(&directiva("LocalForward", "")).is_none());
     }
@@ -242,19 +242,19 @@ mod pruebas {
             a_directiva(&tunel(
                 TipoTunel::Local,
                 "127.0.0.1:5432",
-                Some("10.0.0.5:5432")
+                Some("192.0.2.5:5432")
             ))
             .as_deref(),
-            Some("LocalForward 5432 10.0.0.5:5432")
+            Some("LocalForward 5432 192.0.2.5:5432")
         );
         assert_eq!(
             a_directiva(&tunel(
                 TipoTunel::Local,
                 "0.0.0.0:8080",
-                Some("10.0.0.5:80")
+                Some("192.0.2.5:80")
             ))
             .as_deref(),
-            Some("LocalForward 0.0.0.0:8080 10.0.0.5:80")
+            Some("LocalForward 0.0.0.0:8080 192.0.2.5:80")
         );
         assert_eq!(
             a_directiva(&tunel(
@@ -283,7 +283,7 @@ mod pruebas {
         assert!(a_directiva(&tunel(
             TipoTunel::Local,
             "127.0.0.1:0",
-            Some("10.0.0.5:5432")
+            Some("192.0.2.5:5432")
         ))
         .is_none());
         assert!(a_directiva(&tunel(TipoTunel::Dinamico, "127.0.0.1:0", None)).is_none());
@@ -304,7 +304,7 @@ mod pruebas {
 
     #[test]
     fn solo_son_gestionados_los_reenvios_que_sabemos_representar() {
-        assert!(reenvio_gestionado("LocalForward 5432 10.0.0.5:5432"));
+        assert!(reenvio_gestionado("LocalForward 5432 192.0.2.5:5432"));
         assert!(reenvio_gestionado("dynamicforward 1080"));
         // Formas que `ssh` admite y MAGI no representa: siguen valiendo como
         // opciones extra.
@@ -312,17 +312,17 @@ mod pruebas {
         assert!(!reenvio_gestionado("LocalForward 8080 a:80 b:80"));
         assert!(!reenvio_gestionado("LocalForward 7000 /var/run/ssh.sock"));
         assert!(!reenvio_gestionado("ForwardAgent yes"));
-        assert!(!reenvio_gestionado("# LocalForward 5432 10.0.0.5:5432"));
+        assert!(!reenvio_gestionado("# LocalForward 5432 192.0.2.5:5432"));
     }
 
     #[test]
     fn ida_y_vuelta_en_los_tres_tipos() {
         let casos = [
-            (TipoTunel::Local, "127.0.0.1:5432", Some("10.0.0.5:5432")),
-            (TipoTunel::Local, "0.0.0.0:8080", Some("10.0.0.5:80")),
+            (TipoTunel::Local, "127.0.0.1:5432", Some("192.0.2.5:5432")),
+            (TipoTunel::Local, "0.0.0.0:8080", Some("192.0.2.5:80")),
             (TipoTunel::Local, "[::1]:6000", Some("[2001:db8::1]:6000")),
             (TipoTunel::Remoto, "127.0.0.1:9000", Some("127.0.0.1:9000")),
-            (TipoTunel::Remoto, "0.0.0.0:9100", Some("10.0.0.5:9100")),
+            (TipoTunel::Remoto, "0.0.0.0:9100", Some("192.0.2.5:9100")),
             (TipoTunel::Dinamico, "127.0.0.1:1080", None),
             (TipoTunel::Dinamico, "0.0.0.0:1080", None),
         ];

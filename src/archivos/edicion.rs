@@ -327,7 +327,7 @@ pub fn bytes_con_miles(bytes: u64) -> String {
     let cifras = bytes.to_string();
     let mut salida = String::with_capacity(cifras.len() + cifras.len() / 3);
     for (indice, cifra) in cifras.chars().enumerate() {
-        if indice > 0 && (cifras.len() - indice).is_multiple_of(3) {
+        if indice > 0 && (cifras.len() - indice) % 3 == 0 {
             salida.push(' ');
         }
         salida.push(cifra);
@@ -376,7 +376,7 @@ mod pruebas {
             }),
             usuario_conexion: Some("deploy".to_string()),
             uid_conexion: Some(1001),
-            dir_local: PathBuf::from("/home/hector"),
+            dir_local: PathBuf::from("/home/usuario"),
         }
     }
 

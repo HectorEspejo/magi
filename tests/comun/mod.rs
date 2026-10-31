@@ -831,7 +831,16 @@ pub async fn socks5_conectar(
 }
 
 /// Ruta del `sftp-server` de OpenSSH, si está instalado.
+///
+/// `MAGI_SFTP_SERVER` manda si apunta a un fichero existente: los runners de
+/// CI y las instalaciones de macOS/Arch no siempre usan las rutas habituales.
 pub fn ruta_sftp_server() -> Option<PathBuf> {
+    if let Some(ruta) = std::env::var_os("MAGI_SFTP_SERVER") {
+        let ruta = PathBuf::from(ruta);
+        if ruta.exists() {
+            return Some(ruta);
+        }
+    }
     const CANDIDATOS: [&str; 4] = [
         "/usr/lib/ssh/sftp-server",
         "/usr/lib/openssh/sftp-server",

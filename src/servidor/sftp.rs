@@ -1763,15 +1763,15 @@ www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
 +nis:x:77:
 raro:x:no-es-numero:
 duplicado:x:33:33::/:/bin/false
-hector:x:1000:1000::/home/hector:/bin/bash";
-        let group = "root:x:0:\nwww-data:x:33:\ndevs:x:1001:hector,ana\n";
+usuario:x:1000:1000::/home/usuario:/bin/bash";
+        let group = "root:x:0:\nwww-data:x:33:\ndevs:x:1001:usuario,ana\n";
         let mapa = MapaNombres::desde_textos(passwd, group);
         assert_eq!(mapa.usuario(0), Some("root"));
         assert_eq!(mapa.usuario(33), Some("www-data"), "gana el primero");
-        assert_eq!(mapa.usuario(1000), Some("hector"));
+        assert_eq!(mapa.usuario(1000), Some("usuario"));
         assert_eq!(mapa.usuario(77), None, "las líneas de NIS no cuentan");
         assert_eq!(mapa.usuario(5), None, "ni los comentarios");
-        assert_eq!(mapa.uid_de("hector"), Some(1000));
+        assert_eq!(mapa.uid_de("usuario"), Some(1000));
         assert_eq!(mapa.uid_de("duplicado"), Some(33));
         assert_eq!(mapa.uid_de("raro"), None);
         assert_eq!(mapa.grupo(1001), Some("devs"));

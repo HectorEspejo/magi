@@ -403,7 +403,7 @@ Ninguno nuevo. `magi servidor estado` añade la cola de transferencias (en curso
         ┌─ main.py ───────────────────────────────────────────┐
         │  Tipo        fichero        Tamaño   14 208 bytes   │
         │  Modificado  12 sep 2026 09:41:07                   │
-        │  Permisos    -rw-r--r--     hector:hector           │
+        │  Permisos    -rw-r--r--     usuario:usuario         │
         │  Ruta        /var/www/cooperapp/main.py             │
         │  Otro lado   ~/proyectos/cooperapp/main.py  ≠ tamaño│
         └─────────────────────────────────────────────────────┘

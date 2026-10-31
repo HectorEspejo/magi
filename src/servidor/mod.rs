@@ -143,6 +143,34 @@ pub struct EstadoServidor {
     pub tuneles_parados: std::collections::HashSet<(i64, i64)>,
 }
 
+impl EstadoServidor {
+    /// Lo que custodia el servidor, para el rechazo a un cliente de otra
+    /// versión (Fase 9, §5.2): sesiones custodiadas, transferencias en cola o
+    /// en curso, túneles activos y ejecuciones en curso. Las ventanas
+    /// adjuntas las cuenta `tarea_conexion`, que es quien pregunta.
+    pub fn trabajo(&self) -> crate::protocolo::TrabajoServidor {
+        crate::protocolo::TrabajoServidor {
+            sesiones: self.sesiones.len() as u32,
+            transferencias: self
+                .transferencias
+                .info()
+                .iter()
+                .filter(|transferencia| !transferencia.estado.terminada())
+                .count() as u32,
+            tuneles: tuneles::lista(self)
+                .iter()
+                .filter(|tunel| tunel.estado.en_marcha())
+                .count() as u32,
+            ejecuciones: self
+                .ejecuciones
+                .info()
+                .iter()
+                .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
+                .count() as u32,
+        }
+    }
+}
+
 /// Ruta del socket del servidor.
 pub fn ruta_socket(rutas: &Rutas) -> PathBuf {
     rutas.dir_runtime().join("servidor.sock")
@@ -165,6 +193,19 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     std::fs::set_permissions(&directorio, std::fs::Permissions::from_mode(0o700))
         .with_context(|| "poniendo los permisos 700 del directorio de ejecución")?;
 
+    // SIGTERM es un `Parar`: apagado limpio con sus anotaciones (3b). Se
+    // registra antes de crear el socket: si la señal llegara en la ventana
+    // entre el bind y el bucle, mataría el proceso con la acción por defecto
+    // (el test `sigterm_para_el_servidor_limpio` lo reproduce).
+    let mut terminar =
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(senal) => Some(senal),
+            Err(error) => {
+                warn!("no se pudo atender SIGTERM: {error}");
+                None
+            }
+        };
+
     // Bloqueo exclusivo: un segundo servidor termina sin tocar el socket.
     // El `Flock` se conserva vivo hasta la salida; al caer, libera el lock.
     let fichero_lock = std::fs::OpenOptions::new()
@@ -181,6 +222,17 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         ),
     };
 
+    // La base de datos se abre antes de crear el socket: si es de una versión
+    // más nueva de MAGI, el servidor se niega sin dejar un socket huérfano
+    // (Fase 9). Con el lock en la mano no hay dos servidores migrando a la vez.
+    let almacen =
+        Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
+    let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
+    // Los temporales de una ejecución anterior interrumpida no se heredan (los
+    // de edición sí: pueden tener cambios sin subir).
+    sftp::preparar_temporales(&rutas);
+    sftp::vaciar_temporales(&rutas);
+
     // El socket se crea con umask 077 para que solo el usuario pueda abrirlo.
     let ruta_socket = ruta_socket(&rutas);
     let anterior = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
@@ -191,14 +243,6 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     let listener = UnixListener::bind(&ruta_socket)
         .with_context(|| format!("abriendo el socket {}", ruta_socket.display()))?;
     nix::sys::stat::umask(anterior);
-
-    let almacen =
-        Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
-    let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
-    // Los temporales de una ejecución anterior interrumpida no se heredan (los
-    // de edición sí: pueden tener cambios sin subir).
-    sftp::preparar_temporales(&rutas);
-    sftp::vaciar_temporales(&rutas);
     let estado = Arc::new(tokio::sync::Mutex::new(EstadoServidor {
         rutas: rutas.clone(),
         gracia: config.servidor.gracia_apagado_seg,
@@ -253,17 +297,6 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
     tokio::spawn(ejecuciones::revisar(estado.clone()));
-
-    // SIGTERM es un `Parar`: apagado limpio con sus anotaciones (3b). Así un
-    // MAGI de otra versión puede parar este servidor sin hablar su protocolo.
-    let mut terminar =
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(senal) => Some(senal),
-            Err(error) => {
-                warn!("no se pudo atender SIGTERM: {error}");
-                None
-            }
-        };
 
     loop {
         tokio::select! {
@@ -664,13 +697,27 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
         Ok(MensajeCliente::Hola { version, pid }) if version == VERSION_PROTOCOLO => pid,
         Ok(MensajeCliente::Hola { version, .. }) => {
             info!("un cliente v{version} no coopera con este servidor v{VERSION_PROTOCOLO}");
-            // El cliente recibe la versión del servidor: es lo que le permite
-            // decir si el que se quedó atrás es él o el servidor.
+            // El cliente recibe la versión del servidor (protocolo y app): es
+            // lo que le permite decir si el que se quedó atrás es él o el
+            // servidor. También lo que custodia ahora mismo, contado del
+            // estado real, para que decida si puede sustituirlo sin perder
+            // nada (Fase 9, §5.2). `clientes` son las ventanas adjuntas además
+            // de la que pregunta: esta todavía no está registrada.
+            let (clientes, trabajo) = {
+                let estado_bloqueado = estado.lock().await;
+                (
+                    estado_bloqueado.clientes.len() as u32,
+                    estado_bloqueado.trabajo(),
+                )
+            };
             let _ = enviar_linea(
                 &tx_escritura,
                 MensajeServidor::VersionIncompatible {
                     version: VERSION_PROTOCOLO,
                     pid: Some(std::process::id()),
+                    version_app: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    clientes: Some(clientes),
+                    trabajo: Some(trabajo),
                 },
             );
             return;
@@ -747,6 +794,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
     };
     let mensaje = MensajeServidor::Bienvenida {
         version: VERSION_PROTOCOLO,
+        version_app: env!("CARGO_PKG_VERSION").to_string(),
         pid: std::process::id(),
         cliente_id,
         clientes: estado_bloqueado.clientes.len() as u32,
@@ -2461,6 +2509,43 @@ fn recortar_texto(texto: &str, ancho: usize) -> String {
     format!("{recortado}…")
 }
 
+/// Cabecera de `magi servidor estado` (Fase 9, §6.3): versión de la app del
+/// servidor, protocolo y pid; aviso si no es la versión de este binario; y el
+/// recuento de lo que custodia, si el servidor lo informa (un servidor
+/// anterior a la v6 no sabe decirlo).
+fn imprime_cabecera_servidor(
+    version_app: Option<&str>,
+    version: u32,
+    pid: Option<u32>,
+    clientes: Option<u32>,
+    trabajo: Option<&crate::protocolo::TrabajoServidor>,
+) {
+    let version_app = version_app.unwrap_or("desconocida");
+    let pid = pid.map(|pid| format!(" · pid {pid}")).unwrap_or_default();
+    println!("servidor {version_app} · protocolo {version}{pid}");
+    let actual = env!("CARGO_PKG_VERSION");
+    if version > VERSION_PROTOCOLO {
+        println!(
+            "! el servidor es más nuevo que este magi ({actual}); actualiza MAGI: este binario no puede ni debe pararlo"
+        );
+    } else if version_app != actual || version != VERSION_PROTOCOLO {
+        println!(
+            "! el servidor es de otra versión que este magi ({actual}); al abrir magi se sustituirá o te preguntará"
+        );
+    }
+    match trabajo {
+        Some(trabajo) => println!(
+            "sesiones {} · clientes {} · transferencias {} · túneles {} · ejecuciones {}",
+            trabajo.sesiones,
+            clientes.unwrap_or(0),
+            trabajo.transferencias,
+            trabajo.tuneles,
+            trabajo.ejecuciones,
+        ),
+        None => println!("la versión anterior no informa de lo que custodia"),
+    }
+}
+
 /// `magi servidor estado`: pid, versión de protocolo, sesiones, clientes y la
 /// cola de transferencias (en curso y en cola por host).
 pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
@@ -2480,6 +2565,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
     match leer_respuesta(&mut stream).await? {
         MensajeServidor::Bienvenida {
             version,
+            version_app,
             pid,
             clientes,
             sesiones,
@@ -2488,8 +2574,29 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             ejecuciones,
             ..
         } => {
-            println!(
-                "Servidor pid {pid} · protocolo {version} · {clientes} cliente(s) conectado(s)"
+            let trabajo = crate::protocolo::TrabajoServidor {
+                sesiones: sesiones.len() as u32,
+                transferencias: transferencias
+                    .iter()
+                    .filter(|transferencia| !transferencia.estado.terminada())
+                    .count() as u32,
+                tuneles: tuneles
+                    .iter()
+                    .filter(|tunel| tunel.estado.en_marcha())
+                    .count() as u32,
+                ejecuciones: ejecuciones
+                    .iter()
+                    .filter(|ejecucion| {
+                        ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso
+                    })
+                    .count() as u32,
+            };
+            imprime_cabecera_servidor(
+                Some(&version_app),
+                version,
+                Some(pid),
+                Some(clientes),
+                Some(&trabajo),
             );
             if sesiones.is_empty() {
                 println!("Sin sesiones abiertas.");
@@ -2518,8 +2625,22 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             imprime_ejecuciones(&ejecuciones);
             Ok(0)
         }
-        MensajeServidor::VersionIncompatible { version, pid } => {
-            let pid = pid.or(pid_par);
+        MensajeServidor::VersionIncompatible {
+            version,
+            pid,
+            version_app,
+            clientes,
+            trabajo,
+        } => {
+            // El pid del kernel antes que el que dice el propio servidor.
+            let pid = pid_par.or(pid);
+            imprime_cabecera_servidor(
+                version_app.as_deref(),
+                version,
+                pid,
+                clientes,
+                trabajo.as_ref(),
+            );
             println!(
                 "El servidor{} habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}: ciérralo con «magi servidor parar» y vuelve a abrir.",
                 pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
@@ -2537,8 +2658,53 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
     }
 }
 
+/// Trabajo que se perdería al parar el servidor, para el aviso de
+/// `magi servidor parar`. `None` si no hay nada que perder. Incluye las
+/// transferencias en curso o en cola (parar aborta la cola y se pierden) y las
+/// ejecuciones en curso, además de sesiones y túneles.
+fn trabajo_que_se_pierde(
+    sesiones: usize,
+    transferencias: usize,
+    tuneles: usize,
+    ejecuciones: usize,
+) -> Option<String> {
+    if sesiones == 0 && transferencias == 0 && tuneles == 0 && ejecuciones == 0 {
+        return None;
+    }
+    let mut partes = Vec::new();
+    if sesiones > 0 {
+        partes.push(format!("{sesiones} sesión(es) abierta(s)"));
+    }
+    if transferencias > 0 {
+        partes.push(format!(
+            "{transferencias} transferencia(s) en curso o en cola (se cancelarán)"
+        ));
+    }
+    if tuneles > 0 {
+        partes.push(format!("{tuneles} túnel(es) levantado(s)"));
+    }
+    if ejecuciones > 0 {
+        partes.push(format!(
+            "{ejecuciones} ejecución(es) de snippets en curso (se cancelarán)"
+        ));
+    }
+    Some(format!("Hay {}", unir_con_y(&partes)))
+}
+
+fn unir_con_y(partes: &[String]) -> String {
+    match partes {
+        [] => String::new(),
+        [una] => una.clone(),
+        [primera, segunda] => format!("{primera} y {segunda}"),
+        _ => {
+            let (ultima, resto) = partes.split_last().expect("no está vacía");
+            format!("{} y {ultima}", resto.join(", "))
+        }
+    }
+}
+
 /// `magi servidor parar`: cierra las sesiones y apaga el servidor, con
-/// confirmación si hay sesiones vivas (salvo `--si`). Ante un servidor de
+/// confirmación si hay trabajo vivo (salvo `--si`). Ante un servidor de
 /// otra versión, muestra su pid y le envía `SIGTERM` tras confirmar.
 pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     let ruta = ruta_socket(rutas);
@@ -2555,14 +2721,23 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     // El pid del otro extremo del socket, por si no habla nuestro protocolo.
     let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    let (cuantas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(&mut stream).await? {
+    let (cuantas, transferencias_vivas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(
+        &mut stream,
+    )
+    .await?
+    {
         MensajeServidor::Bienvenida {
             sesiones,
+            transferencias,
             tuneles,
             ejecuciones,
             ..
         } => (
             sesiones.len(),
+            transferencias
+                .iter()
+                .filter(|transferencia| !transferencia.estado.terminada())
+                .count(),
             tuneles
                 .iter()
                 .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
@@ -2572,8 +2747,22 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count(),
         ),
-        MensajeServidor::VersionIncompatible { version, pid } => {
+        MensajeServidor::VersionIncompatible {
+            version,
+            pid,
+            version_app,
+            ..
+        } => {
             drop(stream);
+            // Un servidor más nuevo que este binario no se para nunca desde
+            // aquí: podría custodiar trabajo que esta versión no entiende.
+            if version > VERSION_PROTOCOLO {
+                let app = version_app.map(|app| format!(" {app}")).unwrap_or_default();
+                println!(
+                    "El servidor{app} habla la versión de protocolo {version}, más nueva que la {VERSION_PROTOCOLO} de este MAGI: no se para desde un binario más antiguo. Actualiza MAGI."
+                );
+                return Ok(1);
+            }
             // El pid del kernel antes que el que dice el propio servidor.
             return parar_otra_version(rutas, version, pid_par.or(pid), si).await;
         }
@@ -2582,25 +2771,23 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             return Ok(1);
         }
     };
-    if (cuantas > 0 || tuneles_vivos > 0 || ejecuciones_vivas > 0) && !si {
-        let mut aviso = format!("Hay {cuantas} sesión(es) abierta(s)");
-        if tuneles_vivos > 0 {
-            aviso.push_str(&format!(", {tuneles_vivos} túnel(es) levantado(s)"));
-        }
-        if ejecuciones_vivas > 0 {
-            aviso.push_str(&format!(
-                " y {ejecuciones_vivas} ejecución(es) de snippets en curso (se cancelarán)"
-            ));
-        }
-        print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
-        use std::io::Write as _;
-        std::io::stdout().flush().ok();
-        let mut respuesta = String::new();
-        if std::io::stdin().read_line(&mut respuesta).is_err()
-            || !respuesta.trim().eq_ignore_ascii_case("s")
-        {
-            println!("No se ha parado el servidor.");
-            return Ok(0);
+    if !si {
+        if let Some(aviso) = trabajo_que_se_pierde(
+            cuantas,
+            transferencias_vivas,
+            tuneles_vivos,
+            ejecuciones_vivas,
+        ) {
+            print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
+            use std::io::Write as _;
+            std::io::stdout().flush().ok();
+            let mut respuesta = String::new();
+            if std::io::stdin().read_line(&mut respuesta).is_err()
+                || !respuesta.trim().eq_ignore_ascii_case("s")
+            {
+                println!("No se ha parado el servidor.");
+                return Ok(0);
+            }
         }
     }
     let linea = codificar(&MensajeCliente::Parar).context("serializando Parar")?;
@@ -2622,6 +2809,14 @@ async fn parar_otra_version(
     pid: Option<u32>,
     si: bool,
 ) -> Result<i32> {
+    // Defensa en profundidad: nunca se manda SIGTERM a un servidor más nuevo
+    // que este binario (podría custodiar trabajo que esta versión no entiende).
+    if version > VERSION_PROTOCOLO {
+        println!(
+            "El servidor habla la versión de protocolo {version}, más nueva que la {VERSION_PROTOCOLO} de este MAGI: no se para desde un binario más antiguo. Actualiza MAGI."
+        );
+        return Ok(1);
+    }
     let Some(pid) = pid else {
         println!(
             "El servidor en marcha habla la versión de protocolo {version} y este MAGI la {VERSION_PROTOCOLO}, y no se pudo averiguar su pid. Búscalo con «pgrep -f 'magi --servidor'» y páralo con «kill <pid>»."
@@ -2682,10 +2877,26 @@ pub fn pid_del_par(stream: &UnixStream) -> Option<u32> {
     Some(pid as u32)
 }
 
+/// Plazo de `magi servidor parar` para que el servidor termine.
+const PLAZO_PARAR: Duration = Duration::from_secs(10);
+
 /// Manda `SIGTERM` al servidor y espera (hasta 10 s) a que el proceso
 /// termine y el lock quede libre. Si murió sin limpiar (una versión anterior
 /// no atiende la señal), se borra su socket huérfano. Devuelve si se detuvo.
 pub async fn parar_por_senal(rutas: &Rutas, pid: u32) -> Result<bool> {
+    parar_por_senal_en(rutas, pid, PLAZO_PARAR).await
+}
+
+/// Como `parar_por_senal`, con un plazo propio: lo usa la sustitución del
+/// servidor anterior (Fase 9, §7.2), que espera como mucho 5 s y no lanza
+/// nada si el socket o el lock siguen ocupados. La condición de parada es
+/// que el proceso muera, el lock quede libre y el socket deje de atender.
+pub async fn parar_por_senal_en(rutas: &Rutas, pid: u32, plazo: Duration) -> Result<bool> {
+    // Defensa: nunca se manda una señal a pid 0/-1 (grupo de procesos) ni a un
+    // número que no cabe en un pid de Unix ni a nosotros mismos.
+    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+        anyhow::bail!("pid inválido para parar el servidor: {pid}");
+    }
     let pid_nix = nix::unistd::Pid::from_raw(pid as i32);
     match nix::sys::signal::kill(pid_nix, nix::sys::signal::Signal::SIGTERM) {
         Ok(()) => {}
@@ -2695,16 +2906,27 @@ pub async fn parar_por_senal(rutas: &Rutas, pid: u32) -> Result<bool> {
             return Err(anyhow::anyhow!("enviando SIGTERM al pid {pid}: {error}"));
         }
     }
+    // La condición de liberación son los recursos, no la existencia del
+    // proceso: un servidor que murió puede quedar zombi si lo lanzó otra
+    // ventana de MAGI viva y esta no lo recolecta, y un zombi no custodia nada.
+    // Libre = nadie tiene el lock y nadie atiende el socket; así no se lanza un
+    // segundo servidor mientras haya quien escuche.
+    let ruta = ruta_socket(rutas);
     let inicio = std::time::Instant::now();
-    while inicio.elapsed() < Duration::from_secs(10) {
-        let vivo = nix::sys::signal::kill(pid_nix, None).is_ok();
-        if !vivo && crate::cliente::lock_libre(&ruta_lock(rutas)) {
-            let _ = std::fs::remove_file(ruta_socket(rutas));
+    loop {
+        let libre = crate::cliente::lock_libre(&ruta_lock(rutas))
+            && UnixStream::connect(&ruta).await.is_err();
+        if libre {
+            // No se borra el socket aquí: entre el fallo del connect y el
+            // remove_file otro servidor podría haberlo bindeado. Lo limpia
+            // con el lock en la mano quien arranque el servidor nuevo.
             return Ok(true);
+        }
+        if inicio.elapsed() >= plazo {
+            return Ok(false);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Ok(false)
 }
 
 async fn saludo_y_envio(stream: &mut UnixStream) -> Result<()> {
@@ -2749,3 +2971,25 @@ fn formato_estado(estado: &crate::protocolo::EstadoSesionRemota) -> &'static str
 }
 
 use std::os::unix::fs::PermissionsExt as _;
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn el_aviso_de_parada_cuenta_las_transferencias() {
+        // Solo transferencias: es trabajo que se pierde y hay que preguntar.
+        let aviso = trabajo_que_se_pierde(0, 2, 0, 0).expect("hay trabajo");
+        assert!(aviso.contains("2 transferencia(s)"), "{aviso}");
+        assert!(aviso.contains("se cancelarán"), "{aviso}");
+        // Sin trabajo no hay aviso.
+        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0), None);
+        // Todo junto se une con comas y «y».
+        let aviso = trabajo_que_se_pierde(1, 1, 1, 1).expect("hay trabajo");
+        assert!(aviso.contains("1 sesión(es)"), "{aviso}");
+        assert!(aviso.contains("1 transferencia(s)"), "{aviso}");
+        assert!(aviso.contains("1 túnel(es)"), "{aviso}");
+        assert!(aviso.contains("1 ejecución(es)"), "{aviso}");
+        assert!(aviso.contains(" y "), "{aviso}");
+    }
+}

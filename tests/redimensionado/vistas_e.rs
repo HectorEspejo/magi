@@ -72,8 +72,8 @@ fn difusion_tuneles(sembrado: &Sembrado) -> MensajeServidor {
     let mut grafana = info(1, "hetzner-02", "grafana", EstadoTunelRemoto::Caido);
     grafana.escucha = "127.0.0.1:3000".to_string();
     grafana.escucha_efectiva = "127.0.0.1:3000".to_string();
-    grafana.destino = Some("10.0.1.50:3000".to_string());
-    grafana.ultimo_error = Some("connect: conexión rechazada por 10.0.1.50:3000".to_string());
+    grafana.destino = Some("192.0.2.150:3000".to_string());
+    grafana.ultimo_error = Some("connect: conexión rechazada por 192.0.2.150:3000".to_string());
     let mut webhook = info(3, "mac-mini-m1", "webhook", EstadoTunelRemoto::Activando);
     webhook.tipo = "remoto".to_string();
     webhook.escucha = "0.0.0.0:8080".to_string();
@@ -194,7 +194,7 @@ fn el_detalle_se_pliega_con_la_vista_baja_y_se_abre_en_dialogo() {
         let esperado: &[&str] = match vista {
             Vista::Tuneles => &[
                 "hetzner-02",
-                "127.0.0.1:3000 → 10.0.1.50:3000",
+                "127.0.0.1:3000 → 192.0.2.150:3000",
                 "caído",
                 "connect: conexión rechazada",
             ],

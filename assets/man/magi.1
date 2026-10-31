@@ -1,0 +1,64 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH magi 1 2026-10-30 "magi 1.0.0" MAGI
+.SH NOMBRE
+magi \- Gestor SSH de terminal (TUI) con estética de cabina técnica
+.SH SINOPSIS
+\fBmagi\fR [\fB\-\-servidor\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcomandos\fR]
+.SH DESCRIPCIÓN
+Gestor SSH de terminal (TUI) con estética de cabina técnica
+.SH OPCIONES
+.TP
+\fB\-\-servidor\fR
+Ejecuta el servidor de sesiones en primer plano
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Muestra la ayuda
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Muestra la versión, el protocolo y el commit
+.SH SUBCOMANDOS
+.TP
+magi importar
+Importa un ssh_config (por defecto ~/.ssh/config) sin abrir la TUI
+.TP
+magi exportar
+Regenera ~/.ssh/magi_config sin abrir la TUI
+.TP
+magi sondear
+Sondea la flota sin abrir la TUI
+.TP
+magi registro
+Exporta el historial de MAGI
+.TP
+magi servidor
+El servidor de sesiones: estado o parada
+.TP
+magi conectar
+Abre la TUI con una sesión nueva al host indicado
+.TP
+magi tunel
+Activa o para un túnel del host indicado
+.TP
+magi tuneles
+Lista los túneles definidos y activos
+.TP
+magi snippets
+Lista los snippets con sus destinos resueltos, si son críticos y su último uso
+.TP
+magi sincronizaciones
+Lista las sincronizaciones guardadas con su host, dirección, rutas, borrado y último resultado
+.TP
+magi diagnostico
+Comprueba lo que MAGI necesita en este sistema sin modificar nada
+.TP
+magi autocompletado
+Escribe el script de autocompletado de la shell en la salida estándar
+.TP
+magi man
+Escribe la página man de MAGI en la salida estándar
+.TP
+magi help
+Muestra este mensaje o la ayuda del subcomando indicado
+.SH VERSIÓN
+v1.0.0

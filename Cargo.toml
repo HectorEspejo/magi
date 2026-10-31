@@ -1,15 +1,33 @@
 [package]
-name = "magi"
-version = "0.1.0"
+name = "magi-ssh"
+version = "1.0.0"
 edition = "2021"
+rust-version = "1.86"
 description = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/4d3-org/magi"
+homepage = "https://github.com/4d3-org/magi"
+readme = "README.md"
+keywords = ["ssh", "tui", "terminal", "sessions", "sftp"]
+categories = ["command-line-utilities"]
+publish = false
+build = "build.rs"
+
+[lib]
+name = "magi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "magi"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4.6"
+clap_mangen = "0.3"
 crossterm = "0.29"
 csv = "1"
 directories = "6"
@@ -49,5 +67,11 @@ insta = { version = "1", features = ["filters"] }
 tempfile = "3"
 
 [profile.release]
+lto = "thin"
+strip = true
+
+# Perfil que usa dist para los binarios publicados: LTO fino y strip.
+[profile.dist]
+inherits = "release"
 lto = "thin"
 strip = true

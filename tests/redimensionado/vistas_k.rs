@@ -37,7 +37,7 @@ pub(crate) fn dialogos() -> Vec<(&'static str, FabricaDialogo)> {
             let mut formulario = FormularioGuardada::nueva(
                 1,
                 "hetzner-01".to_string(),
-                "/home/hector/proyectos/cooperapp".to_string(),
+                "/home/usuario/proyectos/cooperapp".to_string(),
                 "/var/www/cooperapp".to_string(),
                 Direccion::Subida,
                 None,
@@ -826,7 +826,7 @@ fn magi_sincronizaciones_lista_las_guardadas() {
         .crear_sincronizacion(&datos(
             sembrado.host("hetzner-01"),
             "web-prod",
-            "/home/hector/proyectos/cooperapp",
+            "/home/usuario/proyectos/cooperapp",
             "/var/www/cooperapp",
             Direccion::Subida,
             true,
@@ -850,7 +850,7 @@ fn magi_sincronizaciones_lista_las_guardadas() {
         " subida ",
         " sí ",
         " parcial · 2026-10-02 14:31 ",
-        "/home/hector/proyectos/cooperapp → /var/www/cooperapp",
+        "/home/usuario/proyectos/cooperapp → /var/www/cooperapp",
     ] {
         assert!(lineas[1].contains(parte), "falta «{parte}»: {texto}");
     }

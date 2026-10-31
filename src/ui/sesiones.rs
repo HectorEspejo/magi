@@ -46,7 +46,11 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
     );
     if app.pestanas.is_empty() {
         let tema = &app.tema;
-        let aviso = if app.servidor_incompatible.is_some() || app.servidor_caido {
+        let aviso = if let Some(motivo) =
+            crate::app::servidor_anterior::motivo_sin_servidor(app.servidor_incompatible.as_ref())
+        {
+            format!("El servidor de sesiones no está disponible: {motivo}.")
+        } else if app.servidor_caido {
             let (abre, cierra) = (super::tecla(tema, "«", "\""), super::tecla(tema, "»", "\""));
             format!(
                 "El servidor de sesiones no está disponible.\nRelánzalo desde el diálogo o ejecuta {abre}magi servidor parar{cierra} y vuelve a abrir."

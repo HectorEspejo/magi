@@ -2,9 +2,9 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ TRANSFERENCIAS · 1 en curso · 0 en cola ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                           ESTADO    DIRECCIÓN ORIGEN → DESTINO                                                 PROGRESO                                                              │
-│                                       ▸ ◑ borrando  ↑ subida  /home/hector/proyectos/cooperapp → hetzner-01:/var/www/cooperapp borrando 1/2                                                          │
-│                                         ● hecha     ↑ subida  /home/hector/notas → hetzner-01:/srv/notas                       15 fichero(s)                                                         │
+│                                           ESTADO    DIRECCIÓN ORIGEN → DESTINO                                                  PROGRESO                                                             │
+│                                       ▸ ◑ borrando  ↑ subida  /home/usuario/proyectos/cooperapp → hetzner-01:/var/www/cooperapp borrando 1/2                                                         │
+│                                         ● hecha     ↑ subida  /home/usuario/notas → hetzner-01:/srv/notas                       15 fichero(s)                                                        │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -56,7 +56,7 @@ source: tests/redimensionado/arnes.rs
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                       ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────                                       │
-│                                         /home/hector/proyectos/cooperapp → hetzner-01:/var/www/cooperapp                                                                                             │
+│                                         /home/usuario/proyectos/cooperapp → hetzner-01:/var/www/cooperapp                                                                                            │
 │                                         4.2 MB de 4.2 MB · 15 fichero(s) · 1 borrados                                                                                                                │
 │                                                                                                                                                                                                      │
 └ 2 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

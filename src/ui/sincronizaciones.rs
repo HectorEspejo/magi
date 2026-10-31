@@ -836,13 +836,13 @@ mod pruebas {
 
     #[test]
     fn el_hogar_se_abrevia_a_la_tilde() {
-        let hogar = Path::new("/home/hector");
+        let hogar = Path::new("/home/usuario");
         assert_eq!(
-            ruta_visible("/home/hector/proyectos/app", hogar),
+            ruta_visible("/home/usuario/proyectos/app", hogar),
             "~/proyectos/app"
         );
-        assert_eq!(ruta_visible("/home/hector", hogar), "~");
-        assert_eq!(ruta_visible("/home/hectorb/x", hogar), "/home/hectorb/x");
+        assert_eq!(ruta_visible("/home/usuario", hogar), "~");
+        assert_eq!(ruta_visible("/home/usuariob/x", hogar), "/home/usuariob/x");
         assert_eq!(ruta_visible("~/web/static", hogar), "~/web/static");
         assert_eq!(ruta_visible("/srv/static", hogar), "/srv/static");
         assert_eq!(ruta_visible("/srv/static", Path::new("")), "/srv/static");
@@ -856,7 +856,7 @@ mod pruebas {
             host_id: 1,
             host_nombre: "hetzner-01".to_string(),
             nombre: "web-prod".to_string(),
-            ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+            ruta_local: "/home/usuario/proyectos/cooperapp".to_string(),
             ruta_remota: "/var/www/cooperapp".to_string(),
             direccion: Direccion::Subida,
             borrar: false,

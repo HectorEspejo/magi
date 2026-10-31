@@ -1,4 +1,8 @@
-use anyhow::Result;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context as _, Result};
 use rusqlite::Connection;
 
 /// Migraciones numeradas y aplicadas por `PRAGMA user_version`. Nunca se
@@ -11,6 +15,99 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_5_SNIPPETS,
     MIGRACION_6_SINCRONIZACIONES,
 ];
+
+/// Versión de esquema que conoce este binario (el número de migraciones).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64;
+
+/// Rechaza una base de datos creada por una versión más nueva de MAGI: las
+/// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
+/// de activar WAL o ajustar permisos, para no modificarlo siquiera.
+pub fn comprobar_version(conexion: &Connection) -> Result<()> {
+    let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
+    if version > VERSION_BD {
+        anyhow::bail!("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI");
+    }
+    Ok(())
+}
+
+/// Ruta del WAL que acompaña a una base de datos SQLite (`magi.db` →
+/// `magi.db-wal`).
+fn ruta_wal(ruta: &Path) -> PathBuf {
+    let mut texto = ruta.as_os_str().to_os_string();
+    texto.push("-wal");
+    PathBuf::from(texto)
+}
+
+/// ¿Hay un WAL pendiente de recuperar? Un WAL vacío no cuenta.
+fn wal_pendiente(ruta: &Path) -> bool {
+    std::fs::metadata(ruta_wal(ruta))
+        .map(|metadatos| metadatos.is_file() && metadatos.len() > 0)
+        .unwrap_or(false)
+}
+
+/// Versión leída de la cabecera SQLite (campo `user_version`, bytes 60..64).
+/// Solo es fiable cuando no hay WAL pendiente: hasta el checkpoint, la
+/// cabecera principal puede ser antigua. Un fichero corto (base de datos
+/// nueva o incompleta) cuenta como versión 0 para que la abra el flujo normal.
+fn version_de_cabecera(ruta: &Path) -> Result<i64> {
+    let mut fichero = std::fs::File::open(ruta)
+        .with_context(|| format!("abriendo la cabecera de {}", ruta.display()))?;
+    let mut cabecera = [0u8; 100];
+    let leidos = fichero
+        .read(&mut cabecera)
+        .with_context(|| format!("leyendo la cabecera de {}", ruta.display()))?;
+    if leidos < 64 {
+        return Ok(0);
+    }
+    let version = i32::from_be_bytes([cabecera[60], cabecera[61], cabecera[62], cabecera[63]]);
+    Ok(i64::from(version))
+}
+
+/// Versión real de una base de datos con WAL pendiente: se copia el par
+/// db+wal a un directorio temporal y se deja que SQLite recupere y lea la
+/// copia, sin tocar el original (abrir el original en lectura/escritura
+/// aplicaría el WAL y modificaría el fichero antes de poder rechazarlo).
+fn version_de_una_copia(ruta: &Path) -> Result<i64> {
+    let marca = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duracion| duracion.as_nanos())
+        .unwrap_or(0);
+    let temporal =
+        std::env::temp_dir().join(format!("magi-version-{}-{marca}", std::process::id()));
+    std::fs::create_dir(&temporal)
+        .with_context(|| format!("creando el directorio temporal {}", temporal.display()))?;
+    let resultado = (|| -> Result<i64> {
+        let copia = temporal.join("magi.db");
+        std::fs::copy(ruta, &copia).with_context(|| format!("copiando {}", ruta.display()))?;
+        std::fs::copy(ruta_wal(ruta), ruta_wal(&copia))
+            .with_context(|| "copiando el WAL de la base de datos")?;
+        let conexion = Connection::open(&copia)
+            .with_context(|| format!("abriendo la copia temporal {}", copia.display()))?;
+        let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
+        Ok(version)
+    })();
+    let _ = std::fs::remove_dir_all(&temporal);
+    resultado
+}
+
+/// Comprueba la versión de una base de datos **sin abrirla en lectura/
+/// escritura**: sin WAL pendiente basta la cabecera; con WAL pendiente se
+/// comprueba una copia temporal. Es la primera comprobación de `Almacen::abrir`,
+/// antes de permisos, WAL o migraciones.
+pub fn comprobar_version_en_disco(ruta: &Path) -> Result<()> {
+    if !ruta.exists() {
+        return Ok(());
+    }
+    let version = if wal_pendiente(ruta) {
+        version_de_una_copia(ruta)?
+    } else {
+        version_de_cabecera(ruta)?
+    };
+    if version > VERSION_BD {
+        anyhow::bail!("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI");
+    }
+    Ok(())
+}
 
 const MIGRACION_1_INICIAL: &str = r#"
 CREATE TABLE GRUPOS (
@@ -229,6 +326,7 @@ CREATE INDEX idx_sincronizaciones_dir_host ON SINCRONIZACIONES_DIR(host_id);
 "#;
 
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {
+    comprobar_version(conexion)?;
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
     for (indice, sql) in MIGRACIONES.iter().enumerate() {
         let numero = indice as i64 + 1;

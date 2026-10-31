@@ -20,7 +20,7 @@ source: tests/redimensionado/arnes.rs
 │                                                                              │
 │                                                                              │
 │──────────────────────────────────────────────────────────────────────────────│
-│  /home/hector/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py      │
+│  /home/usuario/cooperapp/main.py → hetzner-01:/var/www/cooperapp/main.py     │
 │  1.1 MB de 1.4 MB · 0 fichero(s)                                             │
 │  ahora: main.py                                                              │
 └ 5 ───────────────────────────────────────────────────────────────────────────┘

@@ -56,7 +56,7 @@ fn formulario() -> Dialogo {
         1,
         "hetzner-01".to_string(),
         Direccion::Subida,
-        "/home/hector/proyectos/cooperapp".to_string(),
+        "/home/usuario/proyectos/cooperapp".to_string(),
         RUTA_REMOTA.to_string(),
         "~/proyectos/cooperapp".to_string(),
         format!("hetzner-01:{RUTA_REMOTA}"),
@@ -80,7 +80,7 @@ fn plan_maqueta() -> PlanSincronizacion {
             host_nombre: "hetzner-01".to_string(),
             guardada: Some((1, "web-prod".to_string())),
             direccion: Direccion::Subida,
-            ruta_local: "/home/hector/proyectos/cooperapp".to_string(),
+            ruta_local: "/home/usuario/proyectos/cooperapp".to_string(),
             ruta_remota: RUTA_REMOTA.to_string(),
             borrar: true,
             extras: vec!["*.log".to_string()],
@@ -877,7 +877,7 @@ fn transferencia(estado: EstadoTransferencia, host_id: i64) -> InfoTransferencia
         host_nombre: "hetzner-01".to_string(),
         direccion: Direccion::Subida,
         estado,
-        origen: "/home/hector/proyectos/cooperapp".to_string(),
+        origen: "/home/usuario/proyectos/cooperapp".to_string(),
         destino: RUTA_REMOTA.to_string(),
         es_directorio: true,
         ficheros_total: 15,
@@ -919,7 +919,7 @@ fn instantaneas_de_transferencias_borrando() {
         hecha.id = 6;
         hecha.borrados = 0;
         hecha.borrados_total = 0;
-        hecha.origen = "/home/hector/notas".to_string();
+        hecha.origen = "/home/usuario/notas".to_string();
         hecha.destino = "/srv/notas".to_string();
         prueba.servidor(MensajeServidor::Transferencias {
             lista: vec![

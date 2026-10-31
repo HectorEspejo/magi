@@ -534,7 +534,7 @@ fn hosts_ocultan_direccion_bajo_80_y_usuario_puerto_bajo_60() {
     ] {
         prueba.pasar_por(ancho, 24);
         let fila = fila(&prueba);
-        assert_eq!(fila.contains("10.0.1.12"), direccion, "{ancho}: {fila}");
+        assert_eq!(fila.contains("192.0.2.112"), direccion, "{ancho}: {fila}");
         assert_eq!(fila.contains("deploy"), usuario, "{ancho}: {fila}");
         assert_eq!(fila.contains("2222"), usuario, "{ancho}: {fila}");
         // Glifo de estado y nombre nunca se ocultan.

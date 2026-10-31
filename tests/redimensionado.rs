@@ -36,6 +36,9 @@ mod vistas_i;
 mod vistas_j;
 #[path = "redimensionado/vistas_k.rs"]
 mod vistas_k;
+// Fase 9: diálogo SERVIDOR DE SESIONES ANTERIOR.
+#[path = "redimensionado/vistas_l.rs"]
+mod vistas_l;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

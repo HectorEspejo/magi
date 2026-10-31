@@ -29,8 +29,13 @@ impl Almacen {
         if let Some(directorio) = ruta.parent() {
             crear_directorio_privado(directorio)?;
         }
+        // Antes incluso de abrir la conexión: una base de datos de una versión
+        // más nueva de MAGI no se abre ni se toca (Fase 9). Abrirla en lectura/
+        // escritura aplicaría un WAL pendiente y la modificaría.
+        migraciones::comprobar_version_en_disco(ruta)?;
         let conexion =
             Connection::open(ruta).with_context(|| format!("abriendo {}", ruta.display()))?;
+        migraciones::comprobar_version(&conexion)?;
         fs::set_permissions(ruta, fs::Permissions::from_mode(0o600))
             .with_context(|| format!("ajustando permisos de {}", ruta.display()))?;
         let mut almacen = Self {

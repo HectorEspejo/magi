@@ -571,7 +571,7 @@ mod pruebas {
         FormularioGuardada::nueva(
             7,
             "hetzner-01".to_string(),
-            "/home/hector/proyectos/cooperapp".to_string(),
+            "/home/usuario/proyectos/cooperapp".to_string(),
             "/var/www/cooperapp".to_string(),
             Direccion::Subida,
             None,
@@ -648,7 +648,7 @@ mod pruebas {
         let datos = formulario.datos();
         assert_eq!(datos.host_id, 7);
         assert_eq!(datos.nombre, "web-prod");
-        assert_eq!(datos.ruta_local, "/home/hector/proyectos/cooperapp");
+        assert_eq!(datos.ruta_local, "/home/usuario/proyectos/cooperapp");
         assert_eq!(datos.ruta_remota, "/var/www/cooperapp");
         assert_eq!(datos.direccion, Direccion::Subida);
         assert!(!datos.borrar);
@@ -662,7 +662,7 @@ mod pruebas {
             host_id: 3,
             host_nombre: "hetzner-02".to_string(),
             nombre: "logs".to_string(),
-            ruta_local: "/home/hector/logs".to_string(),
+            ruta_local: "/home/usuario/logs".to_string(),
             ruta_remota: "/var/log/nginx".to_string(),
             direccion: Direccion::Bajada,
             borrar: true,

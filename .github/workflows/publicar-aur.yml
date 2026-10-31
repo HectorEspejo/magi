@@ -1,0 +1,182 @@
+# Publica el paquete magi-ssh-bin en AUR — Fase 9.
+#
+# Workflow reutilizable (workflow_call): lo llama release.yml desde el job
+# custom-publicar-aur, que dist genera a partir de publish-jobs en
+# dist-workspace.toml. Solo se ejecuta en versiones estables: release.yml ya
+# lo salta en las prereleases (publish-prereleases = false) y aquí se vuelve a
+# comprobar el tag por si se invoca de otra forma.
+#
+# Dos jobs: empaquetar (contenedor Arch, sin secretos: rellena el PKGBUILD,
+# genera .SRCINFO y pasa namcap) y publicar (runner normal, solo git y ssh:
+# recibe el artefacto y empuja a ssh://aur@aur.archlinux.org/magi-ssh-bin.git
+# con AUR_SSH_PRIVATE_KEY). La clave de AUR no entra nunca en el contenedor
+# rolling de Arch ni en un job que ejecute pacman.
+#
+# Permisos: contents: read, suficiente para el checkout y para descargar los
+# .sha256 de la release con gh.
+
+name: Publicar en AUR
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: Manifiesto de dist (dist-manifest.json) de la release
+        required: true
+        type: string
+    secrets:
+      # Clave SSH dedicada de la cuenta de AUR (docs/publicar.md). Es el único
+      # secreto que recibe este workflow.
+      AUR_SSH_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  empaquetar:
+    name: AUR magi-ssh-bin (preparar paquete)
+    # Un tag con guion es una prerelease (vX.Y.Z-rc.N): no toca AUR.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-22.04
+    container: archlinux:base-devel
+    env:
+      # El plan (dist-manifest.json) llega como input porque dist lo pasa,
+      # pero para AUR bastan el tag y los .sha256 publicados.
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar herramientas de empaquetado y publicación
+        run: pacman -Syu --noconfirm --needed git openssh github-cli namcap
+      - name: Rellenar el PKGBUILD y generar .SRCINFO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Descarga las sumas que dist publicó junto a los tarballs.
+          mkdir -p /tmp/aur/firmas /tmp/aur/magi-ssh-bin
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/aur/firmas \
+            --pattern '*.sha256'
+          cp packaging/aur/magi-ssh-bin.install /tmp/aur/magi-ssh-bin/
+          bash packaging/aur/generar.sh \
+            --version "$version" \
+            --sha256-x86_64-fichero /tmp/aur/firmas/magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256 \
+            --sha256-aarch64-fichero /tmp/aur/firmas/magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256 \
+            --salida /tmp/aur/magi-ssh-bin/PKGBUILD
+          # makepkg no puede ejecutarse como root: se genera .SRCINFO como
+          # usuario sin privilegios.
+          useradd -m empaquetador
+          chown -R empaquetador /tmp/aur/magi-ssh-bin
+          su empaquetador -c 'cd /tmp/aur/magi-ssh-bin && makepkg --printsrcinfo > .SRCINFO'
+          cat /tmp/aur/magi-ssh-bin/.SRCINFO
+      - name: namcap sobre la plantilla (gate real)
+        # namcap devuelve 0 aunque encuentre errores de reglas: se parsea la
+        # salida y se falla con cualquier línea E: (los avisos W: se muestran
+        # pero no rompen la validación de la plantilla).
+        run: |
+          set +e
+          salida=$(namcap /tmp/aur/magi-ssh-bin/PKGBUILD 2>&1)
+          codigo=$?
+          set -e
+          printf '%s\n' "$salida"
+          if [ "$codigo" -ne 0 ]; then
+            echo "namcap no pudo analizar el PKGBUILD" >&2
+            exit 1
+          fi
+          if printf '%s\n' "$salida" | grep -q ' E: '; then
+            echo "namcap encontró errores en el PKGBUILD" >&2
+            exit 1
+          fi
+      - name: Copiar el paquete generado para el artefacto
+        run: |
+          mkdir -p artefacto-aur
+          cp /tmp/aur/magi-ssh-bin/PKGBUILD artefacto-aur/
+          cp /tmp/aur/magi-ssh-bin/.SRCINFO artefacto-aur/
+          cp /tmp/aur/magi-ssh-bin/magi-ssh-bin.install artefacto-aur/
+      - name: Subir el artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-magi-ssh-bin
+          path: artefacto-aur
+          if-no-files-found: error
+
+  publicar:
+    name: AUR magi-ssh-bin (push)
+    needs: empaquetar
+    # Un tag con guion es una prerelease (vX.Y.Z-rc.N): no toca AUR.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Descargar el paquete generado
+        uses: actions/download-artifact@v4
+        with:
+          name: aur-magi-ssh-bin
+          path: artefacto-aur
+      - name: Empujar a AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_GIT_USUARIO: "4d3"
+          AUR_GIT_CORREO: "4d3-org@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+          test -n "${AUR_SSH_PRIVATE_KEY:-}" || { echo 'falta el secreto AUR_SSH_PRIVATE_KEY' >&2; exit 1; }
+          version="${TAG#v}"
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+
+          # Huellas publicadas por AUR en https://aur.archlinux.org (consultadas
+          # el 30-10-2026). `ssh-keyscan` sola es vulnerable a un MITM: se
+          # comprueba que TODAS las claves escaneadas son las publicadas y que
+          # aparecen las tres. Si AUR rota sus claves, actualizar esta lista
+          # (está documentado en docs/publicar.md).
+          ssh-keyscan -H aur.archlinux.org > "$HOME/.ssh/known_hosts" 2>/dev/null
+          huellas="$(ssh-keygen -lf "$HOME/.ssh/known_hosts" | awk '{print $2}' | sort -u)"
+          esperadas="SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI
+          SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8"
+          for huella in $huellas; do
+            printf '%s\n' "$esperadas" | grep -qxF "$huella" || {
+              echo "huella de AUR no publicada: $huella" >&2
+              exit 1
+            }
+          done
+          for huella in $esperadas; do
+            printf '%s\n' "$huellas" | grep -qxF "$huella" || {
+              echo "falta la huella publicada de AUR: $huella" >&2
+              exit 1
+            }
+          done
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+
+          # La primera vez el repositorio de AUR no existe: se crea con un
+          # push inicial desde un repositorio local.
+          mkdir -p /tmp/publicar && cd /tmp/publicar
+          if git clone ssh://aur@aur.archlinux.org/magi-ssh-bin.git repo 2>/dev/null; then
+            cd repo
+          else
+            mkdir repo && cd repo
+            git init -q
+            git remote add origin ssh://aur@aur.archlinux.org/magi-ssh-bin.git
+          fi
+
+          git config user.name "$AUR_GIT_USUARIO"
+          git config user.email "$AUR_GIT_CORREO"
+          cp artefacto-aur/PKGBUILD \
+             artefacto-aur/.SRCINFO \
+             artefacto-aur/magi-ssh-bin.install .
+          git add PKGBUILD .SRCINFO magi-ssh-bin.install
+
+          if git diff --cached --quiet; then
+            echo "Nada que publicar: $version ya está en AUR."
+            exit 0
+          fi
+
+          git commit -m "upgpkg: magi-ssh-bin $version"
+          git push origin HEAD:master

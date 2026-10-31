@@ -25,26 +25,13 @@ pub const PRIORIDAD_ATAJOS_FLOTA: u8 = 5;
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
     let ancho = usize::from(area.width);
-    let linea = if let Some(version) = app.servidor_incompatible {
-        let pid = app
-            .pid_incompatible
-            .map(|pid| format!(", pid {pid}"))
-            .unwrap_or_default();
-        let (abre, cierra) = (super::tecla(tema, "«", "\""), super::tecla(tema, "»", "\""));
-        let texto = if version < crate::protocolo::VERSION_PROTOCOLO {
-            format!(
-                " {} servidor de una versión anterior (protocolo {version}{pid}): {abre}magi servidor parar{cierra} y volver a abrir",
-                tema.glifos.error
-            )
-        } else {
-            format!(
-                " {} el servidor habla el protocolo {version}{pid}, más nuevo que el {} de esta MAGI",
-                tema.glifos.error,
-                crate::protocolo::VERSION_PROTOCOLO
-            )
-        };
+    let linea = if let Some(rechazo) = &app.servidor_incompatible {
+        // Mientras el servidor siga siendo de otra versión: uno más nuevo no
+        // se puede parar desde aquí; uno anterior sin sustituir hay que
+        // pararlo a mano.
+        let texto = crate::app::servidor_anterior::aviso_barra(rechazo);
         Line::from(Span::styled(
-            ajustar(&texto, ancho, tema),
+            ajustar(&format!(" {} {texto}", tema.glifos.error), ancho, tema),
             Style::default().fg(tema.paleta.critico),
         ))
     } else if let Some(mensaje) = &app.mensaje {

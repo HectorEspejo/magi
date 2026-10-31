@@ -377,7 +377,7 @@ se corrigieron 24 y sus pruebas de regresión están en `tests/tuneles.rs`,
    (un `psql` por un túnel local, un `curl localhost:9000` en el host para el remoto, un
    navegador apuntando al SOCKS) no los puede hacer la suite: se prueban contra un servidor
    SSH en proceso con un servicio de eco local. Guion sugerido al final de este informe.
-   - **Verificado a mano el 16 de septiembre** (host real `168.119.10.189`, clave del
+   - **Verificado a mano el 16 de septiembre** (host real `192.0.2.45`, clave del
      agente): el **AC del túnel remoto** —`RemoteForward 127.0.0.1:9000 → 127.0.0.1:8996`
      apuntando a un `python3 -m http.server` local— devuelve el listado del servicio local
      al hacer `curl` desde el host, y el detalle del túnel pasa a 1 conexión con los bytes

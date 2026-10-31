@@ -194,15 +194,82 @@ fn peticion_de_respuesta(mensaje: &MensajeServidor) -> Option<u64> {
     (peticion_id >= RANGO_ESPERAS).then_some(peticion_id)
 }
 
+/// Rechazo del saludo por otra versión de protocolo, leído del JSON
+/// genérico de la primera respuesta: así se entiende igual a un servidor
+/// anterior (v5 o menos), al actual y a uno futuro. Los campos que falten se
+/// quedan en `None` («recuento desconocido»), salvo dentro de `trabajo`, donde
+/// un campo ausente vale 1 (hay trabajo) para no parar nada por error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RechazoVersion {
+    /// Protocolo que habla el servidor.
+    pub version: u32,
+    /// Versión de la app del servidor, si la informa.
+    pub version_app: Option<String>,
+    /// Pid del servidor: del mensaje o, si es antiguo, del socket.
+    pub pid: Option<u32>,
+    /// Ventanas adjuntas además de la que pregunta.
+    pub clientes: Option<u32>,
+    /// Lo que custodia; `None` si su versión no lo informa.
+    pub trabajo: Option<crate::protocolo::TrabajoServidor>,
+}
+
+impl RechazoVersion {
+    /// Rechazo mínimo, para pruebas y para servidores muy antiguos.
+    pub fn nueva(version: u32) -> Self {
+        Self {
+            version,
+            version_app: None,
+            pid: None,
+            clientes: None,
+            trabajo: None,
+        }
+    }
+}
+
 /// Conecta con el servidor, lanzándolo si no está; errores legibles.
 #[derive(Debug)]
 pub enum FalloConexion {
-    /// El servidor habla otra versión de protocolo: la TUI arranca sin
-    /// sesiones y lo explica en la barra. Lleva la versión **del servidor** y
-    /// su pid (del mensaje o, si es antiguo, del socket).
-    VersionIncompatible { version: u32, pid: Option<u32> },
+    /// El servidor habla otra versión de protocolo. La decisión (sustituirlo,
+    /// preguntar o rendirse ante uno más nuevo) la toma el cliente en
+    /// `app::servidor_anterior`.
+    VersionIncompatible(RechazoVersion),
     /// No hay manera de llegar a un servidor.
     Inaccesible(String),
+}
+
+/// Plazo máximo para que un servidor anterior libere socket y lock tras el
+/// `SIGTERM` (Fase 9, §7.2). Pasado, no se lanza ningún servidor nuevo.
+pub const ESPERA_SUSTITUCION: Duration = Duration::from_secs(5);
+
+/// Por qué no se pudo sustituir el servidor de sesiones anterior (Fase 9,
+/// §4.4). El diálogo SERVIDOR DE SESIONES ANTERIOR enseña el motivo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FalloSustitucion {
+    /// El servidor no murió o no liberó socket y lock en 5 s: no se lanzó
+    /// nada y sigue siendo el servidor de la versión anterior.
+    NoLiberado { pid: Option<u32> },
+    /// El servidor anterior ya se paró pero el nuevo no arrancó o no se pudo
+    /// conectar: ahora mismo no hay servidor de sesiones.
+    Parado(String),
+    /// No se puede sustituir por otro motivo (sin pid, error al mandar la
+    /// señal…). El servidor anterior sigue como estaba.
+    Inaccesible(String),
+}
+
+impl FalloSustitucion {
+    /// Motivo legible para el diálogo y la barra.
+    pub fn texto(&self) -> String {
+        match self {
+            Self::NoLiberado { pid: Some(pid) } => format!(
+                "el servidor anterior (pid {pid}) no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor. Páralo con «kill {pid}» y vuelve a abrir MAGI"
+            ),
+            Self::NoLiberado { pid: None } => "el servidor anterior no ha liberado el socket y el lock en 5 s; no se ha arrancado otro servidor".to_string(),
+            Self::Parado(motivo) => format!(
+                "el servidor anterior se paró, pero el nuevo no ha arrancado: {motivo}"
+            ),
+            Self::Inaccesible(motivo) => motivo.clone(),
+        }
+    }
 }
 
 /// Conecta al socket del servidor; si no existe lo lanza desacoplado y espera
@@ -262,6 +329,51 @@ pub async fn conectar(
     }
 }
 
+/// Sustituye el servidor de sesiones de otra versión (Fase 9, §4.4 y §7.2):
+/// SIGTERM a su pid, espera hasta 5 s a que muera y libere socket y lock,
+/// arranca el servidor de este binario y reconecta. Nunca lanza un segundo
+/// servidor mientras el anterior conserve el socket: si no se libera, devuelve
+/// NoLiberado con su pid y no hace nada más.
+pub async fn sustituir_servidor(
+    rutas: &Rutas,
+    rechazo: &RechazoVersion,
+    tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
+) -> Result<Cliente, FalloSustitucion> {
+    let Some(pid) = rechazo.pid else {
+        return Err(FalloSustitucion::Inaccesible(
+            "el servidor anterior no dice su pid, así que no se puede sustituir: ejecuta «magi servidor parar» y vuelve a abrir".to_string(),
+        ));
+    };
+    // SIGTERM y espera a que muera, suelte el lock y deje de atender el
+    // socket. Un ESRCH cuenta como ya parado.
+    let liberado = crate::servidor::parar_por_senal_en(rutas, pid, ESPERA_SUSTITUCION)
+        .await
+        .map_err(|error| FalloSustitucion::Inaccesible(error.to_string()))?;
+    if !liberado {
+        return Err(FalloSustitucion::NoLiberado { pid: Some(pid) });
+    }
+    // Socket y lock libres: se arranca el servidor nuevo y se reconecta. El
+    // saludo de conectar manda la bienvenida a la UI como siempre. A partir de
+    // aquí el anterior ya no está: si el nuevo no arranca, se dice que se paró
+    // (no que «sigue en marcha») y no se deja la UI bloqueada.
+    lanzar_servidor(rutas);
+    let ruta = servidor::ruta_socket(rutas);
+    if !esperar_socket(&ruta, Duration::from_secs(10)).await {
+        return Err(FalloSustitucion::Parado(
+            "el servidor de sesiones nuevo no ha abierto el socket en 10 s; revisa ~/.local/state/magi/logs/servidor.log".to_string(),
+        ));
+    }
+    // Plazo duro para el saludo y la reconexión: nunca se queda la UI en
+    // «sustituyendo» si el servidor nuevo no responde.
+    match tokio::time::timeout(Duration::from_secs(10), conectar(rutas, tx_eventos)).await {
+        Ok(Ok(cliente)) => Ok(cliente),
+        Ok(Err(fallo)) => Err(FalloSustitucion::Parado(describe_fallo(&fallo))),
+        Err(_) => Err(FalloSustitucion::Parado(
+            "el servidor de sesiones nuevo no ha respondido al saludo en 10 s".to_string(),
+        )),
+    }
+}
+
 async fn saludar(
     stream: UnixStream,
     tx_eventos: mpsc::UnboundedSender<crate::app::Evento>,
@@ -299,10 +411,17 @@ async fn saludar(
             ))
         }
     };
-    match decodificar::<MensajeServidor>(&linea)
-        .map_err(|error| FalloConexion::Inaccesible(error.to_string()))?
-    {
-        mensaje @ MensajeServidor::Bienvenida { .. } => {
+    // La primera respuesta se lee como JSON genérico (contrato estable,
+    // Fase 9): un rechazo de cualquier versión —pasada o futura— se entiende
+    // sin conocer su forma exacta.
+    let valor: serde_json::Value = serde_json::from_str(&linea).map_err(|error| {
+        FalloConexion::Inaccesible(format!("respuesta no válida del servidor: {error}"))
+    })?;
+    match valor.get("tipo").and_then(serde_json::Value::as_str) {
+        Some("Bienvenida") => {
+            let mensaje: MensajeServidor = serde_json::from_value(valor).map_err(|error| {
+                FalloConexion::Inaccesible(format!("bienvenida del servidor no válida: {error}"))
+            })?;
             // La bienvenida también va a la UI: con ella reconcilia las
             // sesiones que el servidor ya custodiaba.
             let _ = tx_eventos.send(crate::app::Evento::Servidor(mensaje));
@@ -319,15 +438,62 @@ async fn saludar(
             ));
             Ok(cliente)
         }
-        MensajeServidor::VersionIncompatible { version, pid } => {
-            Err(FalloConexion::VersionIncompatible {
-                version,
-                pid: pid.or(pid_par),
-            })
-        }
+        Some("VersionIncompatible") => Err(FalloConexion::VersionIncompatible(leer_rechazo(
+            &valor, pid_par,
+        ))),
         otro => Err(FalloConexion::Inaccesible(format!(
             "respuesta inesperada al saludo: {otro:?}"
         ))),
+    }
+}
+
+/// Un pid al que se le puede mandar una señal: ni 1 ni menos, ni fuera del
+/// rango de `i32` (el cast acabaría en negativo y `kill(-1)` señala a todos
+/// los procesos del usuario), ni el nuestro.
+fn es_pid_valido(pid: u32) -> bool {
+    pid > 1 && pid <= i32::MAX as u32 && pid != std::process::id()
+}
+
+/// Extrae de un `VersionIncompatible` genérico lo que hace falta para decidir.
+fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersion {
+    let version = valor
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    let version_app = valor
+        .get("version_app")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    // El pid del kernel (peer_cred) es el único que no puede falsear el otro
+    // extremo del socket; el del mensaje solo se usa si no hay peer y pasa una
+    // validación mínima. Así un rechazo no puede pedir señalar a un tercero.
+    let pid_mensaje = valor
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .map(|pid| pid as u32);
+    let pid = pid_par.or(pid_mensaje).filter(|pid| es_pid_valido(*pid));
+    let clientes = valor
+        .get("clientes")
+        .and_then(serde_json::Value::as_u64)
+        .map(|clientes| clientes as u32);
+    // Si `trabajo` está pero no se entiende, vale como «todo lleno»: nunca se
+    // para un servidor por una lectura optimista.
+    let trabajo = valor.get("trabajo").map(|trabajo| {
+        serde_json::from_value::<crate::protocolo::TrabajoServidor>(trabajo.clone()).unwrap_or(
+            crate::protocolo::TrabajoServidor {
+                sesiones: 1,
+                transferencias: 1,
+                tuneles: 1,
+                ejecuciones: 1,
+            },
+        )
+    });
+    RechazoVersion {
+        version,
+        version_app,
+        pid,
+        clientes,
+        trabajo,
     }
 }
 
@@ -423,6 +589,35 @@ async fn tarea_lectura(
 
 // ---------------------------------------------------------------- arranque
 
+/// Proceso de apoyo de las pruebas de la Fase 9: se comporta como un
+/// servidor anterior que no atiende SIGTERM y no suelta el lock del
+/// servidor. Bloquea el lock y no vuelve nunca; solo para tests.
+#[doc(hidden)]
+pub fn servidor_que_no_cede(ruta_lock: &std::path::Path) -> ! {
+    // SIGTERM ignorado: como un servidor viejo que no coopera.
+    unsafe {
+        let _ = nix::sys::signal::signal(
+            nix::sys::signal::Signal::SIGTERM,
+            nix::sys::signal::SigHandler::SigIgn,
+        );
+    }
+    let fichero = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(ruta_lock)
+        .expect("abriendo el lock de pruebas");
+    let bloqueo = nix::fcntl::Flock::lock(fichero, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        .unwrap_or_else(|(_fichero, error)| panic!("bloqueando el lock de pruebas: {error}"));
+    // Aviso de que ya está bloqueado (el padre lee esta línea).
+    println!("listo");
+    // El descriptor se queda abierto: el lock dura lo que el proceso.
+    std::mem::forget(bloqueo);
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
 /// Lanza `magi --servidor` desacoplado: sesión propia (`setsid`), stdio al
 /// log del servidor del día. Devuelve aunque el servidor tarde en arrancar.
 pub fn lanzar_servidor(rutas: &Rutas) {
@@ -504,17 +699,20 @@ pub async fn esperar_socket(ruta: &std::path::Path, plazo: Duration) -> bool {
 /// Comprueba la conexión y devuelve el error legible para mensajes.
 pub fn describe_fallo(fallo: &FalloConexion) -> String {
     match fallo {
-        FalloConexion::VersionIncompatible { version, pid } => {
-            let pid = pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default();
-            if *version < crate::protocolo::VERSION_PROTOCOLO {
+        FalloConexion::VersionIncompatible(rechazo) => {
+            let pid = rechazo
+                .pid
+                .map(|pid| format!(" (pid {pid})"))
+                .unwrap_or_default();
+            if rechazo.version < VERSION_PROTOCOLO {
                 format!(
-                    "el servidor{pid} habla el protocolo {version} y esta MAGI el {}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
-                    crate::protocolo::VERSION_PROTOCOLO
+                    "el servidor{pid} habla el protocolo {} y esta MAGI el {VERSION_PROTOCOLO}: es de una versión anterior, ejecuta «magi servidor parar» y vuelve a abrir",
+                    rechazo.version
                 )
             } else {
                 format!(
-                    "el servidor{pid} habla el protocolo {version}, más nuevo que el {} de esta MAGI",
-                    crate::protocolo::VERSION_PROTOCOLO
+                    "el servidor{pid} habla el protocolo {}, más nuevo que el {VERSION_PROTOCOLO} de esta MAGI",
+                    rechazo.version
                 )
             }
         }

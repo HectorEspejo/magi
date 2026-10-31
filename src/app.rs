@@ -40,6 +40,7 @@ pub mod guardadas;
 pub mod lanzar;
 pub mod permisos;
 mod resultados;
+pub mod servidor_anterior;
 pub mod sincronizar;
 mod snippets;
 pub mod teclado;
@@ -543,6 +544,9 @@ pub enum Evento {
     ServidorCaido,
     /// La conexión con el servidor se ha restablecido (relanzado).
     ServidorConectado(Result<cliente::Cliente, String>),
+    /// Resultado de sustituir el servidor de sesiones anterior (Fase 9): no
+    /// bloquea la UI mientras se espera a que libere socket y lock.
+    Sustitucion(Result<cliente::Cliente, cliente::FalloSustitucion>),
     /// Pestañas con pantalla repintada (coalescido a ~30 fps por el cliente).
     Pantallas(Vec<u32>),
     Identidades(Identidades),
@@ -1430,7 +1434,7 @@ pub(crate) mod pruebas_ficha {
         let almacen = Almacen::abrir_en_memoria().unwrap();
         let datos = DatosHost {
             nombre: "db1".to_string(),
-            direccion: "10.0.0.5".to_string(),
+            direccion: "192.0.2.5".to_string(),
             ..DatosHost::default()
         };
         let id = almacen.crear_host(&datos, Origen::Manual).unwrap();
@@ -1645,6 +1649,9 @@ pub enum Dialogo {
     ServidorCaido {
         perdidas: usize,
     },
+    /// Diálogo SERVIDOR DE SESIONES ANTERIOR (Fase 9, §6.2): aviso con lo que
+    /// custodia, confirmación de la parada, sustitución en curso o su error.
+    ServidorAnterior(servidor_anterior::DialogoServidorAnterior),
     HuellaServidor {
         sesion_id: u32,
         host: String,
@@ -1937,11 +1944,10 @@ pub struct App {
     pub pestana_activa: Option<usize>,
     /// Conexión con el servidor de sesiones.
     pub servidor: cliente::Cliente,
-    /// El servidor habla otra versión de protocolo.
-    /// Versión del servidor cuando habla otra distinta de la nuestra.
-    pub servidor_incompatible: Option<u32>,
-    /// Pid del servidor de otra versión, para decir a quién hay que parar.
-    pub pid_incompatible: Option<u32>,
+    /// El servidor habla otra versión de protocolo: el rechazo leído del JSON
+    /// genérico, mientras no se sustituya. La barra avisa con él y las
+    /// operaciones que necesitan servidor se rechazan.
+    pub servidor_incompatible: Option<cliente::RechazoVersion>,
     /// El servidor ha caído (pendiente del diálogo de relanzado).
     pub servidor_caido: bool,
     /// Sesiones que el servidor perdió al caer (para el diálogo).
@@ -2146,7 +2152,6 @@ impl App {
             pestana_activa: None,
             servidor: cliente::Cliente::sin_servidor(),
             servidor_incompatible: None,
-            pid_incompatible: None,
             servidor_caido: false,
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
@@ -2243,12 +2248,140 @@ impl App {
                 self.servidor = servidor;
                 self.servidor_desde = Some(Instant::now());
             }
-            Err(cliente::FalloConexion::VersionIncompatible { version, pid }) => {
-                self.servidor_incompatible = Some(version);
-                self.pid_incompatible = pid;
+            Err(cliente::FalloConexion::VersionIncompatible(rechazo)) => {
+                self.rechazo_del_servidor(rechazo);
             }
             Err(cliente::FalloConexion::Inaccesible(motivo)) => {
                 self.mensaje(motivo, true);
+            }
+        }
+    }
+
+    /// Decide qué hacer con un servidor que rechazó el saludo (Fase 9,
+    /// §7.2): uno más nuevo se avisa y no se toca nunca; uno sin trabajo ni
+    /// ventanas se sustituye sin preguntar; con trabajo o recuento
+    /// desconocido decide el usuario en el diálogo.
+    /// Motivo por el que las operaciones que necesitan servidor no pueden
+    /// seguir, o `None` si el servidor es de la misma versión.
+    fn motivo_servidor_incompatible(&self) -> Option<String> {
+        servidor_anterior::motivo_sin_servidor(self.servidor_incompatible.as_ref())
+    }
+
+    fn rechazo_del_servidor(&mut self, rechazo: cliente::RechazoVersion) {
+        self.servidor_incompatible = Some(rechazo.clone());
+        match servidor_anterior::decidir(&rechazo) {
+            // La barra avisa mientras el servidor siga siendo de otra
+            // versión: este binario es el viejo y nunca lo para.
+            servidor_anterior::Decision::MasNuevo => {}
+            servidor_anterior::Decision::Sustituir => {
+                self.sustituir_servidor_anterior(rechazo);
+            }
+            servidor_anterior::Decision::Preguntar => {
+                self.dialogo = Some(Dialogo::ServidorAnterior(
+                    servidor_anterior::DialogoServidorAnterior::Aviso(rechazo),
+                ));
+            }
+        }
+    }
+
+    /// Sustituye el servidor anterior sin diálogo (arranque): se puede
+    /// bloquear aquí porque la TUI aún no está pintada.
+    fn sustituir_servidor_anterior(&mut self, rechazo: cliente::RechazoVersion) {
+        let tx = self.eventos_tx.clone();
+        let rutas = self.rutas.clone();
+        match self
+            .runtime
+            .block_on(cliente::sustituir_servidor(&rutas, &rechazo, tx))
+        {
+            Ok(servidor) => {
+                self.pantallas = servidor.pantallas();
+                self.servidor = servidor;
+                self.servidor_desde = Some(Instant::now());
+                self.servidor_incompatible = None;
+                // La versión que corre ahora es la de este binario; la del
+                // rechazo era la del servidor viejo.
+                self.mensaje(
+                    format!("servidor de sesiones actualizado a {}", crate::VERSION_APP),
+                    false,
+                );
+            }
+            Err(fallo) => {
+                let anterior_parado = matches!(fallo, cliente::FalloSustitucion::Parado(_));
+                if anterior_parado {
+                    // El viejo ya no está: la barra no puede seguir diciendo
+                    // que hay un servidor anterior sin sustituir.
+                    self.servidor_incompatible = None;
+                }
+                self.dialogo = Some(Dialogo::ServidorAnterior(
+                    servidor_anterior::DialogoServidorAnterior::Error {
+                        rechazo,
+                        motivo: fallo.texto(),
+                        anterior_parado,
+                    },
+                ));
+            }
+        }
+    }
+
+    /// `s` en la confirmación del diálogo: lanza la sustitución en una tarea
+    /// para no bloquear la UI y deja el diálogo en «sustituyendo».
+    fn confirmar_sustitucion_servidor_anterior(&mut self, rechazo: cliente::RechazoVersion) {
+        self.dialogo = Some(Dialogo::ServidorAnterior(
+            servidor_anterior::DialogoServidorAnterior::Sustituyendo(rechazo.clone()),
+        ));
+        let tx = self.eventos_tx.clone();
+        let rutas = self.rutas.clone();
+        self.runtime.spawn(async move {
+            let resultado = cliente::sustituir_servidor(&rutas, &rechazo, tx.clone()).await;
+            let _ = tx.send(Evento::Sustitucion(resultado));
+        });
+    }
+
+    /// Resultado de una sustitución lanzada desde el diálogo: con éxito se
+    /// conecta al servidor nuevo; si no, el diálogo enseña el motivo y el
+    /// servidor anterior sigue donde estaba.
+    fn evento_sustitucion(
+        &mut self,
+        resultado: Result<cliente::Cliente, cliente::FalloSustitucion>,
+    ) {
+        let rechazo = self.dialogo.as_ref().and_then(|dialogo| match dialogo {
+            Dialogo::ServidorAnterior(
+                servidor_anterior::DialogoServidorAnterior::Sustituyendo(rechazo),
+            ) => Some(rechazo.clone()),
+            _ => None,
+        });
+        match resultado {
+            Ok(servidor) => {
+                self.pantallas = servidor.pantallas();
+                self.servidor = servidor;
+                self.servidor_desde = Some(Instant::now());
+                self.servidor_incompatible = None;
+                self.servidor_caido = false;
+                self.dialogo = None;
+                // La versión nueva es la de este binario (la del rechazo era
+                // la del servidor anterior).
+                self.mensaje(
+                    format!("servidor de sesiones actualizado a {}", crate::VERSION_APP),
+                    false,
+                );
+            }
+            Err(fallo) => {
+                let anterior_parado = matches!(fallo, cliente::FalloSustitucion::Parado(_));
+                if anterior_parado {
+                    self.servidor_incompatible = None;
+                }
+                match rechazo {
+                    Some(rechazo) => {
+                        self.dialogo = Some(Dialogo::ServidorAnterior(
+                            servidor_anterior::DialogoServidorAnterior::Error {
+                                rechazo,
+                                motivo: fallo.texto(),
+                                anterior_parado,
+                            },
+                        ));
+                    }
+                    None => self.mensaje(fallo.texto(), true),
+                }
             }
         }
     }
@@ -2610,6 +2743,10 @@ impl App {
                     Err(motivo) => self.mensaje(motivo, true),
                 }
             }
+            Evento::Sustitucion(resultado) => {
+                self.sucio = true;
+                self.evento_sustitucion(resultado);
+            }
             Evento::Pantallas(ids) => {
                 // Las pantallas ya se alimentaron en la tarea de lectura
                 // (registro compartido); aquí solo se decide el repintado y el
@@ -2677,7 +2814,7 @@ impl App {
                 self.sucio = true;
             }
         }
-        if self.filtro_activo && self.contador_ticks.is_multiple_of(3) {
+        if self.filtro_activo && self.contador_ticks % 3 == 0 {
             self.sucio = true;
         }
         if matches!(self.vista, Vista::Sesion | Vista::Sesiones) {
@@ -3013,11 +3150,8 @@ impl App {
         host_id: i64,
         comandos_iniciales: Vec<protocolo::ComandoInicial>,
     ) -> bool {
-        if self.servidor_incompatible.is_some() {
-            self.mensaje(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
-                true,
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
             return false;
         }
         if self.servidor_caido {
@@ -4004,6 +4138,64 @@ impl App {
             self.servidor_caido = false;
         }
         self.sucio = true;
+    }
+
+    /// Teclas del diálogo SERVIDOR DE SESIONES ANTERIOR (Fase 9, §6.2). El
+    /// estado lleva fijado el rechazo desde que se abrió: no se relee nada al
+    /// confirmar. Mientras sustituye se ignora el teclado.
+    fn tecla_servidor_anterior(
+        &mut self,
+        estado: servidor_anterior::DialogoServidorAnterior,
+        tecla: KeyEvent,
+    ) {
+        use servidor_anterior::DialogoServidorAnterior as Estado;
+        match estado {
+            Estado::Aviso(rechazo) => match tecla.code {
+                KeyCode::Char('p') | KeyCode::Char('P') => {
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Confirmacion(rechazo)));
+                }
+                // Esc cierra el diálogo y deja la TUI sin sesiones: el
+                // servidor anterior sigue ahí y la barra lo recuerda.
+                KeyCode::Esc => self.dialogo = None,
+                KeyCode::Char('q') | KeyCode::Char('Q') => self.intentar_salir(),
+                _ => {
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Aviso(rechazo)));
+                }
+            },
+            Estado::Confirmacion(rechazo) => match tecla.code {
+                KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+                    self.confirmar_sustitucion_servidor_anterior(rechazo);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Aviso(rechazo)));
+                }
+                KeyCode::Esc => self.dialogo = None,
+                KeyCode::Char('q') | KeyCode::Char('Q') => self.intentar_salir(),
+                _ => {
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Confirmacion(rechazo)));
+                }
+            },
+            // Sustituyendo: no se atiende ninguna tecla hasta que llegue el
+            // resultado; el diálogo se queda como está.
+            Estado::Sustituyendo(rechazo) => {
+                self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Sustituyendo(rechazo)));
+            }
+            Estado::Error {
+                rechazo,
+                motivo,
+                anterior_parado,
+            } => match tecla.code {
+                KeyCode::Esc => self.dialogo = None,
+                KeyCode::Char('q') | KeyCode::Char('Q') => self.intentar_salir(),
+                _ => {
+                    self.dialogo = Some(Dialogo::ServidorAnterior(Estado::Error {
+                        rechazo,
+                        motivo,
+                        anterior_parado,
+                    }));
+                }
+            },
+        }
     }
 
     /// Datos de la bienvenida y reconexión, para la barra y la vista Sesiones.
@@ -5512,11 +5704,8 @@ impl App {
 
     /// Pide una operación de túnel al servidor y la deja anotada como en vuelo.
     pub fn pedir_tunel(&mut self, tunel_id: i64, que: PeticionTunel) {
-        if self.servidor_incompatible.is_some() {
-            self.mensaje(
-                "servidor de otra versión de protocolo: magi servidor parar y volver a abrir",
-                true,
-            );
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
             return;
         }
         if self.servidor_caido {
@@ -7183,6 +7372,7 @@ impl App {
             dialogo,
             Dialogo::Confirmar { .. }
                 | Dialogo::ServidorCaido { .. }
+                | Dialogo::ServidorAnterior(_)
                 | Dialogo::HuellaServidor { .. }
                 | Dialogo::HuellaCambiadaServidor { .. }
                 | Dialogo::HuellaDesconocida { .. }
@@ -7323,6 +7513,9 @@ impl App {
                     self.dialogo = Some(Dialogo::ServidorCaido { perdidas });
                 }
             },
+            Dialogo::ServidorAnterior(estado) => {
+                self.tecla_servidor_anterior(estado, tecla);
+            }
             Dialogo::HuellaServidor {
                 sesion_id,
                 host,
@@ -9832,10 +10025,10 @@ mod pruebas_reenvios {
 
     #[test]
     fn una_directiva_de_reenvio_da_los_datos_del_tunel() {
-        let datos = reenvio_de_linea("  LocalForward 5432 10.0.0.5:5432", 3).expect("local");
+        let datos = reenvio_de_linea("  LocalForward 5432 192.0.2.5:5432", 3).expect("local");
         assert_eq!(datos.tipo, TipoTunel::Local);
         assert_eq!(datos.escucha, "127.0.0.1:5432");
-        assert_eq!(datos.destino.as_deref(), Some("10.0.0.5:5432"));
+        assert_eq!(datos.destino.as_deref(), Some("192.0.2.5:5432"));
         assert!(datos.automatico);
 
         let socks = reenvio_de_linea("DynamicForward [::1]:1080", 1).expect("dinámico");
@@ -9849,9 +10042,9 @@ mod pruebas_reenvios {
     fn lo_que_no_es_un_reenvio_utilizable_no_da_datos() {
         assert!(reenvio_de_linea("", 1).is_none());
         assert!(reenvio_de_linea("   ", 1).is_none());
-        assert!(reenvio_de_linea("# LocalForward 5432 10.0.0.5:5432", 1).is_none());
+        assert!(reenvio_de_linea("# LocalForward 5432 192.0.2.5:5432", 1).is_none());
         assert!(reenvio_de_linea("ForwardAgent yes", 1).is_none());
         assert!(reenvio_de_linea("LocalForward 5432", 1).is_none());
-        assert!(reenvio_de_linea("LocalForward 70000 10.0.0.5:80", 1).is_none());
+        assert!(reenvio_de_linea("LocalForward 70000 192.0.2.5:80", 1).is_none());
     }
 }

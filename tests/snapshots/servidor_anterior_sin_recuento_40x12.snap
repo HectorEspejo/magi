@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_l.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ SERVIDOR DE SESIONES ANTERIOR ─────┐│
+││   Este magi:                       ││
+││   1.0.0 · protocolo 6              ││
+││   Servidor activo: desconocida ·   ││
+││   protocolo 5 · pid 48211          ││
+││   Custodia:                        ││
+││                                    ││
+││ p parar y arrancar el nuevo        ││
+││ esc seguir sin sesiones   q salir  ││
+└└──────────────────────────── ↑↓ 1/4 ┘┘
+ ✕ servidor de una versión anterior (de…

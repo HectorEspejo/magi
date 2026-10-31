@@ -88,7 +88,7 @@ docs/fase5/
                                  │ nombre        TEXT NOT NULL │  único por host
                                  │ tipo          TEXT NOT NULL │  local | remoto | dinamico
                                  │ escucha       TEXT NOT NULL │  «127.0.0.1:5432»
-                                 │ destino       TEXT NULL     │  «10.0.0.5:5432»; NULL en dinámico
+                                 │ destino       TEXT NULL     │  «192.0.2.5:5432»; NULL en dinámico
                                  │ automatico    INTEGER 0/1   │
                                  │ creado_en · actualizado_en  │
                                  └─────────────────────────────┘
@@ -211,7 +211,7 @@ Semántica por tipo: **local** escucha en la máquina de MAGI y el host abre `de
     │──Contrasena────▶│──conecta──────▶│
     │◀─Tuneles[activo]│  bind 127.0.0.1:5432
     │                 │◀────────────────────── connect 127.0.0.1:5432 ──│
-    │                 │──direct-tcpip 10.0.0.5:5432──▶│
+    │                 │──direct-tcpip 192.0.2.5:5432─▶│
     │                 │◀═══════════ copy_bidirectional ═══════════════▶│
     │◀─Tuneles[1 conexión · 14 kB]│ (coalescido ≤ 2/s)
 ```
@@ -318,7 +318,7 @@ Semántica por tipo: **local** escucha en la máquina de MAGI y el host abre `de
         │  Nombre    [ pg-prod                               ] │
         │  Tipo      (•) local   ( ) remoto   ( ) dinámico     │
         │  Escucha   [ 127.0.0.1 ] : [ 5432  ]                 │
-        │  Destino   [ 10.0.0.5  ] : [ 5432  ]   (no en dinámico)│
+        │  Destino   [ 192.0.2.5 ] : [ 5432  ]   (no en dinámico)│
         │  [x] automático: se levanta con la primera sesión     │
         │                                                      │
         │  ^s guardar          esc cancelar                    │

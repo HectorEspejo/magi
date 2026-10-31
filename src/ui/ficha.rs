@@ -1902,13 +1902,13 @@ mod pruebas {
 
     #[test]
     fn se_reconocen_las_tres_directivas_con_espacios_y_comentarios() {
-        assert!(es_reenvio("LocalForward 127.0.0.1:5432 10.0.0.5:5432"));
+        assert!(es_reenvio("LocalForward 127.0.0.1:5432 192.0.2.5:5432"));
         assert!(es_reenvio("   remoteforward 9000 127.0.0.1:9000"));
         assert!(es_reenvio("DYNAMICFORWARD [::1]:1080"));
         assert!(es_reenvio("\tdynamicforward 1080"));
         assert!(!es_reenvio(""));
         assert!(!es_reenvio("   "));
-        assert!(!es_reenvio("# LocalForward 5432 10.0.0.5:5432"));
+        assert!(!es_reenvio("# LocalForward 5432 192.0.2.5:5432"));
         assert!(!es_reenvio("ForwardAgent yes"));
         assert!(!es_reenvio("LocalForwardX 5432"));
     }

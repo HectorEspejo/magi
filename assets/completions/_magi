@@ -1,0 +1,716 @@
+#compdef magi
+
+autoload -U is-at-least
+
+_magi() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'--servidor[Ejecuta el servidor de sesiones en primer plano]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_magi_commands" \
+"*::: :->magi" \
+&& ret=0
+    case $state in
+    (magi)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-command-$line[1]:"
+        case $line[1] in
+            (importar)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'::ruta -- Ruta del ssh_config que se importa:_files' \
+&& ret=0
+;;
+(exportar)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sondear)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::hosts -- Hosts a sondear; sin argumentos se sondean todos:_default' \
+&& ret=0
+;;
+(registro)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_magi__subcmd__registro_commands" \
+"*::: :->registro" \
+&& ret=0
+
+    case $state in
+    (registro)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-registro-command-$line[1]:"
+        case $line[1] in
+            (exportar)
+_arguments "${_arguments_options[@]}" : \
+'--desde=[Solo entradas desde esta fecha (AAAA-MM-DD)]:DESDE:_default' \
+'--json[Exporta en JSON en lugar de CSV]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':ruta -- Ruta del fichero de salida:_files' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__registro__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-registro-help-command-$line[1]:"
+        case $line[1] in
+            (exportar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(servidor)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_magi__subcmd__servidor_commands" \
+"*::: :->servidor" \
+&& ret=0
+
+    case $state in
+    (servidor)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-servidor-command-$line[1]:"
+        case $line[1] in
+            (estado)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+'--si[No pide confirmación aunque haya sesiones abiertas]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__servidor__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-servidor-help-command-$line[1]:"
+        case $line[1] in
+            (estado)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(conectar)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':host:_default' \
+&& ret=0
+;;
+(tunel)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_magi__subcmd__tunel_commands" \
+"*::: :->tunel" \
+&& ret=0
+
+    case $state in
+    (tunel)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-tunel-command-$line[1]:"
+        case $line[1] in
+            (activar)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':host -- Nombre del host en el inventario:_default' \
+':nombre -- Nombre del túnel en la ficha del host:_default' \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':host -- Nombre del host en el inventario:_default' \
+':nombre -- Nombre del túnel en la ficha del host:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__tunel__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-tunel-help-command-$line[1]:"
+        case $line[1] in
+            (activar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(tuneles)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(snippets)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sincronizaciones)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(diagnostico)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(autocompletado)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':shell -- Shell del script\: bash, zsh o fish:_default' \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-help-command-$line[1]:"
+        case $line[1] in
+            (importar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(exportar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sondear)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(registro)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__help__subcmd__registro_commands" \
+"*::: :->registro" \
+&& ret=0
+
+    case $state in
+    (registro)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-help-registro-command-$line[1]:"
+        case $line[1] in
+            (exportar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(servidor)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__help__subcmd__servidor_commands" \
+"*::: :->servidor" \
+&& ret=0
+
+    case $state in
+    (servidor)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-help-servidor-command-$line[1]:"
+        case $line[1] in
+            (estado)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(conectar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tunel)
+_arguments "${_arguments_options[@]}" : \
+":: :_magi__subcmd__help__subcmd__tunel_commands" \
+"*::: :->tunel" \
+&& ret=0
+
+    case $state in
+    (tunel)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:magi-help-tunel-command-$line[1]:"
+        case $line[1] in
+            (activar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(parar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(tuneles)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(snippets)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sincronizaciones)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diagnostico)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(autocompletado)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_magi_commands] )) ||
+_magi_commands() {
+    local commands; commands=(
+'importar:Importa un ssh_config (por defecto ~/.ssh/config) sin abrir la TUI' \
+'exportar:Regenera ~/.ssh/magi_config sin abrir la TUI' \
+'sondear:Sondea la flota sin abrir la TUI' \
+'registro:Exporta el historial de MAGI' \
+'servidor:El servidor de sesiones\: estado o parada' \
+'conectar:Abre la TUI con una sesión nueva al host indicado' \
+'tunel:Activa o para un túnel del host indicado' \
+'tuneles:Lista los túneles definidos y activos' \
+'snippets:Lista los snippets con sus destinos resueltos, si son críticos y su último uso' \
+'sincronizaciones:Lista las sincronizaciones guardadas con su host, dirección, rutas, borrado y último resultado' \
+'diagnostico:Comprueba lo que MAGI necesita en este sistema sin modificar nada' \
+'autocompletado:Escribe el script de autocompletado de la shell en la salida estándar' \
+'man:Escribe la página man de MAGI en la salida estándar' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__autocompletado_commands] )) ||
+_magi__subcmd__autocompletado_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi autocompletado commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__conectar_commands] )) ||
+_magi__subcmd__conectar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi conectar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__diagnostico_commands] )) ||
+_magi__subcmd__diagnostico_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi diagnostico commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__exportar_commands] )) ||
+_magi__subcmd__exportar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi exportar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help_commands] )) ||
+_magi__subcmd__help_commands() {
+    local commands; commands=(
+'importar:Importa un ssh_config (por defecto ~/.ssh/config) sin abrir la TUI' \
+'exportar:Regenera ~/.ssh/magi_config sin abrir la TUI' \
+'sondear:Sondea la flota sin abrir la TUI' \
+'registro:Exporta el historial de MAGI' \
+'servidor:El servidor de sesiones\: estado o parada' \
+'conectar:Abre la TUI con una sesión nueva al host indicado' \
+'tunel:Activa o para un túnel del host indicado' \
+'tuneles:Lista los túneles definidos y activos' \
+'snippets:Lista los snippets con sus destinos resueltos, si son críticos y su último uso' \
+'sincronizaciones:Lista las sincronizaciones guardadas con su host, dirección, rutas, borrado y último resultado' \
+'diagnostico:Comprueba lo que MAGI necesita en este sistema sin modificar nada' \
+'autocompletado:Escribe el script de autocompletado de la shell en la salida estándar' \
+'man:Escribe la página man de MAGI en la salida estándar' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__autocompletado_commands] )) ||
+_magi__subcmd__help__subcmd__autocompletado_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help autocompletado commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__conectar_commands] )) ||
+_magi__subcmd__help__subcmd__conectar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help conectar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__diagnostico_commands] )) ||
+_magi__subcmd__help__subcmd__diagnostico_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help diagnostico commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__exportar_commands] )) ||
+_magi__subcmd__help__subcmd__exportar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help exportar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__help_commands] )) ||
+_magi__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__importar_commands] )) ||
+_magi__subcmd__help__subcmd__importar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help importar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__man_commands] )) ||
+_magi__subcmd__help__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help man commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__registro_commands] )) ||
+_magi__subcmd__help__subcmd__registro_commands() {
+    local commands; commands=(
+'exportar:Exporta el registro a CSV (por defecto) o JSON' \
+    )
+    _describe -t commands 'magi help registro commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__registro__subcmd__exportar_commands] )) ||
+_magi__subcmd__help__subcmd__registro__subcmd__exportar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help registro exportar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__servidor_commands] )) ||
+_magi__subcmd__help__subcmd__servidor_commands() {
+    local commands; commands=(
+'estado:Imprime pid, versión de protocolo, sesiones y clientes del servidor' \
+'parar:Cierra todas las sesiones y apaga el servidor' \
+    )
+    _describe -t commands 'magi help servidor commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__servidor__subcmd__estado_commands] )) ||
+_magi__subcmd__help__subcmd__servidor__subcmd__estado_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help servidor estado commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__servidor__subcmd__parar_commands] )) ||
+_magi__subcmd__help__subcmd__servidor__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help servidor parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__sincronizaciones_commands] )) ||
+_magi__subcmd__help__subcmd__sincronizaciones_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help sincronizaciones commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__snippets_commands] )) ||
+_magi__subcmd__help__subcmd__snippets_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help snippets commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__sondear_commands] )) ||
+_magi__subcmd__help__subcmd__sondear_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help sondear commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__tunel_commands] )) ||
+_magi__subcmd__help__subcmd__tunel_commands() {
+    local commands; commands=(
+'activar:Levanta el túnel sobre el servidor de sesiones' \
+'parar:Para el túnel y cierra lo que estaba escuchando' \
+    )
+    _describe -t commands 'magi help tunel commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__tunel__subcmd__activar_commands] )) ||
+_magi__subcmd__help__subcmd__tunel__subcmd__activar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help tunel activar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__tunel__subcmd__parar_commands] )) ||
+_magi__subcmd__help__subcmd__tunel__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help tunel parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__tuneles_commands] )) ||
+_magi__subcmd__help__subcmd__tuneles_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help tuneles commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__importar_commands] )) ||
+_magi__subcmd__importar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi importar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__man_commands] )) ||
+_magi__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi man commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__registro_commands] )) ||
+_magi__subcmd__registro_commands() {
+    local commands; commands=(
+'exportar:Exporta el registro a CSV (por defecto) o JSON' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi registro commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__registro__subcmd__exportar_commands] )) ||
+_magi__subcmd__registro__subcmd__exportar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi registro exportar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__registro__subcmd__help_commands] )) ||
+_magi__subcmd__registro__subcmd__help_commands() {
+    local commands; commands=(
+'exportar:Exporta el registro a CSV (por defecto) o JSON' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi registro help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__registro__subcmd__help__subcmd__exportar_commands] )) ||
+_magi__subcmd__registro__subcmd__help__subcmd__exportar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi registro help exportar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__registro__subcmd__help__subcmd__help_commands] )) ||
+_magi__subcmd__registro__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi registro help help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor_commands] )) ||
+_magi__subcmd__servidor_commands() {
+    local commands; commands=(
+'estado:Imprime pid, versión de protocolo, sesiones y clientes del servidor' \
+'parar:Cierra todas las sesiones y apaga el servidor' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi servidor commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__estado_commands] )) ||
+_magi__subcmd__servidor__subcmd__estado_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi servidor estado commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__help_commands] )) ||
+_magi__subcmd__servidor__subcmd__help_commands() {
+    local commands; commands=(
+'estado:Imprime pid, versión de protocolo, sesiones y clientes del servidor' \
+'parar:Cierra todas las sesiones y apaga el servidor' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi servidor help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__help__subcmd__estado_commands] )) ||
+_magi__subcmd__servidor__subcmd__help__subcmd__estado_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi servidor help estado commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__help__subcmd__help_commands] )) ||
+_magi__subcmd__servidor__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi servidor help help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__help__subcmd__parar_commands] )) ||
+_magi__subcmd__servidor__subcmd__help__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi servidor help parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__servidor__subcmd__parar_commands] )) ||
+_magi__subcmd__servidor__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi servidor parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__sincronizaciones_commands] )) ||
+_magi__subcmd__sincronizaciones_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi sincronizaciones commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__snippets_commands] )) ||
+_magi__subcmd__snippets_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi snippets commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__sondear_commands] )) ||
+_magi__subcmd__sondear_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi sondear commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel_commands] )) ||
+_magi__subcmd__tunel_commands() {
+    local commands; commands=(
+'activar:Levanta el túnel sobre el servidor de sesiones' \
+'parar:Para el túnel y cierra lo que estaba escuchando' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi tunel commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__activar_commands] )) ||
+_magi__subcmd__tunel__subcmd__activar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tunel activar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__help_commands] )) ||
+_magi__subcmd__tunel__subcmd__help_commands() {
+    local commands; commands=(
+'activar:Levanta el túnel sobre el servidor de sesiones' \
+'parar:Para el túnel y cierra lo que estaba escuchando' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'magi tunel help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__help__subcmd__activar_commands] )) ||
+_magi__subcmd__tunel__subcmd__help__subcmd__activar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tunel help activar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__help__subcmd__help_commands] )) ||
+_magi__subcmd__tunel__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tunel help help commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__help__subcmd__parar_commands] )) ||
+_magi__subcmd__tunel__subcmd__help__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tunel help parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tunel__subcmd__parar_commands] )) ||
+_magi__subcmd__tunel__subcmd__parar_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tunel parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__tuneles_commands] )) ||
+_magi__subcmd__tuneles_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi tuneles commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_magi" ]; then
+    _magi "$@"
+else
+    compdef _magi magi
+fi
