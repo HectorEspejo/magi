@@ -1435,7 +1435,7 @@ pub(crate) mod pruebas_ficha {
     }
 
     fn almacen_con_host() -> (Almacen, i64) {
-        let almacen = Almacen::abrir_en_memoria().unwrap();
+        let almacen = crate::almacen::abrir_en_memoria().unwrap();
         let datos = DatosHost {
             nombre: "db1".to_string(),
             direccion: "192.0.2.5".to_string(),
@@ -3287,6 +3287,7 @@ impl App {
             cols,
             filas,
             registro: self.registro_sesiones.clone(),
+            llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
         };
         let comandos = conexion::lanzar(&self.runtime, plan, self.eventos_tx.clone());
         self.comandos_sesion = Some(comandos);

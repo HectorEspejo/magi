@@ -40,7 +40,7 @@ fn hogar() -> PathBuf {
 }
 
 fn almacen() -> Almacen {
-    Almacen::abrir_en_memoria().expect("almacén en memoria")
+    magi::almacen::abrir_en_memoria().expect("almacén en memoria")
 }
 
 fn uuid_este(almacen: &Almacen) -> String {

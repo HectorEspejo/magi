@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::sincronizacion::formato::NAMESPACE_IDENTIDADES;
 
-use super::{equipos, versiones};
+use super::versiones;
 
 /// Migraciones numeradas y aplicadas por `PRAGMA user_version`. Nunca se
 /// modifica una migración ya publicada: se añade otra al final.
@@ -418,7 +418,11 @@ CREATE INDEX idx_conflictos_uuid ON CONFLICTOS(uuid);
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
 /// `aplicar`.
-fn migracion_7(conexion: &Connection) -> Result<()> {
+fn migracion_7(
+    conexion: &Connection,
+    equipo: &crate::rutas::Equipo,
+    app_version: &str,
+) -> Result<()> {
     conexion.execute_batch(MIGRACION_7_ESQUEMA)?;
     let ahora = versiones::ms_ahora();
     let equipo_uuid = Uuid::new_v4().to_string();
@@ -427,9 +431,9 @@ fn migracion_7(conexion: &Connection) -> Result<()> {
          VALUES (?1, ?2, ?3, 1, ?4, 'este', ?5)",
         params![
             equipo_uuid,
-            equipos::nombre_actual(),
-            equipos::plataforma_actual(),
-            crate::VERSION_APP,
+            equipo.nombre.clone(),
+            equipo.plataforma.clone(),
+            app_version,
             ahora,
         ],
     )?;
@@ -468,7 +472,11 @@ fn migracion_7(conexion: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub fn aplicar(conexion: &mut Connection) -> Result<()> {
+pub fn aplicar(
+    conexion: &mut Connection,
+    equipo: &crate::rutas::Equipo,
+    app_version: &str,
+) -> Result<()> {
     comprobar_version(conexion)?;
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
     for (indice, sql) in MIGRACIONES.iter().enumerate() {
@@ -483,7 +491,7 @@ pub fn aplicar(conexion: &mut Connection) -> Result<()> {
     }
     if version < 7 {
         let transaccion = conexion.transaction()?;
-        migracion_7(&transaccion)?;
+        migracion_7(&transaccion, equipo, app_version)?;
         transaccion.pragma_update(None, "user_version", 7)?;
         transaccion.commit()?;
     }

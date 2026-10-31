@@ -45,7 +45,7 @@ impl Entorno {
             runtime: raiz.join("runtime"),
         };
         std::fs::create_dir_all(rutas.dir_ssh()).expect("creando ~/.ssh");
-        let almacen = Almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
         let known_hosts = rutas.fichero_known_hosts();
         Self {
             _temporal: temporal,

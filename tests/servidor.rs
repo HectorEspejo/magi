@@ -291,7 +291,7 @@ async fn la_gracia_de_apagado_es_de_diez_segundos_por_defecto() {
 async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
     use std::sync::Arc;
 
-    use magi::almacen::{hosts, Almacen};
+    use magi::almacen::hosts;
     use magi::modelo::{DatosHost, IdentidadRef, Origen};
     use russh::server::Server as _;
 
@@ -330,7 +330,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
     )
     .unwrap();
     {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         let host_id = hosts::crear(
             almacen.conexion(),
             &DatosHost {
@@ -370,7 +370,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
 
     // El id del host lo da la BD: «prueba» es el primero.
     let host_id = {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         let host = magi::almacen::hosts::por_nombre(almacen.conexion(), "prueba")
             .unwrap()
             .expect("el host de prueba existe");
@@ -480,7 +480,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
 async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
     use std::sync::Arc;
 
-    use magi::almacen::{hosts, Almacen};
+    use magi::almacen::hosts;
     use magi::modelo::{DatosHost, IdentidadRef, Origen};
     use russh::server::Server as _;
 
@@ -535,7 +535,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
     )
     .unwrap();
     {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         hosts::crear(
             almacen.conexion(),
             &DatosHost {
@@ -562,7 +562,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
         .expect("el cliente conecta con el servidor");
 
     let host_id = {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         magi::almacen::hosts::por_nombre(almacen.conexion(), "prueba")
             .unwrap()
             .expect("el host de prueba existe")

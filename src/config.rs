@@ -1,81 +1,64 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::ficheros::escribir_atomico;
 
-/// Rutas XDG de MAGI (equivalentes en macOS vía `directories`).
-#[derive(Debug, Clone)]
-pub struct Rutas {
-    pub datos: PathBuf,
-    pub config: PathBuf,
-    pub estado: PathBuf,
-    pub hogar: PathBuf,
-    /// Directorio de ejecución del servidor (`$XDG_RUNTIME_DIR/magi/` en
-    /// Linux, `~/Library/Caches/magi/` en macOS); inyectable para pruebas.
-    pub runtime: PathBuf,
+pub use magi_nucleo::configuracion::SeccionSincronizacion;
+pub use magi_nucleo::rutas::Rutas;
+
+/// Rutas de este equipo: el núcleo no lee el entorno, así que las descubre
+/// aquí la crate directories.
+pub fn descubrir_rutas() -> Result<Rutas> {
+    let dirs = directories::ProjectDirs::from("org", "4d3", "magi")
+        .context("no se pudo determinar el directorio de datos del usuario")?;
+    let hogar = directories::BaseDirs::new()
+        .context("no se pudo determinar el directorio personal")?
+        .home_dir()
+        .to_path_buf();
+    Ok(Rutas::nuevas(
+        dirs.data_dir().to_path_buf(),
+        dirs.config_dir().to_path_buf(),
+        dirs.state_dir()
+            .unwrap_or_else(|| dirs.data_dir())
+            .to_path_buf(),
+        hogar,
+        runtime_del_usuario(),
+    ))
 }
 
-impl Rutas {
-    pub fn descubrir() -> Result<Self> {
-        let dirs = directories::ProjectDirs::from("org", "4d3", "magi")
-            .context("no se pudo determinar el directorio de datos del usuario")?;
-        let hogar = directories::BaseDirs::new()
-            .context("no se pudo determinar el directorio personal")?
-            .home_dir()
-            .to_path_buf();
-        Ok(Self {
-            datos: dirs.data_dir().to_path_buf(),
-            config: dirs.config_dir().to_path_buf(),
-            estado: dirs
-                .state_dir()
-                .unwrap_or_else(|| dirs.data_dir())
-                .to_path_buf(),
-            hogar,
-            runtime: runtime_del_usuario(),
-        })
+/// Plataforma de este equipo: los valores que entiende el formato de
+/// sincronización.
+pub fn plataforma_actual() -> &'static str {
+    match std::env::consts::OS {
+        "linux" => "linux",
+        "macos" => "macos",
+        "android" => "android",
+        _ => "linux",
     }
+}
 
-    pub fn base_datos(&self) -> PathBuf {
-        self.datos.join("magi.db")
-    }
-
-    pub fn fichero_config(&self) -> PathBuf {
-        self.config.join("config.toml")
-    }
-
-    pub fn dir_logs(&self) -> PathBuf {
-        self.estado.join("logs")
-    }
-
-    pub fn dir_ssh(&self) -> PathBuf {
-        self.hogar.join(".ssh")
-    }
-
-    pub fn fichero_ssh_config(&self) -> PathBuf {
-        self.dir_ssh().join("config")
-    }
-
-    pub fn fichero_magi_config(&self) -> PathBuf {
-        self.dir_ssh().join("magi_config")
-    }
-
-    pub fn fichero_known_hosts(&self) -> PathBuf {
-        self.dir_ssh().join("known_hosts")
-    }
-
-    /// Directorio de ejecución del servidor: `$XDG_RUNTIME_DIR/magi/`
-    /// (fallback `/tmp/magi-<uid>/` en Linux) o `~/Library/Caches/magi/`
-    /// en macOS. Debe crearse con permisos 700.
-    pub fn dir_runtime(&self) -> PathBuf {
-        self.runtime.clone()
+/// Nombre por defecto de este equipo: el hostname, o «magi» si no se puede
+/// leer. Nunca es vacío: el nombre viaja en el fichero.
+pub fn nombre_actual() -> String {
+    match nix::unistd::gethostname() {
+        Ok(nombre) => {
+            let texto = nombre.to_string_lossy().trim().to_string();
+            let texto = texto.split('.').next().unwrap_or(&texto).trim().to_string();
+            if texto.is_empty() {
+                "magi".to_string()
+            } else {
+                texto
+            }
+        }
+        Err(_) => "magi".to_string(),
     }
 }
 
 /// Directorio de ejecución para el proceso real, según el sistema.
-fn runtime_del_usuario() -> PathBuf {
+fn runtime_del_usuario() -> std::path::PathBuf {
     if cfg!(target_os = "macos") {
         let dirs = directories::ProjectDirs::from("org", "4d3", "magi");
         if let Some(dirs) = dirs {
@@ -85,11 +68,11 @@ fn runtime_del_usuario() -> PathBuf {
     }
     if let Ok(ruta) = std::env::var("XDG_RUNTIME_DIR") {
         if !ruta.is_empty() {
-            return PathBuf::from(ruta).join("magi");
+            return std::path::PathBuf::from(ruta).join("magi");
         }
     }
     let uid = nix::unistd::Uid::current().as_raw();
-    PathBuf::from("/tmp").join(format!("magi-{uid}"))
+    std::path::PathBuf::from("/tmp").join(format!("magi-{uid}"))
 }
 
 pub const PREFIJO_POR_DEFECTO: &str = "Ctrl+]";
@@ -255,65 +238,6 @@ pub fn pager_por_defecto(seccion: &SeccionArchivos) -> String {
     match std::env::var("PAGER") {
         Ok(valor) if !valor.trim().is_empty() => valor.trim().to_string(),
         _ => "less".to_string(),
-    }
-}
-
-/// Sección `[sincronizacion]` de `config.toml` (Fase 10). Sin `carpeta`, la
-/// sincronización está desactivada.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SeccionSincronizacion {
-    /// Carpeta compartida (Syncthing, Nextcloud, iCloud…). Puede ser absoluta o
-    /// empezar por `~/`.
-    pub carpeta: Option<String>,
-    /// Segundos entre el último cambio local y la exportación.
-    pub retraso_seg: u64,
-    /// Copias de `magi.db` que se conservan antes de importar.
-    pub copias: u64,
-    /// Más de estos hosts borrados disparan la confirmación de borrados.
-    pub umbral_borrado_hosts: u64,
-    /// Porcentaje de hosts borrados que dispara la confirmación.
-    pub umbral_borrado_pct: u64,
-    /// Fecha límite para seguir leyendo con la clave anterior tras una
-    /// rotación (30 días como máximo). Fuera de plazo se olvida.
-    pub clave_anterior_hasta: Option<String>,
-}
-
-impl Default for SeccionSincronizacion {
-    fn default() -> Self {
-        Self {
-            carpeta: None,
-            retraso_seg: 5,
-            copias: 10,
-            umbral_borrado_hosts: 5,
-            umbral_borrado_pct: 20,
-            clave_anterior_hasta: None,
-        }
-    }
-}
-
-impl SeccionSincronizacion {
-    /// ¿Está configurada la sincronización en este equipo?
-    pub fn activa(&self) -> bool {
-        self.carpeta
-            .as_deref()
-            .map(|carpeta| !carpeta.trim().is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Carpeta resuelta contra el home de este equipo.
-    pub fn ruta_carpeta(&self, hogar: &std::path::Path) -> Option<std::path::PathBuf> {
-        let texto = self.carpeta.as_deref()?.trim();
-        if texto.is_empty() {
-            return None;
-        }
-        if texto == "~" {
-            return Some(hogar.to_path_buf());
-        }
-        if let Some(resto) = texto.strip_prefix("~/") {
-            return Some(hogar.join(resto));
-        }
-        Some(std::path::PathBuf::from(texto))
     }
 }
 

@@ -21,8 +21,8 @@ use crate::almacen::conflictos::{self, Conflicto, NuevoConflicto};
 use crate::almacen::lapidas::{self, Lapida};
 use crate::almacen::versiones::{self, Tabla};
 use crate::deliberacion::validar_verificaciones;
+use crate::modelo::Direccion;
 use crate::modelo::{fecha_ahora, IdentidadRef, Origen, OrigenIdentidad, TipoTunel};
-use crate::protocolo::Direccion;
 use crate::sincronizacion::elementos::{
     ruta_desde_home, DatosGrupo, DatosHost, DatosIdentidad, DatosSincronizacion, DatosSnippet,
     DatosTunel, DatosVerificaciones, DestinoSnippet,

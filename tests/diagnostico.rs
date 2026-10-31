@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use magi::almacen::Almacen;
 use magi::config::Rutas;
 use magi::diagnostico::{
     comprobar, ejecutar_en, recoger, AgenteObservado, Datos, Directorios, EquipoObservado, Estado,
@@ -530,7 +529,7 @@ fn la_sincronizacion_se_observa_sin_leer_la_clave_ni_descifrar() {
 
     let otro_uuid = uuid::Uuid::new_v4().to_string();
     {
-        let almacen = Almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
         let conexion = almacen.conexion();
         let id = magi::almacen::equipos::crear(conexion, &otro_uuid, "mac-mini", "macos")
             .expect("creando el equipo ajeno");

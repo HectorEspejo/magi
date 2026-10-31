@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
-use crate::app::Evento;
 use crate::modelo::{EstadoSesion, Host};
 
 pub mod cliente;
@@ -37,6 +36,8 @@ pub struct PlanConexion {
     pub cols: u16,
     pub filas: u16,
     pub registro: RegistroSesiones,
+    /// Llavero de contraseñas de host, inyectado por la plataforma.
+    pub llavero: std::sync::Arc<dyn crate::llavero::LlaveroHost>,
 }
 
 /// Comandos de la UI hacia la sesión.
@@ -126,13 +127,6 @@ pub enum EventoConexion {
     },
 }
 
-/// Nombre del usuario local, para las conexiones sin usuario en la ficha.
-pub fn usuario_local() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string())
-}
-
 /// De dónde sale una contraseña cuando el host autentica con una.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FuenteContrasena {
@@ -148,26 +142,16 @@ pub enum FuenteContrasena {
     SolicitanteLlavero,
 }
 
-/// Lanza la tarea tokio de la sesión y devuelve el canal de comandos.
-/// La tarea emite `EventoConexion`; aquí se envuelven en `app::Evento::Conexion`
-/// para el bucle de la UI.
+/// Lanza la tarea tokio de la sesión y devuelve el canal de comandos. La tarea
+/// emite EventoConexion; cada plataforma decide cómo llevarlo a su bucle.
 pub fn lanzar(
     runtime: &tokio::runtime::Runtime,
     plan: PlanConexion,
-    tx: mpsc::UnboundedSender<Evento>,
+    tx: mpsc::UnboundedSender<EventoConexion>,
 ) -> mpsc::UnboundedSender<ComandoConexion> {
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
     runtime.spawn(async move {
-        let (tx_eventos, mut rx_eventos) = mpsc::unbounded_channel::<EventoConexion>();
-        let puente = tokio::spawn(async move {
-            while let Some(evento) = rx_eventos.recv().await {
-                if tx.send(Evento::Conexion(evento)).is_err() {
-                    break;
-                }
-            }
-        });
-        cliente::sesion_completa(plan, rx_comandos, tx_eventos).await;
-        let _ = puente.await;
+        cliente::sesion_completa(plan, rx_comandos, tx).await;
     });
     tx_comandos
 }

@@ -15,10 +15,9 @@
 //! a JSON sobre un `serde_json::Value`. Así el contenido de un `Candidato` es
 //! byte a byte el mismo que compara la fusión.
 //!
-//! `datos_de_fila` resuelve el hogar real con `directories` porque su firma
-//! es la que consume el almacén. Si no se puede determinar, deja las rutas tal
-//! cual: la comparación antes/después sigue valiendo, porque el hogar no
-//! cambia entre las dos llamadas.
+//! datos_de_fila (la que consume el almacen) no normaliza: compara una fila
+//! antes y despues de una escritura, y el hogar no cambia entre las dos
+//! llamadas.
 
 use std::path::Path;
 
@@ -132,8 +131,7 @@ pub struct DatosSincronizacion {
 /// Normaliza las rutas del hogar con el hogar real del usuario, que es lo que
 /// hace falta cuando lo llama `versiones::datos_de` sin más contexto.
 pub fn datos_de_fila(conexion: &Connection, tabla: Tabla, id: i64) -> Result<Option<String>> {
-    let hogar = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
-    serializar(valor_de_fila(conexion, tabla, id, hogar.as_deref())?)
+    serializar(valor_de_fila(conexion, tabla, id, None)?)
 }
 
 /// Igual que `datos_de_fila`, con el hogar explícito. La exportación

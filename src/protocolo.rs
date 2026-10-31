@@ -144,40 +144,7 @@ pub struct InfoSesion {
 
 // ---------------------------------------------------------------- archivos
 
-/// Sentido de una transferencia.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Direccion {
-    Subida,
-    Bajada,
-}
-
-impl Direccion {
-    pub fn texto(self) -> &'static str {
-        match self {
-            Direccion::Subida => "subida",
-            Direccion::Bajada => "bajada",
-        }
-    }
-
-    /// La inversa de `texto` (`SINCRONIZACIONES_DIR.direccion`).
-    pub fn desde_texto(texto: &str) -> Option<Self> {
-        match texto {
-            "subida" => Some(Direccion::Subida),
-            "bajada" => Some(Direccion::Bajada),
-            _ => None,
-        }
-    }
-
-    /// Glifo de la cola: hacia el remoto o hacia el local.
-    pub fn glifo(self, ascii: bool) -> &'static str {
-        match (self, ascii) {
-            (Direccion::Subida, false) => "↑",
-            (Direccion::Bajada, false) => "↓",
-            (Direccion::Subida, true) => "^",
-            (Direccion::Bajada, true) => "v",
-        }
-    }
-}
+pub use magi_nucleo::modelo::Direccion;
 
 /// Qué hace el servidor cuando el destino de un elemento ya existe. La decide
 /// el cliente antes de encolar; el servidor la aplica sin dialogar.

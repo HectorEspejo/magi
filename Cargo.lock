@@ -2103,6 +2103,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "magi-nucleo"
+version = "0.1.0"
+dependencies = [
+ "age",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "csv",
+ "globset",
+ "hkdf 0.13.0",
+ "hmac 0.13.0",
+ "nix 0.29.0",
+ "rusqlite",
+ "russh",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "shell-escape",
+ "ssh-key",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid",
+ "vt100",
+ "zeroize",
+]
+
+[[package]]
 name = "magi-ssh"
 version = "1.1.0"
 dependencies = [
@@ -2123,6 +2153,7 @@ dependencies = [
  "hmac 0.13.0",
  "ignore",
  "insta",
+ "magi-nucleo",
  "nix 0.29.0",
  "notify",
  "nucleo-matcher",

@@ -146,7 +146,7 @@ fn modo(ruta: &Path) -> u32 {
 /// Filas de `REGISTRO` de un tipo: detalle y resultado, de la más antigua a
 /// la más nueva.
 fn registro(montaje: &Montaje, tipo: &str) -> Vec<(String, String)> {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let filas = {
         let mut sentencia = almacen
             .conexion()
@@ -174,7 +174,7 @@ async fn hasta<F: FnMut() -> bool>(mut condicion: F) -> bool {
 }
 
 fn guardar_sincronizacion(montaje: &Montaje, local: &Path, remoto: &Path) -> i64 {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let id = almacen
         .crear_sincronizacion(&DatosSincronizacion {
             host_id: montaje.host_id,
@@ -191,7 +191,7 @@ fn guardar_sincronizacion(montaje: &Montaje, local: &Path, remoto: &Path) -> i64
 }
 
 fn ultimo_resultado(montaje: &Montaje, id: i64) -> Option<ResultadoSincronizacion> {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let resultado = almacen.obtener_sincronizacion(id).unwrap().ultimo_resultado;
     almacen.cerrar().unwrap();
     resultado
@@ -590,7 +590,7 @@ async fn una_sincronizacion_en_bajada_borra_en_local() {
 
 /// Inserta una deliberación aprobada como la dejaría el cliente.
 fn deliberacion(montaje: &Montaje) -> i64 {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let id = deliberaciones::crear(
         almacen.conexion(),
         &NuevaDeliberacion {
@@ -619,7 +619,7 @@ fn deliberacion(montaje: &Montaje) -> i64 {
 }
 
 fn resultado_deliberacion(montaje: &Montaje, id: i64) -> Option<String> {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let resultado = almacen
         .conexion()
         .query_row(

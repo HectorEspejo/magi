@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use magi::almacen::{grupos, hosts, snippets, sondeos, tuneles, Almacen};
+use magi::almacen::{grupos, hosts, snippets, sondeos, tuneles};
 use magi::config::Rutas;
 use magi::modelo::{
     DatosHost, DatosTunel, IdentidadRef, Origen, ResultadoSondeo, Sondeo, TipoTunel,
@@ -92,7 +92,7 @@ fn sondeo_ok(host_id: i64, carga: f64, mem_libre_pct: i64, disco_pct: i64) -> So
 
 /// Siembra todo en la base de datos de `rutas`.
 pub fn sembrar(rutas: &Rutas) -> Sembrado {
-    let almacen = Almacen::abrir(&rutas.base_datos()).expect("almacén de la semilla");
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("almacén de la semilla");
     let conexion = almacen.conexion();
     let mut sembrado = Sembrado::default();
 

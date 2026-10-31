@@ -42,7 +42,9 @@ pub struct Almacen {
 }
 
 impl Almacen {
-    pub fn abrir(ruta: &Path) -> Result<Self> {
+    /// Abre (o crea) la base de datos. La identidad del equipo y la versión de
+    /// la app vienen inyectadas: el núcleo no lee el entorno.
+    pub fn abrir(ruta: &Path, equipo: &crate::rutas::Equipo, app_version: &str) -> Result<Self> {
         if let Some(directorio) = ruta.parent() {
             crear_directorio_privado(directorio)?;
         }
@@ -60,19 +62,24 @@ impl Almacen {
             ruta: Some(ruta.to_path_buf()),
         };
         almacen.ajustes(true)?;
-        migraciones::aplicar(&mut almacen.conexion)?;
+        migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
         Ok(almacen)
     }
 
-    /// Almacén en memoria para tests.
+    /// Almacén en memoria para tests, con una identidad de equipo de pruebas.
     pub fn abrir_en_memoria() -> Result<Self> {
+        Self::abrir_en_memoria_con(&crate::rutas::Equipo::nuevo("pruebas", "linux"), "0.0.0")
+    }
+
+    /// Almacén en memoria con la identidad de equipo que se le pase.
+    pub fn abrir_en_memoria_con(equipo: &crate::rutas::Equipo, app_version: &str) -> Result<Self> {
         let conexion = Connection::open_in_memory().context("abriendo SQLite en memoria")?;
         let mut almacen = Self {
             conexion,
             ruta: None,
         };
         almacen.ajustes(false)?;
-        migraciones::aplicar(&mut almacen.conexion)?;
+        migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
         Ok(almacen)
     }
 

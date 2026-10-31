@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
-use magi::almacen::Almacen;
 use magi::app::{App, Evento};
 use magi::protocolo::{EstadoSesionRemota, MensajeCliente};
 use magi::tema::Tema;
@@ -36,7 +35,7 @@ impl Extremo {
             .unwrap();
         let esc = rt.block_on(escenario(OpcionesEscenario::default()));
         let observado = esc.observado.clone();
-        let almacen = Almacen::abrir(&esc.rutas().base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&esc.rutas().base_datos()).unwrap();
         let (mut app, _) = App::de_prueba(
             esc.rutas().clone(),
             esc.entorno.config.clone(),

@@ -84,7 +84,7 @@ fn vector_esperado(ms: i64) -> BTreeMap<String, i64> {
 }
 
 fn semilla() -> Semilla {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     let grupo_id = almacen.crear_grupo("flota").expect("grupo");
     let salto_id = almacen
         .crear_host(
@@ -463,7 +463,7 @@ fn sincronizacion_exporta_ruta_local_con_home() {
 
 #[test]
 fn identidad_ref_fuera_del_hogar_se_conserva() {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     let host_id = almacen
         .crear_host(
             &DatosHost {
@@ -491,7 +491,7 @@ fn identidad_ref_fuera_del_hogar_se_conserva() {
 
 #[test]
 fn identidad_ref_que_no_es_fichero_se_conserva() {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     let host_id = almacen
         .crear_host(
             &DatosHost {
@@ -527,7 +527,7 @@ fn referencia_a_grupo_borrado_queda_nula() {
 
 #[test]
 fn datos_de_fila_devuelve_none_si_la_fila_no_existe() {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     for tabla in Tabla::todas() {
         assert_eq!(
             datos_de_fila(almacen.conexion(), tabla, 12345).expect("consultando"),
@@ -634,7 +634,7 @@ fn estado_local_devuelve_vivos_y_lapidas() {
 
 #[test]
 fn estado_local_omite_filas_sin_uuid_version_o_vector() {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     almacen
         .conexion()
         .execute_batch(

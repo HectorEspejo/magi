@@ -821,7 +821,7 @@ fn magi_sincronizaciones_lista_las_guardadas() {
     );
 
     let sembrado = crate::semilla::sembrar(&rutas);
-    let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
     let id = almacen
         .crear_sincronizacion(&datos(
             sembrado.host("hetzner-01"),

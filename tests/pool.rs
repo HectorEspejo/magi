@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use magi::almacen::{tuneles as almacen_tuneles, Almacen};
+use magi::almacen::tuneles as almacen_tuneles;
 use magi::modelo::{DatosTunel, IdentidadRef, TipoTunel};
 use magi::protocolo::{EstadoSesionRemota, EstadoTunelRemoto, MensajeCliente, MensajeServidor};
 
@@ -30,7 +30,7 @@ fn crear_tunel(
     destino: u16,
     automatico: bool,
 ) -> i64 {
-    let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
     let id = almacen_tuneles::crear(
         almacen.conexion(),
         &DatosTunel {
@@ -558,7 +558,7 @@ async fn cerrar_una_pestana_que_espera_la_huella_se_anota_una_vez() {
     escenario.escuchar(Duration::from_millis(800)).await;
     assert_eq!(escenario.anotaciones("conexion_fallida"), 1);
     // El host no queda marcado en error por una apertura que el usuario cerró.
-    let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
     let estado: Option<String> = almacen
         .conexion()
         .query_row(
@@ -589,7 +589,7 @@ async fn un_host_mudo_no_retiene_el_cerrojo() {
     let mut escenario = escenario(OpcionesEscenario::default()).await;
     let host = escenario.hosts[0];
     {
-        let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
         almacen
             .conexion()
             .execute(
@@ -722,7 +722,7 @@ async fn sigterm_para_el_servidor_limpio() {
     assert!(!socket.exists());
     assert!(!magi::servidor::ruta_lock(&rutas).exists());
 
-    let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
     let tipos: HashSet<String> = {
         let mut sentencia = almacen
             .conexion()

@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::net::UnixStream;
 use tokio_util::codec::FramedRead;
 
-use magi::almacen::{hosts, Almacen};
+use magi::almacen::hosts;
 use magi::archivos::TipoEntrada;
 use magi::modelo::{DatosHost, IdentidadRef, Origen};
 use magi::protocolo::{
@@ -304,7 +304,7 @@ async fn montar_con(sftp: bool, por_contrasena: bool) -> Option<Montaje> {
 
     // 3. Host en la base de datos.
     let host_id = {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         let id = hosts::crear(
             almacen.conexion(),
             &DatosHost {
@@ -524,7 +524,7 @@ async fn borrar_remoto_es_recursivo_y_anota_el_borrado() {
     assert!(!ruta.exists(), "el directorio entero se ha borrado");
 
     // El efecto queda en el registro con el tipo nuevo.
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let entradas = almacen
         .listar_registro(
             &magi::registro::FiltroRegistro {
@@ -977,7 +977,7 @@ async fn una_transferencia_terminada_anota_en_el_registro() {
     // El hilo escritor de la base de datos es asíncrono: se le da un respiro.
     let mut anotada = false;
     for _ in 0..50 {
-        let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
         let entradas = almacen
             .listar_registro(
                 &magi::registro::FiltroRegistro {

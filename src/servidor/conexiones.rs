@@ -576,6 +576,7 @@ async fn conectar(
         },
         // Cualquier conexión del pool puede sostener túneles remotos del host.
         reenvios: Some(reenvios),
+        llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
     };
     let conexion = crate::conexion::salto::conectar_cadena(&cadena, &contexto);
     if interactivo {

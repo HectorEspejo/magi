@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use nix::fcntl::{Flock, FlockArg};
 
-use crate::config::Rutas;
+use crate::rutas::Rutas;
 use crate::sincronizacion::cifrado;
 use crate::sincronizacion::formato::{EXTENSION_FICHERO, PREFIJO_FICHERO};
 

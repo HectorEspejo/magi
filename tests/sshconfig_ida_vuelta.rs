@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 
-use magi::almacen::Almacen;
 use magi::modelo::{DatosHost, DatosTunel, IdentidadRef, Origen, TipoTunel, Tunel};
 use magi::sshconfig::{exportar, importar, parser};
 
@@ -52,7 +51,7 @@ fn sobrescribir_al_importar_conserva_servicios_y_etiquetas() {
         "Host uno\n  HostName 192.0.2.1\n  User usuario\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&dir.path().join("config"), dir.path()).unwrap();
     importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
     let host = almacen
@@ -83,7 +82,7 @@ fn sobrescribir_al_importar_conserva_servicios_y_etiquetas() {
 #[test]
 fn ida_y_vuelta_reproduce_el_inventario() {
     let dir = tempfile::tempdir().unwrap();
-    let origen = Almacen::abrir_en_memoria().unwrap();
+    let origen = magi::almacen::abrir_en_memoria().unwrap();
     let grupo = origen.crear_grupo("4d3 · producción").unwrap();
     origen
         .crear_host(
@@ -178,7 +177,7 @@ fn ida_y_vuelta_reproduce_el_inventario() {
     );
     assert!(bloque.contains("    ForwardAgent yes"), "bloque: {bloque}");
 
-    let destino = Almacen::abrir_en_memoria().unwrap();
+    let destino = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&exportado.ruta, dir.path()).unwrap();
     assert!(
         analisis.omitidos.is_empty(),
@@ -272,7 +271,7 @@ Host sin-reenvios
 ",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
     assert!(
         analisis.omitidos.is_empty(),
@@ -335,7 +334,7 @@ fn un_reenvio_que_no_se_entiende_se_queda_en_opciones_extra() {
         "Host raro\n    HostName 192.0.2.11\n    LocalForward 5432\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
     importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
     assert!(almacen.listar_tuneles().unwrap().is_empty());
@@ -361,14 +360,14 @@ Host tunelero
 ",
     )
     .unwrap();
-    let primero = Almacen::abrir_en_memoria().unwrap();
+    let primero = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
     importar::aplicar(primero.conexion(), &analisis, &HashMap::new()).unwrap();
     assert_eq!(primero.listar_tuneles().unwrap().len(), 3);
 
     // Se exporta y se vuelve a importar el resultado en otro inventario.
     let exportado = exportar::exportar(primero.conexion(), dir.path()).unwrap();
-    let segundo = Almacen::abrir_en_memoria().unwrap();
+    let segundo = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&exportado.ruta, dir.path()).unwrap();
     assert!(
         analisis.omitidos.is_empty(),
@@ -418,7 +417,7 @@ fn reimportar_el_mismo_fichero_no_repite_los_tuneles() {
         "Host tunelero\n    HostName 192.0.2.9\n    LocalForward 5432 192.0.2.5:5432\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
     importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
 
@@ -440,7 +439,7 @@ fn conexion_no_se_resuelve_si_el_salto_no_existe() {
         "Host destino\n    HostName 192.0.2.1\n    ProxyJump fantasma\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
     let resumen = importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
     assert_eq!(resumen.importados, 1);
@@ -537,7 +536,7 @@ fn conflicto_omitido_por_defecto_y_sobrescrito_con_decision() {
         "Host existente\n    HostName 192.0.2.29\n    User nuevo\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     almacen
         .crear_host(
             &DatosHost {
@@ -585,7 +584,7 @@ fn un_reenvio_que_no_cabe_en_tuneles_vuelve_a_opciones_extra() {
          \x20 LocalForward 0.0.0.0:5432 db2:5432\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let analisis = importar::analizar_fichero(&dir.path().join("config"), dir.path()).unwrap();
     let resumen = importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
 
@@ -621,7 +620,7 @@ fn reimportar_el_mismo_fichero_no_cambia_nada() {
          \x20 DynamicForward 1080\n",
     )
     .unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     for _ in 0..2 {
         let analisis = importar::analizar_fichero(&ruta, dir.path()).unwrap();
         let resumen = importar::aplicar(almacen.conexion(), &analisis, &HashMap::new()).unwrap();
@@ -652,7 +651,7 @@ fn el_magi_config_generado_lo_acepta_ssh() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen
         .crear_host(
             &DatosHost {

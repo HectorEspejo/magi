@@ -48,6 +48,8 @@ pub struct Contexto {
     /// Reenvíos remotos vivos del servidor. Es `None` en la TUI y en el sondeo,
     /// que no aceptan canales `forwarded-tcpip`; con `None` se rechazan.
     pub reenvios: Option<std::sync::Arc<super::reenvios::Reenvios>>,
+    /// Llavero de contraseñas de host (lo pone la plataforma en el plan).
+    pub llavero: std::sync::Arc<dyn crate::llavero::LlaveroHost>,
 }
 
 /// Implementación del `Handler` de russh: verifica la huella del servidor y,
@@ -259,6 +261,7 @@ pub async fn sesion_completa(
         fuente_contrasena: super::FuenteContrasena::Llavero,
         // La TUI no custodia túneles: viven en el servidor de sesiones.
         reenvios: None,
+        llavero: plan.llavero.clone(),
     };
     emitir_estado(&tx, host_id, EstadoSesion::Resolviendo);
     let cadena = match construir_cadena(&plan.host, &plan.todos_los_hosts) {
@@ -505,7 +508,10 @@ pub async fn autenticar(
                     .await;
             }
             let mut habia_entrada = false;
-            match crate::llavero::recuperar(&host.nombre, &usuario) {
+            match contexto
+                .llavero
+                .recuperar_contrasena(&host.nombre, &usuario)
+            {
                 Ok(Some(contrasena)) => {
                     habia_entrada = true;
                     let resultado = handle
@@ -600,7 +606,11 @@ async fn autenticar_con_contrasena(
                 }
                 let mut en_llavero = false;
                 if recordar && contexto.fuente_contrasena == super::FuenteContrasena::Llavero {
-                    match crate::llavero::guardar(&host.nombre, usuario, contrasena.as_str()) {
+                    match contexto.llavero.guardar_contrasena(
+                        &host.nombre,
+                        usuario,
+                        contrasena.as_str(),
+                    ) {
                         Ok(()) => en_llavero = true,
                         Err(error) => {
                             let _ = contexto.tx.send(EventoConexion::ContrasenaGuardada {

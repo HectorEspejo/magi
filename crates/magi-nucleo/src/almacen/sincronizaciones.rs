@@ -6,11 +6,11 @@ use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, Row};
 
 use crate::almacen::versiones;
+use crate::modelo::Direccion;
 use crate::modelo::{
     fecha_ahora, validar_sincronizacion, DatosSincronizacion, ResultadoSincronizacion,
     Sincronizacion,
 };
-use crate::protocolo::Direccion;
 
 const SELECCION: &str = "SELECT s.id, s.host_id, h.nombre, s.nombre, s.ruta_local, \
      s.ruta_remota, s.direccion, s.borrar, s.exclusiones, s.ultima_ejecucion_en, \

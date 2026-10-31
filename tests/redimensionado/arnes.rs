@@ -10,7 +10,6 @@ use ratatui::layout::{Position, Size};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use magi::almacen::Almacen;
 use magi::app::{App, Evento};
 use magi::protocolo::{EstadoSesionRemota, InfoSesion, MensajeCliente, MensajeServidor};
 use magi::tema::Tema;
@@ -175,7 +174,7 @@ impl AppPrueba {
 
     pub fn con_entorno_y_tema(entorno: comun::Entorno, cols: u16, filas: u16, tema: Tema) -> Self {
         fijar_zona_horaria();
-        let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+        let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
         let (mut app, enviados) =
             App::de_prueba(entorno.rutas.clone(), entorno.config.clone(), tema, almacen)
                 .expect("app de prueba");

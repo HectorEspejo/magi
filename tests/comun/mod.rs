@@ -963,7 +963,7 @@ impl Ventana {
 
 /// Monta el escenario.
 pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
-    use magi::almacen::{hosts, Almacen};
+    use magi::almacen::hosts;
     use magi::modelo::{DatosHost, IdentidadRef, Origen};
     use magi::protocolo::{MensajeServidor, VERSION_PROTOCOLO};
     use std::os::unix::fs::PermissionsExt as _;
@@ -1029,7 +1029,7 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
         .clone()
         .unwrap_or_else(|| IdentidadRef::Fichero(ruta_clave.display().to_string()));
     let ids = {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         let mut ids = Vec::new();
         for numero in 1..=opciones.hosts {
             let id = hosts::crear(
@@ -1258,7 +1258,7 @@ impl Escenario {
 
     /// Filas del registro, de la más reciente a la más antigua.
     pub fn registro(&self) -> Vec<(String, String)> {
-        let almacen = magi::almacen::Almacen::abrir(&self.rutas().base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&self.rutas().base_datos()).unwrap();
         let filas = {
             let mut sentencia = almacen
                 .conexion()

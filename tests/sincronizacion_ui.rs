@@ -14,7 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use magi::almacen::{conflictos, Almacen};
+use magi::almacen::conflictos;
 use magi::app::{AccionDialogo, AccionInventario, App, Dialogo, Evento};
 use magi::config::{Config, Rutas};
 use magi::modelo::{DatosHost, Origen};
@@ -49,7 +49,7 @@ fn entorno() -> Entorno {
 }
 
 fn con_app(entorno: &Entorno) -> (App, Terminal<TestBackend>) {
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     let (mut app, _enviados) = App::de_prueba(
         entorno.rutas.clone(),
         entorno.config.clone(),
@@ -103,7 +103,7 @@ fn texto(terminal: &Terminal<TestBackend>) -> String {
 /// Siembra un host y un conflicto de tipo elemento con una versión perdedora
 /// que cambia la dirección.
 fn sembrar_conflicto(entorno: &Entorno) {
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     let id = almacen
         .crear_host(
             &DatosHost {
@@ -137,7 +137,7 @@ fn sembrar_conflicto(entorno: &Entorno) {
 }
 
 fn direccion_de(entorno: &Entorno, nombre: &str) -> Option<String> {
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     let direccion = almacen
         .conexion()
         .query_row(
@@ -151,7 +151,7 @@ fn direccion_de(entorno: &Entorno, nombre: &str) -> Option<String> {
 }
 
 fn pendientes(entorno: &Entorno) -> Vec<conflictos::Conflicto> {
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     let lista = conflictos::listar_pendientes(almacen.conexion()).expect("conflictos");
     almacen.cerrar().expect("cerrar");
     lista
@@ -243,7 +243,7 @@ fn n_pide_la_carpeta_y_el_error_la_vuelve_a_pedir() {
 fn las_confirmaciones_de_peligro_no_ejecutan_sin_s() {
     let entorno = entorno();
     // Un equipo ajeno para que x tenga algo que quitar (este equipo no vale).
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     almacen
         .conexion()
         .execute(
@@ -390,7 +390,7 @@ fn d_descarta_el_conflicto_sin_tocar_el_inventario() {
 #[test]
 fn un_borrado_aplazado_no_se_recupera_y_lo_dice() {
     let entorno = entorno();
-    let almacen = Almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
     almacen
         .crear_host(
             &DatosHost {

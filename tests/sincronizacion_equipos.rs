@@ -32,7 +32,7 @@ fn entorno() -> Entorno {
         runtime: raiz.join("runtime"),
     };
     std::fs::create_dir_all(&rutas.hogar).unwrap();
-    let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
     Entorno {
         _temporal: temporal,
         rutas,
@@ -109,7 +109,7 @@ fn la_migracion_7_rellena_uuid_version_y_vector_y_crea_el_equipo() {
             )
             .unwrap();
     }
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let conexion = almacen.conexion();
     let version: i64 = conexion
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -177,7 +177,7 @@ fn la_migracion_7_rellena_uuid_version_y_vector_y_crea_el_equipo() {
 
     // Abrir otra vez no vuelve a migrar ni duplica la fila del equipo.
     drop(almacen);
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let equipos_totales: i64 = almacen
         .conexion()
         .query_row("SELECT COUNT(*) FROM EQUIPOS", [], |fila| fila.get(0))

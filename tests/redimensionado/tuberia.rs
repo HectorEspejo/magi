@@ -166,7 +166,7 @@ fn adjuntar_usa_el_tamano_aplicado_y_no_el_pendiente() {
 fn abrir_sesion_usa_el_tamano_aplicado() {
     let entorno = crate::comun::entorno();
     {
-        let almacen = magi::almacen::Almacen::abrir(&entorno.rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).unwrap();
         magi::almacen::hosts::crear(
             almacen.conexion(),
             &magi::modelo::DatosHost {

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use std::collections::{BTreeMap, HashMap};
 
 use unicode_normalization::UnicodeNormalization;
@@ -319,7 +321,7 @@ pub struct Sincronizacion {
     pub ruta_local: String,
     pub ruta_remota: String,
     /// Subida: local → remoto; bajada: remoto → local.
-    pub direccion: crate::protocolo::Direccion,
+    pub direccion: Direccion,
     /// Borrar en el destino lo que no está en el origen.
     pub borrar: bool,
     /// Patrones extra (gitignore), además de `[archivos] excluir` y el
@@ -339,7 +341,7 @@ pub struct DatosSincronizacion {
     pub nombre: String,
     pub ruta_local: String,
     pub ruta_remota: String,
-    pub direccion: crate::protocolo::Direccion,
+    pub direccion: Direccion,
     pub borrar: bool,
     pub exclusiones: Vec<String>,
 }
@@ -864,9 +866,9 @@ pub fn fecha_ahora_epoca() -> i64 {
     chrono::Local::now().timestamp()
 }
 
-/// Host de ejemplo para las pruebas unitarias de todo el crate.
-#[cfg(test)]
-pub(crate) fn host_de_prueba() -> Host {
+/// Host de ejemplo para las pruebas de todo el workspace.
+#[doc(hidden)]
+pub fn host_de_prueba() -> Host {
     Host {
         id: 1,
         nombre: "Producción-Web".to_string(),
@@ -1031,5 +1033,42 @@ mod pruebas {
         assert!(validar_salto(None, Some(4), &mapa).is_err());
         assert!(validar_salto(None, Some(3), &mapa).is_ok());
         hosts.clear();
+    }
+}
+
+// ---------------------------------------------------------------- dirección de una sincronización
+
+/// Sentido de una transferencia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direccion {
+    Subida,
+    Bajada,
+}
+
+impl Direccion {
+    pub fn texto(self) -> &'static str {
+        match self {
+            Direccion::Subida => "subida",
+            Direccion::Bajada => "bajada",
+        }
+    }
+
+    /// La inversa de `texto` (`SINCRONIZACIONES_DIR.direccion`).
+    pub fn desde_texto(texto: &str) -> Option<Self> {
+        match texto {
+            "subida" => Some(Direccion::Subida),
+            "bajada" => Some(Direccion::Bajada),
+            _ => None,
+        }
+    }
+
+    /// Glifo de la cola: hacia el remoto o hacia el local.
+    pub fn glifo(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (Direccion::Subida, false) => "↑",
+            (Direccion::Bajada, false) => "↓",
+            (Direccion::Subida, true) => "^",
+            (Direccion::Bajada, true) => "v",
+        }
     }
 }
