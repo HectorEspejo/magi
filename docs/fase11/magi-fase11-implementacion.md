@@ -22,14 +22,17 @@ sigue publicando solo `magi-ssh`. Faltan la UI y los adaptadores,
 `assembleRelease`, la prueba de humo, la CI real, el ensayo de publicación y
 la validación en el plegable; el checklist sigue sin marcar (0/110) hasta que
 se cierre la fase.
+
 ## Resumen de lo implementado
+
 ### Workspace de Cargo y núcleo compartido (implementado; commit `ef4e18f`)
 
 - Commits: `a5f1e1f` (workspace con el núcleo compartido), `82bff82`
   (mecánica de túneles y SOCKS5 al núcleo) y `ef4e18f` («Integra la lógica del
   núcleo móvil y el contrato UniFFI», 58 ficheros). El árbol conserva cambios
-  sin commit de `magi-movil` (`gestor.rs`, `inventario.rs` y
-  `sincro.rs`) y el proyecto Android aún sin versionar.
+  sin commit de `magi-movil` (`gestor.rs`, `inventario.rs` y `sincro.rs`), un
+  ajuste en `magi-nucleo/src/rutas.rs` y el proyecto Android aún sin
+  versionar.
 - `Cargo.toml` raíz: `[workspace]` con `crates/magi-nucleo` y
   `crates/magi-movil`, `resolver = "2"`; `magi-ssh` sigue en la raíz con
   su nombre, versión 1.1.0, `publish = false` y `dist` sin tocar.
@@ -203,6 +206,7 @@ se cierre la fase.
   `lint` está pendiente (ver pendientes).
 
 ## Desviaciones respecto a la especificación (qué y por qué)
+
 1. **`ci.yml`: cargo-deny sin `--workspace`.** El checklist pide pasar a
    `--workspace`, pero cargo-deny 0.20.2 no admite esa opción (verificado:
    `unexpected argument`) y analiza por sí mismo el grafo completo del
@@ -264,6 +268,7 @@ se cierre la fase.
     debe leerse como el estado final de la fase.
 
 ## Estructura de archivos creada/modificada
+
 Raíz del repositorio:
 
 - `Cargo.toml`: `[workspace]` con los miembros `crates/magi-nucleo` y
@@ -298,7 +303,8 @@ Núcleo compartido:
 - `crates/magi-movil/`: `Cargo.toml`, `uniffi.toml` y
   `src/{lib,api,clave,estado,escritor,gestor,inventario,sincro,dialogos,retrollamadas}.rs`
   más `src/bin/uniffi-bindgen.rs`; lógica real (commit `ef4e18f` y
-  ajustes sin commit en `gestor.rs`, `inventario.rs` y `sincro.rs`).
+  ajustes sin commit en `gestor.rs`, `inventario.rs` y `sincro.rs`, más un
+  ajuste en `magi-nucleo/src/rutas.rs`).
 
 Android:
 
@@ -418,6 +424,7 @@ CI, publicación y documentación:
   build añade la supresión solo al fichero generado, no al resto de la app.
 
 ## Funcionalidades del checklist completadas
+
 Copia literal de los ítems que hoy se pueden considerar hechos (se marcarán
 `[x]` en la checklist al cerrar la fase; el estado de cada uno se anota en
 cursiva). El resto de los 110 ítems siguen pendientes y no se copian aquí.
@@ -528,6 +535,7 @@ pendientes).
   libre están en los módulos del núcleo y también en verde.*
 
 ## Pendientes y bloqueos
+
 1. **UI Compose y adaptadores reales en curso.** Las pantallas y los
    adaptadores (`NucleoRepositorio`, `AdaptadoresPlataforma`,
    `AdaptadorOyenteNucleo` y `FuenteNucleoReal`) se están escribiendo
@@ -561,9 +569,10 @@ pendientes).
    contradice el informe de la Fase 11 §7.3 (implementado sin copia ni
    confirmación). Hay que corregir el documento de formato.
 8. **Cerrar los commits.** El proyecto Android está sin versionar y
-   `docs/publicar-android.md` sin commit; `magi-movil` tiene ajustes sin
-   commit (`gestor.rs`, `inventario.rs` y `sincro.rs`). Antes de cerrar
-   la fase hay que dejarlo todo commiteado y con la CI en verde.
+   `docs/publicar-android.md` sin commit; hay ajustes sin commit en
+   `magi-movil` (`gestor.rs`, `inventario.rs` y `sincro.rs`) y en
+   `magi-nucleo/src/rutas.rs`. Antes de cerrar la fase hay que dejarlo todo
+   commiteado y con la CI en verde.
 9. **`dist` local y de CI.** La validación local del plan se hizo con
    0.32.0 porque el índice no tiene 0.33.1; hay que confirmar el plan real en
    CI con la versión fijada.
@@ -573,6 +582,7 @@ pendientes).
     el Lead al final de la fase, junto con este informe.
 
 ## Ejecución y pruebas (cómo arrancar, migrar y testear)
+
 **Entorno de Android (máquina de desarrollo).** Antes de usar Gradle o
 cargo-ndk:
 

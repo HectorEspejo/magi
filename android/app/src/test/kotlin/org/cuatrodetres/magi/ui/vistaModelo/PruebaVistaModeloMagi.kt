@@ -1,0 +1,294 @@
+package org.cuatrodetres.magi.ui.vistaModelo
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import org.cuatrodetres.magi.navegacion.Destino
+import org.cuatrodetres.magi.navegacion.DetalleVista
+import org.cuatrodetres.magi.navegacion.SeccionAjustes
+import org.cuatrodetres.magi.ui.dobles.ControlBloqueoPrueba
+import org.cuatrodetres.magi.ui.dobles.FuenteNucleoFalsa
+import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
+import org.cuatrodetres.magi.ui.modelos.DialogoVista
+import org.cuatrodetres.magi.ui.modelos.EstadoBloqueoVista
+import org.cuatrodetres.magi.ui.modelos.EstadoHostVista
+import org.cuatrodetres.magi.ui.modelos.EstadoSesionVista
+import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
+import org.cuatrodetres.magi.ui.modelos.FaseSincronizacionVista
+import org.cuatrodetres.magi.ui.modelos.FichaHostVista
+import org.cuatrodetres.magi.ui.modelos.GrupoVista
+import org.cuatrodetres.magi.ui.modelos.HostVista
+import org.cuatrodetres.magi.ui.modelos.InventarioVista
+import org.cuatrodetres.magi.ui.modelos.PasoAsistente
+import org.cuatrodetres.magi.ui.modelos.PeticionDialogoVista
+import org.cuatrodetres.magi.ui.modelos.RespuestaDialogoVista
+import org.cuatrodetres.magi.ui.modelos.SesionVista
+import org.cuatrodetres.magi.ui.modelos.TipoAviso
+import org.cuatrodetres.magi.ui.modelos.TipoConfirmacion
+import org.cuatrodetres.magi.ui.modelos.TunelVista
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** ViewModel de la app con el doble de la fuente del núcleo (sin Android). */
+class PruebaVistaModeloMagi {
+
+    private fun ambito() = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    private fun host(uuid: String = "h1", nombre: String = "web-01", grupo: String? = "g1") = HostVista(
+        uuid = uuid,
+        nombre = nombre,
+        direccion = "192.0.2.10",
+        puerto = 22,
+        usuario = "usuario",
+        grupoUuid = grupo,
+        estado = EstadoHostVista.SIN_SESION,
+    )
+
+    private fun sesion(id: Long = 1, estado: EstadoSesionVista = EstadoSesionVista.ABIERTA) =
+        SesionVista(id = id, hostUuid = "h1", hostNombre = "web-01", estado = estado)
+
+    private fun inventarioDePrueba() = InventarioVista(
+        grupos = listOf(GrupoVista("g1", "producción", 1)),
+        hosts = listOf(host()),
+    )
+
+    @Test
+    fun alIniciarCargaInventarioSincronizacionYVersiones() {
+        val fuente = FuenteNucleoFalsa().apply {
+            inventarioRespuesta = inventarioDePrueba()
+            emitirSincronizacion(
+                EstadoSincronizacionVista(fase = FaseSincronizacionVista.ACTIVA, conflictosHuella = 1),
+            )
+            conflictosRespuesta = listOf(conflicto())
+            claveRespuesta = null
+        }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        assertTrue(vm.estado.value.iniciado)
+        assertEquals(1, vm.estado.value.inventario.hosts.size)
+        assertEquals(FaseSincronizacionVista.ACTIVA, vm.estado.value.sincronizacion.fase)
+        assertEquals(1, vm.estado.value.conflictos.size)
+        assertNotNull(vm.estado.value.version)
+        assertEquals(1, fuente.vecesIniciado)
+    }
+
+    @Test
+    fun elFiltroSePideAlNucleo() {
+        val fuente = FuenteNucleoFalsa().apply { inventarioRespuesta = inventarioDePrueba() }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.cambiarFiltro("web")
+        assertEquals("web", fuente.ultimoFiltro)
+        assertEquals("web", vm.estado.value.filtro)
+    }
+
+    @Test
+    fun plegarUnGrupoEsOptimistaYSeGuarda() {
+        val fuente = FuenteNucleoFalsa().apply { inventarioRespuesta = inventarioDePrueba() }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.plegarGrupo("g1")
+        assertTrue(vm.estado.value.inventario.grupos[0].plegado)
+        assertTrue(fuente.llamadas.contains("plegar:g1:true"))
+    }
+
+    @Test
+    fun abrirFichaCargaLaFichaYSusTuneles() {
+        val fuente = FuenteNucleoFalsa().apply {
+            inventarioRespuesta = inventarioDePrueba()
+            fichas["h1"] = FichaHostVista(
+                uuid = "h1",
+                nombre = "web-01",
+                direccion = "192.0.2.10",
+                puerto = 22,
+                usuario = "usuario",
+                tieneContrasena = true,
+            )
+            tunelesRespuesta = listOf(tunel())
+        }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.abrirFicha("h1")
+        assertTrue(vm.estado.value.detalle is DetalleVista.Ficha)
+        assertEquals("web-01", vm.estado.value.ficha?.nombre)
+        assertEquals(1, vm.estado.value.tunelesFicha.size)
+    }
+
+    @Test
+    fun abrirSesionAbreElTerminal() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.abrirSesion("h1")
+        assertEquals(DetalleVista.Terminal(1L), vm.estado.value.detalle)
+        assertEquals(1L, vm.estado.value.sesionVisible)
+    }
+
+    @Test
+    fun lasSesionesDelNucleoLleganAlEstadoYSeNumeran() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        fuente.emitirSesiones(listOf(sesion(1), sesion(2)))
+        assertEquals(2, vm.estado.value.sesiones.size)
+        assertEquals("web-01 (2)", vm.estado.value.sesiones[1].titulo)
+    }
+
+    @Test
+    fun responderUnaHuellaQuitaElDialogoYRespondeAlNucleo() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        fuente.emitirPeticion(
+            PeticionDialogoVista.HuellaNueva(
+                peticionId = 7,
+                hostUuid = "h1",
+                hostNombre = "web-01",
+                tipo = "ed25519",
+                sha256 = "SHA256:abc",
+            ),
+        )
+        val dialogo = vm.estado.value.dialogoActual
+        assertTrue(dialogo is DialogoVista.DeNucleo)
+        vm.responderDialogo(dialogo as DialogoVista.DeNucleo, RespuestaDialogoVista.AceptarHuella)
+        assertNull(vm.estado.value.dialogoActual)
+        assertEquals(7L, fuente.respuestasDialogo[0].first)
+    }
+
+    @Test
+    fun cerrarSesionPideConfirmacionYLaCierra() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        fuente.emitirSesiones(listOf(sesion()))
+        vm.abrirTerminal(1L)
+        vm.cerrarSesion(1L)
+        val dialogo = vm.estado.value.dialogoActual as DialogoVista.Confirmacion
+        assertEquals(TipoConfirmacion.CERRAR_SESION, dialogo.tipo)
+        vm.confirmar(dialogo)
+        assertTrue(fuente.llamadas.contains("cerrarSesion:1"))
+        assertNull(vm.estado.value.detalle)
+    }
+
+    @Test
+    fun elBloqueoDecideSiSeEntraYDesbloquearArranca() {
+        val fuente = FuenteNucleoFalsa()
+        val control = ControlBloqueoPrueba(bloquearAlArrancar = true)
+        val vm = VistaModeloMagi(fuente, control, ambito())
+        assertEquals(EstadoBloqueoVista.BLOQUEADA, vm.estado.value.bloqueo)
+        vm.desbloquear()
+        assertEquals(EstadoBloqueoVista.DESBLOQUEADA, vm.estado.value.bloqueo)
+        assertEquals(1, fuente.vecesIniciado)
+    }
+
+    @Test
+    fun sinBloqueoDePantallaNoSeArranca() {
+        val vm = VistaModeloMagi(
+            FuenteNucleoFalsa(),
+            ControlBloqueoPrueba(hayBloqueo = false),
+            ambito(),
+        )
+        assertEquals(EstadoBloqueoVista.SIN_BLOQUEO_DE_PANTALLA, vm.estado.value.bloqueo)
+    }
+
+    @Test
+    fun elAsistenteEligeCarpetaYUneConClave() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.abrirAsistente()
+        assertNotNull(vm.estado.value.asistente)
+        vm.carpetaElegida("content://carpeta/magi", "magi")
+        assertEquals("content://carpeta/magi", fuente.carpetaElegida)
+        assertEquals(PasoAsistente.UNIR_CLAVE, vm.estado.value.asistente?.paso)
+        vm.unirConClave("AGE-SECRET-KEY-1")
+        assertEquals("AGE-SECRET-KEY-1", fuente.claveUnida)
+        assertNull(vm.estado.value.asistente)
+    }
+
+    @Test
+    fun instalarClavePideConfirmacionYUsaElNucleo() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.instalarClave("h1", "web-01")
+        val dialogo = vm.estado.value.dialogoActual as DialogoVista.Confirmacion
+        assertEquals(TipoConfirmacion.INSTALAR_CLAVE, dialogo.tipo)
+        vm.confirmar(dialogo)
+        assertTrue(fuente.llamadas.contains("instalarClave:h1"))
+    }
+
+    @Test
+    fun borrarTodoLimpiaElEstado() {
+        val fuente = FuenteNucleoFalsa().apply { inventarioRespuesta = inventarioDePrueba() }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.borrarTodo()
+        assertTrue(fuente.llamadas.contains("borrarDatos:true"))
+        assertTrue(vm.estado.value.inventario.vacio)
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is org.cuatrodetres.magi.ui.modelos.AvisoVista.DeInterfaz)
+        assertEquals(TipoAviso.DATOS_BORRADOS, (aviso as org.cuatrodetres.magi.ui.modelos.AvisoVista.DeInterfaz).tipo)
+    }
+
+    @Test
+    fun avisaDeLasSesionesQueAndroidDejoAbiertas() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso(sesionesPerdidas = 2)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        val dialogo = vm.estado.value.dialogoActual
+        assertTrue(dialogo is DialogoVista.SesionesPerdidas)
+        assertEquals(2, (dialogo as DialogoVista.SesionesPerdidas).cantidad)
+        vm.descartarAvisoSesionesPerdidas()
+        assertNull(vm.estado.value.dialogoActual)
+    }
+
+    @Test
+    fun ofreceLaGuiaDeBateriaConLaPrimeraSesionYLaMarca() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso(ofrecerGuiaBateria = true)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        fuente.emitirSesiones(listOf(sesion()))
+        assertEquals(DialogoVista.GuiaBateria, vm.estado.value.dialogoActual)
+        vm.abrirGuiaBateria()
+        assertTrue(avisos.guiaMarcada)
+        assertNull(vm.estado.value.dialogoActual)
+        assertTrue(vm.estado.value.detalle is DetalleVista.Ajustes)
+    }
+
+    @Test
+    fun ahoraNoTambienMarcaLaGuiaComoVista() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso(ofrecerGuiaBateria = true)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        fuente.emitirSesiones(listOf(sesion()))
+        vm.descartarGuiaBateria()
+        assertTrue(avisos.guiaMarcada)
+        assertNull(vm.estado.value.dialogoActual)
+    }
+
+    private fun conflicto() = ConflictoHuellaVista(
+        id = 3,
+        hostUuid = "h1",
+        hostNombre = "web-01",
+        direccion = "192.0.2.10:22",
+        huellaMia = "SHA256:aaa",
+        huellaOtra = "SHA256:bbb",
+    )
+
+    private fun tunel() = TunelVista(
+        uuid = "t1",
+        hostUuid = "h1",
+        hostNombre = "web-01",
+        nombre = "grafana",
+        tipo = org.cuatrodetres.magi.ui.modelos.TipoTunelVista.LOCAL,
+        escucha = "127.0.0.1:3000",
+        destino = "127.0.0.1:3000",
+    )
+}

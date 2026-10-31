@@ -27,6 +27,12 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Cambiado
 
+- **Codificación de teclas del terminal unificada (Fase 11).** La tabla
+  de bytes de las teclas vive ahora en el núcleo compartido, como la usará la
+  app Android. El escritorio gana la codificación estándar de flechas e
+  Inicio/Fin con modificadores (`ESC [ 1 ; m X`), Ctrl+Alt+tecla y algunas
+  combinaciones de Ctrl que antes se ignoraban; el resto no cambia.
+
 - Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
 
 ### Corregido

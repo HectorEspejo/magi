@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MAGI · app Android (Fase 11) · textos de la capa de plataforma.
+
+  Todas las claves llevan el prefijo "plataforma_" para no chocar con
+  res/values/strings.xml (hosts, terminal, túneles, ajustes), que es de la
+  interfaz. Aquí viven los mensajes de error de SAF, Keystore y clave del
+  móvil, el bloqueo, el servicio en primer plano y la guía de batería.
+  Todo en castellano.
+-->
+<resources>
+
+    <!-- ===================================================================== -->
+    <!-- Bloqueo de la app (informe §7.8)                                      -->
+    <!-- ===================================================================== -->
+    <string name="plataforma_bloqueo_titulo">MAGI bloqueada</string>
+    <string name="plataforma_bloqueo_subtitulo">Desbloquea para ver el inventario y las sesiones</string>
+
+    <!-- ===================================================================== -->
+    <!-- Carpeta sincronizada por SAF (informe §4.8 y §5.2)                    -->
+    <!-- ===================================================================== -->
+    <string name="plataforma_carpeta_sin_elegir">todavía no hay una carpeta de sincronización elegida</string>
+    <string name="plataforma_carpeta_no_valida">la carpeta elegida no es una carpeta de documentos de Android</string>
+    <string name="plataforma_carpeta_sin_permiso_persistente">Android no ha dado permiso permanente sobre esa carpeta; elígela otra vez</string>
+    <string name="plataforma_carpeta_permiso_retirado">se retiró el permiso de la carpeta de sincronización; vuelve a elegirla en Ajustes</string>
+    <string name="plataforma_carpeta_no_es_arbol">la carpeta elegida no es un árbol de documentos válido</string>
+    <string name="plataforma_carpeta_ilegible">no se pudo leer la carpeta de sincronización</string>
+    <string name="plataforma_carpeta_nombre_invalido">«%1$s» no es un fichero de sincronización de MAGI</string>
+    <string name="plataforma_carpeta_tamano_no_valido">el tamaño máximo pedido para leer no es válido</string>
+    <string name="plataforma_carpeta_fichero_no_encontrado">no se encontró el fichero «%1$s» en la carpeta</string>
+    <string name="plataforma_carpeta_fichero_grande">«%1$s» ocupa más de %2$d bytes: se ignora</string>
+    <string name="plataforma_carpeta_fichero_ilegible">no se pudo leer el fichero «%1$s» de la carpeta</string>
+
+    <!-- ===================================================================== -->
+    <!-- Llavero cifrado con el Keystore (informe §5.2 y §8)                   -->
+    <!-- ===================================================================== -->
+    <string name="plataforma_llavero_clave_invalida">el nombre del secreto no es válido: «%1$s»</string>
+    <string name="plataforma_llavero_ilegible">no se pudo leer el secreto «%1$s» del llavero</string>
+    <string name="plataforma_llavero_danado">el secreto «%1$s» está dañado o no se puede descifrar con la clave de este teléfono</string>
+    <string name="plataforma_llavero_no_borrado">no se pudo borrar el secreto «%1$s» del llavero</string>
+    <string name="plataforma_llavero_keystore_no_disponible">no se pudo abrir el Keystore del teléfono</string>
+    <string name="plataforma_llavero_clave_invalidada">la clave del llavero ya no es válida en este teléfono: hay que volver a configurar la sincronización y las contraseñas</string>
+    <string name="plataforma_llavero_telefono_bloqueado">el teléfono está bloqueado: desbloquéalo para usar el llavero de MAGI</string>
+    <string name="plataforma_llavero_no_leido">no se pudo descifrar el secreto con el Keystore del teléfono</string>
+    <string name="plataforma_llavero_no_guardado">no se pudo cifrar y guardar el secreto con el Keystore del teléfono</string>
+
+    <!-- ===================================================================== -->
+    <!-- Clave del móvil ECDSA P-256 (informe §7.2 y §9)                       -->
+    <!-- ===================================================================== -->
+    <string name="plataforma_clave_sin_crear">todavía no hay clave del móvil: se crea al desbloquear el primer arranque</string>
+    <string name="plataforma_clave_sin_publica">la clave del móvil no tiene clave pública X.509</string>
+    <string name="plataforma_clave_invalidada">Android ha invalidado la clave del móvil (¿se quitó el bloqueo de pantalla?): crea otra y vuelve a instalarla en tus hosts</string>
+    <string name="plataforma_clave_sin_bloqueo_pantalla">MAGI necesita un PIN, un patrón o una contraseña en el teléfono para proteger la clave del móvil</string>
+    <string name="plataforma_clave_telefono_bloqueado">desbloquea el teléfono para usar la clave del móvil</string>
+    <string name="plataforma_clave_no_creada">no se pudo crear la clave del móvil en el Keystore</string>
+    <string name="plataforma_clave_strongbox_no_disponible">este teléfono no tiene StrongBox disponible</string>
+    <string name="plataforma_clave_no_firmado">no se pudo firmar con la clave del móvil</string>
+    <string name="plataforma_clave_no_borrada">no se pudo borrar la clave del móvil</string>
+
+    <!-- ===================================================================== -->
+    <!-- Servicio en primer plano (informe §4.6)                               -->
+    <!-- ===================================================================== -->
+    <string name="plataforma_notificacion_canal">Sesiones y túneles</string>
+    <string name="plataforma_notificacion_canal_descripcion">MAGI mantiene las sesiones y los túneles abiertos mientras haya alguno activo</string>
+    <string name="plataforma_notificacion_servicio">MAGI · %1$s · %2$s</string>
+    <plurals name="plataforma_notificacion_sesiones">
+        <item quantity="one">%1$d sesión</item>
+        <item quantity="other">%1$d sesiones</item>
+    </plurals>
+    <plurals name="plataforma_notificacion_tuneles">
+        <item quantity="one">%1$d túnel</item>
+        <item quantity="other">%1$d túneles</item>
+    </plurals>
+
+    <!-- ===================================================================== -->
+    <!-- Guía de batería (informe §4.6)                                        -->
+    <!-- ===================================================================== -->
+    <string-array name="plataforma_bateria_pasos_magic">
+        <item>Ajustes &gt; Batería &gt; Inicio de aplicaciones</item>
+        <item>Busca MAGI y desactiva la gestión automática</item>
+        <item>Activa «Inicio automático», «Inicio secundario» y «Ejecutar en segundo plano»</item>
+        <item>En Ajustes &gt; Aplicaciones &gt; MAGI &gt; Batería, elige «Sin restricciones»</item>
+    </string-array>
+    <string-array name="plataforma_bateria_pasos_genericos">
+        <item>Ajustes &gt; Aplicaciones &gt; MAGI &gt; Batería</item>
+        <item>Elige «Sin restricciones» o «No optimizar»</item>
+        <item>Si tu móvil tiene «Inicio automático», permite que MAGI arranque solo</item>
+    </string-array>
+
+</resources>
