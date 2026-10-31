@@ -29,6 +29,13 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 - Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
 
+### Corregido
+
+- Evita el error «database is locked» al escribir el inventario con el
+  servidor de sesiones activo: las transacciones del almacén se abren con
+  `BEGIN IMMEDIATE`, de modo que esperan el bloqueo en vez de fallar al
+  promoverlo.
+
 ## [1.0.0] - 2026-10-30
 
 Primera versión pública de MAGI. Reúne las Fases 1-8 del proyecto y el

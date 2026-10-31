@@ -155,7 +155,7 @@ pub fn crear(conexion: &Connection, datos: &DatosTunel) -> Result<i64> {
         ));
     }
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     transaccion
         .execute(
             "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico, creado_en, actualizado_en) \
@@ -220,7 +220,7 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosTunel) -> Result<
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let Some(tunel) =
         crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Tuneles, id)?
     else {

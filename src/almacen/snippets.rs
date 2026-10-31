@@ -166,7 +166,7 @@ fn insertar_destinos(conexion: &Connection, snippet_id: i64, destinos: &[Destino
 /// Crea un snippet con sus destinos, en una transacción.
 pub fn crear(conexion: &Connection, datos: &DatosSnippet) -> Result<i64> {
     let datos = preparar(datos)?;
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let ahora = fecha_ahora();
     transaccion
         .execute(
@@ -196,7 +196,7 @@ pub fn crear(conexion: &Connection, datos: &DatosSnippet) -> Result<i64> {
 /// Actualiza un snippet y sustituye sus destinos, en una transacción.
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSnippet) -> Result<()> {
     let datos = preparar(datos)?;
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     // `antes` incluye los destinos: cambiarlos también es editar el snippet
     // (Fase 10).
     let antes = versiones::datos_de(&transaccion, versiones::Tabla::Snippets, id)?;
@@ -240,7 +240,7 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSnippet) -> Resul
 /// como «snippet al conectar» se quedan sin él y las deliberaciones conservan
 /// la acción en texto (`SET NULL`).
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let Some(snippet) =
         crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Snippets, id)?
     else {

@@ -93,7 +93,7 @@ pub fn existe_nombre(conexion: &Connection, nombre: &str, excluyendo: Option<i64
 
 pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result<i64> {
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     transaccion
         .execute(
             "INSERT INTO HOSTS (
@@ -194,7 +194,7 @@ fn hijas_para_lapida(
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let Some(host) = crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Hosts, id)?
     else {
         // No hay fila que borrar: ni lápida ni cambios.

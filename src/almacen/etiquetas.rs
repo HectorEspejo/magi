@@ -61,7 +61,7 @@ pub fn por_host(conexion: &Connection) -> Result<HashMap<i64, Vec<String>>> {
 /// Sustituye las etiquetas de un host creando las que falten.
 pub fn fijar_de_host(conexion: &Connection, host_id: i64, nombres: &[String]) -> Result<()> {
     let normalizadas = normalizar(nombres);
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     transaccion.execute(
         "DELETE FROM HOST_ETIQUETAS WHERE host_id = ?1",
         params![host_id],

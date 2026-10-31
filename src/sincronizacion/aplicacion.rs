@@ -171,7 +171,7 @@ pub fn aplicar(
     opciones: &OpcionesAplicacion,
     hogar: &Path,
 ) -> Result<ResumenAplicacion> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     // El reloj híbrido de este equipo sube a la mayor versión vista antes de
     // emitir ninguna edición nueva (los renombrados).
     versiones::al_importar(&transaccion, plan.reloj_ms)?;
@@ -468,7 +468,7 @@ pub fn recuperar_version(conexion: &Connection, conflicto: &Conflicto, hogar: &P
     let contenido: serde_json::Value =
         serde_json::from_str(perdedora).context("la versión perdedora del conflicto no es JSON")?;
 
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let vector_anterior =
         vector_de_uuid(&transaccion, tabla, &conflicto.uuid)?.unwrap_or_else(|| "{}".to_string());
     let (version, vector) = versiones::version_de_edicion(&transaccion, &vector_anterior)?;
@@ -561,7 +561,7 @@ pub fn unir_por_nombre(
     documentos: &[crate::sincronizacion::formato::Documento],
     _hogar: &Path,
 ) -> Result<usize> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let mut unidos = 0;
     // Se hacen dos pasadas: primero los elementos cuya clave natural no
     // depende de otra, para que cuando lleguen los túneles y las

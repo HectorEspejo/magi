@@ -106,7 +106,7 @@ pub fn crear(conexion: &Connection, datos: &DatosSincronizacion) -> Result<i64> 
     validar_sincronizacion(datos).map_err(|motivo| anyhow!(motivo))?;
     let nombre = datos.nombre.trim().to_string();
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     transaccion
         .execute(
             "INSERT INTO SINCRONIZACIONES_DIR (host_id, nombre, ruta_local, ruta_remota, \
@@ -171,7 +171,7 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSincronizacion) -
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let Some(sincronizacion) =
         crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::SincronizacionesDir, id)?
     else {

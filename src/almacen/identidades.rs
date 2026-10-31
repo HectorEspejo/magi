@@ -47,7 +47,7 @@ pub fn uuid_de_huella(huella: &str) -> String {
 /// revocada; el alias y `anadida_en` nunca se pisan. Los campos que viajan
 /// (tipo, comentario) suben la versión; origen y ruta son de este equipo.
 pub fn sincronizar(conexion: &Connection, claves: &[ClaveSincronizada]) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     for clave in claves {
         let existente: Option<(i64,)> = transaccion
             .query_row(
@@ -125,7 +125,7 @@ pub fn crear(
         ruta: ruta.map(str::to_string),
         comentario: comentario.map(str::to_string),
     };
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let alias = alias_disponible(&transaccion, &clave, None)?;
     transaccion.execute(
         "INSERT INTO IDENTIDADES (
@@ -315,7 +315,7 @@ pub fn revocar(conexion: &Connection, id: i64, hogar: &Path) -> Result<usize> {
     let identidad = obtener(conexion, id)?;
     let hosts = hosts_que_usan(conexion, &identidad, hogar)?;
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     // Los hosts que se quedan en `auto` cambian un campo que viaja: se
     // capturan antes de revocar (Fase 10).
     let mut ids_hosts: Vec<i64> = Vec::new();

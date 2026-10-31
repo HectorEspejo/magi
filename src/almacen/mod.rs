@@ -23,6 +23,18 @@ pub mod tuneles;
 pub mod verificaciones;
 pub mod versiones;
 
+/// Abre una transacción de escritura con `BEGIN IMMEDIATE`: toma el bloqueo
+/// desde el principio para que `busy_timeout` espere de verdad. Con dos
+/// procesos compartiendo `magi.db` (la TUI y el servidor de sesiones), una
+/// transacción deferida que empieza leyendo y luego escribe recibe
+/// `SQLITE_BUSY` en la promoción sin pasar por el plazo de espera.
+pub fn transaccion(conexion: &Connection) -> Result<rusqlite::Transaction<'_>> {
+    Ok(rusqlite::Transaction::new_unchecked(
+        conexion,
+        rusqlite::TransactionBehavior::Immediate,
+    )?)
+}
+
 /// Fichero SQLite del inventario.
 pub struct Almacen {
     conexion: Connection,

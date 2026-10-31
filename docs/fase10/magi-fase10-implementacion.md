@@ -325,6 +325,13 @@ Modificados:
 - **Las huellas se añaden con `conexion::huellas::aprender`** (que ya entiende
   `known_hosts` con entradas hasheadas) tras una copia con fecha, y solo se
   sustituyen con `sustituir` cuando el usuario acepta el conflicto.
+- **Las transacciones de escritura del almacén son `BEGIN IMMEDIATE`**: con
+  dos procesos compartiendo `magi.db` (la TUI y el servidor de sesiones), una
+  transacción deferida que empieza leyendo y luego escribe recibe
+  `SQLITE_BUSY` al promover el bloqueo sin pasar por `busy_timeout`. Lo
+  detectó la CI (prueba de ejecuciones con el servidor escribiendo a la vez) y
+  se corrigió con `almacen::transaccion` en todas las escrituras
+  transaccionales, incluida la aplicación de la fusión.
 - **Cada cambio de clave invalida el hash del fichero propio** (crear, unir,
   rotar, quitar): el fichero que existe en la carpeta está cifrado con la clave
   anterior y hay que reescribirlo con la nueva aunque el inventario no cambie.

@@ -53,7 +53,7 @@ pub fn por_nombre(conexion: &Connection, nombre: &str) -> Result<Option<Grupo>> 
 /// existe.
 pub fn crear(conexion: &Connection, nombre: &str) -> Result<i64> {
     let nombre = nombre.trim();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let orden: i64 = transaccion
         .query_row(
             "SELECT COALESCE(MAX(orden), 0) + 1 FROM GRUPOS",
@@ -101,7 +101,7 @@ pub fn renombrar(conexion: &Connection, id: i64, nombre: &str) -> Result<()> {
 
 /// Borra el grupo; sus hosts pasan a «sin grupo» (ON DELETE SET NULL).
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let Some(grupo) = crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Grupos, id)?
     else {
         return Ok(());
@@ -160,7 +160,7 @@ pub fn mover(conexion: &Connection, id: i64, direccion: i8) -> Result<()> {
     };
     let a = &grupos[posicion];
     let b = &grupos[destino];
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     // El orden viaja: mover un grupo es una edición de los dos que
     // intercambian posición (Fase 10).
     let antes_a = versiones::datos_de(&transaccion, versiones::Tabla::Grupos, a.id)?;
