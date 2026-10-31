@@ -5,7 +5,9 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::ficheros::escribir_atomico;
-use crate::modelo::{fecha_ahora, EntradaRegistro, ResultadoRegistro};
+use crate::modelo::{fecha_ahora, EntradaRegistro};
+
+pub use crate::modelo::ResultadoRegistro;
 
 /// Tipos de evento admitidos en el registro. Los valores se validan en código,
 /// nunca con `CHECK` en SQLite.
@@ -68,8 +70,10 @@ pub const INVENTARIO_SINC_ACTIVADA: &str = "inventario_sinc_activada";
 pub const INVENTARIO_SINC_DESACTIVADA: &str = "inventario_sinc_desactivada";
 /// La sincronización se detuvo o falló (solo al cambiar de estado).
 pub const INVENTARIO_SINC_ERROR: &str = "inventario_sinc_error";
+/// Fase 11 (móvil): la clave del móvil se instaló en un host.
+pub const CLAVE_INSTALADA: &str = "clave_instalada";
 
-pub const TIPOS: [&str; 35] = [
+pub const TIPOS: [&str; 36] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -105,6 +109,7 @@ pub const TIPOS: [&str; 35] = [
     INVENTARIO_SINC_ACTIVADA,
     INVENTARIO_SINC_DESACTIVADA,
     INVENTARIO_SINC_ERROR,
+    CLAVE_INSTALADA,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

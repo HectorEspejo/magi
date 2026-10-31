@@ -1,0 +1,6 @@
+# Configuración de los bindings de UniFFI (informe §2).
+# El paquete Kotlin es el que espera la app: org.cuatrodetres.magi.nucleo.
+# La cdylib se llama libmagi_movil.so y se empaqueta por ABI en app/src/main/jniLibs.
+[bindings.kotlin]
+package_name = "org.cuatrodetres.magi.nucleo"
+cdylib_name = "magi_movil"

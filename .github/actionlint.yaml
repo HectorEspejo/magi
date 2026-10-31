@@ -1,0 +1,15 @@
+# Configuración de actionlint (https://github.com/rhysd/actionlint).
+#
+# .github/workflows/release.yml lo genera dist (cargo-dist) y se mantiene a mano
+# solo en los ajustes que documenta su cabecera; sus scripts de compilación y
+# publicación no se tocan aquí. Para que actionlint siga siendo una puerta real
+# para el resto de workflows (ci.yml, android.yml y android-release.yml, que
+# pasan ShellCheck sin avisos), se ignoran solo los avisos de estilo que arrastra
+# ese fichero generado. Si algún día se tocan sus scripts, quita las entradas que
+# ya no hagan falta en vez de ampliarlas a ciegas.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      - 'SC2086:.*'
+      - 'SC2129:.*'
+      - 'SC2001:.*'

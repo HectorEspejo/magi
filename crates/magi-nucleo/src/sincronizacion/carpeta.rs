@@ -4,8 +4,16 @@
 //! Solo se leen nombres estrictos `magi-<uuid>` + `.age`: los temporales, las
 //! copias en conflicto de las herramientas de sincronización
 //! (magi-<uuid>.sync-conflict-...age) y cualquier otro fichero se ignoran.
+//!
+//! Aquí vive también el servicio inyectable `CarpetaSincronizacion` (Fase 11):
+//! la pasada en modo lector no abre la carpeta por su cuenta, la recibe como
+//! trait. El trait solo lista y lee, así que esa pasada no puede escribir en la
+//! carpeta ni por error. `CarpetaDisco` lo implementa sobre el sistema de
+//! ficheros (escritorio y pruebas); el móvil lo implementa sobre SAF.
 
 use std::fs;
+use std::io::Read as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -44,6 +52,140 @@ pub fn uuid_de_nombre(nombre: &str) -> Option<String> {
         return None;
     }
     Some(uuid.to_string())
+}
+
+/// Tamaño máximo de un fichero de sincronización (T81): uno mayor se rechaza
+/// sin cargarlo en memoria. El escritor y el lector comparten este tope.
+pub const TAMANO_MAXIMO: u64 = 16 * 1024 * 1024;
+
+/// Lo que una plataforma lista de la carpeta compartida. Es la entrada no
+/// fiable que consume la pasada en modo lector (§7.3): además de esta lista,
+/// la pasada vuelve a validar el nombre y el tamaño (T81), porque la
+/// implementación puede devolver cualquier cosa.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntradaCarpeta {
+    /// Nombre del fichero, sin ruta.
+    pub nombre: String,
+    /// Tamaño en bytes.
+    pub tamano: u64,
+    /// Última modificación, en milisegundos desde la época. 0 si la
+    /// plataforma no la da (SAF puede no darla).
+    pub modificado_ms: i64,
+}
+
+/// La carpeta compartida como servicio inyectable: listar y leer, nada más.
+///
+/// La pasada en modo lector nunca escribe en la carpeta, así que el trait no
+/// tiene métodos de escritura ni de borrado: lo que no existe en el trait no
+/// se puede llamar. El escritorio y las pruebas lo implementan sobre el
+/// sistema de ficheros (`CarpetaDisco`); el móvil, sobre SAF
+/// (`DocumentsContract`).
+pub trait CarpetaSincronizacion: Send + Sync {
+    /// Lista las entradas de la carpeta. Una carpeta que no existe no es un
+    /// error: devuelve una lista vacía.
+    fn listar(&self) -> Result<Vec<EntradaCarpeta>, String>;
+
+    /// Lee un fichero entero. Debe fallar sin leerlo si ocupa más de `maximo`
+    /// bytes, y no debe seguir enlaces simbólicos (T81).
+    fn leer(&self, nombre: &str, maximo: u64) -> Result<Vec<u8>, String>;
+}
+
+/// La carpeta compartida en el sistema de ficheros local (escritorio y
+/// pruebas). Filtra las entradas con las mismas reglas que la pasada:
+/// `magi-<uuid>.age` canónico, fichero normal (nunca un enlace) y tamaño
+/// máximo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarpetaDisco {
+    ruta: PathBuf,
+}
+
+impl CarpetaDisco {
+    pub fn nueva(ruta: impl Into<PathBuf>) -> Self {
+        Self { ruta: ruta.into() }
+    }
+
+    pub fn ruta(&self) -> &Path {
+        &self.ruta
+    }
+}
+
+impl CarpetaSincronizacion for CarpetaDisco {
+    fn listar(&self) -> Result<Vec<EntradaCarpeta>, String> {
+        let entradas = match fs::read_dir(&self.ruta) {
+            Ok(entradas) => entradas,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(format!("leyendo {}: {error}", self.ruta.display())),
+        };
+        let mut ficheros = Vec::new();
+        for entrada in entradas {
+            let entrada =
+                entrada.map_err(|error| format!("leyendo {}: {error}", self.ruta.display()))?;
+            // Metadatos sin seguir el enlace: un enlace simbólico no es un
+            // fichero de equipo y no se lee.
+            let Ok(metadatos) = fs::symlink_metadata(entrada.path()) else {
+                continue;
+            };
+            if !metadatos.is_file() {
+                continue;
+            }
+            let nombre_os = entrada.file_name();
+            let Some(nombre) = nombre_os.to_str() else {
+                continue;
+            };
+            if uuid_de_nombre(nombre).is_none() {
+                continue;
+            }
+            // Un fichero por encima del tope no se lista: no es un fichero de
+            // equipo legible (T81). La pasada lo vuelve a comprobar de todas
+            // formas.
+            if metadatos.len() > TAMANO_MAXIMO {
+                continue;
+            }
+            let modificado_ms = metadatos
+                .modified()
+                .ok()
+                .and_then(|fecha| fecha.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duracion| i64::try_from(duracion.as_millis()).unwrap_or(i64::MAX))
+                .unwrap_or(0);
+            ficheros.push(EntradaCarpeta {
+                nombre: nombre.to_string(),
+                tamano: metadatos.len(),
+                modificado_ms,
+            });
+        }
+        ficheros.sort_by(|a, b| a.nombre.cmp(&b.nombre));
+        Ok(ficheros)
+    }
+
+    fn leer(&self, nombre: &str, maximo: u64) -> Result<Vec<u8>, String> {
+        // Solo un nombre canónico puede construir la ruta: nada de barras,
+        // `..` ni sufijos con los que salirse de la carpeta.
+        if uuid_de_nombre(nombre).is_none() {
+            return Err(format!(
+                "nombre de fichero de sincronización no válido: «{nombre}»"
+            ));
+        }
+        let ruta = self.ruta.join(nombre);
+        let fichero = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(&ruta)
+            .map_err(|error| format!("abriendo {}: {error}", ruta.display()))?;
+        let mut bytes = Vec::new();
+        // Se pide un byte de más: si llega, el fichero supera el tope y se
+        // descarta sin terminar de cargarlo en memoria.
+        let mut lector = fichero.take(maximo.saturating_add(1));
+        lector
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("leyendo {}: {error}", ruta.display()))?;
+        if bytes.len() as u64 > maximo {
+            return Err(format!(
+                "el fichero {} ocupa más de {maximo} bytes (T81)",
+                ruta.display()
+            ));
+        }
+        Ok(bytes)
+    }
 }
 
 /// Lista los ficheros de equipo de la carpeta, con su hash. Una carpeta que no
@@ -198,36 +340,6 @@ pub fn fecha_iso_ahora() -> String {
 }
 
 #[cfg(test)]
-mod pruebas_tmp {
-    use super::*;
-
-    #[test]
-    fn tmp_listar() {
-        let dir = std::env::temp_dir().join(format!("magi-tmp-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("magi-11111111-1111-4111-8111-111111111111.age"),
-            b"x",
-        )
-        .unwrap();
-        eprintln!(
-            "uuid_de_nombre: {:?}",
-            uuid_de_nombre("magi-11111111-1111-4111-8111-111111111111.age")
-        );
-        eprintln!(
-            "file_type: {:?}",
-            std::fs::read_dir(&dir)
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .file_type()
-        );
-        eprintln!("listar: {:?}", listar(&dir));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-#[cfg(test)]
 mod pruebas {
     use super::*;
 
@@ -271,5 +383,94 @@ mod pruebas {
         )
         .unwrap();
         assert!(listar(&carpeta).unwrap().is_empty());
+    }
+
+    #[test]
+    fn el_servicio_de_carpeta_lista_solo_ficheros_de_magi_y_ordenados() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let uuid_a = "2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b";
+        let uuid_b = "11111111-1111-4111-8111-111111111111";
+        let uuid_c = "33333333-3333-4333-8333-333333333333";
+        std::fs::write(carpeta.join(nombre_fichero(uuid_b)), b"bbbb").unwrap();
+        std::fs::write(carpeta.join(nombre_fichero(uuid_a)), b"aaaaaa").unwrap();
+        // Todo esto se ignora: copia en conflicto, temporal, mayúsculas,
+        // subcarpeta con nombre canónico y un fichero ajeno.
+        std::fs::write(
+            carpeta.join(format!("magi-{uuid_a}.sync-conflict-20260101-000000.age")),
+            b"x",
+        )
+        .unwrap();
+        std::fs::write(carpeta.join(format!(".magi-{uuid_a}.age.tmp")), b"x").unwrap();
+        std::fs::write(
+            carpeta.join(format!("magi-{}.age", uuid_a.to_uppercase())),
+            b"x",
+        )
+        .unwrap();
+        std::fs::create_dir_all(carpeta.join(nombre_fichero(uuid_c))).unwrap();
+        std::fs::write(carpeta.join("otra-cosa.txt"), b"x").unwrap();
+
+        let servicio = CarpetaDisco::nueva(&carpeta);
+        let entradas = servicio.listar().unwrap();
+        assert_eq!(entradas.len(), 2);
+        // Ordenadas por nombre: primero el uuid que empieza por 1.
+        assert_eq!(entradas[0].nombre, nombre_fichero(uuid_b));
+        assert_eq!(entradas[0].tamano, 4);
+        assert_eq!(entradas[1].nombre, nombre_fichero(uuid_a));
+        assert_eq!(entradas[1].tamano, 6);
+        assert_eq!(
+            servicio
+                .leer(&nombre_fichero(uuid_a), TAMANO_MAXIMO)
+                .unwrap(),
+            b"aaaaaa"
+        );
+        assert!(servicio.leer(&nombre_fichero(uuid_a), 5).is_err());
+        assert!(servicio
+            .leer(
+                &format!("magi-{uuid_a}.sync-conflict-20260101-000000.age"),
+                TAMANO_MAXIMO
+            )
+            .is_err());
+        assert!(servicio.leer("../fuera.age", TAMANO_MAXIMO).is_err());
+        // Una carpeta que no existe no es un error: está vacía.
+        assert!(CarpetaDisco::nueva(temporal.path().join("no-existe"))
+            .listar()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn el_servicio_de_carpeta_no_sigue_enlaces_simbolicos() {
+        use std::os::unix::fs::symlink;
+        let temporal = tempfile::tempdir().unwrap();
+        let fuera = temporal.path().join("fuera.age");
+        std::fs::write(&fuera, b"contenido de fuera").unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let nombre = nombre_fichero("2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b");
+        symlink(&fuera, carpeta.join(&nombre)).unwrap();
+        let servicio = CarpetaDisco::nueva(&carpeta);
+        assert!(
+            servicio.listar().unwrap().is_empty(),
+            "el enlace no se lista"
+        );
+        assert!(servicio.leer(&nombre, TAMANO_MAXIMO).is_err(), "O_NOFOLLOW");
+    }
+
+    #[test]
+    fn el_servicio_de_carpeta_rechaza_un_fichero_por_encima_del_maximo() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let nombre = nombre_fichero("2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b");
+        let fichero = std::fs::File::create(carpeta.join(&nombre)).unwrap();
+        fichero.set_len(TAMANO_MAXIMO + 1).unwrap();
+        let servicio = CarpetaDisco::nueva(&carpeta);
+        assert!(
+            servicio.listar().unwrap().is_empty(),
+            "un fichero por encima del tope no se lista"
+        );
+        assert!(servicio.leer(&nombre, TAMANO_MAXIMO).is_err());
     }
 }

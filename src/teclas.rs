@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use magi_nucleo::terminal::teclas::{codificar, Modificadores, ModoTerminal, Tecla};
 
 /// Convierte el texto de `config.toml` («Ctrl+]») en una tecla.
 pub fn parsear_prefijo(texto: &str) -> Result<(KeyCode, KeyModifiers), String> {
@@ -75,69 +76,37 @@ pub fn es_prefijo(tecla: &KeyEvent, prefijo: (KeyCode, KeyModifiers)) -> bool {
 }
 
 /// Traduce una tecla de crossterm a los bytes que espera un PTY remoto.
+///
+/// La codificación es la del núcleo, la misma que usa la app móvil. El
+/// escritorio codifica en modo normal porque el parser de la sesión vive en el
+/// servidor; Ctrl, Alt y Mayús se traducen a la tabla de §7.6.
 pub fn bytes_de_tecla(tecla: KeyEvent) -> Option<Vec<u8>> {
-    let ctrl = tecla.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = tecla.modifiers.contains(KeyModifiers::ALT);
-    let mut bytes = match tecla.code {
-        KeyCode::Char(caracter) => {
-            if ctrl {
-                let byte = match caracter {
-                    'a'..='z' => caracter as u8 - b'a' + 1,
-                    'A'..='Z' => caracter as u8 - b'A' + 1,
-                    ' ' | '@' => 0,
-                    '4' => 0x1c,
-                    '5' => 0x1d,
-                    '6' => 0x1e,
-                    '7' => 0x1f,
-                    '[' => 27,
-                    '\\' => 28,
-                    ']' => 29,
-                    '^' => 30,
-                    '_' => 31,
-                    _ => return None,
-                };
-                vec![byte]
-            } else {
-                let mut buffer = [0u8; 4];
-                let texto = caracter.encode_utf8(&mut buffer);
-                texto.as_bytes().to_vec()
-            }
-        }
-        KeyCode::Enter => vec![b'\r'],
-        KeyCode::Tab => vec![b'\t'],
-        KeyCode::BackTab => vec![b'\x1b', b'[', b'Z'],
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => vec![0x1b, b'[', b'A'],
-        KeyCode::Down => vec![0x1b, b'[', b'B'],
-        KeyCode::Right => vec![0x1b, b'[', b'C'],
-        KeyCode::Left => vec![0x1b, b'[', b'D'],
-        KeyCode::Home => vec![0x1b, b'[', b'H'],
-        KeyCode::End => vec![0x1b, b'[', b'F'],
-        KeyCode::PageUp => vec![0x1b, b'[', b'5', b'~'],
-        KeyCode::PageDown => vec![0x1b, b'[', b'6', b'~'],
-        KeyCode::Insert => vec![0x1b, b'[', b'2', b'~'],
-        KeyCode::Delete => vec![0x1b, b'[', b'3', b'~'],
-        KeyCode::F(1) => vec![0x1b, b'O', b'P'],
-        KeyCode::F(2) => vec![0x1b, b'O', b'Q'],
-        KeyCode::F(3) => vec![0x1b, b'O', b'R'],
-        KeyCode::F(4) => vec![0x1b, b'O', b'S'],
-        KeyCode::F(5) => vec![0x1b, b'[', b'1', b'5', b'~'],
-        KeyCode::F(6) => vec![0x1b, b'[', b'1', b'7', b'~'],
-        KeyCode::F(7) => vec![0x1b, b'[', b'1', b'8', b'~'],
-        KeyCode::F(8) => vec![0x1b, b'[', b'1', b'9', b'~'],
-        KeyCode::F(9) => vec![0x1b, b'[', b'2', b'0', b'~'],
-        KeyCode::F(10) => vec![0x1b, b'[', b'2', b'1', b'~'],
-        KeyCode::F(11) => vec![0x1b, b'[', b'2', b'3', b'~'],
-        KeyCode::F(12) => vec![0x1b, b'[', b'2', b'4', b'~'],
+    let tecla_nucleo = match tecla.code {
+        KeyCode::Char(caracter) => Tecla::Caracter(caracter),
+        KeyCode::Enter => Tecla::Intro,
+        KeyCode::Tab => Tecla::Tabulador,
+        KeyCode::BackTab => Tecla::TabuladorInverso,
+        KeyCode::Backspace => Tecla::Retroceso,
+        KeyCode::Esc => Tecla::Escape,
+        KeyCode::Up => Tecla::Arriba,
+        KeyCode::Down => Tecla::Abajo,
+        KeyCode::Right => Tecla::Derecha,
+        KeyCode::Left => Tecla::Izquierda,
+        KeyCode::Home => Tecla::Inicio,
+        KeyCode::End => Tecla::Fin,
+        KeyCode::PageUp => Tecla::RePagina,
+        KeyCode::PageDown => Tecla::AvPagina,
+        KeyCode::Insert => Tecla::Insertar,
+        KeyCode::Delete => Tecla::Suprimir,
+        KeyCode::F(numero) => Tecla::F(numero),
         _ => return None,
     };
-    if alt && !ctrl {
-        let mut con_alt = vec![0x1b];
-        con_alt.append(&mut bytes);
-        return Some(con_alt);
-    }
-    Some(bytes)
+    let modificadores = Modificadores {
+        mayusculas: tecla.modifiers.contains(KeyModifiers::SHIFT),
+        alt: tecla.modifiers.contains(KeyModifiers::ALT),
+        ctrl: tecla.modifiers.contains(KeyModifiers::CONTROL),
+    };
+    codificar(tecla_nucleo, modificadores, ModoTerminal::default())
 }
 
 #[cfg(test)]

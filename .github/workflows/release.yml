@@ -23,6 +23,8 @@
 #   * una comprobación del formato del tag (vX.Y.Z o vX.Y.Z-<sufijo>) antes de
 #     usar su valor en cualquier script, que además cierra una inyección de
 #     github.ref_name en run:;
+#   * no dispararse con las etiquetas android-v* (patrón negativo): la app
+#     Android se publica aparte con .github/workflows/android-release.yml;
 #   * pasar al workflow de AUR solo el secreto que necesita (AUR_SSH_PRIVATE_KEY)
 #     en vez de todos los secretos del repositorio;
 #   * no dispararse en pull requests (menos superficie y ningún permiso de
@@ -61,6 +63,9 @@ on:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
+      # La app Android se publica con android-release.yml: sus etiquetas
+      # android-vX.Y.Z no deben llegar a dist.
+      - '!android-v*'
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do

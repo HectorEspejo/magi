@@ -1,0 +1,478 @@
+# Publicación de la app Android de MAGI — Fase 11.
+#
+# Solo se dispara con una etiqueta android-vX.Y.Z o android-vX.Y.Z-rc.N. Antes
+# de compilar comprueba que la etiqueta coincide con android/version.properties
+# y calcula el versionCode con la fórmula del informe (§7.10). El APK se firma
+# con el keystore de los secretos que SOLO recibe este workflow, se verifica con
+# apksigner (esquemas v2 y v3), se acompaña de su .sha256, se atesta su
+# procedencia y se publica en una GitHub Release que NUNCA se marca como
+# «Latest» (esa marca es de las releases del escritorio). Con -rc.N la release
+# es una prerelease.
+#
+# El workflow del escritorio (release.yml, dist) no se dispara con estas
+# etiquetas: su on.push.tags lleva el patrón negativo '!android-v*'.
+#
+# Permisos: contents: read por defecto; contents: write solo en el job que crea
+# la Release, e id-token: write + attestations: write solo en el que compila y
+# atesta. Secretos (y solo aquí): ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS y ANDROID_KEY_PASSWORD.
+
+name: Release Android
+
+on:
+  push:
+    tags: ['android-v*']
+
+# Una release no se cancela ni se solapa: cada etiqueta se publica una vez.
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: '30.0.16248370'
+  CARGO_NDK_VERSION: '4.1.2'
+  # SHA-256 del binario precompilado de cargo-ndk (musl, estático).
+  CARGO_NDK_X86_64_LINUX_MUSL_SHA256: dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
+
+jobs:
+  verificar:
+    name: Etiqueta y versión
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Comprobar el formato de la etiqueta
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            android-v*) ;;
+            *)
+              echo "ERROR: «$TAG» no es una etiqueta de la app; se esperaba android-vX.Y.Z." >&2
+              exit 1
+              ;;
+          esac
+          version="${TAG#android-v}"
+          if [[ ! "$version" =~ ^([0-9]+)\.([0-9]{1,2})\.([0-9]{1,2})(-rc\.([1-8]))?$ ]]; then
+            echo "ERROR: «$version» no es una versión válida; se esperaba X.Y.Z o X.Y.Z-rc.N (N entre 1 y 8)." >&2
+            exit 1
+          fi
+          mayor="${BASH_REMATCH[1]}"
+          menor="${BASH_REMATCH[2]}"
+          parche="${BASH_REMATCH[3]}"
+          rc="${BASH_REMATCH[5]:-}"
+          if [ -n "$rc" ]; then
+            r="$rc"
+            prerelease=true
+          else
+            r=9
+            prerelease=false
+          fi
+          # Fórmula del informe §7.10: MAYOR*100000 + MENOR*1000 + PARCHE*10 + R.
+          version_code=$(( 10#$mayor * 100000 + 10#$menor * 1000 + 10#$parche * 10 + 10#$r ))
+          {
+            echo "version=$version"
+            echo "version_code=$version_code"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Etiqueta $TAG válida: version=$version, versionCode=$version_code, prerelease=$prerelease."
+
+      - name: Descargar el repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Comprobar que la etiqueta coincide con android/version.properties
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          fichero="android/version.properties"
+          if [ ! -f "$fichero" ]; then
+            echo "ERROR: no existe $fichero; el proyecto Gradle debe fijar ahí la versión." >&2
+            exit 1
+          fi
+          esperada="$(sed -n 's/^version=//p' "$fichero" | head -n 1 | tr -d '[:space:]')"
+          if [ -z "$esperada" ]; then
+            echo "ERROR: $fichero no contiene una línea version=X.Y.Z." >&2
+            exit 1
+          fi
+          if [ "$esperada" != "$VERSION" ]; then
+            echo "ERROR: la etiqueta android-v$VERSION no coincide con $fichero (version=$esperada)." >&2
+            echo "Actualiza android/version.properties en el mismo commit que la etiqueta, o etiqueta la versión que dice el fichero." >&2
+            exit 1
+          fi
+          echo "La etiqueta coincide con $fichero (version=$esperada)."
+
+  compilar:
+    name: APK release firmado y atestado
+    needs: verificar
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      huella: ${{ steps.firma.outputs.huella }}
+    env:
+      VERSION: ${{ needs.verificar.outputs.version }}
+      VERSION_CODE: ${{ needs.verificar.outputs.version_code }}
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Preparar JDK 21 (AGP y Gradle)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Preparar el SDK de Android
+        uses: android-actions/setup-android@v4
+
+      - name: Instalar el NDK r30
+        # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);
+        # el de commandline-tools 22 y anteriores usa «;». Se prueban las dos
+        # formas para que el workflow valga con cualquiera de los dos. La
+        # plataforma de compileSdk y las build-tools las descarga AGP si faltan
+        # (las licencias ya están aceptadas); el NDK hace falta antes, para
+        # cargo-ndk.
+        run: |
+          set -euo pipefail
+          instalar() {
+            if ! sdkmanager --install "$1" > /dev/null 2>&1; then
+              sdkmanager --install "$2" > /dev/null
+            fi
+          }
+          instalar "ndk/${NDK_VERSION}" "ndk;${NDK_VERSION}"
+          ndk_home="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          if [ ! -d "$ndk_home" ]; then
+            echo "ERROR: el NDK ${NDK_VERSION} no quedó instalado en $ndk_home" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+
+      - name: Preparar Rust con los objetivos de Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache de Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release
+
+      - name: Instalar cargo-ndk 4.1.2
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tar.gz"
+          echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/cargo-ndk
+          tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
+          install -m 755 "/tmp/cargo-ndk/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}/cargo-ndk" "$HOME/.cargo/bin/cargo-ndk"
+
+      - name: Cache de Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Preparar el keystore de firma
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ERROR: falta el secreto ANDROID_KEYSTORE_BASE64." >&2
+            exit 1
+          fi
+          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ]; then
+            echo "ERROR: faltan ANDROID_KEYSTORE_PASSWORD o ANDROID_KEY_ALIAS." >&2
+            exit 1
+          fi
+          umask 077
+          keystore="$RUNNER_TEMP/magi-android-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          if [ ! -s "$keystore" ]; then
+            echo "ERROR: el keystore descodificado está vacío." >&2
+            exit 1
+          fi
+          if ! keytool -list -keystore "$keystore" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" > /dev/null 2>&1; then
+            echo "ERROR: el keystore, su contraseña o el alias no son válidos; revisa los secretos." >&2
+            exit 1
+          fi
+          echo "MAGI_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+          echo "Keystore preparado en $keystore (no se imprime su contenido)."
+
+      - name: Compilar el APK release
+        working-directory: android
+        env:
+          MAGI_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MAGI_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MAGI_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for nombre in MAGI_KEYSTORE_PATH MAGI_KEYSTORE_PASSWORD MAGI_KEY_ALIAS MAGI_KEY_PASSWORD; do
+            if [ -z "${!nombre:-}" ]; then
+              echo "ERROR: falta la variable $nombre (secreto no configurado en el repositorio)." >&2
+              exit 1
+            fi
+          done
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Comprobar versionName, versionCode y ABI del APK
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$apk" ]; then
+            echo "ERROR: no se generó el APK firmado en $apk." >&2
+            find android/app/build/outputs/apk -name '*.apk' -print >&2 || true
+            exit 1
+          fi
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$sdk" ]; then
+            echo "ERROR: no están definidos ANDROID_SDK_ROOT ni ANDROID_HOME." >&2
+            exit 1
+          fi
+          build_tools="$(find "$sdk/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -n 1)"
+          aapt2="$build_tools/aapt2"
+          if [ ! -x "$aapt2" ]; then
+            echo "ERROR: no se encontró aapt2 en $build_tools." >&2
+            exit 1
+          fi
+          badging="$("$aapt2" dump badging "$apk" | head -n 1)"
+          version_name="$(printf '%s' "$badging" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+          version_code="$(printf '%s' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+          paquete="$(printf '%s' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          if [ "$paquete" != "org.cuatrodetres.magi" ]; then
+            echo "ERROR: el APK declara el paquete «$paquete», no org.cuatrodetres.magi." >&2
+            exit 1
+          fi
+          if [ "$version_name" != "$VERSION" ]; then
+            echo "ERROR: el APK lleva versionName «$version_name» y la etiqueta dice «$VERSION»." >&2
+            exit 1
+          fi
+          if [ "$version_code" != "$VERSION_CODE" ]; then
+            echo "ERROR: el APK lleva versionCode «$version_code» y la fórmula §7.10 da «$VERSION_CODE»." >&2
+            exit 1
+          fi
+          libs="$(unzip -Z1 "$apk" 'lib/*/*.so' | cut -d/ -f2 | sort -u)"
+          if [ "$libs" != "arm64-v8a" ]; then
+            echo "ERROR: el APK release debe ser solo arm64-v8a; lleva: $libs" >&2
+            exit 1
+          fi
+          if ! unzip -Z1 "$apk" | grep -qx 'lib/arm64-v8a/libmagi_movil.so'; then
+            echo "ERROR: el APK no contiene lib/arm64-v8a/libmagi_movil.so." >&2
+            exit 1
+          fi
+          echo "APK correcto: paquete=$paquete versionName=$version_name versionCode=$version_code ABI=arm64-v8a."
+
+      - name: Verificar la firma con apksigner
+        id: firma
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          build_tools="$(find "$sdk/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -n 1)"
+          apksigner="$build_tools/apksigner"
+          if [ ! -x "$apksigner" ]; then
+            echo "ERROR: no se encontró apksigner en $build_tools." >&2
+            exit 1
+          fi
+          salida="$("$apksigner" verify --verbose --print-certs "$apk")"
+          printf '%s\n' "$salida"
+          if ! printf '%s\n' "$salida" | grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true'; then
+            echo "ERROR: el APK no verifica con el esquema de firma v2." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$salida" | grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true'; then
+            echo "ERROR: el APK no verifica con el esquema de firma v3." >&2
+            exit 1
+          fi
+          huella="$(printf '%s\n' "$salida" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          if [ -z "$huella" ]; then
+            echo "ERROR: apksigner no imprimió la huella SHA-256 del certificado." >&2
+            exit 1
+          fi
+          echo "huella=$huella" >> "$GITHUB_OUTPUT"
+          echo "Firma v2 y v3 correctas. Certificado SHA-256: $huella"
+
+      - name: Preparar el APK y su .sha256
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release.apk "release/magi-android-v${VERSION}.apk"
+          (
+            cd release
+            sha256sum "magi-android-v${VERSION}.apk" > "magi-android-v${VERSION}.apk.sha256"
+            cat "magi-android-v${VERSION}.apk.sha256"
+          )
+
+      - name: Atestar la procedencia del APK
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: 'release/*.apk'
+
+      - name: Guardar los artefactos de la release
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-release
+          path: release/*
+          if-no-files-found: error
+
+  publicar:
+    name: GitHub Release
+    needs:
+      - verificar
+      - compilar
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verificar.outputs.version }}
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Descargar los artefactos
+        uses: actions/download-artifact@v8
+        with:
+          name: android-release
+          path: release
+
+      - name: Comprobar los artefactos descargados
+        working-directory: release
+        run: |
+          set -euo pipefail
+          if [ ! -f "magi-android-v${VERSION}.apk" ]; then
+            echo "ERROR: no se descargó el APK de la release." >&2
+            ls -la >&2
+            exit 1
+          fi
+          sha256sum -c ./*.sha256
+
+      - name: Extraer las notas de android/CHANGELOG.md
+        env:
+          VERSION: ${{ needs.verificar.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" <<'PY' > "$RUNNER_TEMP/notas-changelog.md"
+          import re
+          import sys
+
+          version = sys.argv[1]
+          sys.stdout.reconfigure(encoding="utf-8")
+          with open("android/CHANGELOG.md", encoding="utf-8") as fichero:
+              texto = fichero.read()
+
+          candidatas = [version]
+          base = re.sub(r"-rc\.[1-8]$", "", version)
+          if base != version:
+              candidatas.append(base)
+          candidatas.append("Sin publicar")
+
+          def limpiar(contenido):
+              # Fuera los comentarios HTML de plantilla del CHANGELOG.
+              return re.sub(r"<!--.*?-->", "", contenido, flags=re.S).strip()
+
+          for clave in candidatas:
+              patron = r"^## \[" + re.escape(clave) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)"
+              encontrado = re.search(patron, texto, re.M | re.S)
+              if encontrado:
+                  contenido = limpiar(encontrado.group(1))
+                  if contenido:
+                      print(contenido)
+                      break
+          else:
+              sys.stderr.write(
+                  "ERROR: android/CHANGELOG.md no tiene notas para " + version +
+                  " ni una sección «Sin publicar» con contenido.\n"
+              )
+              raise SystemExit(1)
+          PY
+
+      - name: Componer las notas de la release
+        env:
+          VERSION: ${{ needs.verificar.outputs.version }}
+          VERSION_CODE: ${{ needs.verificar.outputs.version_code }}
+          PRERELEASE: ${{ needs.verificar.outputs.prerelease }}
+          HUELLA: ${{ needs.compilar.outputs.huella }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HUELLA" ]; then
+            echo "ERROR: no se recibió la huella del certificado de firma." >&2
+            exit 1
+          fi
+          huella="$(printf '%s' "$HUELLA" | tr '[:lower:]' '[:upper:]' | sed 's/../&:/g; s/:$//')"
+          {
+            cat "$RUNNER_TEMP/notas-changelog.md"
+            echo
+            echo "## Verificación"
+            echo
+            echo "- APK: magi-android-v${VERSION}.apk (arm64-v8a, Android 11 o superior)"
+            echo "- SHA-256: en el fichero magi-android-v${VERSION}.apk.sha256"
+            echo "- Certificado de firma (SHA-256): ${huella}"
+            echo "- versionName: ${VERSION} · versionCode: ${VERSION_CODE}"
+            echo
+            echo "Comprobación del APK antes de instalarlo:"
+            echo
+            echo "    sha256sum -c magi-android-v${VERSION}.apk.sha256"
+            echo "    apksigner verify --print-certs magi-android-v${VERSION}.apk"
+            echo "    gh attestation verify magi-android-v${VERSION}.apk --repo 4d3-org/magi"
+            echo
+            echo "La huella del certificado debe coincidir con esta y con la de las releases anteriores de la app: si cambia, no instales el APK y avisa."
+            echo
+            if [ "$PRERELEASE" = "true" ]; then
+              echo "Esta es una prerelease (candidata): no sustituye a ninguna versión estable."
+            else
+              echo "Esta release no se marca como «Latest»: esa marca queda reservada a las releases del escritorio."
+            fi
+          } > "$RUNNER_TEMP/notas-release.md"
+          cat "$RUNNER_TEMP/notas-release.md"
+
+      - name: Crear la GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verificar.outputs.version }}
+          PRERELEASE: ${{ needs.verificar.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          argumentos=(
+            --title "MAGI para Android v${VERSION}"
+            --notes-file "$RUNNER_TEMP/notas-release.md"
+            --verify-tag
+            --latest=false
+          )
+          if [ "$PRERELEASE" = "true" ]; then
+            argumentos+=(--prerelease)
+          fi
+          gh release create "$TAG" "${argumentos[@]}" release/*
+          latest="$(gh release view "$TAG" --json isLatest --jq '.isLatest')"
+          if [ "$latest" != "false" ]; then
+            echo "ERROR: la release quedó marcada como «Latest»; no debe serlo nunca. Corrígelo en GitHub." >&2
+            exit 1
+          fi
+          echo "Release $TAG publicada (isLatest=$latest)."

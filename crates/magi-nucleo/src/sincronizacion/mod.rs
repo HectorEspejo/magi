@@ -16,6 +16,7 @@ pub mod elementos;
 pub mod formato;
 pub mod fusion;
 pub mod huellas;
+pub mod lector;
 pub mod reloj;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -168,18 +169,41 @@ pub fn equipos_quitados(documentos: &[Documento]) -> BTreeMap<String, String> {
     quitados
 }
 
+/// Da de alta o marca como quitados en EQUIPOS los equipos que los documentos
+/// ajenos dan por quitados, y devuelve el mapa uuid → fecha del borrado.
+/// Compartido por las pasadas en modo escritor y en modo lector.
+pub(crate) fn aplicar_equipos_quitados(
+    conexion: &Connection,
+    documentos: &[Documento],
+) -> Result<BTreeMap<String, String>> {
+    let quitados = equipos_quitados(documentos);
+    for (uuid, fecha) in &quitados {
+        match equipos_bd::por_uuid(conexion, uuid)? {
+            Some(equipo) if equipo.estado != equipos_bd::ESTADO_QUITADO => {
+                equipos_bd::marcar_quitado(conexion, equipo.id, fecha)?;
+            }
+            Some(_) => {}
+            None => {
+                let id = equipos_bd::crear(conexion, uuid, "desconocido", "linux")?;
+                equipos_bd::marcar_quitado(conexion, id, fecha)?;
+            }
+        }
+    }
+    Ok(quitados)
+}
+
 /// por el cerrojo en la CLI.
 pub const ESPERA_CERROJO: Duration = Duration::from_secs(10);
 
 /// Fichero leído y validado de otro equipo.
-struct FicheroLeido {
-    uuid: String,
-    hash: String,
-    documento: Documento,
+pub(crate) struct FicheroLeido {
+    pub(crate) uuid: String,
+    pub(crate) hash: String,
+    pub(crate) documento: Documento,
 }
 
 /// Motivo por el que no se puede leer un fichero de otro equipo.
-enum FalloLectura {
+pub(crate) enum FalloLectura {
     /// Ninguna clave lo descifra.
     SinClave,
     /// Se descifra pero la cabecera o la firma no son válidas.
@@ -190,8 +214,8 @@ enum FalloLectura {
     EquipoInvalido(String),
 }
 
-/// Lee, descifra y verifica el fichero de un equipo. Prueba todas las claves
-/// (la actual y, tras una rotación, la anterior).
+/// Lee, descifra y verifica el fichero de un equipo desde el disco. Prueba
+/// todas las claves (la actual y, tras una rotación, la anterior).
 fn leer_fichero(
     ruta: &Path,
     claves: &[ClaveSincronizacion],
@@ -199,49 +223,62 @@ fn leer_fichero(
 ) -> Result<std::result::Result<FicheroLeido, FalloLectura>> {
     // Un fichero de sincronización no debería pasar de unos pocos MB: uno
     // enorme (o corrupto) se rechaza como dañado en vez de cargarlo en memoria.
-    const TAMANO_MAX: u64 = 16 * 1024 * 1024;
     let tamano = std::fs::metadata(ruta)
         .map(|metadatos| metadatos.len())
         .unwrap_or(0);
-    if tamano > TAMANO_MAX {
+    if tamano > carpeta::TAMANO_MAXIMO {
         return Ok(Err(FalloLectura::Danado(format!(
-            "el fichero ocupa {tamano} bytes, más del máximo de {TAMANO_MAX}"
+            "el fichero ocupa {tamano} bytes, más del máximo de {}",
+            carpeta::TAMANO_MAXIMO
         ))));
     }
     let bytes = carpeta::leer(ruta)?;
-    let hash = cifrado::sha256_hex(&bytes);
+    Ok(interpretar_fichero(&bytes, claves, uuid_esperado))
+}
+
+/// Interpreta los bytes de un fichero de equipo: descifra, comprueba la firma,
+/// el formato y que el documento dice ser del equipo del nombre. La pasada en
+/// modo escritor lo llama tras leer del disco y la pasada en modo lector con
+/// los bytes que le da `CarpetaSincronizacion`: el orden de validación es
+/// exactamente el mismo en los dos casos.
+pub(crate) fn interpretar_fichero(
+    bytes: &[u8],
+    claves: &[ClaveSincronizacion],
+    uuid_esperado: &str,
+) -> std::result::Result<FicheroLeido, FalloLectura> {
+    let hash = cifrado::sha256_hex(bytes);
     for clave in claves {
-        let Ok(plano) = clave.descifrar(&bytes) else {
+        let Ok(plano) = clave.descifrar(bytes) else {
             continue;
         };
         let Ok(en_claro) = formato::separar(&plano) else {
-            return Ok(Err(FalloLectura::Danado(
+            return Err(FalloLectura::Danado(
                 "cabecera de sincronización no válida".to_string(),
-            )));
+            ));
         };
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
-            return Ok(Err(FalloLectura::Danado("firma no válida".to_string())));
+            return Err(FalloLectura::Danado("firma no válida".to_string()));
         }
         if en_claro.formato > formato::FORMATO {
-            return Ok(Err(FalloLectura::FormatoNuevo(en_claro.formato)));
+            return Err(FalloLectura::FormatoNuevo(en_claro.formato));
         }
         let documento = match formato::parsear(&en_claro.json) {
             Ok(documento) => documento,
-            Err(error) => return Ok(Err(FalloLectura::Danado(error.to_string()))),
+            Err(error) => return Err(FalloLectura::Danado(error.to_string())),
         };
         if documento.equipo.uuid != uuid_esperado {
-            return Ok(Err(FalloLectura::EquipoInvalido(format!(
+            return Err(FalloLectura::EquipoInvalido(format!(
                 "el fichero dice ser del equipo {} y se llama {}",
                 documento.equipo.uuid, uuid_esperado
-            ))));
+            )));
         }
-        return Ok(Ok(FicheroLeido {
+        return Ok(FicheroLeido {
             uuid: uuid_esperado.to_string(),
             hash,
             documento,
-        }));
+        });
     }
-    Ok(Err(FalloLectura::SinClave))
+    Err(FalloLectura::SinClave)
 }
 
 /// Construye el documento propio (instantánea completa de este equipo).
@@ -324,8 +361,9 @@ pub fn hash_canonico(documento: &Documento) -> Result<String> {
     Ok(cifrado::sha256_hex(json.as_bytes()))
 }
 
-/// ¿El plan cambia algo del inventario local?
-fn plan_cambia(plan: &fusion::PlanFusion, local: &[fusion::Candidato]) -> bool {
+/// ¿El plan cambia algo del inventario local? La comparten las pasadas en
+/// modo escritor y en modo lector.
+pub(crate) fn plan_cambia(plan: &fusion::PlanFusion, local: &[fusion::Candidato]) -> bool {
     if !plan.renombrados.is_empty() || !plan.conflictos.is_empty() {
         return true;
     }
@@ -529,22 +567,7 @@ pub fn pasada(
 
     // 2. ¿Este equipo ha sido quitado por otro?
     let documentos_owned: Vec<Documento> = leidos.iter().map(|l| l.documento.clone()).collect();
-    let quitados = equipos_quitados(&documentos_owned);
-    for (uuid, fecha) in &quitados {
-        if uuid == &este.uuid {
-            continue;
-        }
-        match equipos_bd::por_uuid(conexion, uuid)? {
-            Some(equipo) if equipo.estado != equipos_bd::ESTADO_QUITADO => {
-                equipos_bd::marcar_quitado(conexion, equipo.id, fecha)?;
-            }
-            Some(_) => {}
-            None => {
-                let id = equipos_bd::crear(conexion, uuid, "desconocido", "linux")?;
-                equipos_bd::marcar_quitado(conexion, id, fecha)?;
-            }
-        }
-    }
+    let quitados = aplicar_equipos_quitados(conexion, &documentos_owned)?;
     // El fichero de un equipo que se acaba de descubrir quitado no se importa
     // en esta misma pasada: su estado ya no es al_dia y sus elementos no
     // cuentan.
@@ -660,6 +683,7 @@ pub fn pasada(
             .unwrap_or(0);
         let opciones_aplicar = aplicacion::OpcionesAplicacion {
             borrados_aplazados: aplazados,
+            ..aplicacion::OpcionesAplicacion::default()
         };
         resumen = {
             let aplicado = aplicacion::aplicar(conexion, &plan, &opciones_aplicar, &rutas.hogar)?;

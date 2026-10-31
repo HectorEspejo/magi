@@ -7,17 +7,21 @@
 //! inyectados.
 
 pub mod almacen;
+pub mod claves;
 pub mod conexion;
 pub mod configuracion;
 pub mod deliberacion;
 pub mod ficheros;
+pub mod instalar_clave;
 pub mod llavero;
 pub mod modelo;
 pub mod registro;
 pub mod rutas;
 pub mod sincronizacion;
 pub mod snippets;
+pub mod terminal;
 pub mod trabajo_vivo;
+pub mod tuneles;
 
 /// Versión del núcleo. La app la enseña en «Acerca de» junto a la suya.
 pub const VERSION_NUCLEO: &str = env!("CARGO_PKG_VERSION");

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/magi-nucleo"]
+members = ["crates/magi-nucleo", "crates/magi-movil"]
 resolver = "2"
 
 [package]

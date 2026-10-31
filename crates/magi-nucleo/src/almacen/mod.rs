@@ -15,6 +15,7 @@ pub mod hosts;
 pub mod identidades;
 pub mod lapidas;
 pub mod migraciones;
+pub mod movil;
 pub mod registro;
 pub mod sincronizaciones;
 pub mod snippets;

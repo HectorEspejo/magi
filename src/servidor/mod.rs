@@ -10,7 +10,6 @@ pub mod difusion;
 pub mod ejecuciones;
 pub mod sesiones;
 pub mod sftp;
-pub mod socks5;
 pub mod transferencias;
 pub mod tuneles;
 

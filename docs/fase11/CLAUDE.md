@@ -41,7 +41,7 @@ coméntalo con el desarrollador.
   `minusculas_snake_case`. Identificadores de Rust (módulos, funciones,
   variables) en castellano y `snake_case`; tipos en `CamelCase` en castellano.
 - Sin `CHECK` sobre enumeraciones en SQLite: los valores se validan en código.
-- Migraciones en `src/almacen/migraciones.rs`, numeradas y aplicadas por
+- Migraciones en `crates/magi-nucleo/src/almacen/migraciones.rs`, numeradas y aplicadas por
   `PRAGMA user_version`; nunca modifiques una migración ya aplicada, añade otra.
 - Nunca guardes claves privadas ni frases en disco ni en el log; en memoria
   usa `zeroize`.
@@ -71,7 +71,7 @@ coméntalo con el desarrollador.
   conexión y notifica `Pantalla` coalescido a ~30 fps. Los diálogos que esperan
   al usuario (huella, frase) no tienen timeout; el de 10 s solo cubre DNS/TCP.
 - Log: `~/.local/state/magi/logs/magi.log.<fecha>` (un fichero por día).
-- Todo evento que deba quedar en el historial pasa por `registro::anotar`;
+- Todo evento que deba quedar en el historial pasa por `registro::anotar` (`crates/magi-nucleo/src/registro.rs`);
   nadie escribe en `REGISTRO` directamente y sus filas nunca se editan.
 - Las operaciones automáticas (sondeo y las que vengan) nunca abren diálogos:
   reportan error con instrucción. Solo las conexiones interactivas aceptan
@@ -83,7 +83,7 @@ coméntalo con el desarrollador.
   nunca interpolados en el texto del comando.
 - El bucle de UI es el único escritor de SQLite: las tareas de red emiten
   eventos y nunca abren la base de datos.
-- Toda conexión viva está en `conexion::RegistroSesiones`; antes de abrir una
+- Toda conexión viva está en `conexion::RegistroSesiones` (`crates/magi-nucleo/src/conexion/`); antes de abrir una
   conexión efímera, pide la existente ahí.
 - Un secreto que no es una clave (contraseñas) solo vive en el llavero del
   sistema a través de `src/llavero.rs`; en `magi.db` van referencias, nunca
@@ -132,7 +132,7 @@ coméntalo con el desarrollador.
   recursos, esperas sin plazo y estado leído a destiempo; corrige lo que
   encuentres y añade test de regresión a lo que sea pérdida de datos. Anota
   el resultado en el informe de implementación.
-- Túneles (`src/servidor/tuneles.rs`): el CRUD de `TUNELES` lo hace el cliente;
+- Túneles (`src/servidor/tuneles.rs` en el escritorio; la mecánica compartida en `crates/magi-nucleo/src/tuneles/`): el CRUD de `TUNELES` lo hace el cliente;
   el servidor solo lee la tabla y ejecuta. Un túnel activo cuenta como canal
   del pool pero no como pestaña ni SFTP para el ciclo automático. Todo lo que
   escuche en local va en `127.0.0.1` salvo aviso explícito; los canales
@@ -162,7 +162,7 @@ coméntalo con el desarrollador.
   variables (escapadas con `shell-escape`) y deliberación; el servidor recibe
   el comando ya resuelto, lo ejecuta sin diálogos y nunca lee `SNIPPETS`. La
   salida de comandos remotos jamás va a `REGISTRO` ni al log.
-- Deliberación (`src/deliberacion/`): comprobaciones en paralelo con plazo duro
+- Deliberación (`src/deliberacion/` del escritorio; el modelo compartido en `crates/magi-nucleo/src/deliberacion.rs`): comprobaciones en paralelo con plazo duro
   de 2 s; `Ctrl+K` es la única tecla que ejecuta desde el diálogo MAGI (`↵`
   no). El servidor escribe `DELIBERACIONES.ejecucion_resultado` y las
   anotaciones `deliberacion_*` al terminar la ejecución, por su hilo escritor.
@@ -258,7 +258,7 @@ coméntalo con el desarrollador.
   de sustituirlo (es lo correcto).
 - MAGI no comprueba actualizaciones ni abre conexiones salientes que no sean a
   los hosts del usuario (sin telemetría).
-- Sincronización del inventario (desde la Fase 10, `src/sincronizacion/`):
+- Sincronización del inventario (desde la Fase 10, `crates/magi-nucleo/src/sincronizacion/`; la pasada en modo escritor con copia y exportación vive en `src/sincronizacion/` del escritorio):
   toda tabla que viaja lleva `uuid`, `version` y `vector`. Las escrituras del
   almacén de campos que viajan suben la versión con el reloj híbrido
   (`almacen/versiones.rs`); los campos propios del equipo no. Un `SET NULL`

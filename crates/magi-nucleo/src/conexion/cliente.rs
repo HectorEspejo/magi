@@ -858,3 +858,170 @@ fn acortar_hogar(ruta: &Path, hogar: &Path) -> String {
         Err(_) => ruta.display().to_string(),
     }
 }
+
+// ---------------------------------------------------------------- móvil
+
+/// Clave del móvil lista para autenticar: la línea OpenSSH pública (derivada
+/// de la X.509 del Keystore) y el firmante que firma sin sacar la privada.
+pub struct ClaveMovil {
+    pub linea_publica: String,
+    pub firmante: Arc<dyn crate::claves::Firmante>,
+}
+
+/// Firmante de russh sobre el Firmante de la plataforma: firma con el
+/// Keystore y convierte la firma DER al formato de SSH.
+struct FirmanteSigner {
+    firmante: Arc<dyn crate::claves::Firmante>,
+}
+
+#[derive(Debug)]
+enum ErrorFirma {
+    Fallo(String),
+    Envio(russh::SendError),
+}
+
+impl std::fmt::Display for ErrorFirma {
+    fn fmt(&self, formato: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorFirma::Fallo(motivo) => write!(formato, "{motivo}"),
+            ErrorFirma::Envio(error) => write!(formato, "no se pudo enviar la firma: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ErrorFirma {}
+
+impl From<russh::SendError> for ErrorFirma {
+    fn from(error: russh::SendError) -> Self {
+        ErrorFirma::Envio(error)
+    }
+}
+
+impl russh::Signer for FirmanteSigner {
+    type Error = ErrorFirma;
+
+    fn auth_sign(
+        &mut self,
+        _key: &AgentIdentity,
+        _hash_alg: Option<russh::keys::HashAlg>,
+        to_sign: Vec<u8>,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        let firmante = self.firmante.clone();
+        async move {
+            // El Keystore puede tardar y la firma no debe ocupar un hilo de
+            // tokio: se firma fuera y después se compone el mensaje.
+            let para_firmar = to_sign.clone();
+            let der = tokio::task::spawn_blocking(move || firmante.firmar(&para_firmar))
+                .await
+                .map_err(|error| {
+                    ErrorFirma::Fallo(format!("la firma del móvil se interrumpió: {error}"))
+                })?
+                .map_err(ErrorFirma::Fallo)?;
+            let firma = crate::claves::der_a_ssh::der_a_ssh(&der).map_err(ErrorFirma::Fallo)?;
+            let mut datos = to_sign;
+            // El campo signature del mensaje es una cadena SSH que envuelve el
+            // blob (algoritmo + r/s), como lo escribe cualquier firmante.
+            datos.extend_from_slice(&(firma.len() as u32).to_be_bytes());
+            datos.extend_from_slice(&firma);
+            Ok(datos)
+        }
+    }
+}
+
+/// Autentica en el móvil con la cadena fija de la Fase 11: clave del móvil,
+/// luego la contraseña guardada en este móvil y, si no, el diálogo (3
+/// intentos, con opción de recordar).
+pub async fn autenticar_movil(
+    handle: &mut Handle<Cliente>,
+    host: &Host,
+    contexto: &Contexto,
+    clave: &ClaveMovil,
+) -> Result<IdentidadUsada, ErrorCliente> {
+    emitir_estado(&contexto.tx, host.id, EstadoSesion::Autenticando);
+    let usuario = host
+        .usuario
+        .clone()
+        .unwrap_or_else(|| contexto.usuario_local.clone());
+
+    // 1. Clave del móvil. Si el host la rechaza, se sigue con contraseña; un
+    // fallo del firmante (teléfono bloqueado) también deja probar contraseña.
+    let mut quedan = russh::MethodSet::empty();
+    match russh::keys::PublicKey::from_openssh(clave.linea_publica.trim()) {
+        Ok(publica) => {
+            let huella = huellas::huella(&publica);
+            let mut firmante = FirmanteSigner {
+                firmante: clave.firmante.clone(),
+            };
+            match handle
+                .authenticate_publickey_with(usuario.as_str(), publica, None, &mut firmante)
+                .await
+            {
+                Ok(resultado) => {
+                    if resultado.success() {
+                        return Ok(IdentidadUsada {
+                            descripcion: "clave del móvil".to_string(),
+                            huella: Some(huella),
+                        });
+                    }
+                    if let russh::client::AuthResult::Failure {
+                        remaining_methods, ..
+                    } = resultado
+                    {
+                        quedan = remaining_methods;
+                    }
+                }
+                Err(error) => {
+                    let _ = contexto.tx.send(EventoConexion::ContrasenaGuardada {
+                        host_id: host.id,
+                        ok: false,
+                        motivo: Some(format!(
+                            "la clave del móvil no se pudo usar ({error}); desbloquea el teléfono"
+                        )),
+                    });
+                }
+            }
+        }
+        Err(error) => {
+            return Err(ErrorCliente::Mensaje(format!(
+                "la clave pública del móvil no es válida: {error}"
+            )));
+        }
+    }
+
+    // 2. Contraseña guardada en este móvil.
+    if contexto.interactivo {
+        match contexto
+            .llavero
+            .recuperar_contrasena(&host.nombre, &usuario)
+        {
+            Ok(Some(contrasena)) => {
+                let intento = handle
+                    .authenticate_password(usuario.as_str(), contrasena.as_str())
+                    .await?;
+                if intento.success() {
+                    return Ok(IdentidadUsada {
+                        descripcion: "contraseña · llavero del móvil".to_string(),
+                        huella: None,
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+
+    // 3. Diálogo de contraseña, con recordar en este móvil.
+    if !contexto.interactivo {
+        return Err(ErrorCliente::Mensaje(format!(
+            "«{}» no acepta la clave del móvil y no hay contraseña guardada en este móvil",
+            host.nombre
+        )));
+    }
+    if !quedan.is_empty() && !quedan.contains(&russh::MethodKind::Password) {
+        return Err(ErrorCliente::Mensaje(format!(
+            "«{}» no acepta ni la clave del móvil ni contraseña",
+            host.nombre
+        )));
+    }
+    autenticar_con_contrasena(handle, host, contexto, &usuario, true).await
+}

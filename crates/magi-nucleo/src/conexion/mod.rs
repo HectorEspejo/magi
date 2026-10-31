@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
@@ -154,4 +155,33 @@ pub fn lanzar(
         cliente::sesion_completa(plan, rx_comandos, tx).await;
     });
     tx_comandos
+}
+
+/// Abre un canal con plazo sin dejarlo huérfano: la apertura va en su propia
+/// tarea y, si el plazo vence, una tarea de rescate espera a que el host la
+/// confirme para cerrarla (en russh un `Channel` no se cierra al soltarse, y
+/// en una conexión compartida los canales huérfanos agotarían `MaxSessions`).
+pub async fn abrir_con_plazo<F, E>(
+    plazo: Duration,
+    apertura: F,
+) -> Result<russh::Channel<russh::client::Msg>, String>
+where
+    F: std::future::Future<Output = Result<russh::Channel<russh::client::Msg>, E>> + Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let mut tarea = tokio::spawn(apertura);
+    match tokio::time::timeout(plazo, &mut tarea).await {
+        Ok(Ok(Ok(canal))) => Ok(canal),
+        Ok(Ok(Err(error))) => Err(error.to_string()),
+        Ok(Err(error)) => Err(format!("la apertura del canal falló: {error}")),
+        Err(_) => {
+            tokio::spawn(async move {
+                // Termina sola: si la conexión cae, la apertura devuelve error.
+                if let Ok(Ok(canal)) = tarea.await {
+                    let _ = canal.close().await;
+                }
+            });
+            Err("el host no abrió el canal a tiempo".to_string())
+        }
+    }
 }

@@ -120,3 +120,14 @@ pub fn sustituir(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Res
     texto.push('\n');
     escribir_atomico(ruta, texto.as_bytes(), 0o600)
 }
+
+/// Entradas de known_hosts de una dirección, como (tipo de clave, huella
+/// SHA256). Las usa la ficha del móvil para enseñar las huellas conocidas.
+pub fn entradas_de_host(ruta: &Path, host: &str, puerto: u16) -> Result<Vec<(String, String)>> {
+    let entradas = known_host_keys_path(host, puerto, ruta)
+        .with_context(|| format!("leyendo {}", ruta.display()))?;
+    Ok(entradas
+        .into_iter()
+        .map(|(_, clave)| (tipo_clave(&clave), huella(&clave)))
+        .collect())
+}

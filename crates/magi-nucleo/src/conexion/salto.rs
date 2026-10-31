@@ -129,3 +129,78 @@ async fn conectar_tcp(direccion: &str, puerto: u16) -> Result<tokio::net::TcpStr
         Ok(Ok(socket)) => Ok(socket),
     }
 }
+
+/// Conecta y autentica la cadena con la cadena fija del móvil (clave del
+/// móvil, contraseña guardada y diálogo), saltando con canales direct-tcpip.
+pub async fn conectar_cadena_movil(
+    cadena: &[Host],
+    contexto: &Contexto,
+    clave: &super::cliente::ClaveMovil,
+) -> Result<Transporte, ErrorCliente> {
+    let mut saltos: Vec<Handle<Cliente>> = Vec::new();
+    let mut canal: Option<russh::Channel<russh::client::Msg>> = None;
+    let mut handle_final: Option<Handle<Cliente>> = None;
+    let mut identidad_usada = IdentidadUsada {
+        descripcion: String::new(),
+        huella: None,
+    };
+    for (indice, host) in cadena.iter().enumerate() {
+        let config = std::sync::Arc::new(config_cliente_movil(host));
+        let manejador = Cliente::nuevo(
+            contexto.tx.clone(),
+            host.id,
+            &host.direccion,
+            host.puerto,
+            contexto.known_hosts.clone(),
+            contexto.interactivo,
+        )
+        .con_reenvios(contexto.reenvios.clone());
+        let mut handle = match canal.take() {
+            Some(canal) => {
+                russh::client::connect_stream(config, canal.into_stream(), manejador).await?
+            }
+            None => {
+                let socket = conectar_tcp(&host.direccion, host.puerto).await?;
+                russh::client::connect_stream(config, socket, manejador).await?
+            }
+        };
+        let identidad =
+            super::cliente::autenticar_movil(&mut handle, host, contexto, clave).await?;
+        if indice + 1 < cadena.len() {
+            let siguiente = &cadena[indice + 1];
+            let nuevo_canal = handle
+                .channel_open_direct_tcpip(
+                    siguiente.direccion.clone(),
+                    siguiente.puerto as u32,
+                    "127.0.0.1".to_string(),
+                    0,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "abriendo el canal hacia {} a través de {}",
+                        siguiente.nombre, host.nombre
+                    )
+                })?;
+            saltos.push(handle);
+            canal = Some(nuevo_canal);
+        } else {
+            identidad_usada = identidad;
+            handle_final = Some(handle);
+        }
+    }
+    Ok(Transporte {
+        handle: std::sync::Arc::new(handle_final.expect("la cadena siempre incluye el destino")),
+        saltos,
+        identidad: identidad_usada,
+    })
+}
+
+fn config_cliente_movil(host: &Host) -> russh::client::Config {
+    russh::client::Config {
+        keepalive_interval: Some(std::time::Duration::from_secs(u64::from(
+            host.keepalive_seg.unwrap_or(30),
+        ))),
+        ..Default::default()
+    }
+}

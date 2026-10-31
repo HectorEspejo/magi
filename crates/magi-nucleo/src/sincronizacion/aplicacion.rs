@@ -39,6 +39,12 @@ const PREFIJO_TEMPORAL: &str = "__magi_sync__";
 pub struct OpcionesAplicacion {
     /// uuids cuyo borrado se aplaza porque tienen trabajo vivo: no se borran.
     pub borrados_aplazados: BTreeSet<String>,
+    /// Tipos de conflicto que se guardan en CONFLICTOS. `None` guarda todos
+    /// (lo que hace el escritorio); la pasada en modo lector pasa solo
+    /// `huella` y `borrado`, porque los conflictos de elemento, nombre y
+    /// huérfano son de los equipos que escriben y en el móvil nunca se
+    /// resolverían (§7.3 del informe de la Fase 11).
+    pub tipos_conflicto: Option<BTreeSet<String>>,
 }
 
 /// Resumen de lo aplicado, para REGISTRO y para la vista.
@@ -404,7 +410,13 @@ pub fn aplicar(
     }
 
     // 8. Conflictos: los que ya estaban pendientes no se duplican ni cuentan.
+    //    El modo lector filtra los tipos que no resuelve nunca.
     for conflicto in plan.conflictos.iter().chain(conflictos_por_nombre.iter()) {
+        if let Some(tipos) = &opciones.tipos_conflicto {
+            if !tipos.contains(&conflicto.tipo) {
+                continue;
+            }
+        }
         let nuevo = nuevo_conflicto(conflicto);
         if conflictos::crear_si_nuevo(&transaccion, &nuevo)?.is_some() {
             resumen.conflictos += 1;
