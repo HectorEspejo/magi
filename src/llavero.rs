@@ -2,8 +2,6 @@
 //! En macOS el Keychain se usa por API (`security-framework`, sin subproceso
 //! y sin argv visible); en Linux con `secret-tool` por stdin.
 
-use std::process::{Command, Stdio};
-
 use zeroize::Zeroizing;
 
 /// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
@@ -71,8 +69,9 @@ mod backend {
 
 #[cfg(not(target_os = "macos"))]
 mod backend {
-    use super::{Command, Stdio, Zeroizing, SERVICIO};
+    use super::{Zeroizing, SERVICIO};
     use std::io::Write as _;
+    use std::process::{Command, Stdio};
 
     enum Fallo {
         NoExiste,
