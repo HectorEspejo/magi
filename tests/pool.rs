@@ -5,6 +5,8 @@
 
 mod comun;
 
+// Solo lo usa la prueba de SIGTERM, que es de Linux.
+#[cfg(target_os = "linux")]
 use std::collections::HashSet;
 use std::time::Duration;
 
