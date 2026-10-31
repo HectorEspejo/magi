@@ -27,16 +27,15 @@ mod backend {
     const ITEM_NO_ENCONTRADO: i32 = -25300;
 
     pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
-        keychain::set_generic_password(
-            SERVICIO,
-            cuenta(host, usuario).as_bytes(),
-            contrasena.as_bytes(),
-        )
-        .map_err(|error| format!("Keychain: {error}"))
+        // security-framework 3.x pide service y account como &str.
+        let cuenta = cuenta(host, usuario);
+        keychain::set_generic_password(SERVICIO, &cuenta, contrasena.as_bytes())
+            .map_err(|error| format!("Keychain: {error}"))
     }
 
     pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>, String> {
-        match keychain::get_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+        let cuenta = cuenta(host, usuario);
+        match keychain::get_generic_password(SERVICIO, &cuenta) {
             Ok(bytes) => {
                 let texto = String::from_utf8_lossy(&bytes).to_string();
                 // La copia devuelta por la API se descarta con zeroize.
@@ -54,7 +53,8 @@ mod backend {
     }
 
     pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
-        match keychain::delete_generic_password(SERVICIO, cuenta(host, usuario).as_bytes()) {
+        let cuenta = cuenta(host, usuario);
+        match keychain::delete_generic_password(SERVICIO, &cuenta) {
             Ok(()) => Ok(true),
             Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(false),
             Err(error) => Err(format!("Keychain: {error}")),
