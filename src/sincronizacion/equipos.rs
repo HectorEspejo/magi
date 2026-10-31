@@ -81,10 +81,13 @@ pub fn claves_para_leer(
     config: &Config,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<Vec<ClaveSincronizacion>, String> {
-    let mut claves = Vec::new();
-    if let Some(clave) = clave_del_llavero(llavero)? {
-        claves.push(clave);
-    }
+    // La anterior solo sirve para LEER ficheros de la rotación: sin la actual
+    // no se puede sincronizar (ni exportar con una clave que ya no es la del
+    // inventario), así que se devuelve vacío y la pasada dice SinClave.
+    let Some(actual) = clave_del_llavero(llavero)? else {
+        return Ok(Vec::new());
+    };
+    let mut claves = vec![actual];
     if let Some(anterior) = clave_anterior_del_llavero(config, llavero)? {
         claves.push(anterior);
     }
@@ -119,9 +122,22 @@ pub fn olvidar_anterior_si_vencida(
     if clave_anterior_vigente(config) {
         return Ok(false);
     }
-    let _ = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR);
+    if let Err(error) = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR) {
+        // No se toca la fecha: se reintentará en la siguiente pasada.
+        anyhow::bail!("no se pudo olvidar la clave anterior del llavero: {error}");
+    }
     config.sincronizacion.clave_anterior_hasta = None;
     Ok(true)
+}
+
+/// Toma el cerrojo de sincronización para una operación de ciclo de vida
+/// (crear, unir, rotar, quitar, desactivar): la pasada de otra ventana no
+/// puede leer/escribir la carpeta a la vez.
+fn cerrojo_de_ciclo(rutas: &Rutas) -> Result<Option<carpeta::Cerrojo>> {
+    match carpeta::adquirir_cerrojo(rutas, Some(std::time::Duration::from_secs(3)))? {
+        Some(cerrojo) => Ok(Some(cerrojo)),
+        None => anyhow::bail!("otra ventana está sincronizando; inténtalo cuando termine"),
+    }
 }
 
 /// Comprueba que la carpeta existe y se puede escribir, sin dejar nada.
@@ -131,11 +147,26 @@ fn comprobar_carpeta(carpeta: &Path) -> Result<()> {
     if !metadatos.is_dir() {
         anyhow::bail!("{} no es una carpeta", carpeta.display());
     }
-    let prueba = carpeta.join(".magi-escritura");
-    std::fs::write(&prueba, b"")
+    // Nombre único y create_new: si alguien plantó un enlace con el nombre de
+    // la sonda, no se sigue ni se trunca el fichero de fuera.
+    let prueba = carpeta.join(format!(".magi-escritura-{}", uuid::Uuid::new_v4()));
+    let fichero = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&prueba)
         .with_context(|| format!("no se puede escribir en {}", carpeta.display()))?;
+    drop(fichero);
     let _ = std::fs::remove_file(&prueba);
     Ok(())
+}
+
+/// Olvida el hash del fichero propio para que la siguiente pasada lo
+/// reescriba aunque el inventario no haya cambiado. Hace falta cada vez que
+/// cambia la clave (crear, unir, rotar, quitar): el fichero existente estaría
+/// cifrado con la clave vieja y un equipo con la nueva no podría leerlo.
+fn olvidar_fichero_propio(conexion: &Connection) -> Result<()> {
+    let este = crate::almacen::equipos::este(conexion)?;
+    crate::almacen::equipos::olvidar_hash_propio(conexion, este.id)
 }
 
 /// Guarda la carpeta en config.toml.
@@ -156,13 +187,17 @@ pub fn crear(
     config: &mut Config,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<ClaveSincronizacion> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
     comprobar_carpeta(carpeta)?;
     if carpeta::hay_ficheros(carpeta)? {
         anyhow::bail!("la carpeta ya tiene ficheros de MAGI: une este equipo en vez de crearlo");
     }
     let clave = ClaveSincronizacion::generar();
     guardar_en_llavero(&clave, llavero).map_err(anyhow::Error::msg)?;
+    // Una configuración nueva no arrastra la clave anterior de otra carpeta.
+    let _ = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR);
     guardar_carpeta(rutas, config, carpeta)?;
+    olvidar_fichero_propio(conexion)?;
     registro::anotar(
         conexion,
         registro::INVENTARIO_SINC_ACTIVADA,
@@ -186,6 +221,7 @@ pub fn unir(
     config: &mut Config,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<ClaveSincronizacion> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
     comprobar_carpeta(carpeta)?;
     let clave = ClaveSincronizacion::desde_texto(texto_clave)?;
     let mut documentos = Vec::new();
@@ -202,15 +238,22 @@ pub fn unir(
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
             continue;
         }
+        if en_claro.formato > formato::FORMATO {
+            continue;
+        }
         if let Ok(documento) = formato::parsear(&en_claro.json) {
-            documentos.push(documento);
+            if documento.equipo.uuid == fichero.uuid {
+                documentos.push(documento);
+            }
         }
     }
     if documentos.is_empty() {
         anyhow::bail!("la clave no abre los ficheros de esta carpeta");
     }
     guardar_en_llavero(&clave, llavero).map_err(anyhow::Error::msg)?;
+    let _ = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR);
     guardar_carpeta(rutas, config, carpeta)?;
+    olvidar_fichero_propio(conexion)?;
     let unidos =
         crate::sincronizacion::aplicacion::unir_por_nombre(conexion, &documentos, &rutas.hogar)?;
     registro::anotar(
@@ -257,16 +300,24 @@ pub fn quitar(
     uuid_equipo: &str,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<ClaveSincronizacion> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
+    if uuid::Uuid::parse_str(uuid_equipo).is_err() {
+        anyhow::bail!("uuid de equipo no válido: «{uuid_equipo}»");
+    }
     let carpeta = carpeta_configurada(rutas, config)?;
     let equipo = crate::almacen::equipos::por_uuid(conexion, uuid_equipo)?
         .with_context(|| format!("no existe el equipo {uuid_equipo}"))?;
     if equipo.es_este {
         anyhow::bail!("no se puede quitar este mismo equipo");
     }
-    crate::almacen::equipos::marcar_quitado(conexion, equipo.id, &crate::modelo::fecha_ahora())?;
-    let _ = carpeta::borrar(&carpeta, uuid_equipo)?;
+    // Primero se borra su fichero: si esto falla, no se marca quitado ni se
+    // rota la clave (dejaría la baja a medias).
+    carpeta::borrar(&carpeta, uuid_equipo)
+        .with_context(|| format!("borrando el fichero del equipo {uuid_equipo}"))?;
     let clave = rotar_en_llavero(config, llavero)?;
+    crate::almacen::equipos::marcar_quitado(conexion, equipo.id, &crate::modelo::fecha_ahora())?;
     config.guardar(&rutas.fichero_config())?;
+    olvidar_fichero_propio(conexion)?;
     registro::anotar(
         conexion,
         registro::INVENTARIO_EQUIPO_QUITADO,
@@ -293,9 +344,11 @@ pub fn rotar(
     config: &mut Config,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<ClaveSincronizacion> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
     let _carpeta = carpeta_configurada(rutas, config)?;
     let clave = rotar_en_llavero(config, llavero)?;
     config.guardar(&rutas.fichero_config())?;
+    olvidar_fichero_propio(conexion)?;
     registro::anotar(
         conexion,
         registro::INVENTARIO_CLAVE_CAMBIADA,
@@ -316,13 +369,20 @@ pub fn desactivar(
     config: &mut Config,
     llavero: &dyn LlaveroSecreto,
 ) -> Result<()> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
     let Some(carpeta) = config.sincronizacion.ruta_carpeta(&rutas.hogar) else {
         anyhow::bail!("la sincronización no está configurada");
     };
     let este = crate::almacen::equipos::este(conexion)?;
-    let _ = carpeta::borrar(&carpeta, &este.uuid)?;
-    let _ = llavero.olvidar(CUENTA_SINCRONIZACION);
-    let _ = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR);
+    // Si el llavero no deja olvidar las claves, no se desactiva a medias: se
+    // avisa y la carpeta y el fichero se quedan como están.
+    if let Err(error) = llavero.olvidar(CUENTA_SINCRONIZACION) {
+        anyhow::bail!("no se pudo borrar la clave del llavero: {error}");
+    }
+    if let Err(error) = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR) {
+        anyhow::bail!("no se pudo borrar la clave anterior del llavero: {error}");
+    }
+    carpeta::borrar(&carpeta, &este.uuid)?;
     config.sincronizacion.carpeta = None;
     config.sincronizacion.clave_anterior_hasta = None;
     config.guardar(&rutas.fichero_config())?;
@@ -341,6 +401,7 @@ pub fn desactivar(
 /// borra el fichero de su uuid anterior, le asigna un uuid nuevo y lo deja
 /// listo para unir de nuevo con la clave nueva. Devuelve el uuid nuevo.
 pub fn reunir(conexion: &Connection, rutas: &Rutas, config: &mut Config) -> Result<String> {
+    let _cerrojo = cerrojo_de_ciclo(rutas)?;
     let Some(carpeta) = config.sincronizacion.ruta_carpeta(&rutas.hogar) else {
         anyhow::bail!("la sincronización no está configurada");
     };

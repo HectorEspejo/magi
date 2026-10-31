@@ -456,3 +456,39 @@ fn el_known_hosts_de_prueba_esta_bajo_ssh() {
     );
     assert!(Path::new(&entorno.known_hosts).starts_with(&entorno.rutas.hogar));
 }
+/// Clave RSA de prueba (pareja de usar y tirar; solo la parte pública).
+const CLAVE_RSA: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC8/77KqdlhuVFizFaIUyeJ3635wtS4SKDmCiZLCnQMJPtg5PaTANqbCRaxpRJN0krhoP7K396IV5RbujkBsSwVYdIFQGiveNnJOwo4a3xfVwenPi20jfNamFybjw98zOpYc780WhLanv2VFO/7z+IlObwJTPs1gKJk6D5nJ8ajASf7VVJfgESqpjNwEHZN5JQ79dI3KBKmJoUIUn3fYfEc20uSePcCn07nX7YOxdYR0MoelyXUbT+E6s1gxV73FW+3JTSInz7sDmhm3d+zC8hDiUaJPHqcLRq7mh02uYlsuw/bqMvKz+rC9ql3z6PMiJGOBgnfd7VrWlOvzyICWlhr";
+
+#[test]
+fn una_huella_de_otro_tipo_no_se_anade_sin_que_el_usuario_la_acepte() {
+    let entorno = Entorno::nuevo();
+    let uuid = entorno.host("web", "192.0.2.5", 22);
+    // Este equipo ya tiene una RSA de ese host; llega una ed25519 del otro.
+    entorno.escribir_known_hosts(&format!("192.0.2.5 {CLAVE_RSA}\n"));
+    let entrada = huella(&uuid, CLAVE_A, "2026-11-01T10:00:00+01:00");
+    let resultado = huellas::importar(
+        entorno.conexion(),
+        &entorno.known_hosts,
+        &[entrada],
+        &equipos_de(&uuid),
+    )
+    .expect("importando huellas");
+
+    assert!(
+        resultado.anadidas.is_empty(),
+        "no se añade una huella de otro tipo sin conflicto"
+    );
+    assert_eq!(
+        resultado.conflictos.len(),
+        1,
+        "queda un conflicto de huella"
+    );
+    assert_eq!(resultado.conflictos[0].tipo, "huella");
+    let known_hosts = entorno.leer_known_hosts();
+    assert!(known_hosts.contains("ssh-rsa"));
+    assert!(
+        !known_hosts.contains("ssh-ed25519"),
+        "no se escribió la ajena"
+    );
+    assert_eq!(entorno.registros("huella_sincronizada"), 0);
+}

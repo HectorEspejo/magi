@@ -88,10 +88,10 @@
 - [x] CHANGELOG en «Sin publicar» con la sincronización cifrada (versión MINOR: migración 7)
 - [x] Tests: migración 6→7, reloj híbrido, versiones solo en campos que viajan, fusión (dominancia, concurrencia, lápidas, huérfanos, nombres, determinismo), firma y equipo del fichero, huellas, umbral de borrados, unión por nombre y rotación de clave
 - [x] `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo deny check` y `TZ=UTC cargo test` limpios y en verde
-- [ ] Revisión adversarial del código nuevo (fusión, borrados, huellas, clave y llavero, ficheros de la carpeta) con verificación independiente de cada hallazgo, resultado en el informe de implementación
+- [x] Revisión adversarial del código nuevo (fusión, borrados, huellas, clave y llavero, ficheros de la carpeta) con verificación independiente de cada hallazgo, resultado en el informe de implementación
 
 ---
 
-**Progreso Fase 10:** 62 / 63 funcionalidades
+**Progreso Fase 10:** 63 / 63 funcionalidades
 
-**Total MAGI (Fases 1-10):** 658 / 717 funcionalidades
+**Total MAGI (Fases 1-10):** 659 / 717 funcionalidades

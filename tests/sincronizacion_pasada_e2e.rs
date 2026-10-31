@@ -285,8 +285,11 @@ fn un_fichero_de_formato_nuevo_o_danado_no_se_aplica() {
     // Equipo conocido con formato 2: se marca formato_nuevo y no se importa.
     let uuid_nuevo = uuid::Uuid::new_v4().to_string();
     magi::almacen::equipos::crear(a.almacen.conexion(), &uuid_nuevo, "futuro", "linux").unwrap();
-    let plano = b"MAGI-SINCRONIZACION 2\nfirma: 0000000000000000000000000000000000000000000000000000000000000000\n{}\n";
-    let cifrado = clave_obj.cifrar(plano).unwrap();
+    // Un fichero de una versión futura también va firmado con la clave actual.
+    let json = "{}";
+    let firma = clave_obj.firmar(json.as_bytes()).unwrap();
+    let plano = format!("MAGI-SINCRONIZACION 2\nfirma: {firma}\n{json}\n");
+    let cifrado = clave_obj.cifrar(plano.as_bytes()).unwrap();
     sincronizacion::carpeta::escribir(&carpeta, &uuid_nuevo, &cifrado).unwrap();
     let resultado = a.pasada(PoliticaBorrados::Preguntar);
     assert_eq!(resultado.estado, EstadoPasada::AlDia);
@@ -444,4 +447,398 @@ fn quitar_un_equipo_rota_la_clave_y_el_quitado_puede_reincorporarse() {
         "A ve al equipo reincorporado"
     );
     assert_eq!(a.host_por_nombre("web").unwrap().direccion, "192.0.2.5");
+}
+#[test]
+fn un_borrado_con_trabajo_vivo_se_aplaza_y_queda_como_conflicto() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    a.crear_host("web", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+    let id_b = b.host_por_nombre("web").unwrap().id;
+    b.almacen.borrar_host(id_b).unwrap();
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // La pasada de A ve el borrado, pero el host tiene trabajo vivo: se
+    // aplaza y queda un conflicto de tipo borrado.
+    let clave_a = a.clave();
+    let opciones = OpcionesPasada {
+        politica_borrados: PoliticaBorrados::Preguntar,
+        trabajo_vivo: &|tipo, _uuid| tipo == "host",
+    };
+    let resultado = sincronizacion::pasada(
+        a.almacen.conexion(),
+        &a.rutas,
+        &a.config,
+        &[clave_a],
+        &opciones,
+    )
+    .unwrap();
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert!(
+        a.host_por_nombre("web").is_some(),
+        "el host con trabajo vivo no se borra"
+    );
+    let conflictos = magi::almacen::conflictos::listar_pendientes(a.almacen.conexion()).unwrap();
+    assert!(
+        conflictos
+            .iter()
+            .any(|conflicto| conflicto.tipo == "borrado"),
+        "{conflictos:?}"
+    );
+    assert!(
+        magi::almacen::lapidas::listar(a.almacen.conexion())
+            .unwrap()
+            .is_empty(),
+        "no se guarda la lápida de un borrado aplazado"
+    );
+
+    // Una segunda pasada sin ficheros nuevos no vuelve a aplicar nada.
+    let clave_a = a.clave();
+    let opciones = OpcionesPasada {
+        politica_borrados: PoliticaBorrados::Preguntar,
+        trabajo_vivo: &|tipo, _uuid| tipo == "host",
+    };
+    let resultado = sincronizacion::pasada(
+        a.almacen.conexion(),
+        &a.rutas,
+        &a.config,
+        &[clave_a],
+        &opciones,
+    )
+    .unwrap();
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert!(
+        resultado.resumen.is_none(),
+        "el borrado aplazado no debe reprocesarse en cada pasada"
+    );
+}
+
+#[test]
+fn mantener_los_mios_resucita_los_hosts_que_otro_borro() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    a.crear_host("web", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+    let id_b = b.host_por_nombre("web").unwrap().id;
+    b.almacen.borrar_host(id_b).unwrap();
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // «m mantener los míos»: el host vuelve con una edición nueva y gana en
+    // todos los equipos.
+    let resultado = a.pasada(PoliticaBorrados::Mantener);
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert!(a.host_por_nombre("web").is_some());
+    let resultado = b.pasada(PoliticaBorrados::Preguntar);
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert!(
+        b.host_por_nombre("web").is_some(),
+        "la edición nueva de A resucita el host en B"
+    );
+}
+#[test]
+fn rotar_la_clave_reexporta_el_fichero_propio_cifrado_con_la_nueva() {
+    use magi::llavero::{LlaveroEnMemoria, LlaveroSecreto, CUENTA_SINCRONIZACION};
+    use magi::sincronizacion::equipos as equipos_sync;
+
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave_original = ClaveSincronizacion::generar().texto().to_string();
+    let mut a = equipo(&carpeta, &clave_original);
+    let mut b = equipo(&carpeta, &clave_original);
+    a.crear_host("web", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    let llavero_a = LlaveroEnMemoria::nuevo();
+    llavero_a
+        .guardar(CUENTA_SINCRONIZACION, &clave_original)
+        .unwrap();
+    let nueva =
+        equipos_sync::rotar(a.almacen.conexion(), &a.rutas, &mut a.config, &llavero_a).unwrap();
+    a.texto_clave = nueva.texto().to_string();
+    let resultado = a.pasada(PoliticaBorrados::Preguntar);
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert!(
+        resultado.exportado,
+        "tras rotar la clave hay que reescribir el fichero propio"
+    );
+
+    // El fichero de A se abre con la clave nueva y no con la vieja.
+    let uuid_a = sincronizacion::carpeta::listar(&carpeta)
+        .unwrap()
+        .into_iter()
+        .find(|fichero| {
+            fichero.uuid
+                != magi::almacen::equipos::este(b.almacen.conexion())
+                    .unwrap()
+                    .uuid
+        })
+        .expect("el fichero de A")
+        .uuid;
+    let bytes = sincronizacion::carpeta::leer(
+        &carpeta.join(sincronizacion::carpeta::nombre_fichero(&uuid_a)),
+    )
+    .unwrap();
+    assert!(
+        nueva.descifrar(&bytes).is_ok(),
+        "se abre con la clave nueva"
+    );
+    assert!(
+        ClaveSincronizacion::desde_texto(&clave_original)
+            .unwrap()
+            .descifrar(&bytes)
+            .is_err(),
+        "ya no se abre con la clave vieja"
+    );
+
+    // B, tras recibir la clave nueva, sigue leyendo a A.
+    let llavero_b = LlaveroEnMemoria::nuevo();
+    equipos_sync::unir(
+        b.almacen.conexion(),
+        &b.rutas,
+        &carpeta,
+        &a.texto_clave,
+        &mut b.config,
+        &llavero_b,
+    )
+    .unwrap();
+    b.texto_clave = a.texto_clave.clone();
+    let resultado = b.pasada(PoliticaBorrados::Preguntar);
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    assert_eq!(b.host_por_nombre("web").unwrap().direccion, "192.0.2.5");
+}
+
+#[test]
+fn un_borrado_aplazado_no_vacia_las_referencias_de_otros_hosts() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    let id_x = a
+        .almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "X".to_string(),
+                direccion: "192.0.2.5".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+    a.almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "H".to_string(),
+                direccion: "192.0.2.6".to_string(),
+                salto_host_id: Some(id_x),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // H2 nace en A después de que B importara: B no lo conoce y su salto solo
+    // existe en A.
+    let id_h2 = a
+        .almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "H2".to_string(),
+                direccion: "192.0.2.7".to_string(),
+                salto_host_id: Some(id_x),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+    let id_x_b = b.host_por_nombre("X").unwrap().id;
+    b.almacen.borrar_host(id_x_b).unwrap();
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // A ve la lápida de X, pero X tiene trabajo vivo: se aplaza. H2 no puede
+    // perder su salto por eso.
+    let clave_a = a.clave();
+    let opciones = OpcionesPasada {
+        politica_borrados: PoliticaBorrados::Preguntar,
+        trabajo_vivo: &|tipo, _uuid| tipo == "host",
+    };
+    let resultado = sincronizacion::pasada(
+        a.almacen.conexion(),
+        &a.rutas,
+        &a.config,
+        &[clave_a],
+        &opciones,
+    )
+    .unwrap();
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    let h2 = a.almacen.obtener_host(id_h2).unwrap();
+    assert_eq!(
+        h2.salto_host_id,
+        Some(id_x),
+        "el salto a un host aplazado no se vacía"
+    );
+}
+#[test]
+fn un_borrado_aplazado_y_un_host_nuevo_con_el_mismo_nombre_no_atascan() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    a.crear_host("web", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // B borra su «web» y crea otro host nuevo con el mismo nombre.
+    let id_b = b.host_por_nombre("web").unwrap().id;
+    b.almacen.borrar_host(id_b).unwrap();
+    b.crear_host("web", "192.0.2.60");
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // El «web» de A tiene trabajo vivo: su borrado se aplaza y el host nuevo
+    // de B, con el mismo nombre, se renombra como edición nueva. La pasada no
+    // puede abortar por el UNIQUE de HOSTS.nombre.
+    let clave_a = a.clave();
+    let opciones = OpcionesPasada {
+        politica_borrados: PoliticaBorrados::Preguntar,
+        trabajo_vivo: &|tipo, _uuid| tipo == "host",
+    };
+    let resultado = sincronizacion::pasada(
+        a.almacen.conexion(),
+        &a.rutas,
+        &a.config,
+        &[clave_a],
+        &opciones,
+    )
+    .expect("la pasada no debe abortar por un nombre repetido");
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    let nombres: Vec<String> = a.hosts().into_iter().map(|host| host.nombre).collect();
+    assert!(nombres.contains(&"web".to_string()), "{nombres:?}");
+    assert!(nombres.contains(&"web (2)".to_string()), "{nombres:?}");
+}
+
+#[test]
+fn un_tunel_nuevo_con_el_nombre_de_uno_aplazado_se_renombra() {
+    use magi::modelo::{DatosTunel, TipoTunel};
+
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    let id_host = a.crear_host("web", "192.0.2.5");
+    a.almacen
+        .crear_tunel(&DatosTunel {
+            host_id: id_host,
+            nombre: "t".to_string(),
+            tipo: TipoTunel::Local,
+            escucha: "127.0.0.1:8080".to_string(),
+            destino: Some("192.0.2.10:80".to_string()),
+            automatico: false,
+        })
+        .unwrap();
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // B borra el túnel y crea otro con el mismo nombre en el mismo host.
+    let host_b = b.host_por_nombre("web").unwrap().id;
+    let tunel_b = b
+        .almacen
+        .tuneles_de_host(host_b)
+        .unwrap()
+        .into_iter()
+        .find(|tunel| tunel.nombre == "t")
+        .unwrap();
+    b.almacen.borrar_tunel(tunel_b.id).unwrap();
+    b.almacen
+        .crear_tunel(&DatosTunel {
+            host_id: host_b,
+            nombre: "t".to_string(),
+            tipo: TipoTunel::Local,
+            escucha: "127.0.0.1:9090".to_string(),
+            destino: Some("192.0.2.11:80".to_string()),
+            automatico: false,
+        })
+        .unwrap();
+    b.pasada(PoliticaBorrados::Preguntar);
+
+    // En A el túnel viejo tiene trabajo vivo: se aplaza y el nuevo se renombra.
+    let clave_a = a.clave();
+    let opciones = OpcionesPasada {
+        politica_borrados: PoliticaBorrados::Preguntar,
+        trabajo_vivo: &|tipo, _uuid| tipo == "tunel",
+    };
+    let resultado = sincronizacion::pasada(
+        a.almacen.conexion(),
+        &a.rutas,
+        &a.config,
+        &[clave_a],
+        &opciones,
+    )
+    .expect("la pasada no debe abortar por un nombre de túnel repetido");
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+    let nombres: Vec<String> = a
+        .almacen
+        .tuneles_de_host(id_host)
+        .unwrap()
+        .into_iter()
+        .map(|tunel| tunel.nombre)
+        .collect();
+    assert!(nombres.contains(&"t".to_string()), "{nombres:?}");
+    assert!(nombres.contains(&"t (2)".to_string()), "{nombres:?}");
+}
+#[test]
+fn un_equipo_quitado_no_se_importa_en_la_pasada_que_descubre_la_baja() {
+    use magi::llavero::{LlaveroEnMemoria, LlaveroSecreto, CUENTA_SINCRONIZACION};
+    use magi::sincronizacion::equipos as equipos_sync;
+
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave_original = ClaveSincronizacion::generar().texto().to_string();
+    let mut a = equipo(&carpeta, &clave_original);
+    let mut b = equipo(&carpeta, &clave_original);
+    a.crear_host("base", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+    assert!(b.host_por_nombre("base").is_some());
+
+    // A crea un host que B aún no conoce, quita a B y exporta con la clave
+    // nueva. B, en la misma pasada en que descubre la baja, no debe importar
+    // ese host.
+    a.crear_host("nuevo", "192.0.2.50");
+    let uuid_b = magi::almacen::equipos::este(b.almacen.conexion())
+        .unwrap()
+        .uuid;
+    magi::almacen::equipos::crear(a.almacen.conexion(), &uuid_b, "equipo-b", "linux").unwrap();
+    let llavero_a = LlaveroEnMemoria::nuevo();
+    llavero_a
+        .guardar(CUENTA_SINCRONIZACION, &clave_original)
+        .unwrap();
+    let nueva = equipos_sync::quitar(
+        a.almacen.conexion(),
+        &a.rutas,
+        &mut a.config,
+        &uuid_b,
+        &llavero_a,
+    )
+    .unwrap();
+    a.texto_clave = nueva.texto().to_string();
+    let resultado = a.pasada(PoliticaBorrados::Preguntar);
+    assert_eq!(resultado.estado, EstadoPasada::AlDia);
+
+    b.texto_clave = a.texto_clave.clone();
+    let resultado = b.pasada(PoliticaBorrados::Preguntar);
+    assert_eq!(resultado.estado, EstadoPasada::Quitado);
+    assert!(
+        b.host_por_nombre("nuevo").is_none(),
+        "el fichero de un equipo quitado no se importa"
+    );
+    assert!(
+        b.host_por_nombre("base").is_some(),
+        "lo que ya estaba se conserva"
+    );
 }

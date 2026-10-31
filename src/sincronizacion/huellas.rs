@@ -189,6 +189,7 @@ fn equipo_unico(
 }
 
 /// Una huella ajena lista para el conflicto y para elegir la ganadora.
+#[derive(Clone)]
 struct HuellaAjena {
     tipo: String,
     clave: String,
@@ -254,19 +255,6 @@ fn version_perdedora_json(
     serde_json::json!({ "mias": mias_json, "suyas": suyas_json })
 }
 
-/// Huella ajena que gana el conflicto: la aceptada más recientemente de ese
-/// tipo, con la clave como desempate. Devuelve el índice en ajenas.
-fn indice_ganadora(ajenas: &[HuellaAjena], tipo: &str) -> Option<usize> {
-    let mut candidatas: Vec<usize> = ajenas
-        .iter()
-        .enumerate()
-        .filter(|(_, ajena)| ajena.tipo == tipo)
-        .map(|(indice, _)| indice)
-        .collect();
-    candidatas.sort_by(|a, b| orden_ajenas(&ajenas[*a], &ajenas[*b]));
-    candidatas.last().copied()
-}
-
 /// Importa las huellas de un documento: añade las que este equipo no tiene y
 /// deja conflicto si ya había otra del mismo tipo. No toca known_hosts salvo
 /// para añadir. La lista equipos mapea uuid del equipo → (nombre, generado_en).
@@ -299,6 +287,23 @@ pub fn importar(
             ));
             continue;
         };
+        // La dirección se escribe como primer campo de known_hosts: no puede
+        // llevar espacios, comas, ni empezar por el prefijo de las entradas
+        // hasheadas (inyectar líneas en el fichero del usuario).
+        let direccion_invalida = host.direccion.is_empty()
+            || host
+                .direccion
+                .chars()
+                .any(|caracter| caracter.is_whitespace() || caracter.is_control())
+            || host.direccion.contains(',')
+            || host.direccion.starts_with('|');
+        if direccion_invalida {
+            resultado.avisos.push(format!(
+                "no se importan las huellas de «{}»: su dirección no se puede escribir en known_hosts",
+                host.nombre
+            ));
+            continue;
+        }
 
         // Huellas ajenas únicas (mismo tipo y clave puede venir de varios
         // equipos) y ordenadas para que la pasada sea determinista.
@@ -337,103 +342,100 @@ pub fn importar(
             continue;
         }
 
-        let mut tipos_con_conflicto: BTreeSet<String> = BTreeSet::new();
-        for ajena in &ajenas {
-            let Ok(clave_parseada) = clave_publica(&ajena.tipo, &ajena.clave) else {
+        // Huellas de este equipo para el host (entradas hasheadas incluidas).
+        let mias = match entradas_de(&host, ruta_known_hosts) {
+            Ok(mias) => mias,
+            Err(error) => {
+                resultado.avisos.push(format!(
+                    "no se pudieron leer las huellas de «{}»: {error:#}",
+                    host.nombre
+                ));
                 continue;
-            };
-            let estado = match comprobar(
-                ruta_known_hosts,
-                &host.direccion,
-                host.puerto,
-                &clave_parseada,
-            ) {
-                Ok(estado) => estado,
-                Err(error) => {
-                    resultado.avisos.push(format!(
-                        "no se pudieron leer las huellas de «{}»: {error:#}",
-                        host.nombre
-                    ));
+            }
+        };
+        let presente = |ajena: &HuellaAjena| {
+            mias.iter()
+                .any(|mia| mia.tipo == ajena.tipo && mia.clave == ajena.clave)
+        };
+        // Si este equipo no tiene NINGUNA huella para el host, se añaden las
+        // del fichero (todas las que no estén ya), con copia previa. Si ya
+        // tiene alguna distinta —del mismo tipo o de otro—, no se sustituye
+        // sola: un único conflicto de huella para el host. Un ancla de
+        // confianza nueva no se añade nunca sin que el usuario la acepte.
+        if mias.is_empty() {
+            if let Err(error) = copia_con_fecha(ruta_known_hosts) {
+                resultado.avisos.push(format!(
+                    "no se pudo copiar known_hosts antes de añadir la huella de «{}»: {error:#}",
+                    host.nombre
+                ));
+                continue;
+            }
+            let mut anadidas: Vec<HuellaAjena> = Vec::new();
+            for ajena in &ajenas {
+                let Ok(clave_parseada) = clave_publica(&ajena.tipo, &ajena.clave) else {
                     continue;
-                }
-            };
-            match estado {
-                // Este equipo ya tiene exactamente esa huella: no hay nada que hacer.
-                EstadoHuella::Conocida => {}
-                // No tiene ninguna de ese tipo: se añade a known_hosts con copia previa.
-                EstadoHuella::Desconocida => {
-                    if let Err(error) = copia_con_fecha(ruta_known_hosts) {
-                        resultado.avisos.push(format!(
-                            "no se pudo copiar known_hosts antes de añadir la huella de «{}»: {error:#}",
-                            host.nombre
-                        ));
-                        continue;
-                    }
-                    if let Err(error) = aprender(
-                        ruta_known_hosts,
-                        &host.direccion,
-                        host.puerto,
-                        &clave_parseada,
-                    ) {
-                        resultado.avisos.push(format!(
-                            "no se pudo añadir la huella de «{}» a known_hosts: {error:#}",
-                            host.nombre
-                        ));
-                        continue;
-                    }
-                    let origen = match equipo_unico(equipos) {
-                        Some((_, (nombre, _))) => format!(" (sincronizada desde «{nombre}»)"),
-                        None => " (sincronizada)".to_string(),
-                    };
-                    registro::anotar(
-                        conexion,
-                        registro::HUELLA_SINCRONIZADA,
-                        Some(host.id),
-                        None,
-                        &format!(
-                            "«{}»: añadida la huella {} {}{}",
-                            host.nombre, ajena.tipo, ajena.huella, origen
-                        ),
-                        ResultadoRegistro::Ok,
-                    )?;
-                    resultado.anadidas.push(host.nombre.clone());
-                }
-                // Tiene otra del mismo tipo: nunca se sustituye sola.
-                EstadoHuella::Cambiada { .. } => {
-                    if tipos_con_conflicto.contains(&ajena.tipo) {
-                        continue;
-                    }
-                    let Some(indice) = indice_ganadora(&ajenas, &ajena.tipo) else {
-                        continue;
-                    };
-                    let ganadora = &ajenas[indice];
-                    let mias = match entradas_de(&host, ruta_known_hosts) {
-                        Ok(mias) => mias,
-                        Err(error) => {
-                            resultado.avisos.push(format!(
-                                "no se pudieron leer las huellas de «{}»: {error:#}",
-                                host.nombre
-                            ));
-                            continue;
-                        }
-                    };
-                    let aceptada_mias = aceptada_en(conexion, host.id).unwrap_or_default();
-                    let json = version_perdedora_json(&mias, &aceptada_mias, &ajenas, equipos);
-                    let conflicto = ConflictoFusion {
-                        tipo: TIPO_HUELLA.to_string(),
-                        elemento_tipo: "host".to_string(),
-                        uuid: host_uuid.to_string(),
-                        nombre: host.nombre.clone(),
-                        version_perdedora_json: Some(json.to_string()),
-                        version_ganadora: Some(ganadora.clave.clone()),
-                        equipo_ganador: equipo_unico(equipos).map(|(uuid, _)| uuid.clone()),
-                    };
-                    tipos_con_conflicto.insert(ajena.tipo.clone());
-                    if !resultado.conflictos.contains(&conflicto) {
-                        resultado.conflictos.push(conflicto);
-                    }
+                };
+                match aprender(
+                    ruta_known_hosts,
+                    &host.direccion,
+                    host.puerto,
+                    &clave_parseada,
+                ) {
+                    Ok(()) => anadidas.push(ajena.clone()),
+                    Err(error) => resultado.avisos.push(format!(
+                        "no se pudo añadir la huella de «{}» a known_hosts: {error:#}",
+                        host.nombre
+                    )),
                 }
             }
+            if anadidas.is_empty() {
+                continue;
+            }
+            let origen = match equipo_unico(equipos) {
+                Some((_, (nombre, _))) => format!(" (sincronizada desde «{nombre}»)"),
+                None => " (sincronizada)".to_string(),
+            };
+            let detalle = anadidas
+                .iter()
+                .map(|ajena| format!("{} {}", ajena.tipo, ajena.huella))
+                .collect::<Vec<_>>()
+                .join(", ");
+            registro::anotar(
+                conexion,
+                registro::HUELLA_SINCRONIZADA,
+                Some(host.id),
+                None,
+                &format!("«{}»: añadida la huella {detalle}{origen}", host.nombre),
+                ResultadoRegistro::Ok,
+            )?;
+            resultado.anadidas.push(host.nombre.clone());
+            continue;
+        }
+        if ajenas.iter().all(&presente) {
+            continue;
+        }
+        // La huella ajena que gana: la aceptada más recientemente de las que
+        // este equipo no tiene ya (el resto van en «suyas» para mostrarlas).
+        let Some(ganadora) = ajenas
+            .iter()
+            .filter(|ajena| !presente(ajena))
+            .max_by(|a, b| orden_ajenas(a, b))
+        else {
+            continue;
+        };
+        let aceptada_mias = aceptada_en(conexion, host.id).unwrap_or_default();
+        let json = version_perdedora_json(&mias, &aceptada_mias, &ajenas, equipos);
+        let conflicto = ConflictoFusion {
+            tipo: TIPO_HUELLA.to_string(),
+            elemento_tipo: "host".to_string(),
+            uuid: host_uuid.to_string(),
+            nombre: host.nombre.clone(),
+            version_perdedora_json: Some(json.to_string()),
+            version_ganadora: Some(ganadora.clave.clone()),
+            equipo_ganador: equipo_unico(equipos).map(|(uuid, _)| uuid.clone()),
+        };
+        if !resultado.conflictos.contains(&conflicto) {
+            resultado.conflictos.push(conflicto);
         }
     }
     Ok(resultado)

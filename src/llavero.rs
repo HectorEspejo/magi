@@ -327,9 +327,25 @@ impl LlaveroSecreto for LlaveroDelSistema {
 /// producción). Se documenta como superficie de pruebas, igual que
 /// App::de_prueba.
 #[doc(hidden)]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct LlaveroEnMemoria {
     secretos: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+}
+
+impl std::fmt::Debug for LlaveroEnMemoria {
+    /// Nunca imprime los valores: aunque sea solo para pruebas, un Debug no
+    /// debe poder volcar secretos en un log ni en un mensaje de error.
+    fn fmt(&self, formato: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cuentas = self
+            .secretos
+            .lock()
+            .map(|secretos| secretos.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        formato
+            .debug_struct("LlaveroEnMemoria")
+            .field("cuentas", &cuentas)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LlaveroEnMemoria {

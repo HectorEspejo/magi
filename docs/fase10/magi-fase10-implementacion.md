@@ -5,10 +5,10 @@
 > [magi-fase10-informe.md](magi-fase10-informe.md) y el alcance verificable en
 > [magi-fase10-checklist.md](magi-fase10-checklist.md).
 
-**Estado de la sesión:** implementación completa y suite en verde. Queda la
-revisión adversarial de cierre (último ítem del checklist) y las validaciones
-manuales que necesitan llavero real, una carpeta sincronizada de verdad o dos
-equipos.
+**Estado de la sesión:** fase cerrada: implementación completa, revisión
+adversarial de cierre hecha y corregida, y suite completa (tests, clippy, fmt
+y cargo-deny) en verde. Quedan solo las validaciones manuales que necesitan
+llavero real, una carpeta sincronizada de verdad o dos equipos.
 
 ## Resumen de lo implementado
 
@@ -92,6 +92,98 @@ equipos.
   `assets/` (completados y man) regenerados por el subcomando nuevo,
   `deny.toml` con dos avisos de RustSec ignorados y justificados (solo
   compilación, transitivos de `age`), y README/CHANGELOG actualizados.
+
+### Revisión adversarial de cierre (resultado)
+
+Hecha con revisión independiente (un revisor dedicado, solo lectura) sobre el
+commit d2a9572 y el árbol de corrección, con reproducciones fuera del
+repositorio. Hallazgos verificados y corregidos:
+
+1. **ALTO — cambiar la clave no recifraba el fichero propio.** El paso de
+   exportación solo miraba el hash canónico y la existencia del fichero, así
+   que tras rotar/quitar/unir el fichero seguía cifrado con la clave anterior
+   (la clave posiblemente comprometida seguía abriéndolo, y un equipo con la
+   clave nueva no podía leerlo). **Corregido**: crear/unir/rotar/quitar olvidan
+   el hash del fichero propio (`EQUIPOS.hash_ultimo_fichero` a NULL) para que
+   la pasada siguiente lo reescriba con la clave nueva.
+2. **MEDIO — un borrado aplazado vaciaba referencias de otros hosts sin subir
+   su versión.** Al resolver las referencias solo contra los vivos del plan,
+   un host que saltaba por un host aplazado (o que lo usaba como grupo/snippet)
+   perdía la referencia sin subir su versión, rompiendo el invariante «mismo
+   contenido, misma versión» y perdiendo configuración mientras el elemento
+   seguía vivo. **Corregido**: las referencias se resuelven contra los vivos
+   **más los aplazados**.
+
+Además se corrigieron dos detalles de integración detectados en la revisión:
+no se guarda en `LAPIDAS` la lápida de un borrado aplazado (evitaba que la
+pasada lo re-aplazara en cada arranque con copia y REGISTRO de más) y la firma
+se comprueba ahora **antes** del número de `formato`, como documenta el
+formato (§13).
+
+**Hallazgo grave posterior, también corregido:** un nombre reutilizado por un
+elemento nuevo mientras el antiguo tenía el borrado aplazado chocaba con el
+UNIQUE al aplicar, abortaba la importación y dejaba la sincronización
+atascada (cada pasada reintentaba el mismo fichero). Ahora la aplicación
+propaga el aplazamiento al padre si un hijo sigue vivo (la cascada no borra
+sin lápida) y renombra como edición nueva los elementos del plan cuyo nombre
+ocupa un aplazado, con conflicto `nombre`; esto cubre hosts, túneles,
+sincronizaciones, grupos, identidades y snippets.
+
+**Segunda pasada, de seguridad** (revisor independiente, con 16
+reproducciones fuera del repositorio). No encontró fugas de la clave (log,
+REGISTRO, `magi.db`, `config.toml`, carpeta, argv, panic ni QR). Se
+corrigieron:
+
+- **Enlaces simbólicos en la carpeta** (ALTA): la sonda de escritura, el
+  temporal de `escribir_atomico` y el listado seguían enlaces y podían
+  escribir/leer fuera de la carpeta. Ahora la sonda y el temporal usan
+  `create_new` con nombre único y el listado/lectura usan `O_NOFOLLOW`.
+- **Un equipo quitado se importaba en la misma pasada en que se descubría la
+  baja** (ALTA/MEDIA): se filtran sus documentos antes de fusionar y no se
+  marcan como importados.
+- **La clave anterior se usaba para exportar** si faltaba la actual (MEDIA):
+  sin clave actual la pasada dice `SinClave`; la anterior solo lee.
+- **Quitar un equipo con un uuid no canónico** podía construir rutas fuera de
+  la carpeta (MEDIA): se valida el uuid y `carpeta::escribir/borrar` exige la
+  forma canónica. Los nombres de fichero solo aceptan el uuid canónico en
+  minúsculas.
+- **Huella de otro algoritmo añadida sin consentimiento** (MEDIA): solo se
+  añade si el host no tiene NINGUNA huella; con cualquier otra se abre un
+  único conflicto `huella`.
+- **Escrituras de ciclo de vida sin cerrojo** (MEDIA): crear, unir, rotar,
+  quitar, desactivar y reunir toman el `flock`.
+- **Clave anterior huérfana** al crear/unir, purga de la caducada en la CLI,
+  y no se borra la fecha si el llavero falla (MEDIA): corregido.
+- **Esc en el diálogo CLAVE** tras quitar/rotar no exportaba (MEDIA): ahora
+  dispara la pasada de exportación.
+- **Borrar en cascada un túnel aplazado sin lápida** y **conflicto de borrado
+  obsoleto que borraba un host resucitado** (MEDIA): corregidos (propagación
+  de aplazados y resolución del conflicto al aplicar una edición nueva).
+- **Dirección de `known_hosts` sin sanear** (BAJA), **tamaño máximo de
+  fichero** (BAJA), **desbordamiento del reloj** (BAJA), **copias
+  `known_hosts` en el mismo segundo** (BAJA), permisos 700 del runtime
+  (BAJA) y `Debug` del llavero en memoria sin secretos (BAJA): corregidos.
+
+Quedan como limitaciones conocidas, anotadas para la validación manual y no
+bloqueantes de la fase: `magi sincronizar` y la pasada de cierre de la TUI no
+pueden consultar el trabajo vivo del servidor (la CLI no tiene TUI; en la TUI
+el cierre sí lo consulta ya); las actualizaciones del almacén hacen el UPDATE
+y la subida de versión en dos pasos (una caída entre ambos dejaría la versión
+atrás; es una ventana de durabilidad, no de la lógica de fusión); un fichero
+truncado y una clave incorrecta son indistinguibles al descifrar; un elemento
+con firma válida pero datos semánticamente inválidos hace fallar la pasada
+entera sin aplicar nada (no a medias); y aceptar una huella sustituye todas
+las claves del host, no solo el tipo en conflicto.
+
+Cada corrección tiene test de regresión en
+`tests/sincronizacion_pasada_e2e.rs`, `tests/sincronizacion_aplicacion.rs`,
+`tests/sincronizacion_equipos.rs`, `tests/sincronizacion_huellas.rs` y los
+unitarios de `carpeta.rs`. Áreas revisadas sin hallazgos: fusión/reloj,
+serialización canónica, instrumentación del almacén, migración 7,
+carpeta/cerrojo/escritura atómica y manejo de la clave. No revisadas en esas
+pasadas (pendientes de validación manual): interfaz completa, CLI con llavero
+real, diagnóstico, backends reales del llavero, huellas hasheadas reales y
+concurrencia multi-documento más allá de la suite.
 
 ## Desviaciones respecto a la especificación (qué y por qué)
 
@@ -233,10 +325,21 @@ Modificados:
 - **Las huellas se añaden con `conexion::huellas::aprender`** (que ya entiende
   `known_hosts` con entradas hasheadas) tras una copia con fecha, y solo se
   sustituyen con `sustituir` cuando el usuario acepta el conflicto.
+- **Cada cambio de clave invalida el hash del fichero propio** (crear, unir,
+  rotar, quitar): el fichero que existe en la carpeta está cifrado con la clave
+  anterior y hay que reescribirlo con la nueva aunque el inventario no cambie.
+- **Las referencias a un elemento cuyo borrado está aplazado se mantienen**:
+  mientras el elemento siga vivo en este equipo, quien lo usa (salto, grupo,
+  snippet al conectar, destinos de snippet) lo sigue apuntando; vaciarlas
+  cambiaría contenido que viaja sin subir su versión.
+- **La lápida de un borrado aplazado no se guarda en `LAPIDAS`**: el borrado
+  sigue en el fichero del otro equipo y se aplica con la acción «a» (o cuando
+  llegue un fichero nuevo). Guardarla haría que el elemento vivo local perdiera
+  contra ella en cada pasada y se re-aplazara el borrado una y otra vez.
 
 ## Funcionalidades del checklist completadas
 
-Se copian literalmente del checklist de la fase, en su orden, las 62 funcionalidades dadas por terminadas:
+Se copian literalmente del checklist de la fase, en su orden, las 63 funcionalidades dadas por terminadas:
 
 - Migración 7 por `PRAGMA user_version`: `uuid`, `version` y `vector` en GRUPOS, HOSTS, IDENTIDADES, TUNELES, SNIPPETS y SINCRONIZACIONES_DIR, con índice único por `uuid`; las filas existentes reciben `uuid` nuevo y versión de este equipo
 - Tabla `EQUIPOS` (id, uuid, nombre, plataforma, es_este, app_version, ultimo_fichero_en, ultima_importacion_en, hash_ultimo_fichero, estado, quitado_en, reloj_ms) con la fila de este equipo creada en la migración (nombre = hostname)
@@ -307,15 +410,15 @@ Se copian literalmente del checklist de la fase, en su orden, las 62 funcionalid
 - CHANGELOG en «Sin publicar» con la sincronización cifrada (versión MINOR: migración 7)
 - Tests: migración 6→7, reloj híbrido, versiones solo en campos que viajan, fusión (dominancia, concurrencia, lápidas, huérfanos, nombres, determinismo), firma y equipo del fichero, huellas, umbral de borrados, unión por nombre y rotación de clave
 - `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo deny check` y `TZ=UTC cargo test` limpios y en verde
+- Revisión adversarial del código nuevo (fusión, borrados, huellas, clave y llavero, ficheros de la carpeta) con verificación independiente de cada hallazgo, resultado en el informe de implementación
 
 ## Pendientes y bloqueos
 
 Pendiente al cerrar esta sesión:
 
-- **Revisión adversarial de cierre** (último ítem del checklist): en curso
-  cuando se escribió esta versión del informe; su resultado y las correcciones
-  se anotarán aquí antes de dar la fase por cerrada. No se puede dar la fase por
-  terminada sin ella.
+- **Revisión adversarial de cierre**: hecha (ver el resultado y las
+  correcciones en el resumen, arriba). Sus dos hallazgos están corregidos con
+  tests de regresión y anotados en este informe.
 - **Validaciones manuales que necesitan el entorno real** (no cubiertas por la
   suite): crear y unir con `secret-tool`/Keychain desbloqueados, rotar/quitar y
   volver a leer con la clave nueva, abrir un fichero con el `age` real fuera de
@@ -353,8 +456,8 @@ excepciones de `cargo deny` (desviación 8) hay que revisarlas al actualizar
 - Tests: `TZ=UTC cargo test` (suite completa; requiere `TZ=UTC` por las
   instantáneas). Resultado de la sesión: **todo en verde**, incluidos lib 499,
   almacén 56, redimensionado 283 (con las instantáneas nuevas), las siete
-  suites de sincronización (aplicación 21, elementos 14, equipos 7, fusión 19,
-  huellas 7, pasada 10, e2e 7), interfaz de sincronización 9, diagnóstico 15,
+  suites de sincronización (aplicación 23, elementos 14, equipos 8, fusión 19,
+  huellas 8, pasada 10, e2e 15), interfaz de sincronización 9, diagnóstico 15,
   recursos 6, servidor 13, sftp 48, etc. Los tests de la fase:
   `TZ=UTC cargo test --test sincronizacion_equipos --test
   sincronizacion_elementos --test sincronizacion_fusion --test

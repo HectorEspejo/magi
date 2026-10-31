@@ -178,6 +178,17 @@ fn leer_fichero(
     claves: &[ClaveSincronizacion],
     uuid_esperado: &str,
 ) -> Result<std::result::Result<FicheroLeido, FalloLectura>> {
+    // Un fichero de sincronización no debería pasar de unos pocos MB: uno
+    // enorme (o corrupto) se rechaza como dañado en vez de cargarlo en memoria.
+    const TAMANO_MAX: u64 = 16 * 1024 * 1024;
+    let tamano = std::fs::metadata(ruta)
+        .map(|metadatos| metadatos.len())
+        .unwrap_or(0);
+    if tamano > TAMANO_MAX {
+        return Ok(Err(FalloLectura::Danado(format!(
+            "el fichero ocupa {tamano} bytes, más del máximo de {TAMANO_MAX}"
+        ))));
+    }
     let bytes = carpeta::leer(ruta)?;
     let hash = cifrado::sha256_hex(&bytes);
     for clave in claves {
@@ -189,11 +200,11 @@ fn leer_fichero(
                 "cabecera de sincronización no válida".to_string(),
             )));
         };
-        if en_claro.formato > formato::FORMATO {
-            return Ok(Err(FalloLectura::FormatoNuevo(en_claro.formato)));
-        }
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
             return Ok(Err(FalloLectura::Danado("firma no válida".to_string())));
+        }
+        if en_claro.formato > formato::FORMATO {
+            return Ok(Err(FalloLectura::FormatoNuevo(en_claro.formato)));
         }
         let documento = match formato::parsear(&en_claro.json) {
             Ok(documento) => documento,
@@ -514,6 +525,10 @@ pub fn pasada(
             }
         }
     }
+    // El fichero de un equipo que se acaba de descubrir quitado no se importa
+    // en esta misma pasada: su estado ya no es al_dia y sus elementos no
+    // cuentan.
+    leidos.retain(|leido| !quitados.contains_key(&leido.uuid));
     if quitados.contains_key(&este.uuid) {
         equipos_bd::marcar_quitado(conexion, este.id, &crate::modelo::fecha_ahora())?;
         registro::anotar(
@@ -528,6 +543,7 @@ pub fn pasada(
     }
 
     // 3. Fusionar.
+    let documentos_owned: Vec<Documento> = leidos.iter().map(|l| l.documento.clone()).collect();
     let local = elementos::estado_local(conexion, &rutas.hogar)?;
     let mut plan = fusion::fusionar(&local, &documentos_owned)?;
     let mut cambia = plan_cambia(&plan, &local);

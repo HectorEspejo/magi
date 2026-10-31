@@ -524,7 +524,22 @@ fn sincronizar_cli(
             );
             0
         }
-        None => sincronizar_pasada(&almacen, rutas, config),
+        None => {
+            // Purga la clave anterior caducada (30 días) igual que la TUI.
+            let mut config = config.clone();
+            if config.sincronizacion.activa() {
+                let llavero = magi::llavero::LlaveroDelSistema;
+                if let Ok(true) = magi::sincronizacion::equipos::olvidar_anterior_si_vencida(
+                    &mut config,
+                    &llavero,
+                ) {
+                    if let Err(error) = config.guardar(&rutas.fichero_config()) {
+                        eprintln!("no se pudo guardar config.toml: {error:#}");
+                    }
+                }
+            }
+            sincronizar_pasada(&almacen, rutas, &config)
+        }
     };
     almacen.cerrar()?;
     Ok(codigo)

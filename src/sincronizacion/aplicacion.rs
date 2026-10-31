@@ -176,7 +176,7 @@ pub fn aplicar(
     // emitir ninguna edición nueva (los renombrados).
     versiones::al_importar(&transaccion, plan.reloj_ms)?;
 
-    let leido = leer_plan(plan)?;
+    let mut leido = leer_plan(plan)?;
     let vivos_uuids = leido.vivos.uuids_por_tabla();
 
     // Estado local antes de tocar nada: uuid → fila, y etiquetas por host para
@@ -232,6 +232,23 @@ pub fn aplicar(
         a_borrar.insert(tabla, borrar);
     }
 
+    // Un borrado aplazado sigue vivo en este equipo: si es un túnel o una
+    // sincronización cuyo host se va a borrar, hay que aplazar también el host
+    // (la cascada de SQLite se llevaría el hijo sin lápida). Y como el hijo
+    // aplazado sigue ocupando su nombre, los elementos del plan que colisionen
+    // con él se renombran como edición nueva antes de escribir: un UNIQUE a
+    // mitad abortaría toda la importación y la sincronización quedaría
+    // atascada reintentando el mismo fichero.
+    let mut aplazados = opciones.borrados_aplazados.clone();
+    propagar_aplazados(&transaccion, &mut aplazados, &a_borrar)?;
+    let conflictos_por_nombre =
+        resolver_colisiones_con_aplazados(&transaccion, &mut leido, &aplazados)?;
+    for (tabla, uuids) in &leido.renombrados {
+        if let Some(actualizar) = a_actualizar.get_mut(tabla) {
+            actualizar.extend(uuids.iter().cloned());
+        }
+    }
+
     // 1. Nombres temporales: se apartan todas las filas que se van a reescribir
     //    o borrar para que las permutas de nombre y los UNIQUE no choquen.
     for tabla in Tabla::todas() {
@@ -261,6 +278,9 @@ pub fn aplicar(
         let locales_tabla = locales.get(&tabla).unwrap_or(&vacio);
         let algunas = a_borrar.get(&tabla).cloned().unwrap_or_default();
         for uuid in &algunas {
+            if aplazados.contains(uuid) {
+                continue;
+            }
             let Some(fila) = locales_tabla.get(uuid) else {
                 continue;
             };
@@ -319,6 +339,21 @@ pub fn aplicar(
         let vivos_tabla = vivos_uuids.get(&tabla).cloned().unwrap_or_default();
         ids.insert(tabla, leer_ids(&transaccion, tabla, Some(&vivos_tabla))?);
     }
+    // Un elemento cuyo borrado está aplazado sigue vivo en este equipo: sus
+    // referencias no deben vaciarse. Sin esto, un host que saltaba por un host
+    // aplazado perdía el salto sin subir su versión (y lo mismo con grupo y
+    // snippet al conectar), rompiendo el invariante «mismo contenido, misma
+    // versión» que usa la fusión.
+    for uuid in &aplazados {
+        for tabla in [Tabla::Hosts, Tabla::Grupos, Tabla::Snippets] {
+            let Some(id) = id_por_uuid(&transaccion, tabla, uuid)? else {
+                continue;
+            };
+            if let Some(mapa) = ids.get_mut(&tabla) {
+                mapa.insert(uuid.clone(), id);
+            }
+        }
+    }
 
     fijar_referencias_de_hosts(&transaccion, &leido.vivos, &ids)?;
     escribir_tuneles(
@@ -345,9 +380,16 @@ pub fn aplicar(
     reconstruir_etiquetas(&transaccion, &leido.vivos, &ids, &etiquetas_anteriores)?;
     actualizar_verificaciones_de_hosts(&transaccion, &leido.vivos, &ids)?;
 
-    // 6. Lápidas del plan: todas se conservan siempre (también las de los
-    //    elementos resucitados y las de los borrados aplazados).
+    // 6. Lápidas del plan: se conservan siempre (también las de los elementos
+    //    resucitados). La de un borrado aplazado NO se guarda: si se guardara,
+    //    el elemento vivo local perdería contra ella en la siguiente fusión y
+    //    la pasada volvería a aplazar el borrado en cada arranque (copia y
+    //    REGISTRO de más). El borrado sigue en el fichero del otro equipo y se
+    //    aplicará con la acción «a» de la vista CONFLICTOS.
     for lapida in leido.lapidas.values() {
+        if aplazados.contains(&lapida.uuid) {
+            continue;
+        }
         lapidas::guardar(&transaccion, lapida)?;
     }
 
@@ -362,10 +404,33 @@ pub fn aplicar(
     }
 
     // 8. Conflictos: los que ya estaban pendientes no se duplican ni cuentan.
-    for conflicto in &plan.conflictos {
+    for conflicto in plan.conflictos.iter().chain(conflictos_por_nombre.iter()) {
         let nuevo = nuevo_conflicto(conflicto);
         if conflictos::crear_si_nuevo(&transaccion, &nuevo)?.is_some() {
             resumen.conflictos += 1;
+        }
+    }
+
+    // 9. Un conflicto de borrado aplazado deja de tener sentido si el elemento
+    //    sigue vivo (p. ej. resucitó con una edición nueva antes de aceptar el
+    //    borrado). Se marca como recuperado para que «a» no borre algo que ya
+    //    está vivo.
+    for conflicto in conflictos::listar_pendientes(&transaccion)? {
+        if conflicto.tipo != conflictos::TIPO_BORRADO {
+            continue;
+        }
+        let Some(tabla) = Tabla::desde_tipo_elemento(&conflicto.elemento_tipo) else {
+            continue;
+        };
+        if vivos_uuids
+            .get(&tabla)
+            .is_some_and(|uuids| uuids.contains(&conflicto.uuid))
+        {
+            conflictos::resolver(
+                &transaccion,
+                conflicto.id,
+                conflictos::RESOLUCION_RECUPERADO,
+            )?;
         }
     }
 
@@ -2126,4 +2191,294 @@ fn conflicto_de_nombre(que: &str, nombre: &str, error: rusqlite::Error) -> anyho
     } else {
         anyhow::Error::new(error)
     }
+}
+
+// --------------------------------------------------- aplazados y nombres
+
+/// uuid local de una fila por id; None si ya no existe.
+fn uuid_de_id(conexion: &Connection, tabla: Tabla, id: i64) -> Result<Option<String>> {
+    Ok(conexion
+        .query_row(
+            &format!("SELECT uuid FROM {} WHERE id = ?1", tabla.nombre()),
+            params![id],
+            |fila| fila.get(0),
+        )
+        .optional()?)
+}
+
+/// Si un túnel o una sincronización tienen el borrado aplazado, su host no
+/// puede borrarse: la cascada de SQLite se llevaría la fila sin lápida y
+/// dejaría un conflicto apuntando a algo inexistente. Se aplaza también el
+/// host (y se repite hasta que no cambie, por si hay más niveles).
+fn propagar_aplazados(
+    conexion: &Connection,
+    aplazados: &mut BTreeSet<String>,
+    a_borrar: &HashMap<Tabla, BTreeSet<String>>,
+) -> Result<()> {
+    let Some(hosts_a_borrar) = a_borrar.get(&Tabla::Hosts) else {
+        return Ok(());
+    };
+    loop {
+        let mut nuevos: Vec<String> = Vec::new();
+        for tabla in [Tabla::Tuneles, Tabla::SincronizacionesDir] {
+            for uuid in aplazados.iter() {
+                let Some(id) = id_por_uuid(conexion, tabla, uuid)? else {
+                    continue;
+                };
+                let host_id: Option<Option<i64>> = conexion
+                    .query_row(
+                        &format!("SELECT host_id FROM {} WHERE id = ?1", tabla.nombre()),
+                        params![id],
+                        |fila| fila.get(0),
+                    )
+                    .optional()?;
+                let Some(Some(host_id)) = host_id else {
+                    continue;
+                };
+                let Some(host_uuid) = uuid_de_id(conexion, Tabla::Hosts, host_id)? else {
+                    continue;
+                };
+                if hosts_a_borrar.contains(&host_uuid) && !aplazados.contains(&host_uuid) {
+                    nuevos.push(host_uuid);
+                }
+            }
+        }
+        if nuevos.is_empty() {
+            return Ok(());
+        }
+        for uuid in nuevos {
+            aplazados.insert(uuid);
+        }
+    }
+}
+
+/// Nombres que siguen ocupados por filas con borrado aplazado, por tabla.
+fn nombres_aplazados_global(
+    conexion: &Connection,
+    tabla: Tabla,
+    columna: &str,
+    aplazados: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let mut sentencia = conexion.prepare(&format!(
+        "SELECT uuid, {columna} FROM {} WHERE {columna} IS NOT NULL",
+        tabla.nombre()
+    ))?;
+    let filas = sentencia.query_map([], |fila| {
+        Ok((fila.get::<_, String>(0)?, fila.get::<_, String>(1)?))
+    })?;
+    let mut nombres = BTreeSet::new();
+    for fila in filas {
+        let (uuid, nombre) = fila?;
+        if aplazados.contains(&uuid) {
+            nombres.insert(nombre);
+        }
+    }
+    Ok(nombres)
+}
+
+/// Nombres de túneles/sincronizaciones aplazados, por uuid del host.
+fn nombres_aplazados_por_host(
+    conexion: &Connection,
+    tabla: Tabla,
+    aplazados: &BTreeSet<String>,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut sentencia = conexion.prepare(&format!(
+        "SELECT E.uuid, E.nombre, H.uuid FROM {} E JOIN HOSTS H ON H.id = E.host_id",
+        tabla.nombre()
+    ))?;
+    let filas = sentencia.query_map([], |fila| {
+        Ok((
+            fila.get::<_, String>(0)?,
+            fila.get::<_, String>(1)?,
+            fila.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut por_host: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for fila in filas {
+        let (uuid, nombre, host_uuid) = fila?;
+        if aplazados.contains(&uuid) {
+            por_host.entry(host_uuid).or_default().insert(nombre);
+        }
+    }
+    Ok(por_host)
+}
+
+/// Primer nombre libre para una base: el mismo, (2), (3)…
+fn primer_nombre_libre(base: &str, ocupados: &BTreeSet<String>) -> String {
+    if !ocupados.contains(base) {
+        return base.to_string();
+    }
+    let mut numero: u64 = 2;
+    loop {
+        let propuesto = format!("{base} ({numero})");
+        if !ocupados.contains(&propuesto) {
+            return propuesto;
+        }
+        numero += 1;
+    }
+}
+
+fn conflicto_de_nombre_renombrado(tabla: Tabla, uuid: &str, nombre: &str) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_NOMBRE.to_string(),
+        elemento_tipo: tabla.tipo_elemento().to_string(),
+        uuid: uuid.to_string(),
+        nombre: nombre.to_string(),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
+}
+
+/// Renombra los vivos del plan cuyo nombre natural choca con una fila
+/// aplazada (que sigue viva en este equipo pero no participó en la fusión, así
+/// que resolver_nombres no la vio). El renombrado se aplica como edición nueva
+/// al escribir y deja un conflicto de tipo nombre.
+fn colisiones_globales<D>(
+    vivos: &mut BTreeMap<String, VivoPlan<D>>,
+    tabla: Tabla,
+    aplazados: &BTreeSet<String>,
+    renombrados: &mut HashMap<Tabla, BTreeSet<String>>,
+    conflictos: &mut Vec<ConflictoFusion>,
+    nombre_de: impl Fn(&D) -> String,
+    mut poner_nombre: impl FnMut(&mut D, &str),
+) {
+    if aplazados.is_empty() {
+        return;
+    }
+    let mut ocupados: BTreeSet<String> = aplazados.clone();
+    for vivo in vivos.values() {
+        ocupados.insert(nombre_de(&vivo.datos));
+    }
+    for (uuid, vivo) in vivos.iter_mut() {
+        let nombre = nombre_de(&vivo.datos);
+        if !aplazados.contains(&nombre) {
+            continue;
+        }
+        let nuevo = primer_nombre_libre(&nombre, &ocupados);
+        ocupados.remove(&nombre);
+        ocupados.insert(nuevo.clone());
+        poner_nombre(&mut vivo.datos, &nuevo);
+        renombrados.entry(tabla).or_default().insert(uuid.clone());
+        conflictos.push(conflicto_de_nombre_renombrado(tabla, uuid, &nuevo));
+    }
+}
+
+/// Igual que colisiones_globales, pero para túneles y sincronizaciones, cuyo
+/// nombre es único dentro de su host.
+#[allow(clippy::too_many_arguments)] // Dos tablas, dos salidas y tres closures.
+fn colisiones_por_host<D>(
+    vivos: &mut BTreeMap<String, VivoPlan<D>>,
+    tabla: Tabla,
+    aplazados: &BTreeMap<String, BTreeSet<String>>,
+    renombrados: &mut HashMap<Tabla, BTreeSet<String>>,
+    conflictos: &mut Vec<ConflictoFusion>,
+    nombre_de: impl Fn(&D) -> String,
+    host_de: impl Fn(&D) -> Option<String>,
+    mut poner_nombre: impl FnMut(&mut D, &str),
+) {
+    if aplazados.is_empty() {
+        return;
+    }
+    let mut ocupados = aplazados.clone();
+    for vivo in vivos.values() {
+        if let (Some(host), nombre) = (host_de(&vivo.datos), nombre_de(&vivo.datos)) {
+            ocupados.entry(host).or_default().insert(nombre);
+        }
+    }
+    for (uuid, vivo) in vivos.iter_mut() {
+        let Some(host) = host_de(&vivo.datos) else {
+            continue;
+        };
+        let nombre = nombre_de(&vivo.datos);
+        if !aplazados
+            .get(&host)
+            .is_some_and(|nombres| nombres.contains(&nombre))
+        {
+            continue;
+        }
+        let ocupados_host = ocupados.entry(host.clone()).or_default();
+        let nuevo = primer_nombre_libre(&nombre, ocupados_host);
+        ocupados_host.remove(&nombre);
+        ocupados_host.insert(nuevo.clone());
+        poner_nombre(&mut vivo.datos, &nuevo);
+        renombrados.entry(tabla).or_default().insert(uuid.clone());
+        conflictos.push(conflicto_de_nombre_renombrado(tabla, uuid, &nuevo));
+    }
+}
+
+/// Resuelve las colisiones de nombre entre el plan y las filas aplazadas.
+fn resolver_colisiones_con_aplazados(
+    conexion: &Connection,
+    leido: &mut PlanLeido,
+    aplazados: &BTreeSet<String>,
+) -> Result<Vec<ConflictoFusion>> {
+    let mut conflictos = Vec::new();
+    if aplazados.is_empty() {
+        return Ok(conflictos);
+    }
+    let grupos = nombres_aplazados_global(conexion, Tabla::Grupos, "nombre", aplazados)?;
+    colisiones_globales(
+        &mut leido.vivos.grupos,
+        Tabla::Grupos,
+        &grupos,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.nombre.clone(),
+        |datos, nombre| datos.nombre = nombre.to_string(),
+    );
+    let hosts = nombres_aplazados_global(conexion, Tabla::Hosts, "nombre", aplazados)?;
+    colisiones_globales(
+        &mut leido.vivos.hosts,
+        Tabla::Hosts,
+        &hosts,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.nombre.clone(),
+        |datos, nombre| datos.nombre = nombre.to_string(),
+    );
+    let identidades = nombres_aplazados_global(conexion, Tabla::Identidades, "alias", aplazados)?;
+    colisiones_globales(
+        &mut leido.vivos.identidades,
+        Tabla::Identidades,
+        &identidades,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.alias.clone(),
+        |datos, nombre| datos.alias = nombre.to_string(),
+    );
+    let snippets = nombres_aplazados_global(conexion, Tabla::Snippets, "nombre", aplazados)?;
+    colisiones_globales(
+        &mut leido.vivos.snippets,
+        Tabla::Snippets,
+        &snippets,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.nombre.clone(),
+        |datos, nombre| datos.nombre = nombre.to_string(),
+    );
+    let tuneles = nombres_aplazados_por_host(conexion, Tabla::Tuneles, aplazados)?;
+    colisiones_por_host(
+        &mut leido.vivos.tuneles,
+        Tabla::Tuneles,
+        &tuneles,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.nombre.clone(),
+        |datos| Some(datos.host.clone()),
+        |datos, nombre| datos.nombre = nombre.to_string(),
+    );
+    let sincronizaciones =
+        nombres_aplazados_por_host(conexion, Tabla::SincronizacionesDir, aplazados)?;
+    colisiones_por_host(
+        &mut leido.vivos.sincronizaciones,
+        Tabla::SincronizacionesDir,
+        &sincronizaciones,
+        &mut leido.renombrados,
+        &mut conflictos,
+        |datos| datos.nombre.clone(),
+        |datos| Some(datos.host.clone()),
+        |datos, nombre| datos.nombre = nombre.to_string(),
+    );
+    Ok(conflictos)
 }

@@ -436,3 +436,21 @@ fn desactivar_borra_su_fichero_y_la_clave_pero_deja_magi_db_intacta() {
         .unwrap();
     assert_eq!(desactivaciones, 1);
 }
+#[test]
+fn sin_clave_actual_no_se_sincroniza_aunque_este_la_anterior() {
+    let mut entorno = entorno();
+    let llavero = LlaveroEnMemoria::nuevo();
+    let anterior = ClaveSincronizacion::generar();
+    llavero
+        .guardar(CUENTA_SINCRONIZACION_ANTERIOR, anterior.texto().as_str())
+        .unwrap();
+    let limite = chrono::Local::now() + chrono::Duration::days(1);
+    entorno.config.sincronizacion.clave_anterior_hasta =
+        Some(limite.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+
+    let claves = equipos::claves_para_leer(&entorno.config, &llavero).unwrap();
+    assert!(
+        claves.is_empty(),
+        "la anterior solo sirve para leer junto a la actual; sin actual no se sincroniza"
+    );
+}

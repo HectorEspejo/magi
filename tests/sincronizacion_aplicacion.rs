@@ -630,11 +630,14 @@ fn los_borrados_aplazados_no_se_borran() {
         .expect("el host aplazado sigue");
     assert_eq!(nombre, "con-trabajo");
     assert_eq!(version, msde(100, EQUIPO_LOCAL), "se queda como estaba");
-    // La lápida se guarda igual: es parte del universo y el borrado podrá
-    // aplicarse cuando acabe el trabajo vivo.
+    // La lápida del borrado aplazado NO se guarda: si se guardara, el host
+    // vivo local perdería contra ella en la siguiente fusión y la pasada
+    // volvería a aplazar el borrado en cada arranque (copia y REGISTRO de
+    // más). El borrado sigue en el fichero del otro equipo y se aplicará con
+    // la acción «a» de la vista CONFLICTOS (o si vuelve un fichero nuevo).
     assert!(lapidas::obtener(conexion, "uuid-aplazado")
         .expect("lápida")
-        .is_some());
+        .is_none());
 }
 
 #[test]
@@ -1474,4 +1477,80 @@ fn una_fila_exportable_que_el_plan_omite_se_borra_con_lapida_minima() {
     assert_eq!(guardada.nombre, "huerfano-del-plan");
     assert_eq!(guardada.version, msde(100, EQUIPO_LOCAL));
     assert_eq!(guardada.tipo, "host");
+}
+#[test]
+fn un_tunel_aplazado_no_cae_por_la_cascada_de_su_host() {
+    let almacen = almacen();
+    let conexion = almacen.conexion();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_tunel_local(&almacen, host_id, "t", "uuid-tunel", 100);
+
+    // El plan trae las lápidas del host y del túnel, pero el túnel tiene
+    // trabajo vivo: su borrado se aplaza y con él el del host, para que la
+    // cascada de SQLite no se lleve la fila sin lápida.
+    let plan = plan(
+        Vec::new(),
+        vec![
+            lapida_plan("host", "uuid-host", "web", 400, EQUIPO_REMOTO),
+            lapida_plan("tunel", "uuid-tunel", "t", 400, EQUIPO_REMOTO),
+        ],
+    );
+    let mut opciones = OpcionesAplicacion::default();
+    opciones.borrados_aplazados.insert("uuid-tunel".to_string());
+    let resumen = aplicar(conexion, &plan, &opciones, &hogar()).expect("aplicando el plan");
+
+    assert_eq!(resumen.borrados, 0);
+    assert_eq!(contar(&almacen, Tabla::Hosts), 1, "el host sigue");
+    assert_eq!(
+        contar(&almacen, Tabla::Tuneles),
+        1,
+        "el túnel aplazado sigue"
+    );
+    assert!(
+        lapidas::listar(conexion).unwrap().is_empty(),
+        "no se guarda la lápida de un aplazado"
+    );
+}
+
+#[test]
+fn un_nombre_ocupado_por_un_aplazado_renombra_al_elemento_nuevo() {
+    let almacen = almacen();
+    let conexion = almacen.conexion();
+    // «web» local con el borrado aplazado (sigue vivo en este equipo).
+    crear_host_local(&almacen, "web", "192.0.2.1", "uuid-viejo", 100);
+    // El plan trae la lápida del viejo y un host NUEVO que también se llama
+    // «web». La fusión no vio al aplazado: hay que renombrar el nuevo y no
+    // abortar por el UNIQUE de HOSTS.nombre.
+    let plan = plan(
+        vec![vivo(
+            "host",
+            "uuid-nuevo",
+            300,
+            EQUIPO_REMOTO,
+            &host_datos("web", "192.0.2.60"),
+        )],
+        vec![lapida_plan("host", "uuid-viejo", "web", 400, EQUIPO_REMOTO)],
+    );
+    let mut opciones = OpcionesAplicacion::default();
+    opciones.borrados_aplazados.insert("uuid-viejo".to_string());
+    aplicar(conexion, &plan, &opciones, &hogar()).expect("la aplicación no debe abortar");
+
+    assert_eq!(contar(&almacen, Tabla::Hosts), 2);
+    let nombres: Vec<String> = {
+        let mut sentencia = conexion
+            .prepare("SELECT nombre FROM HOSTS ORDER BY nombre")
+            .unwrap();
+        let filas = sentencia
+            .query_map([], |fila| fila.get::<_, String>(0))
+            .unwrap();
+        filas.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    };
+    assert_eq!(nombres, vec!["web".to_string(), "web (2)".to_string()]);
+    let conflictos = conflictos::listar_pendientes(conexion).unwrap();
+    assert!(
+        conflictos
+            .iter()
+            .any(|conflicto| conflicto.tipo == "nombre"),
+        "{conflictos:?}"
+    );
 }

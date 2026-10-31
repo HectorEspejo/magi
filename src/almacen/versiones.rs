@@ -118,7 +118,7 @@ pub fn vector_a_json(vector: &BTreeMap<String, i64>) -> String {
 pub fn emitir(conexion: &Connection) -> Result<(i64, String)> {
     let equipo = equipos::este(conexion)?;
     let ahora = ms_ahora();
-    let ms = ahora.max(equipo.reloj_ms.unwrap_or(0) + 1);
+    let ms = ahora.max(equipo.reloj_ms.unwrap_or(0).saturating_add(1));
     conexion
         .execute(
             "UPDATE EQUIPOS SET reloj_ms = ?1 WHERE id = ?2",

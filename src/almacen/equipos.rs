@@ -179,6 +179,17 @@ pub fn fijar_hash_propio(conexion: &Connection, id: i64, hash: &str) -> Result<(
     Ok(())
 }
 
+/// Borra el hash del contenido canónico propio para forzar que la siguiente
+/// pasada vuelva a escribir el fichero (p. ej. tras rotar la clave, porque el
+/// fichero existente está cifrado con la clave anterior).
+pub fn olvidar_hash_propio(conexion: &Connection, id: i64) -> Result<()> {
+    conexion.execute(
+        "UPDATE EQUIPOS SET hash_ultimo_fichero = NULL WHERE id = ?1 AND es_este = 1",
+        params![id],
+    )?;
+    Ok(())
+}
+
 pub fn fijar_importacion(conexion: &Connection, id: i64, generado_en: &str) -> Result<()> {
     conexion.execute(
         "UPDATE EQUIPOS SET ultima_importacion_en = ?1 WHERE id = ?2",

@@ -197,19 +197,29 @@ fn escribir_documento(carpeta: &Path, clave: &ClaveSincronizacion, documento: &D
     carpeta::escribir(carpeta, &documento.equipo.uuid, &cifrado).expect("escribiendo el fichero");
 }
 
-/// Escribe un documento con una cabecera de formato concreta y una firma que
-/// no valida: sirve para probar los rechazos de lectura.
-fn escribir_documento_manipulado(
+/// Escribe un documento con una cabecera de formato concreta. Con
+/// `firma_valida` firma el JSON como haría un MAGI más nuevo (para probar el
+/// rechazo por formato); sin ella deja una firma que no valida (para probar el
+/// rechazo por firma). El orden de lectura comprueba la firma antes del
+/// formato, así que cada caso necesita lo suyo.
+fn escribir_documento_con_formato(
     carpeta: &Path,
     clave: &ClaveSincronizacion,
     documento: &Documento,
     numero_formato: u32,
+    firma_valida: bool,
 ) {
     let json = formato::serializar(documento).expect("serializando el documento");
-    let plano = format!(
-        "{} {numero_formato}\nfirma: {}\n{json}\n",
-        formato::CABECERA,
+    let firma = if firma_valida {
+        clave
+            .firmar(json.as_bytes())
+            .expect("firmando el documento")
+    } else {
         "0".repeat(64)
+    };
+    let plano = format!(
+        "{} {numero_formato}\nfirma: {firma}\n{json}\n",
+        formato::CABECERA
     );
     let cifrado = clave
         .cifrar(plano.as_bytes())
@@ -353,7 +363,7 @@ fn un_fichero_con_formato_mas_nuevo_se_ignora_con_aviso() {
         .pasada(PoliticaBorrados::Preguntar)
         .expect("la primera pasada no debería fallar");
 
-    escribir_documento_manipulado(&entorno.carpeta, &entorno.clave(), &documento, 2);
+    escribir_documento_con_formato(&entorno.carpeta, &entorno.clave(), &documento, 2, true);
     let resultado = entorno
         .pasada(PoliticaBorrados::Preguntar)
         .expect("la pasada no debería fallar");
@@ -376,11 +386,12 @@ fn un_fichero_con_formato_mas_nuevo_se_ignora_con_aviso() {
 fn un_fichero_manipulado_queda_danado_y_no_se_aplica() {
     let entorno = Entorno::nuevo(true, true);
     let documento = documento_ajeno_con_host();
-    escribir_documento_manipulado(
+    escribir_documento_con_formato(
         &entorno.carpeta,
         &entorno.clave(),
         &documento,
         formato::FORMATO,
+        false,
     );
 
     let resultado = entorno

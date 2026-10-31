@@ -7544,7 +7544,14 @@ impl App {
                         self.solicitar_pasada();
                     }
                 }
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {}
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    // La operación (crear, quitar, rotar) ya se aplicó: al
+                    // cerrar hay que exportar igualmente con la clave nueva y
+                    // el estado de equipos al día.
+                    if sincronizar_al_cerrar {
+                        self.solicitar_pasada();
+                    }
+                }
                 _ => {
                     self.dialogo = Some(Dialogo::ClaveSincronizacion {
                         clave,
@@ -8609,9 +8616,10 @@ impl App {
         ) else {
             return;
         };
-        let opciones = crate::sincronizacion::OpcionesPasada::sin_trabajo_vivo(
-            crate::sincronizacion::PoliticaBorrados::Preguntar,
-        );
+        let opciones = crate::sincronizacion::OpcionesPasada {
+            politica_borrados: crate::sincronizacion::PoliticaBorrados::Preguntar,
+            trabajo_vivo: &|tipo, uuid| self.hay_trabajo_vivo(tipo, uuid),
+        };
         let _ = crate::sincronizacion::pasada(
             self.almacen.conexion(),
             &self.rutas,
