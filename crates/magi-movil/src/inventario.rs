@@ -118,7 +118,9 @@ pub fn ficha(estado: &EstadoNucleo, host_uuid: &str) -> Result<FichaHost, ErrorN
         };
         let uuids = movil_bd::uuid_por_id(conexion, Tabla::Hosts)?;
         let salto_uuid = host.salto_host_id.and_then(|id| uuids.get(&id).cloned());
-        Ok::<_, anyhow::Error>(Some((host, salto_uuid)))
+        let grupos = movil_bd::uuid_por_id(conexion, Tabla::Grupos)?;
+        let grupo_uuid = host.grupo_id.and_then(|id| grupos.get(&id).cloned());
+        Ok::<_, anyhow::Error>(Some((host, salto_uuid, grupo_uuid)))
     })
     .map_err(|error| ErrorNucleo::General {
         detalle: error.to_string(),
@@ -126,7 +128,7 @@ pub fn ficha(estado: &EstadoNucleo, host_uuid: &str) -> Result<FichaHost, ErrorN
     .map_err(|error| ErrorNucleo::General {
         detalle: format!("leyendo la ficha: {error:#}"),
     })?;
-    let Some((host, salto_uuid)) = obtenido else {
+    let Some((host, salto_uuid, grupo_uuid)) = obtenido else {
         return Err(ErrorNucleo::NoEncontrado {
             detalle: format!("el host {host_uuid}"),
         });
@@ -150,7 +152,7 @@ pub fn ficha(estado: &EstadoNucleo, host_uuid: &str) -> Result<FichaHost, ErrorN
         direccion: host.direccion,
         puerto: u32::from(host.puerto),
         usuario: host.usuario.unwrap_or_default(),
-        grupo_uuid: None,
+        grupo_uuid,
         grupo_nombre: host.grupo_nombre.clone(),
         etiquetas: host.etiquetas.clone(),
         salto_uuid,

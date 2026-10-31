@@ -1,12 +1,12 @@
 //! Rutas del equipo y datos que lo identifican, inyectados al arrancar.
 //!
 //! El núcleo no lee el entorno ni calcula rutas por su cuenta: el escritorio
-//! las descubre con la crate directories y las pasa; el móvil pasa las suyas
+//! las descubre el escritorio y las pasa; el móvil pasa las suyas
 //! dentro de su almacenamiento privado.
 
 use std::path::{Path, PathBuf};
 
-/// Rutas XDG de MAGI (equivalentes en macOS vía directories), o las que la
+/// Rutas XDG de MAGI (equivalentes en macOS), o las que la
 /// app móvil decida dentro de su almacenamiento privado.
 #[derive(Debug, Clone)]
 pub struct Rutas {

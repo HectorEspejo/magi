@@ -275,6 +275,31 @@ fn lanzar_bucle_eventos(
                 EventoConexion::PideFrase { responder, .. } => {
                     let _ = responder.send(None);
                 }
+                EventoConexion::HuellaRegistrada {
+                    host_id,
+                    anterior,
+                    nueva,
+                } => {
+                    let tipo = if anterior.is_some() {
+                        registro::HUELLA_SUSTITUIDA
+                    } else {
+                        registro::HUELLA_ACEPTADA
+                    };
+                    let detalle = match &anterior {
+                        Some(anterior) => format!("anterior {anterior}; nueva {nueva}"),
+                        None => format!("nueva {nueva}"),
+                    };
+                    let _ = estado.escritor.con_almacen(move |almacen| {
+                        registro::anotar(
+                            almacen.conexion(),
+                            tipo,
+                            Some(host_id),
+                            None,
+                            &detalle,
+                            ResultadoRegistro::Ok,
+                        )
+                    });
+                }
                 _ => {}
             }
         }
@@ -728,7 +753,16 @@ pub fn texto_seleccion(
 }
 
 pub fn cerrar_sesion(estado: &EstadoNucleo, id: u64) -> Result<(), ErrorNucleo> {
-    sesion_de(estado, id)?.ordenar(ComandoSesion::Cerrar);
+    let sesion = sesion_de(estado, id)?;
+    if sesion.estado() == EstadoSesion::Caida {
+        // Una sesión caída ya no tiene tarea que atienda el cierre.
+        if let Ok(mut sesiones) = estado.sesiones.lock() {
+            sesiones.remove(&id);
+        }
+        estado.emitir_sesiones();
+        return Ok(());
+    }
+    sesion.ordenar(ComandoSesion::Cerrar);
     Ok(())
 }
 
@@ -849,9 +883,10 @@ pub fn tuneles(
             }
             None => (EstadoTunel::Inactivo, None, 0, 0, 0, None),
         };
-        let (escucha_texto, aviso) = match &escucha {
-            Ok(escucha) => (escucha.texto(), escucha.aviso),
-            Err(_) => (tunel.escucha.clone(), false),
+        let (escucha_texto, aviso) = match (&escucha, tunel.tipo) {
+            (Ok(_escucha), TipoTunel::Remoto) => (tunel.escucha.clone(), false),
+            (Ok(escucha), _) => (escucha.texto(), escucha.aviso),
+            (Err(_), _) => (tunel.escucha.clone(), false),
         };
         lista.push(TunelVivo {
             uuid,
@@ -1441,11 +1476,12 @@ async fn comprobar_clave_movil(
     };
     match conectar_cadena_movil(&cadena, &contexto, &clave).await {
         Ok(transporte) => {
+            let con_clave = transporte.identidad.descripcion == "clave del móvil";
             let handle = transporte.handle.clone();
             let _ = handle
                 .disconnect(russh::Disconnect::ByApplication, "", "")
                 .await;
-            true
+            con_clave
         }
         Err(_) => false,
     }

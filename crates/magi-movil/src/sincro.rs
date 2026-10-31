@@ -58,16 +58,50 @@ impl CarpetaSincronizacion for CarpetaRetrollamada {
     }
 }
 
-/// Claves de sincronización guardadas en el llavero (la actual y, si existe,
-/// la anterior de una rotación).
+/// Días que se conserva la clave anterior tras una rotación (F10 §7.4).
+pub const DIAS_CLAVE_ANTERIOR: i64 = 30;
+
+/// La clave anterior se guarda con su fecha límite y su texto separados
+/// por un salto de línea; así solo lee mientras dura el plazo, aunque
+/// la app se reinicie.
+fn partir_anterior(texto: &str) -> Option<(i64, String)> {
+    let (hasta, clave) = texto.split_once('\n')?;
+    let hasta = hasta.trim().parse::<i64>().ok()?;
+    Some((hasta, clave.to_string()))
+}
+
+fn juntar_anterior(hasta: i64, clave: &str) -> String {
+    format!(
+        "{hasta}
+{clave}"
+    )
+}
+
+/// Claves de sincronización guardadas en el llavero (la actual y, si existe y
+/// no ha caducado, la anterior de una rotación).
 pub fn claves_guardadas(estado: &EstadoNucleo) -> Vec<ClaveSincronizacion> {
     let mut claves = Vec::new();
-    for cuenta in [CUENTA_CLAVE, CUENTA_CLAVE_ANTERIOR] {
-        let Ok(Some(texto)) = estado.llavero.leer(cuenta) else {
-            continue;
-        };
+    if let Ok(Some(texto)) = estado.llavero.leer(CUENTA_CLAVE) {
         if let Ok(clave) = ClaveSincronizacion::desde_texto(texto.as_str()) {
             claves.push(clave);
+        }
+    }
+    if let Ok(Some(guardada)) = estado.llavero.leer(CUENTA_CLAVE_ANTERIOR) {
+        match partir_anterior(guardada.as_str()) {
+            Some((hasta, texto)) => {
+                if chrono::Utc::now().timestamp() <= hasta {
+                    if let Ok(clave) = ClaveSincronizacion::desde_texto(&texto) {
+                        claves.push(clave);
+                    }
+                } else {
+                    // Caducada: se olvida (la anterior solo lee 30 días).
+                    let _ = estado.llavero.borrar(CUENTA_CLAVE_ANTERIOR);
+                }
+            }
+            None => {
+                // Formato antiguo sin fecha: se trata como caducada.
+                let _ = estado.llavero.borrar(CUENTA_CLAVE_ANTERIOR);
+            }
         }
     }
     claves
@@ -84,13 +118,20 @@ pub fn normalizar_clave(texto: &str) -> String {
 }
 
 fn nombre_de_uri(uri: &str) -> String {
-    let limpio = uri.trim_end_matches('/');
+    // La URI SAF viene codificada (primary%3ASync%2Fmagi): se decodifican los
+    // separadores para quedarse con el nombre legible de la carpeta.
+    let texto = uri
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .replace("%2F", "/")
+        .replace("%2f", "/")
+        .replace("%20", " ");
+    let limpio = texto.trim_end_matches('/');
     let ultimo = limpio.rsplit('/').next().unwrap_or(limpio);
-    let ultimo = ultimo.rsplit(':').next().unwrap_or(ultimo);
     if ultimo.is_empty() {
         "carpeta".to_string()
     } else {
-        ultimo.replace("%20", " ")
+        ultimo.to_string()
     }
 }
 
@@ -168,9 +209,26 @@ pub async fn unir_con_clave(estado: &Arc<EstadoNucleo>, texto: String) -> Result
             detalle: "la clave no abre los ficheros de esta carpeta".to_string(),
         });
     }
+    // Si ya había una clave distinta, pasa a anterior: solo lee 30 días.
+    let anterior = estado
+        .llavero
+        .leer(CUENTA_CLAVE)
+        .ok()
+        .flatten()
+        .map(|texto| texto.to_string());
+    let nueva = clave.texto().to_string();
+    if let Some(anterior) = anterior {
+        if anterior != nueva {
+            let hasta = chrono::Utc::now().timestamp() + DIAS_CLAVE_ANTERIOR * 24 * 60 * 60;
+            estado
+                .llavero
+                .guardar(CUENTA_CLAVE_ANTERIOR, &juntar_anterior(hasta, &anterior))
+                .map_err(|detalle| ErrorNucleo::Llavero { detalle })?;
+        }
+    }
     estado
         .llavero
-        .guardar(CUENTA_CLAVE, clave.texto().as_str())
+        .guardar(CUENTA_CLAVE, &nueva)
         .map_err(|detalle| ErrorNucleo::Llavero { detalle })?;
     {
         let mut sincro = estado.sincro.lock().await;
@@ -577,4 +635,40 @@ pub fn listar_carpeta(estado: &EstadoNucleo) -> Result<Vec<EntradaCarpeta>, Erro
     carpeta
         .listar()
         .map_err(|detalle| ErrorNucleo::Carpeta { detalle })
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn la_clave_pegada_se_normaliza_sin_espacios_y_en_mayusculas() {
+        let texto = "  age-secret-key-1 abc \n  def\t";
+        assert_eq!(normalizar_clave(texto), "AGE-SECRET-KEY-1ABCDEF");
+    }
+
+    #[test]
+    fn la_clave_anterior_se_guarda_con_su_plazo() {
+        let hasta = 1_900_000_000;
+        let guardada = juntar_anterior(hasta, "AGE-SECRET-KEY-1PRUEBA");
+        let (leida, clave) = partir_anterior(&guardada).expect("formato válido");
+        assert_eq!(leida, hasta);
+        assert_eq!(clave, "AGE-SECRET-KEY-1PRUEBA");
+    }
+
+    #[test]
+    fn un_formato_antiguo_sin_fecha_no_se_acepta() {
+        assert!(partir_anterior("AGE-SECRET-KEY-1PRUEBA").is_none());
+        assert!(partir_anterior("no-numero\nclave").is_none());
+    }
+
+    #[test]
+    fn el_nombre_de_la_carpeta_sale_de_la_uri_saf() {
+        let uri = "content://com.android.externalstorage.documents/tree/primary%3ASync%2Fmagi";
+        assert_eq!(nombre_de_uri(uri), "magi");
+        assert_eq!(
+            nombre_de_uri("content://x/tree/primary%3ASync%2Fmagi/documents"),
+            "documents"
+        );
+    }
 }
