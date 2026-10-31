@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::modelo::{fecha_ahora, Identidad, OrigenIdentidad};
+use crate::sincronizacion::formato::NAMESPACE_IDENTIDADES;
 
 const SELECCION: &str = "
     SELECT id, alias, tipo, huella, origen, ruta, comentario, anadida_en,
@@ -35,11 +37,19 @@ pub struct ClaveSincronizada {
     pub comentario: Option<String>,
 }
 
+/// uuid determinista de una identidad: UUIDv5 de la huella, el mismo en todos
+/// los equipos y en la app Android (Fase 10).
+pub fn uuid_de_huella(huella: &str) -> String {
+    uuid::Uuid::new_v5(&NAMESPACE_IDENTIDADES, huella.as_bytes()).to_string()
+}
+
 /// Alta o actualización por huella. Una identidad revocada se conserva
-/// revocada; el alias y `anadida_en` nunca se pisan.
+/// revocada; el alias y `anadida_en` nunca se pisan. Los campos que viajan
+/// (tipo, comentario) suben la versión; origen y ruta son de este equipo.
 pub fn sincronizar(conexion: &Connection, claves: &[ClaveSincronizada]) -> Result<()> {
+    let transaccion = crate::almacen::transaccion(conexion)?;
     for clave in claves {
-        let existente: Option<(i64,)> = conexion
+        let existente: Option<(i64,)> = transaccion
             .query_row(
                 "SELECT id FROM IDENTIDADES WHERE huella = ?1",
                 params![clave.huella],
@@ -48,7 +58,8 @@ pub fn sincronizar(conexion: &Connection, claves: &[ClaveSincronizada]) -> Resul
             .ok();
         match existente {
             Some((id,)) => {
-                conexion.execute(
+                let antes = versiones::datos_de(&transaccion, versiones::Tabla::Identidades, id)?;
+                transaccion.execute(
                     "UPDATE IDENTIDADES
                         SET tipo = ?1, origen = ?2, ruta = ?3, comentario = ?4
                       WHERE id = ?5",
@@ -60,10 +71,16 @@ pub fn sincronizar(conexion: &Connection, claves: &[ClaveSincronizada]) -> Resul
                         id
                     ],
                 )?;
+                versiones::subir_si_cambio(
+                    &transaccion,
+                    versiones::Tabla::Identidades,
+                    id,
+                    antes.as_deref(),
+                )?;
             }
             None => {
-                let alias = alias_disponible(conexion, clave, None)?;
-                conexion.execute(
+                let alias = alias_disponible(&transaccion, clave, None)?;
+                transaccion.execute(
                     "INSERT INTO IDENTIDADES (
                         alias, tipo, huella, origen, ruta, comentario, anadida_en
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -77,9 +94,18 @@ pub fn sincronizar(conexion: &Connection, claves: &[ClaveSincronizada]) -> Resul
                         fecha_ahora(),
                     ],
                 )?;
+                let id = transaccion.last_insert_rowid();
+                let uuid = uuid_de_huella(&clave.huella);
+                versiones::registrar_nuevo(
+                    &transaccion,
+                    versiones::Tabla::Identidades,
+                    id,
+                    Some(&uuid),
+                )?;
             }
         }
     }
+    transaccion.commit()?;
     Ok(())
 }
 
@@ -99,8 +125,9 @@ pub fn crear(
         ruta: ruta.map(str::to_string),
         comentario: comentario.map(str::to_string),
     };
-    let alias = alias_disponible(conexion, &clave, None)?;
-    conexion.execute(
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let alias = alias_disponible(&transaccion, &clave, None)?;
+    transaccion.execute(
         "INSERT INTO IDENTIDADES (
             alias, tipo, huella, origen, ruta, comentario, anadida_en
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -114,7 +141,13 @@ pub fn crear(
             fecha_ahora(),
         ],
     )?;
-    Ok(conexion.last_insert_rowid())
+    let id = transaccion.last_insert_rowid();
+    // El uuid de una identidad sale de la huella: la misma clave lo tiene
+    // igual en todos los equipos (Fase 10).
+    let uuid = uuid_de_huella(huella);
+    versiones::registrar_nuevo(&transaccion, versiones::Tabla::Identidades, id, Some(&uuid))?;
+    transaccion.commit()?;
+    Ok(id)
 }
 
 /// Alias por defecto: comentario, nombre del fichero o tipo, con sufijo
@@ -200,9 +233,16 @@ pub fn renombrar(conexion: &Connection, id: i64, alias: &str) -> Result<()> {
     if existe_alias(conexion, alias, Some(id))? {
         anyhow::bail!("ya existe una identidad con el alias «{alias}»");
     }
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Identidades, id)?;
     conexion.execute(
         "UPDATE IDENTIDADES SET alias = ?1 WHERE id = ?2",
         params![alias, id],
+    )?;
+    versiones::subir_si_cambio(
+        conexion,
+        versiones::Tabla::Identidades,
+        id,
+        antes.as_deref(),
     )?;
     Ok(())
 }
@@ -275,7 +315,26 @@ pub fn revocar(conexion: &Connection, id: i64, hogar: &Path) -> Result<usize> {
     let identidad = obtener(conexion, id)?;
     let hosts = hosts_que_usan(conexion, &identidad, hogar)?;
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    // Los hosts que se quedan en `auto` cambian un campo que viaja: se
+    // capturan antes de revocar (Fase 10).
+    let mut ids_hosts: Vec<i64> = Vec::new();
+    for variante in variantes_ref(&identidad, hogar) {
+        let mut sentencia =
+            transaccion.prepare("SELECT id FROM HOSTS WHERE identidad_ref = ?1 ORDER BY id")?;
+        let filas = sentencia.query_map(params![variante], |fila| fila.get(0))?;
+        for fila in filas {
+            let host_id: i64 = fila?;
+            if !ids_hosts.contains(&host_id) {
+                ids_hosts.push(host_id);
+            }
+        }
+    }
+    let antes_hosts: Vec<Option<String>> = ids_hosts
+        .iter()
+        .map(|host_id| versiones::datos_de(&transaccion, versiones::Tabla::Hosts, *host_id))
+        .collect::<Result<Vec<_>>>()?;
+    let antes_identidad = versiones::datos_de(&transaccion, versiones::Tabla::Identidades, id)?;
     for variante in variantes_ref(&identidad, hogar) {
         transaccion.execute(
             "UPDATE HOSTS SET identidad_ref = NULL, actualizado_en = ?1
@@ -287,14 +346,35 @@ pub fn revocar(conexion: &Connection, id: i64, hogar: &Path) -> Result<usize> {
         "UPDATE IDENTIDADES SET revocada_en = ?1 WHERE id = ?2",
         params![ahora, id],
     )?;
+    for (host_id, antes) in ids_hosts.iter().zip(antes_hosts.iter()) {
+        versiones::subir_si_cambio(
+            &transaccion,
+            versiones::Tabla::Hosts,
+            *host_id,
+            antes.as_deref(),
+        )?;
+    }
+    versiones::subir_si_cambio(
+        &transaccion,
+        versiones::Tabla::Identidades,
+        id,
+        antes_identidad.as_deref(),
+    )?;
     transaccion.commit()?;
     Ok(hosts.len())
 }
 
 pub fn reactivar(conexion: &Connection, id: i64) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Identidades, id)?;
     conexion.execute(
         "UPDATE IDENTIDADES SET revocada_en = NULL WHERE id = ?1",
         params![id],
+    )?;
+    versiones::subir_si_cambio(
+        conexion,
+        versiones::Tabla::Identidades,
+        id,
+        antes.as_deref(),
     )?;
     Ok(())
 }

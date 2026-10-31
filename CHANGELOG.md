@@ -7,6 +7,35 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ## [Sin publicar]
 
+### Añadido
+
+- **Sincronización cifrada del inventario (Fase 10).** El mismo inventario en
+  todos los equipos del usuario mediante ficheros cifrados con age (X25519) y
+  firmados con HMAC-SHA256 en una carpeta que él elige (Syncthing, Nextcloud,
+  iCloud, git…). Cada equipo escribe su propio `magi-<uuid>.age` (instantánea
+  completa) y lee los de los demás; `magi.db` no se cifra. Migración 7 con
+  `uuid`, `version` y `vector` en las tablas que viajan y las tablas nuevas
+  `EQUIPOS`, `LAPIDAS` y `CONFLICTOS`, reloj híbrido, fusión determinista por
+  vectores con conflictos recuperables, lápidas permanentes, unión por nombre al
+  añadir un equipo, huellas de `known_hosts` que solo se añaden si no había
+  ninguna, copia de `magi.db` y confirmación de borrados masivos, clave en el
+  llavero mostrada como texto y QR, rotación al quitar un equipo, vistas
+  SINCRONIZACIÓN y CONFLICTOS con indicador `⇅` en la barra y
+  `magi sincronizar [estado]`. El formato está documentado en
+  [`docs/formato-sincronizacion.md`](docs/formato-sincronizacion.md) para la app
+  Android.
+
+### Cambiado
+
+- Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
+
+### Corregido
+
+- Evita el error «database is locked» al escribir el inventario con el
+  servidor de sesiones activo: las transacciones del almacén se abren con
+  `BEGIN IMMEDIATE`, de modo que esperan el bloqueo en vez de fallar al
+  promoverlo.
+
 ## [1.0.0] - 2026-10-30
 
 Primera versión pública de MAGI. Reúne las Fases 1-8 del proyecto y el

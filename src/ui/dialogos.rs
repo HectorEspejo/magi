@@ -290,6 +290,11 @@ pub fn dibujar(
         Dialogo::Guardadas(dialogo) => {
             crate::ui::sincronizaciones::dibujar(marco, area, app, dialogo, disp);
         }
+        Dialogo::ClaveSincronizacion { .. }
+        | Dialogo::UnirEquipo { .. }
+        | Dialogo::ImportacionBorrados { .. } => {
+            crate::ui::sincronizacion::dibujar_dialogo(marco, area, app, dialogo, disp);
+        }
         Dialogo::Confirmar {
             titulo,
             lineas,

@@ -268,6 +268,30 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ("q / esc", "cerrar la salida o volver a Snippets"),
                 ],
             ),
+            Vista::Sincronizacion => (
+                "AYUDA · SINCRONIZACIÓN",
+                vec![
+                    ("s", "sincronizar ahora"),
+                    ("c", "conflictos pendientes"),
+                    ("k", "mostrar la clave (texto y QR)"),
+                    ("x", "quitar el equipo seleccionado (cambia la clave)"),
+                    ("r", "cambiar la clave sin quitar equipos"),
+                    ("d", "desactivar la sincronización en este equipo"),
+                    ("n", "configurar la carpeta (crear o unir)"),
+                    ("q / esc", "volver"),
+                ],
+            ),
+            Vista::Conflictos => (
+                "AYUDA · CONFLICTOS",
+                vec![
+                    ("↑ ↓ / j k", "mover la selección"),
+                    ("↵", "detalle de los campos que difieren"),
+                    ("r", "recuperar mi versión (elemento o borrado aplazado)"),
+                    ("a", "aceptar la del otro equipo (huella o borrado)"),
+                    ("d", "descartar el conflicto"),
+                    ("q / esc", "volver"),
+                ],
+            ),
             Vista::Flota => (
                 "AYUDA · FLOTA",
                 vec![

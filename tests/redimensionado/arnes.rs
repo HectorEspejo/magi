@@ -298,6 +298,8 @@ impl AppPrueba {
             Lista::ArchivosRemoto,
             Lista::Transferencias,
             Lista::Tuneles,
+            Lista::Sincronizacion,
+            Lista::Conflictos,
             Lista::Snippets,
             Lista::Paleta,
             Lista::ResultadosEjecuciones,

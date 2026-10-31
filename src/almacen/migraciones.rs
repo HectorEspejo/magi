@@ -3,7 +3,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+use uuid::Uuid;
+
+use crate::sincronizacion::formato::NAMESPACE_IDENTIDADES;
+
+use super::{equipos, versiones};
 
 /// Migraciones numeradas y aplicadas por `PRAGMA user_version`. Nunca se
 /// modifica una migración ya publicada: se añade otra al final.
@@ -16,8 +21,9 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_6_SINCRONIZACIONES,
 ];
 
-/// Versión de esquema que conoce este binario (el número de migraciones).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64;
+/// Versión de esquema que conoce este binario (el número de migraciones más
+/// la migración 7, que necesita Rust para rellenar uuid, versión y vector).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 1;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -325,6 +331,143 @@ CREATE TABLE SINCRONIZACIONES_DIR (
 CREATE INDEX idx_sincronizaciones_dir_host ON SINCRONIZACIONES_DIR(host_id);
 "#;
 
+/// Fase 10: sincronización cifrada del inventario. Las columnas uuid, version
+/// y vector se añaden sin NOT NULL porque SQLite no permite añadir una columna
+/// NOT NULL sin reconstruir la tabla; el código y la importación garantizan
+/// que ninguna fila queda sin ellas. El uuid de las identidades es
+/// determinista (UUIDv5 de la huella) y lo rellena migracion_7.
+const MIGRACION_7_ESQUEMA: &str = r#"
+ALTER TABLE GRUPOS ADD COLUMN uuid TEXT;
+ALTER TABLE GRUPOS ADD COLUMN version TEXT;
+ALTER TABLE GRUPOS ADD COLUMN vector TEXT;
+
+ALTER TABLE HOSTS ADD COLUMN uuid TEXT;
+ALTER TABLE HOSTS ADD COLUMN version TEXT;
+ALTER TABLE HOSTS ADD COLUMN vector TEXT;
+
+ALTER TABLE IDENTIDADES ADD COLUMN uuid TEXT;
+ALTER TABLE IDENTIDADES ADD COLUMN version TEXT;
+ALTER TABLE IDENTIDADES ADD COLUMN vector TEXT;
+
+ALTER TABLE TUNELES ADD COLUMN uuid TEXT;
+ALTER TABLE TUNELES ADD COLUMN version TEXT;
+ALTER TABLE TUNELES ADD COLUMN vector TEXT;
+
+ALTER TABLE SNIPPETS ADD COLUMN uuid TEXT;
+ALTER TABLE SNIPPETS ADD COLUMN version TEXT;
+ALTER TABLE SNIPPETS ADD COLUMN vector TEXT;
+
+ALTER TABLE SINCRONIZACIONES_DIR ADD COLUMN uuid TEXT;
+ALTER TABLE SINCRONIZACIONES_DIR ADD COLUMN version TEXT;
+ALTER TABLE SINCRONIZACIONES_DIR ADD COLUMN vector TEXT;
+
+CREATE UNIQUE INDEX idx_grupos_uuid ON GRUPOS(uuid);
+CREATE UNIQUE INDEX idx_hosts_uuid ON HOSTS(uuid);
+CREATE UNIQUE INDEX idx_identidades_uuid ON IDENTIDADES(uuid);
+CREATE UNIQUE INDEX idx_tuneles_uuid ON TUNELES(uuid);
+CREATE UNIQUE INDEX idx_snippets_uuid ON SNIPPETS(uuid);
+CREATE UNIQUE INDEX idx_sincronizaciones_dir_uuid ON SINCRONIZACIONES_DIR(uuid);
+
+CREATE TABLE EQUIPOS (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid                  TEXT    NOT NULL UNIQUE,
+    nombre                TEXT    NOT NULL,
+    plataforma            TEXT    NOT NULL,
+    es_este               INTEGER NOT NULL DEFAULT 0,
+    app_version           TEXT,
+    ultimo_fichero_en     TEXT,
+    ultima_importacion_en TEXT,
+    hash_ultimo_fichero   TEXT,
+    estado                TEXT    NOT NULL,
+    quitado_en            TEXT,
+    reloj_ms              INTEGER
+);
+
+CREATE INDEX idx_equipos_es_este ON EQUIPOS(es_este);
+
+CREATE TABLE LAPIDAS (
+    uuid       TEXT PRIMARY KEY,
+    tipo       TEXT NOT NULL,
+    nombre     TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    vector     TEXT NOT NULL,
+    borrado_en TEXT NOT NULL
+);
+
+CREATE INDEX idx_lapidas_tipo ON LAPIDAS(tipo);
+
+CREATE TABLE CONFLICTOS (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo                   TEXT NOT NULL,
+    elemento_tipo          TEXT NOT NULL,
+    uuid                   TEXT NOT NULL,
+    nombre                 TEXT NOT NULL,
+    version_perdedora_json TEXT,
+    version_ganadora       TEXT,
+    equipo_ganador         TEXT,
+    detectado_en           TEXT NOT NULL,
+    resuelto_en            TEXT,
+    resolucion             TEXT
+);
+
+CREATE INDEX idx_conflictos_pendientes ON CONFLICTOS(resuelto_en);
+CREATE INDEX idx_conflictos_uuid ON CONFLICTOS(uuid);
+"#;
+
+/// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
+/// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
+/// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
+/// `aplicar`.
+fn migracion_7(conexion: &Connection) -> Result<()> {
+    conexion.execute_batch(MIGRACION_7_ESQUEMA)?;
+    let ahora = versiones::ms_ahora();
+    let equipo_uuid = Uuid::new_v4().to_string();
+    conexion.execute(
+        "INSERT INTO EQUIPOS (uuid, nombre, plataforma, es_este, app_version, estado, reloj_ms)
+         VALUES (?1, ?2, ?3, 1, ?4, 'este', ?5)",
+        params![
+            equipo_uuid,
+            equipos::nombre_actual(),
+            equipos::plataforma_actual(),
+            crate::VERSION_APP,
+            ahora,
+        ],
+    )?;
+    let version = versiones::formatear_version(ahora, &equipo_uuid);
+    let vector = format!("{{\"{equipo_uuid}\":{ahora}}}");
+    for tabla in [
+        "GRUPOS",
+        "HOSTS",
+        "IDENTIDADES",
+        "TUNELES",
+        "SNIPPETS",
+        "SINCRONIZACIONES_DIR",
+    ] {
+        let ids: Vec<i64> = {
+            let mut sentencia = conexion.prepare(&format!("SELECT id FROM {tabla} ORDER BY id"))?;
+            let filas = sentencia.query_map([], |fila| fila.get(0))?;
+            filas.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        for id in ids {
+            let uuid = if tabla == "IDENTIDADES" {
+                let huella: String = conexion.query_row(
+                    "SELECT huella FROM IDENTIDADES WHERE id = ?1",
+                    params![id],
+                    |fila| fila.get(0),
+                )?;
+                Uuid::new_v5(&NAMESPACE_IDENTIDADES, huella.as_bytes()).to_string()
+            } else {
+                Uuid::new_v4().to_string()
+            };
+            conexion.execute(
+                &format!("UPDATE {tabla} SET uuid = ?1, version = ?2, vector = ?3 WHERE id = ?4"),
+                params![uuid, version, vector, id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub fn aplicar(conexion: &mut Connection) -> Result<()> {
     comprobar_version(conexion)?;
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
@@ -336,6 +479,12 @@ pub fn aplicar(conexion: &mut Connection) -> Result<()> {
         let transaccion = conexion.transaction()?;
         transaccion.execute_batch(sql)?;
         transaccion.pragma_update(None, "user_version", numero)?;
+        transaccion.commit()?;
+    }
+    if version < 7 {
+        let transaccion = conexion.transaction()?;
+        migracion_7(&transaccion)?;
+        transaccion.pragma_update(None, "user_version", 7)?;
         transaccion.commit()?;
     }
     Ok(())

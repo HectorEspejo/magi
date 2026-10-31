@@ -681,6 +681,8 @@ pub(crate) fn todos_los_dialogos(
     dialogos.extend(super::vistas_i::dialogos());
     dialogos.extend(super::vistas_j::dialogos());
     dialogos.extend(super::vistas_k::dialogos());
+    // Los de la Fase 10.
+    dialogos.extend(super::vistas_m::dialogos());
     dialogos
 }
 

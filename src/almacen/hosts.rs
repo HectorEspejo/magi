@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, Row};
 
-use crate::almacen::etiquetas;
+use crate::almacen::{etiquetas, versiones};
 use crate::modelo::{fecha_ahora, DatosHost, Host, IdentidadRef, Origen, UltimoEstado};
 
 const SELECCION: &str = "
@@ -93,7 +93,7 @@ pub fn existe_nombre(conexion: &Connection, nombre: &str, excluyendo: Option<i64
 
 pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result<i64> {
     let ahora = fecha_ahora();
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     transaccion
         .execute(
             "INSERT INTO HOSTS (
@@ -125,12 +125,15 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
             }
         })?;
     let id = transaccion.last_insert_rowid();
+    // Un host nuevo nace con uuid, versión y vector (Fase 10).
+    versiones::registrar_nuevo(&transaccion, versiones::Tabla::Hosts, id, None)?;
     transaccion.commit()?;
     etiquetas::fijar_de_host(conexion, id, &datos.etiquetas)?;
     Ok(id)
 }
 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion
         .execute(
             "UPDATE HOSTS SET
@@ -163,40 +166,150 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
             }
         })?;
     etiquetas::fijar_de_host(conexion, id, &datos.etiquetas)?;
+    // Solo sube si cambió algo que viaja: los campos propios del equipo no
+    // cuentan (Fase 10).
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
+/// Filas de otra tabla que cuelgan de un host por `host_id` y dejan su propia
+/// lápida cuando el host se borra en cascada.
+fn hijas_para_lapida(
+    conexion: &Connection,
+    tabla: versiones::Tabla,
+    host_id: i64,
+) -> Result<Vec<crate::almacen::FilaParaLapida>> {
+    let mut sentencia = conexion.prepare(&format!(
+        "SELECT uuid, nombre, vector FROM {} WHERE host_id = ?1 ORDER BY id",
+        tabla.nombre()
+    ))?;
+    let filas = sentencia.query_map(params![host_id], |fila| {
+        Ok(crate::almacen::FilaParaLapida {
+            uuid: fila.get(0)?,
+            nombre: fila.get(1)?,
+            vector: fila.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        })
+    })?;
+    Ok(filas.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    conexion.execute("DELETE FROM HOSTS WHERE id = ?1", params![id])?;
-    etiquetas::limpiar_huerfanas(conexion)?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let Some(host) = crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Hosts, id)?
+    else {
+        // No hay fila que borrar: ni lápida ni cambios.
+        return Ok(());
+    };
+    // Túneles y sincronizaciones del host caen en cascada: también dejan
+    // lápida (Fase 10).
+    let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, id)?;
+    let sincronizaciones =
+        hijas_para_lapida(&transaccion, versiones::Tabla::SincronizacionesDir, id)?;
+    // Los hosts que lo usaban como salto se quedan con la referencia a nulo
+    // (ON DELETE SET NULL): eso cuenta como edición de cada uno.
+    let saltos: Vec<i64> = {
+        let mut sentencia =
+            transaccion.prepare("SELECT id FROM HOSTS WHERE salto_host_id = ?1 ORDER BY id")?;
+        let filas = sentencia.query_map(params![id], |fila| fila.get(0))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let antes_saltos: Vec<Option<String>> = saltos
+        .iter()
+        .map(|host_id| versiones::datos_de(&transaccion, versiones::Tabla::Hosts, *host_id))
+        .collect::<Result<Vec<_>>>()?;
+    // Los snippets que lo tenían como destino pierden ese destino en cascada:
+    // su contenido que viaja cambia y también cuentan como edición.
+    let snippets: Vec<i64> = {
+        let mut sentencia = transaccion
+            .prepare("SELECT DISTINCT snippet_id FROM SNIPPET_DESTINOS WHERE host_id = ?1 ORDER BY snippet_id")?;
+        let filas = sentencia.query_map(params![id], |fila| fila.get(0))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let antes_snippets: Vec<Option<String>> = snippets
+        .iter()
+        .map(|snippet_id| {
+            versiones::datos_de(&transaccion, versiones::Tabla::Snippets, *snippet_id)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    crate::almacen::dejar_lapida(
+        &transaccion,
+        versiones::Tabla::Hosts,
+        &host.uuid,
+        &host.nombre,
+        &host.vector,
+    )?;
+    for hija in &tuneles {
+        crate::almacen::dejar_lapida(
+            &transaccion,
+            versiones::Tabla::Tuneles,
+            &hija.uuid,
+            &hija.nombre,
+            &hija.vector,
+        )?;
+    }
+    for hija in &sincronizaciones {
+        crate::almacen::dejar_lapida(
+            &transaccion,
+            versiones::Tabla::SincronizacionesDir,
+            &hija.uuid,
+            &hija.nombre,
+            &hija.vector,
+        )?;
+    }
+    transaccion.execute("DELETE FROM HOSTS WHERE id = ?1", params![id])?;
+    etiquetas::limpiar_huerfanas(&transaccion)?;
+    for (host_id, antes) in saltos.iter().zip(antes_saltos.iter()) {
+        versiones::subir_si_cambio(
+            &transaccion,
+            versiones::Tabla::Hosts,
+            *host_id,
+            antes.as_deref(),
+        )?;
+    }
+    for (snippet_id, antes) in snippets.iter().zip(antes_snippets.iter()) {
+        versiones::subir_si_cambio(
+            &transaccion,
+            versiones::Tabla::Snippets,
+            *snippet_id,
+            antes.as_deref(),
+        )?;
+    }
+    transaccion.commit()?;
     Ok(())
 }
 
 pub fn mover_a_grupo(conexion: &Connection, id: i64, grupo_id: Option<i64>) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion.execute(
         "UPDATE HOSTS SET grupo_id = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![grupo_id, fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
 pub fn marcar_origen(conexion: &Connection, id: i64, origen: Origen) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion.execute(
         "UPDATE HOSTS SET origen = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![origen.como_texto(), fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
 pub fn fijar_salto(conexion: &Connection, id: i64, salto_host_id: Option<i64>) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion.execute(
         "UPDATE HOSTS SET salto_host_id = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![salto_host_id, fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
 pub fn anadir_opciones_extra(conexion: &Connection, id: i64, linea: &str) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     let actuales: String = conexion.query_row(
         "SELECT opciones_extra FROM HOSTS WHERE id = ?1",
         params![id],
@@ -211,6 +324,7 @@ pub fn anadir_opciones_extra(conexion: &Connection, id: i64, linea: &str) -> Res
         "UPDATE HOSTS SET opciones_extra = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![nuevas, fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
@@ -231,10 +345,12 @@ pub fn marcar_identidad_ref(
     id: i64,
     identidad: &IdentidadRef,
 ) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion.execute(
         "UPDATE HOSTS SET identidad_ref = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![identidad.a_bd(), fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 
@@ -273,10 +389,12 @@ pub fn fijar_snippet_al_conectar(
     id: i64,
     snippet_id: Option<i64>,
 ) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
     conexion.execute(
         "UPDATE HOSTS SET snippet_al_conectar_id = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![snippet_id, fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
     Ok(())
 }
 

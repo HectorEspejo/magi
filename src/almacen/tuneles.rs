@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::modelo::{
     fecha_ahora, juntar_direccion_puerto, partir_direccion_puerto, validar_tunel, DatosTunel,
     TipoTunel, Tunel,
@@ -154,7 +155,8 @@ pub fn crear(conexion: &Connection, datos: &DatosTunel) -> Result<i64> {
         ));
     }
     let ahora = fecha_ahora();
-    conexion
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    transaccion
         .execute(
             "INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico, creado_en, actualizado_en) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
@@ -175,7 +177,11 @@ pub fn crear(conexion: &Connection, datos: &DatosTunel) -> Result<i64> {
                 anyhow::Error::new(error)
             }
         })?;
-    Ok(conexion.last_insert_rowid())
+    let id = transaccion.last_insert_rowid();
+    // Un túnel nuevo nace con uuid, versión y vector (Fase 10).
+    versiones::registrar_nuevo(&transaccion, versiones::Tabla::Tuneles, id, None)?;
+    transaccion.commit()?;
+    Ok(id)
 }
 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosTunel) -> Result<()> {
@@ -186,6 +192,7 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosTunel) -> Result<
             tipo.etiqueta()
         ));
     }
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Tuneles, id)?;
     conexion
         .execute(
             "UPDATE TUNELES SET host_id = ?1, nombre = ?2, tipo = ?3, escucha = ?4, destino = ?5, \
@@ -208,19 +215,36 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosTunel) -> Result<
                 anyhow::Error::new(error)
             }
         })?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Tuneles, id, antes.as_deref())?;
     Ok(())
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    conexion.execute("DELETE FROM TUNELES WHERE id = ?1", params![id])?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let Some(tunel) =
+        crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Tuneles, id)?
+    else {
+        return Ok(());
+    };
+    crate::almacen::dejar_lapida(
+        &transaccion,
+        versiones::Tabla::Tuneles,
+        &tunel.uuid,
+        &tunel.nombre,
+        &tunel.vector,
+    )?;
+    transaccion.execute("DELETE FROM TUNELES WHERE id = ?1", params![id])?;
+    transaccion.commit()?;
     Ok(())
 }
 
 pub fn alternar_automatico(conexion: &Connection, id: i64, automatico: bool) -> Result<()> {
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Tuneles, id)?;
     conexion.execute(
         "UPDATE TUNELES SET automatico = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![automatico as i64, fecha_ahora(), id],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Tuneles, id, antes.as_deref())?;
     Ok(())
 }
 

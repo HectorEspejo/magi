@@ -39,6 +39,9 @@ mod vistas_k;
 // Fase 9: diálogo SERVIDOR DE SESIONES ANTERIOR.
 #[path = "redimensionado/vistas_l.rs"]
 mod vistas_l;
+// Fase 10: vistas SINCRONIZACIÓN y CONFLICTOS y sus diálogos.
+#[path = "redimensionado/vistas_m.rs"]
+mod vistas_m;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

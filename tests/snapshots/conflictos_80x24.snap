@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ CONFLICTOS DE SINCRONIZACIÓN ──────────────────────────────────────────── 4 ─┐
+│  TIPO      ELEMENTO    GANÓ                  CUÁNDO                          │
+│▸ huerfano  socks       huérfano              hace 2 días                     │
+│  borrado   backup-nas  aplazado              hace 3 h                        │
+│  elemento  hetzner-01  mac-mini              hace 1 h                        │
+│  huella    hetzner-02  mac-mini aceptó otra  hace 1 h                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│┌────────────────────────────────────────────────────────────────────────────┐│
+││  huérfano: tunel «socks» perdió su host · hace 2 días                      ││
+││  d lo descarta; no se puede recuperar sin su host                          ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ detalle  r recuperar  a aceptar  d descartar  ? más           ⇅ 4 conflictos

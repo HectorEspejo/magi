@@ -31,6 +31,19 @@ ignore = [
   # ci.yml: a partir de ese día la CI falla hasta que se renueve y se vuelva a
   # justificar.
   { id = "RUSTSEC-2023-0071", reason = "rsa sin parche, transitiva de russh; MAGI solo firma como cliente" },
+  # 2026-10-31 · proc-macro-error2 2.0.1 (sin mantener) es dependencia de
+  # compilación de i18n-embed-fl, que age arrastra para sus textos. No entra en
+  # el binario (es una proc-macro) ni se ejecuta en tiempo de ejecución, y no
+  # hay versión de age sin ella (0.12 usa i18n-embed-fl 0.10, con el mismo
+  # proc-macro-error2; además 0.12 no compila en este árbol por el conflicto
+  # ml-kem/kem con russh, ver docs/fase10/magi-fase10-implementacion.md).
+  # Revisar al actualizar age (o cuando age deje de usar i18n-embed-fl).
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro sin mantener, solo de compilación vía age/i18n-embed-fl; sin alternativa en el stack" },
+  # 2026-10-31 · basic-toml (sin mantener) llega por i18n-embed/fluent, que age
+  # usa para localizar sus textos; sin parche disponible. No lo usa MAGI (el
+  # TOML propio es la crate toml) y no hay versión de age sin este árbol.
+  # Revisar al actualizar age.
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml sin mantener, transitiva de age/i18n-embed; sin alternativa en el stack" },
 ]
 
 [licenses]

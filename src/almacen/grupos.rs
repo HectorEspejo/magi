@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::modelo::{fecha_ahora, Grupo};
 
 pub fn listar(conexion: &Connection) -> Result<Vec<Grupo>> {
@@ -52,14 +53,15 @@ pub fn por_nombre(conexion: &Connection, nombre: &str) -> Result<Option<Grupo>> 
 /// existe.
 pub fn crear(conexion: &Connection, nombre: &str) -> Result<i64> {
     let nombre = nombre.trim();
-    let orden: i64 = conexion
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let orden: i64 = transaccion
         .query_row(
             "SELECT COALESCE(MAX(orden), 0) + 1 FROM GRUPOS",
             [],
             |fila| fila.get(0),
         )
         .context("calculando el orden del grupo")?;
-    conexion
+    transaccion
         .execute(
             "INSERT INTO GRUPOS (nombre, orden, plegado, creado_en) VALUES (?1, ?2, 0, ?3)",
             params![nombre, orden, fecha_ahora()],
@@ -71,11 +73,16 @@ pub fn crear(conexion: &Connection, nombre: &str) -> Result<i64> {
                 anyhow::Error::new(error)
             }
         })?;
-    Ok(conexion.last_insert_rowid())
+    let id = transaccion.last_insert_rowid();
+    // Un grupo nuevo nace con uuid, versión y vector (Fase 10).
+    versiones::registrar_nuevo(&transaccion, versiones::Tabla::Grupos, id, None)?;
+    transaccion.commit()?;
+    Ok(id)
 }
 
 pub fn renombrar(conexion: &Connection, id: i64, nombre: &str) -> Result<()> {
     let nombre = nombre.trim();
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Grupos, id)?;
     conexion
         .execute(
             "UPDATE GRUPOS SET nombre = ?1 WHERE id = ?2",
@@ -88,12 +95,46 @@ pub fn renombrar(conexion: &Connection, id: i64, nombre: &str) -> Result<()> {
                 anyhow::Error::new(error)
             }
         })?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Grupos, id, antes.as_deref())?;
     Ok(())
 }
 
 /// Borra el grupo; sus hosts pasan a «sin grupo» (ON DELETE SET NULL).
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    conexion.execute("DELETE FROM GRUPOS WHERE id = ?1", params![id])?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let Some(grupo) = crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Grupos, id)?
+    else {
+        return Ok(());
+    };
+    // Los hosts que se quedan sin grupo cuentan como editados (ON DELETE SET
+    // NULL): se captura su contenido antes del borrado (Fase 10).
+    let hosts: Vec<i64> = {
+        let mut sentencia =
+            transaccion.prepare("SELECT id FROM HOSTS WHERE grupo_id = ?1 ORDER BY id")?;
+        let filas = sentencia.query_map(params![id], |fila| fila.get(0))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let antes_hosts: Vec<Option<String>> = hosts
+        .iter()
+        .map(|host_id| versiones::datos_de(&transaccion, versiones::Tabla::Hosts, *host_id))
+        .collect::<Result<Vec<_>>>()?;
+    crate::almacen::dejar_lapida(
+        &transaccion,
+        versiones::Tabla::Grupos,
+        &grupo.uuid,
+        &grupo.nombre,
+        &grupo.vector,
+    )?;
+    transaccion.execute("DELETE FROM GRUPOS WHERE id = ?1", params![id])?;
+    for (host_id, antes) in hosts.iter().zip(antes_hosts.iter()) {
+        versiones::subir_si_cambio(
+            &transaccion,
+            versiones::Tabla::Hosts,
+            *host_id,
+            antes.as_deref(),
+        )?;
+    }
+    transaccion.commit()?;
     Ok(())
 }
 
@@ -119,7 +160,11 @@ pub fn mover(conexion: &Connection, id: i64, direccion: i8) -> Result<()> {
     };
     let a = &grupos[posicion];
     let b = &grupos[destino];
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    // El orden viaja: mover un grupo es una edición de los dos que
+    // intercambian posición (Fase 10).
+    let antes_a = versiones::datos_de(&transaccion, versiones::Tabla::Grupos, a.id)?;
+    let antes_b = versiones::datos_de(&transaccion, versiones::Tabla::Grupos, b.id)?;
     transaccion.execute(
         "UPDATE GRUPOS SET orden = ?1 WHERE id = ?2",
         params![b.orden, a.id],
@@ -127,6 +172,18 @@ pub fn mover(conexion: &Connection, id: i64, direccion: i8) -> Result<()> {
     transaccion.execute(
         "UPDATE GRUPOS SET orden = ?1 WHERE id = ?2",
         params![a.orden, b.id],
+    )?;
+    versiones::subir_si_cambio(
+        &transaccion,
+        versiones::Tabla::Grupos,
+        a.id,
+        antes_a.as_deref(),
+    )?;
+    versiones::subir_si_cambio(
+        &transaccion,
+        versiones::Tabla::Grupos,
+        b.id,
+        antes_b.as_deref(),
     )?;
     transaccion.commit()?;
     Ok(())

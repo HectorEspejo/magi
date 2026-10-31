@@ -8,10 +8,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use magi::almacen::Almacen;
 use magi::config::Rutas;
 use magi::diagnostico::{
-    comprobar, ejecutar_en, recoger, AgenteObservado, Datos, Directorios, Estado, EstadoDirectorio,
-    ResultadoBaseDatos, ResultadoConfig, ServidorObservado,
+    comprobar, ejecutar_en, recoger, AgenteObservado, Datos, Directorios, EquipoObservado, Estado,
+    EstadoDirectorio, ResultadoBaseDatos, ResultadoConfig, ResultadoEquipos, ServidorObservado,
+    SincronizacionObservada,
 };
 
 /// Rutas de MAGI en un directorio temporal, sin crear nada.
@@ -70,6 +72,7 @@ fn datos_sanos(rutas: Rutas) -> Datos {
         },
         config: ResultadoConfig::Valida(Box::default()),
         base_datos: ResultadoBaseDatos::NoExiste,
+        sincronizacion: SincronizacionObservada::Desactivada,
         servidor: ServidorObservado::Apagado,
         agente: AgenteObservado::Claves(2),
         binarios,
@@ -120,11 +123,16 @@ fn un_sistema_sano_no_tiene_avisos_ni_errores() {
             "paginador",
             "terminal",
             "ssh_config",
+            "sincronización",
         ]
     );
     let (codigo, texto) = texto_de(&datos, false);
     assert_eq!(codigo, 0);
-    assert!(texto.contains("MAGI 1.0.0 · protocolo 6 · commit abc1234"));
+    assert!(texto.contains(&format!(
+        "MAGI {} · protocolo {} · commit abc1234",
+        magi::VERSION_APP,
+        magi::protocolo::VERSION_PROTOCOLO
+    )));
     assert!(texto.contains("0 avisos, 0 errores"));
 }
 
@@ -201,7 +209,11 @@ fn el_modo_ascii_cambia_los_signos_y_no_deja_glifos() {
         assert!(!texto.contains(glifo), "queda el glifo «{glifo}»:\n{texto}");
     }
     assert!(
-        texto.contains("MAGI 1.0.0 - protocolo 6 - commit abc1234"),
+        texto.contains(&format!(
+            "MAGI {} - protocolo {} - commit abc1234",
+            magi::VERSION_APP,
+            magi::protocolo::VERSION_PROTOCOLO
+        )),
         "{texto}"
     );
     // Un error también degrada su signo.
@@ -385,4 +397,201 @@ fn una_base_de_datos_futura_en_disco_se_detecta_sin_tocarla() {
     );
     assert!(!rutas.datos.join("magi.db-wal").exists());
     assert!(!rutas.datos.join("magi.db-shm").exists());
+}
+
+/// Busca una comprobación por su nombre.
+fn comprobacion_de<'a>(
+    informe: &'a magi::diagnostico::Informe,
+    nombre: &str,
+) -> &'a magi::diagnostico::Comprobacion {
+    informe
+        .comprobaciones
+        .iter()
+        .find(|comprobacion| comprobacion.nombre == nombre)
+        .unwrap_or_else(|| panic!("falta la comprobación «{nombre}»"))
+}
+
+#[test]
+fn la_sincronizacion_desactivada_es_correcta() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let datos = datos_sanos(rutas_de_prueba(temporal.path()));
+    let informe = comprobar(&datos);
+    let sincronizacion = comprobacion_de(&informe, "sincronización");
+    assert_eq!(
+        sincronizacion.estado,
+        Estado::Correcto,
+        "{}",
+        sincronizacion.detalle
+    );
+    assert!(
+        sincronizacion.detalle.contains("desactivada"),
+        "{}",
+        sincronizacion.detalle
+    );
+    assert_eq!(informe.codigo_salida(), 0);
+}
+
+#[test]
+fn una_carpeta_de_sincronizacion_que_no_existe_es_un_error() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let mut datos = datos_sanos(rutas_de_prueba(temporal.path()));
+    datos.sincronizacion = SincronizacionObservada::Configurada {
+        carpeta: EstadoDirectorio {
+            ruta: PathBuf::from("/no/existe/magi-sync"),
+            existe: false,
+            es_directorio: false,
+            permisos: None,
+            escribible: false,
+        },
+        equipos: ResultadoEquipos::SinDatos,
+        conflictos_pendientes: None,
+        copias_conflicto: 0,
+    };
+    let informe = comprobar(&datos);
+    let sincronizacion = comprobacion_de(&informe, "sincronización");
+    assert_eq!(sincronizacion.estado, Estado::Error);
+    assert!(
+        sincronizacion.detalle.contains("no existe"),
+        "{}",
+        sincronizacion.detalle
+    );
+    assert_eq!(informe.codigo_salida(), 1);
+}
+
+#[test]
+fn la_sincronizacion_avisa_de_equipos_ilegibles_conflictos_y_copias() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let mut datos = datos_sanos(rutas_de_prueba(temporal.path()));
+    datos.sincronizacion = SincronizacionObservada::Configurada {
+        carpeta: directorio(datos.rutas.hogar.join("magi-sync"), true),
+        equipos: ResultadoEquipos::Equipos(vec![
+            EquipoObservado {
+                nombre: "omarchy-portatil".to_string(),
+                plataforma: "linux".to_string(),
+                estado: "este".to_string(),
+                ultimo_fichero_en: None,
+            },
+            EquipoObservado {
+                nombre: "mac-mini".to_string(),
+                plataforma: "macos".to_string(),
+                estado: "ilegible".to_string(),
+                ultimo_fichero_en: Some("2026-11-05T09:12:44+01:00".to_string()),
+            },
+        ]),
+        conflictos_pendientes: Some(2),
+        copias_conflicto: 1,
+    };
+    let informe = comprobar(&datos);
+    let sincronizacion = comprobacion_de(&informe, "sincronización");
+    assert_eq!(
+        sincronizacion.estado,
+        Estado::Aviso,
+        "{}",
+        sincronizacion.detalle
+    );
+    for fragmento in [
+        "2 equipos",
+        "mac-mini",
+        "ilegible",
+        "2 conflictos pendientes",
+        "1 copia en conflicto",
+    ] {
+        assert!(
+            sincronizacion.detalle.contains(fragmento),
+            "falta «{fragmento}» en: {}",
+            sincronizacion.detalle
+        );
+    }
+    assert!(
+        sincronizacion
+            .arreglo
+            .as_deref()
+            .unwrap_or_default()
+            .contains("clave nueva"),
+        "falta la instrucción de la clave nueva: {:?}",
+        sincronizacion.arreglo
+    );
+    // Un aviso no cambia el código de salida.
+    assert_eq!(informe.codigo_salida(), 0);
+}
+
+#[test]
+fn la_sincronizacion_se_observa_sin_leer_la_clave_ni_descifrar() {
+    let temporal = tempfile::tempdir().expect("directorio temporal");
+    let rutas = rutas_de_prueba(temporal.path());
+    let carpeta = rutas.hogar.join("magi-sync");
+    std::fs::create_dir_all(&carpeta).expect("creando la carpeta de sincronización");
+    std::fs::create_dir_all(&rutas.config).expect("creando el directorio de configuración");
+    std::fs::write(
+        rutas.fichero_config(),
+        format!("[sincronizacion]\ncarpeta = \"{}\"\n", carpeta.display()),
+    )
+    .expect("escribiendo config.toml");
+
+    let otro_uuid = uuid::Uuid::new_v4().to_string();
+    {
+        let almacen = Almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
+        let conexion = almacen.conexion();
+        let id = magi::almacen::equipos::crear(conexion, &otro_uuid, "mac-mini", "macos")
+            .expect("creando el equipo ajeno");
+        magi::almacen::equipos::fijar_estado(conexion, id, magi::almacen::equipos::ESTADO_ILEGIBLE)
+            .expect("marcando el equipo ilegible");
+        let _ = magi::almacen::conflictos::crear_si_nuevo(
+            conexion,
+            &magi::almacen::conflictos::NuevoConflicto {
+                tipo: magi::almacen::conflictos::TIPO_ELEMENTO.to_string(),
+                elemento_tipo: "host".to_string(),
+                uuid: "0f1e2d3c-2222-4b3a-9c1d-abcdef012345".to_string(),
+                nombre: "web".to_string(),
+                version_perdedora_json: None,
+                version_ganadora: Some("1793873500001.6b1e5c2a".to_string()),
+                equipo_ganador: None,
+            },
+        )
+        .expect("creando un conflicto pendiente");
+        almacen.cerrar().expect("cerrando magi.db");
+    }
+    // Una copia en conflicto de la herramienta de sincronización: se ignora
+    // como fichero, pero el diagnóstico avisa de que existe.
+    std::fs::write(
+        carpeta.join(format!(
+            "magi-{otro_uuid}.sync-conflict-20261105-101200-ABC123.age"
+        )),
+        b"copia",
+    )
+    .expect("creando una copia en conflicto");
+
+    let datos = recoger(rutas.clone());
+    match &datos.sincronizacion {
+        SincronizacionObservada::Configurada {
+            carpeta: observada,
+            equipos: ResultadoEquipos::Equipos(equipos),
+            conflictos_pendientes,
+            copias_conflicto,
+        } => {
+            assert_eq!(observada.ruta, carpeta);
+            assert_eq!(equipos.len(), 2, "este equipo y el ajeno");
+            assert!(*conflictos_pendientes >= Some(1));
+            assert_eq!(*copias_conflicto, 1);
+        }
+        otra => panic!("la sincronización no se observó: {otra:?}"),
+    }
+    let informe = comprobar(&datos);
+    let sincronizacion = comprobacion_de(&informe, "sincronización");
+    assert_eq!(
+        sincronizacion.estado,
+        Estado::Aviso,
+        "{}",
+        sincronizacion.detalle
+    );
+    assert!(
+        sincronizacion.detalle.contains("ilegible"),
+        "{}",
+        sincronizacion.detalle
+    );
+    assert!(
+        sincronizacion.detalle.contains("conflicto"),
+        "{}",
+        sincronizacion.detalle
+    );
 }

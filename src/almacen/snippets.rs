@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::modelo::fecha_ahora;
 use crate::snippets::{normalizar, validar, DatosSnippet, Destino, Snippet};
 
@@ -165,7 +166,7 @@ fn insertar_destinos(conexion: &Connection, snippet_id: i64, destinos: &[Destino
 /// Crea un snippet con sus destinos, en una transacción.
 pub fn crear(conexion: &Connection, datos: &DatosSnippet) -> Result<i64> {
     let datos = preparar(datos)?;
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
     let ahora = fecha_ahora();
     transaccion
         .execute(
@@ -185,6 +186,8 @@ pub fn crear(conexion: &Connection, datos: &DatosSnippet) -> Result<i64> {
         )
         .map_err(|error| conflicto(&datos.nombre, error))?;
     let id = transaccion.last_insert_rowid();
+    // Un snippet nuevo nace con uuid, versión y vector (Fase 10).
+    versiones::registrar_nuevo(&transaccion, versiones::Tabla::Snippets, id, None)?;
     insertar_destinos(&transaccion, id, &datos.destinos)?;
     transaccion.commit()?;
     Ok(id)
@@ -193,7 +196,10 @@ pub fn crear(conexion: &Connection, datos: &DatosSnippet) -> Result<i64> {
 /// Actualiza un snippet y sustituye sus destinos, en una transacción.
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSnippet) -> Result<()> {
     let datos = preparar(datos)?;
-    let transaccion = conexion.unchecked_transaction()?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    // `antes` incluye los destinos: cambiarlos también es editar el snippet
+    // (Fase 10).
+    let antes = versiones::datos_de(&transaccion, versiones::Tabla::Snippets, id)?;
     let cambiadas = transaccion
         .execute(
             "UPDATE SNIPPETS SET nombre = ?1, comando = ?2, descripcion = ?3, etiquetas = ?4, \
@@ -220,6 +226,12 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSnippet) -> Resul
         params![id],
     )?;
     insertar_destinos(&transaccion, id, &datos.destinos)?;
+    versiones::subir_si_cambio(
+        &transaccion,
+        versiones::Tabla::Snippets,
+        id,
+        antes.as_deref(),
+    )?;
     transaccion.commit()?;
     Ok(())
 }
@@ -228,7 +240,41 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSnippet) -> Resul
 /// como «snippet al conectar» se quedan sin él y las deliberaciones conservan
 /// la acción en texto (`SET NULL`).
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    conexion.execute("DELETE FROM SNIPPETS WHERE id = ?1", params![id])?;
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let Some(snippet) =
+        crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::Snippets, id)?
+    else {
+        return Ok(());
+    };
+    // Los hosts que lo tenían como «snippet al conectar» se quedan sin él
+    // (ON DELETE SET NULL): eso cuenta como edición de cada uno (Fase 10).
+    let hosts: Vec<i64> = {
+        let mut sentencia = transaccion
+            .prepare("SELECT id FROM HOSTS WHERE snippet_al_conectar_id = ?1 ORDER BY id")?;
+        let filas = sentencia.query_map(params![id], |fila| fila.get(0))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let antes_hosts: Vec<Option<String>> = hosts
+        .iter()
+        .map(|host_id| versiones::datos_de(&transaccion, versiones::Tabla::Hosts, *host_id))
+        .collect::<Result<Vec<_>>>()?;
+    crate::almacen::dejar_lapida(
+        &transaccion,
+        versiones::Tabla::Snippets,
+        &snippet.uuid,
+        &snippet.nombre,
+        &snippet.vector,
+    )?;
+    transaccion.execute("DELETE FROM SNIPPETS WHERE id = ?1", params![id])?;
+    for (host_id, antes) in hosts.iter().zip(antes_hosts.iter()) {
+        versiones::subir_si_cambio(
+            &transaccion,
+            versiones::Tabla::Hosts,
+            *host_id,
+            antes.as_deref(),
+        )?;
+    }
+    transaccion.commit()?;
     Ok(())
 }
 

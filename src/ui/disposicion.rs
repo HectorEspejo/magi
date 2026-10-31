@@ -131,6 +131,7 @@ pub fn minimo_vista(vista: Vista) -> Tamano {
         | Vista::Identidades
         | Vista::Snippets => Tamano::new(50, 12),
         Vista::Resultados => Tamano::new(60, 14),
+        Vista::Sincronizacion | Vista::Conflictos => Tamano::new(50, 12),
         Vista::Flota | Vista::Hosts | Vista::Sesiones => MINIMO_GLOBAL,
     }
 }
@@ -149,6 +150,8 @@ pub fn nombre_vista(vista: Vista) -> &'static str {
         Vista::Tuneles => "Túneles",
         Vista::Snippets => "Snippets",
         Vista::Resultados => "Resultados",
+        Vista::Sincronizacion => "Sincronización",
+        Vista::Conflictos => "Conflictos",
     }
 }
 
@@ -181,6 +184,13 @@ pub const MINIMO_SINCRONIZACIONES: Tamano = Tamano::new(40, 12);
 /// Diálogo SERVIDOR DE SESIONES ANTERIOR (Fase 9, §6.2): con este tamaño se
 /// ve entero; por debajo entra el mínimo de la pantalla.
 pub const MINIMO_SERVIDOR_ANTERIOR: Tamano = Tamano::new(40, 12);
+/// Vistas SINCRONIZACIÓN y CONFLICTOS (Fase 10, T45).
+pub const MINIMO_SINCRONIZACION: Tamano = Tamano::new(50, 12);
+pub const MINIMO_CONFLICTOS: Tamano = Tamano::new(50, 12);
+/// Diálogos de la Fase 10: CLAVE con QR, UNIR e IMPORTACIÓN CON BORRADOS.
+pub const MINIMO_CLAVE_SINCRONIZACION: Tamano = Tamano::new(40, 12);
+pub const MINIMO_UNIR_EQUIPO: Tamano = Tamano::new(40, 12);
+pub const MINIMO_IMPORTACION_BORRADOS: Tamano = Tamano::new(40, 12);
 
 /// Por debajo de estos anchos, cada diálogo pasa a su modo estrecho (rótulos
 /// cortos, columnas de menos).
@@ -192,6 +202,13 @@ pub const ESTRECHO_SINCRONIZACIONES: u16 = 70;
 /// Por debajo de este ancho, el diálogo del servidor anterior parte cada
 /// recuento de custodia en su propio renglón.
 pub const ESTRECHO_SERVIDOR_ANTERIOR: u16 = 60;
+/// Anchos por debajo de los cuales las vistas y diálogos de la Fase 10 parten
+/// la cabecera o pierden la huella de la clave.
+pub const ESTRECHO_SINCRONIZACION: u16 = 90;
+pub const ESTRECHO_CONFLICTOS: u16 = 80;
+pub const ESTRECHO_CLAVE_SINCRONIZACION: u16 = 64;
+pub const ESTRECHO_UNIR_EQUIPO: u16 = 56;
+pub const ESTRECHO_IMPORTACION_BORRADOS: u16 = 56;
 
 /// Mínimo que declara el diálogo abierto, si es de los que lo declaran.
 pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
@@ -204,6 +221,18 @@ pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
         Dialogo::ServidorAnterior(_) => Some(Minimo {
             tamano: MINIMO_SERVIDOR_ANTERIOR,
             exige: "diálogo servidor anterior",
+        }),
+        Dialogo::ClaveSincronizacion { .. } => Some(Minimo {
+            tamano: MINIMO_CLAVE_SINCRONIZACION,
+            exige: "CLAVE DE SINCRONIZACIÓN",
+        }),
+        Dialogo::UnirEquipo { .. } => Some(Minimo {
+            tamano: MINIMO_UNIR_EQUIPO,
+            exige: "UNIR ESTE EQUIPO",
+        }),
+        Dialogo::ImportacionBorrados { .. } => Some(Minimo {
+            tamano: MINIMO_IMPORTACION_BORRADOS,
+            exige: "IMPORTACIÓN CON BORRADOS",
         }),
         _ => None,
     }
@@ -529,6 +558,10 @@ pub enum Lista {
     ResultadosHosts,
     VisorSalida,
     VisorErrores,
+    /// Lista de equipos de la vista SINCRONIZACIÓN (Fase 10).
+    Sincronizacion,
+    /// Lista de conflictos pendientes (Fase 10).
+    Conflictos,
     Paleta,
     Ayuda,
     Modal,

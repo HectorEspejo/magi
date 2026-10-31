@@ -7,6 +7,12 @@ use zeroize::Zeroizing;
 /// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
 pub const SERVICIO: &str = "magi";
 
+/// Cuenta donde vive la clave de sincronización del inventario (Fase 10).
+pub const CUENTA_SINCRONIZACION: &str = "sincronizacion";
+
+/// Cuenta de la clave anterior, solo para leer durante una rotación.
+pub const CUENTA_SINCRONIZACION_ANTERIOR: &str = "sincronizacion-anterior";
+
 // ------------------------------------------------------------- macOS: Keychain por API
 
 #[cfg(target_os = "macos")]
@@ -53,6 +59,31 @@ mod backend {
     pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
         let cuenta = cuenta(host, usuario);
         match keychain::delete_generic_password(SERVICIO, &cuenta) {
+            Ok(()) => Ok(true),
+            Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(false),
+            Err(error) => Err(format!("Keychain: {error}")),
+        }
+    }
+
+    pub fn guardar_secreto(cuenta: &str, valor: &str) -> Result<(), String> {
+        keychain::set_generic_password(SERVICIO, cuenta, valor.as_bytes())
+            .map_err(|error| format!("Keychain: {error}"))
+    }
+
+    pub fn recuperar_secreto(cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
+        match keychain::get_generic_password(SERVICIO, cuenta) {
+            Ok(mut bytes) => {
+                let texto = String::from_utf8_lossy(&bytes).to_string();
+                bytes.zeroize();
+                Ok((!texto.is_empty()).then_some(Zeroizing::new(texto)))
+            }
+            Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(None),
+            Err(error) => Err(format!("Keychain: {error}")),
+        }
+    }
+
+    pub fn olvidar_secreto(cuenta: &str) -> Result<bool, String> {
+        match keychain::delete_generic_password(SERVICIO, cuenta) {
             Ok(()) => Ok(true),
             Err(error) if error.code() == ITEM_NO_ENCONTRADO => Ok(false),
             Err(error) => Err(format!("Keychain: {error}")),
@@ -156,6 +187,75 @@ mod backend {
         }
     }
 
+    pub fn guardar_secreto(cuenta: &str, valor: &str) -> Result<(), String> {
+        let mut errores: Vec<String> = Vec::new();
+        let etiqueta = format!("{SERVICIO} · {cuenta}");
+        let resultado = lanzar(
+            "secret-tool",
+            &["store", "--label", &etiqueta, "magi-clave", cuenta],
+            true,
+        );
+        match resultado {
+            Err(Fallo::NoExiste) => {
+                return Err("no se encontró secret-tool (llavero del sistema)".to_string())
+            }
+            Err(Fallo::Fallo(motivo)) => errores.push(motivo),
+            Ok(mut proceso) => {
+                if let Some(mut entrada) = proceso.stdin.take() {
+                    if let Err(error) = entrada.write_all(valor.as_bytes()) {
+                        errores.push(error.to_string());
+                    }
+                }
+                if let Err(Fallo::Fallo(motivo)) = comprobar(&mut proceso) {
+                    errores.push(motivo);
+                }
+                if errores.is_empty() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(errores.join(" · "))
+    }
+
+    pub fn recuperar_secreto(cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
+        let mut comando = Command::new("secret-tool");
+        comando.args(["lookup", "magi-clave", cuenta]);
+        comando.stdout(Stdio::piped()).stderr(Stdio::null());
+        let proceso = match comando.spawn() {
+            Ok(proceso) => proceso,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err("no se encontró secret-tool (llavero del sistema)".to_string());
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let salida = proceso
+            .wait_with_output()
+            .map_err(|error| error.to_string())?;
+        if !salida.status.success() {
+            return Ok(None);
+        }
+        let texto = String::from_utf8_lossy(&salida.stdout)
+            .trim_end_matches(['\n', '\r'])
+            .to_string();
+        Ok((!texto.is_empty()).then_some(Zeroizing::new(texto)))
+    }
+
+    pub fn olvidar_secreto(cuenta: &str) -> Result<bool, String> {
+        let mut comando = Command::new("secret-tool");
+        comando.args(["clear", "magi-clave", cuenta]);
+        comando.stdout(Stdio::null()).stderr(Stdio::null());
+        match comando.spawn() {
+            Ok(mut proceso) => {
+                let salida = proceso.wait().map_err(|error| error.to_string())?;
+                Ok(salida.success())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err("no se encontró secret-tool (llavero del sistema)".to_string())
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     /// ¿Hay algún llavero disponible (secret-tool presente)?
     pub fn disponible() -> bool {
         Command::new("secret-tool")
@@ -193,6 +293,87 @@ mod backend {
     }
 }
 
+// ------------------------------------------------------------- secretos inyectables
+
+/// Interfaz de los secretos genéricos del llavero (la clave de sincronización
+/// y su anterior). La implementación real usa el llavero del sistema; las
+/// pruebas usan una en memoria. Así la pasada y los asistentes de
+/// sincronización se prueban sin depender de secret-tool ni del Keychain.
+pub trait LlaveroSecreto: Send + Sync {
+    fn guardar(&self, cuenta: &str, valor: &str) -> Result<(), String>;
+    fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String>;
+    fn olvidar(&self, cuenta: &str) -> Result<bool, String>;
+}
+
+/// El llavero real del sistema.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LlaveroDelSistema;
+
+impl LlaveroSecreto for LlaveroDelSistema {
+    fn guardar(&self, cuenta: &str, valor: &str) -> Result<(), String> {
+        guardar_secreto(cuenta, valor)
+    }
+
+    fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
+        recuperar_secreto(cuenta)
+    }
+
+    fn olvidar(&self, cuenta: &str) -> Result<bool, String> {
+        olvidar_secreto(cuenta)
+    }
+}
+
+/// Llavero en memoria para las pruebas de integración (nunca se usa en
+/// producción). Se documenta como superficie de pruebas, igual que
+/// App::de_prueba.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct LlaveroEnMemoria {
+    secretos: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+}
+
+impl std::fmt::Debug for LlaveroEnMemoria {
+    /// Nunca imprime los valores: aunque sea solo para pruebas, un Debug no
+    /// debe poder volcar secretos en un log ni en un mensaje de error.
+    fn fmt(&self, formato: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cuentas = self
+            .secretos
+            .lock()
+            .map(|secretos| secretos.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        formato
+            .debug_struct("LlaveroEnMemoria")
+            .field("cuentas", &cuentas)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlaveroEnMemoria {
+    pub fn nuevo() -> Self {
+        Self::default()
+    }
+}
+
+impl LlaveroSecreto for LlaveroEnMemoria {
+    fn guardar(&self, cuenta: &str, valor: &str) -> Result<(), String> {
+        let mut secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
+        secretos.insert(cuenta.to_string(), valor.to_string());
+        Ok(())
+    }
+
+    fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
+        let secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
+        Ok(secretos
+            .get(cuenta)
+            .map(|valor| Zeroizing::new(valor.clone())))
+    }
+
+    fn olvidar(&self, cuenta: &str) -> Result<bool, String> {
+        let mut secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
+        Ok(secretos.remove(cuenta).is_some())
+    }
+}
+
 // ------------------------------------------------------------- API pública
 
 /// Guarda la contraseña de un host en el llavero del sistema. Nunca toca
@@ -209,6 +390,22 @@ pub fn recuperar(host: &str, usuario: &str) -> Result<Option<Zeroizing<String>>,
 /// Borra la contraseña guardada de un host. Devuelve si existía.
 pub fn olvidar(host: &str, usuario: &str) -> Result<bool, String> {
     backend::olvidar(host, usuario)
+}
+
+/// Guarda un secreto genérico de MAGI (p. ej. la clave de sincronización) en
+/// el llavero, indexado por una cuenta estable. Nunca toca magi.db.
+pub fn guardar_secreto(cuenta: &str, valor: &str) -> Result<(), String> {
+    backend::guardar_secreto(cuenta, valor)
+}
+
+/// Recupera un secreto genérico del llavero.
+pub fn recuperar_secreto(cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
+    backend::recuperar_secreto(cuenta)
+}
+
+/// Borra un secreto genérico del llavero. Devuelve si existía.
+pub fn olvidar_secreto(cuenta: &str) -> Result<bool, String> {
+    backend::olvidar_secreto(cuenta)
 }
 
 /// ¿Hay algún llavero disponible en este sistema?

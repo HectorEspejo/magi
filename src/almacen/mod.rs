@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+pub mod conflictos;
+pub mod copias;
 pub mod deliberaciones;
+pub mod equipos;
 pub mod etiquetas;
 pub mod grupos;
 pub mod hosts;
 pub mod identidades;
+pub mod lapidas;
 pub mod migraciones;
 pub mod registro;
 pub mod sincronizaciones;
@@ -17,6 +21,19 @@ pub mod snippets;
 pub mod sondeos;
 pub mod tuneles;
 pub mod verificaciones;
+pub mod versiones;
+
+/// Abre una transacción de escritura con `BEGIN IMMEDIATE`: toma el bloqueo
+/// desde el principio para que `busy_timeout` espere de verdad. Con dos
+/// procesos compartiendo `magi.db` (la TUI y el servidor de sesiones), una
+/// transacción deferida que empieza leyendo y luego escribe recibe
+/// `SQLITE_BUSY` en la promoción sin pasar por el plazo de espera.
+pub fn transaccion(conexion: &Connection) -> Result<rusqlite::Transaction<'_>> {
+    Ok(rusqlite::Transaction::new_unchecked(
+        conexion,
+        rusqlite::TransactionBehavior::Immediate,
+    )?)
+}
 
 /// Fichero SQLite del inventario.
 pub struct Almacen {
@@ -126,6 +143,18 @@ impl Almacen {
 
     pub fn mover_host_a_grupo(&self, id: i64, grupo_id: Option<i64>) -> Result<()> {
         hosts::mover_a_grupo(&self.conexion, id, grupo_id)
+    }
+
+    pub fn marcar_origen(&self, id: i64, origen: crate::modelo::Origen) -> Result<()> {
+        hosts::marcar_origen(&self.conexion, id, origen)
+    }
+
+    pub fn fijar_salto(&self, id: i64, salto_host_id: Option<i64>) -> Result<()> {
+        hosts::fijar_salto(&self.conexion, id, salto_host_id)
+    }
+
+    pub fn anadir_opciones_extra(&self, id: i64, linea: &str) -> Result<()> {
+        hosts::anadir_opciones_extra(&self.conexion, id, linea)
     }
 
     pub fn marcar_conexion(&self, id: i64) -> Result<()> {
@@ -463,6 +492,72 @@ impl Almacen {
     pub fn contar_registro_anterior(&self, fecha_corte: &str) -> Result<i64> {
         registro::contar_anteriores(&self.conexion, fecha_corte)
     }
+}
+
+/// Datos mínimos de una fila que va a borrarse, para dejar su lápida
+/// (Fase 10).
+pub(crate) struct FilaParaLapida {
+    pub uuid: String,
+    pub nombre: String,
+    pub vector: String,
+}
+
+/// Lee uuid, nombre y vector de una fila por su id. None si no existe. Las
+/// tablas que viajan y se borran desde el almacén tienen columna `nombre`;
+/// las identidades no se borran nunca (se revocan).
+pub(crate) fn fila_para_lapida(
+    conexion: &Connection,
+    tabla: versiones::Tabla,
+    id: i64,
+) -> Result<Option<FilaParaLapida>> {
+    use rusqlite::OptionalExtension as _;
+    Ok(conexion
+        .query_row(
+            &format!(
+                "SELECT uuid, nombre, vector FROM {} WHERE id = ?1",
+                tabla.nombre()
+            ),
+            rusqlite::params![id],
+            |fila| {
+                Ok(FilaParaLapida {
+                    uuid: fila.get(0)?,
+                    nombre: fila.get(1)?,
+                    vector: fila.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Deja la lápida de una fila que se va a borrar: emite una versión nueva
+/// sobre el vector anterior del elemento, para que el borrado domine las
+/// ediciones que ya había visto y pierda ante una edición posterior (Fase 10).
+/// Se llama antes del DELETE, en la misma transacción.
+pub(crate) fn dejar_lapida(
+    conexion: &Connection,
+    tabla: versiones::Tabla,
+    uuid: &str,
+    nombre: &str,
+    vector_anterior: &str,
+) -> Result<()> {
+    let (version, vector) = versiones::version_de_lapida(conexion, vector_anterior)?;
+    lapidas::guardar(
+        conexion,
+        &lapidas::Lapida {
+            uuid: uuid.to_string(),
+            tipo: tabla.tipo_elemento().to_string(),
+            nombre: nombre.to_string(),
+            version,
+            vector,
+            borrado_en: crate::modelo::fecha_ahora(),
+        },
+    )
+}
+
+/// Crea un directorio con permisos 0700 si no existe (para copias y
+/// temporales de la sincronización).
+pub fn crear_directorio_privado_publico(ruta: &Path) -> Result<()> {
+    crear_directorio_privado(ruta)
 }
 
 fn crear_directorio_privado(ruta: &Path) -> Result<()> {

@@ -16,12 +16,20 @@ pub fn escribir_atomico(ruta: &Path, contenido: &[u8], modo: u32) -> Result<()> 
         .file_name()
         .and_then(|n| n.to_str())
         .context("nombre de fichero no válido")?;
-    let temporal = directorio.join(format!(".{nombre}.tmp"));
+    // Temporal único y creado con create_new: un enlace simbólico preparado
+    // en el nombre del temporal no se sigue (create_new falla) y dos procesos
+    // no se pisan. En la carpeta de sincronización esto importa: la carpeta la
+    // comparte otro programa y el atacante no necesita la clave para plantar
+    // un enlace.
+    let marca = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duracion| duracion.as_nanos())
+        .unwrap_or(0);
+    let temporal = directorio.join(format!(".{nombre}.{}.{marca}.tmp", std::process::id()));
     {
         let mut fichero = fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(modo)
             .open(&temporal)
             .with_context(|| format!("creando {}", temporal.display()))?;
@@ -61,7 +69,13 @@ pub fn copia_con_fecha(ruta: &Path) -> Result<Option<std::path::PathBuf>> {
         .file_name()
         .and_then(|n| n.to_str())
         .context("nombre de fichero no válido")?;
-    let copia = ruta.with_file_name(format!("{nombre}.bak-{marca}"));
+    // Dos copias en el mismo segundo no se pisan: se añade un sufijo.
+    let mut copia = ruta.with_file_name(format!("{nombre}.bak-{marca}"));
+    let mut sufijo = 2u32;
+    while copia.exists() {
+        copia = ruta.with_file_name(format!("{nombre}.bak-{marca}-{sufijo}"));
+        sufijo += 1;
+    }
     fs::copy(ruta, &copia)
         .with_context(|| format!("copiando {} → {}", ruta.display(), copia.display()))?;
     Ok(Some(copia))

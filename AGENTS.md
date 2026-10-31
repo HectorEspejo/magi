@@ -4,7 +4,7 @@
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con app Android prevista. Cliente: 4d3 (producto propio).
 Desde la Fase 9 es software libre (MIT OR Apache-2.0) en `4d3-org/magi` y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `4d3-org/homebrew-tap` y tarballs de GitHub Releases.
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 
 ## Documentación del proyecto
@@ -18,6 +18,7 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/faseN/magi-faseN-prompt-continuacion.md` — prompt de reanudación (si la fase queda a medias)
 - `docs/faseN/magi-faseN-implementacion.md` — informe de implementación (lo escribes tú)
 - `docs/publicar.md` — cómo se publica una versión (lo creas en la Fase 9; lo sigue el desarrollador)
+- `docs/formato-sincronizacion.md` — formato del fichero de sincronización (lo creas en la Fase 10; lo leerá la app Android)
 
 El informe de fase manda sobre tu criterio: si algo te parece incorrecto o
 incompleto, no lo cambies por tu cuenta — impleméntalo como está o párate y
@@ -48,8 +49,8 @@ coméntalo con el desarrollador.
   conjunto y repetir las pruebas manuales de la vista Sesión.
 - Comandos: `cargo run` arranca la TUI; `cargo run -- importar [ruta]`,
   `cargo run -- exportar`, `cargo run -- sincronizaciones`, `cargo run --
-  diagnostico`, `cargo run -- autocompletado <shell>` y `cargo run -- man` son
-  subcomandos; `scripts/generar-recursos.sh` regenera `assets/` y `cargo deny
+  diagnostico`, `cargo run -- autocompletado <shell>`, `cargo run -- man` y
+  `cargo run -- sincronizar [estado]` son subcomandos; `scripts/generar-recursos.sh` regenera `assets/` y `cargo deny
   check` revisa licencias y avisos;
   `TZ=UTC cargo test` ejecuta todos los tests (el crate expone `src/lib.rs`
   para los de `tests/`; las pruebas de pintado necesitan `TZ=UTC`);
@@ -228,6 +229,23 @@ coméntalo con el desarrollador.
   cuentas y no subes binarios: tú lo preparas y lo hace el desarrollador.
 - MAGI no comprueba actualizaciones ni abre conexiones salientes que no sean a
   los hosts del usuario (sin telemetría).
+- Sincronización del inventario (desde la Fase 10, `src/sincronizacion/`):
+  toda tabla que viaja lleva `uuid`, `version` y `vector`. Las escrituras del
+  almacén de campos que viajan suben la versión con el reloj híbrido
+  (`almacen/versiones.rs`); los campos propios del equipo no. Borrar deja
+  lápida. Si añades un campo o una tabla que deba viajar, actualiza
+  `sincronizacion/elementos.rs` y `docs/formato-sincronizacion.md`, y sube
+  `formato` si cambia el significado.
+- La importación escribe las versiones tal cual (nunca por el camino que sube
+  versión), en una transacción, bajo el cerrojo y con copia previa de
+  `magi.db`. Nada se importa sin firma válida. Cada equipo escribe solo su
+  fichero; el de otro solo se borra al quitar ese equipo.
+- La clave de sincronización vive solo en el llavero (`llavero.rs`): nunca en
+  logs, `REGISTRO`, `magi.db` ni la carpeta. Contraseñas y claves privadas no
+  viajan. Una importación nunca cierra trabajo vivo (aplaza el borrado) ni
+  sustituye una huella sin que el usuario lo acepte.
+- Ejemplos, tests y mockups usan direcciones de documentación (`192.0.2.x`) y
+  dominios `ejemplo.org`.
 
 ## Al terminar una fase (o al pausar la sesión)
 
