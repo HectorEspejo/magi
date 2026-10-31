@@ -57,6 +57,20 @@ class PruebaVistaModeloTerminal {
     }
 
     @Test
+    fun laEntradaSeEnviaEnOrdenPorElCanalUnico() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloTerminal(fuente, ambito())
+        vm.mostrarSesion(1)
+        vm.alEscribir("ab")
+        vm.alPulsarTecla(TeclaVista.Escape)
+        vm.alEscribir("cd")
+        assertEquals(
+            listOf("escribir:ab", "tecla:Escape", "escribir:cd"),
+            fuente.eventos,
+        )
+    }
+
+    @Test
     fun ctrlDeUnaPulsacionSeConsumeConLaTecla() {
         val fuente = FuenteNucleoFalsa()
         val vm = VistaModeloTerminal(fuente, ambito())

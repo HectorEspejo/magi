@@ -6,10 +6,10 @@
 //! (carpeta SAF, llavero del Keystore, firmante de la clave del móvil y oyente
 //! de pantallas, sesiones, túneles, diálogos y sincronización) por retrollamadas.
 //!
-//! En esta entrega el crate es el CONTRATO compilable: solo version() está
-//! implementada. La lógica (almacén, runtime de tokio, hilo escritor, gestor de
-//! sesiones, túneles, diálogos y sincronización en modo lector) la integra el
-//! Lead sustituyendo los unimplemented! con TODO.
+//! El crate implementa la lógica completa del móvil: arranque con las rutas y
+//! la identidad del equipo inyectadas, hilo escritor único de SQLite, inventario
+//! de solo lectura, sincronización en modo lector, sesiones con terminal por
+//! tramos, túneles y diálogos con la plataforma.
 
 uniffi::setup_scaffolding!();
 

@@ -69,13 +69,15 @@ async fn conectar_host(
     estado: &Arc<EstadoNucleo>,
     host_uuid: &str,
 ) -> Result<Arc<ConexionHost>, ErrorNucleo> {
-    let (host, otros) = con_almacen(estado, {
+    let (host, otros, uuids) = con_almacen(estado, {
         let host_uuid = host_uuid.to_string();
         move |almacen| {
             let conexion = almacen.conexion();
             let host = movil_bd::host_por_uuid(conexion, &host_uuid)?;
             let otros = hosts_bd::listar(conexion)?;
-            Ok::<_, anyhow::Error>((host, otros))
+            let uuids =
+                movil_bd::uuid_por_id(conexion, magi_nucleo::almacen::versiones::Tabla::Hosts)?;
+            Ok::<_, anyhow::Error>((host, otros, uuids))
         }
     })
     .map_err(|error| ErrorNucleo::General {
@@ -93,6 +95,11 @@ async fn conectar_host(
     let cadena = construir_cadena(&host, &mapa).map_err(|error| ErrorNucleo::General {
         detalle: error.to_string(),
     })?;
+    let saltos_uuids: Vec<String> = cadena
+        .iter()
+        .skip(1)
+        .filter_map(|salto| uuids.get(&salto.id).cloned())
+        .collect();
     let (tx, rx) = mpsc::unbounded_channel::<EventoConexion>();
     lanzar_bucle_eventos(estado.clone(), rx);
     let reenvios = Arc::new(Reenvios::default());
@@ -141,6 +148,7 @@ async fn conectar_host(
         saltos: transporte.saltos,
         reenvios,
         tx,
+        saltos_uuids,
     }))
 }
 
@@ -249,9 +257,18 @@ fn lanzar_bucle_eventos(
                         });
                     match receptor.await {
                         Ok(RespuestaDialogo::Contrasena { bytes, recordar }) => {
-                            let texto = String::from_utf8_lossy(&bytes).to_string();
-                            let contrasena = zeroize::Zeroizing::new(texto);
-                            let _ = responder.send(Some((contrasena, recordar)));
+                            let bytes = zeroize::Zeroizing::new(bytes);
+                            match std::str::from_utf8(&bytes) {
+                                Ok(texto) => {
+                                    let contrasena = zeroize::Zeroizing::new(texto.to_string());
+                                    let _ = responder.send(Some((contrasena, recordar)));
+                                }
+                                Err(_) => {
+                                    // El contrato exige texto UTF-8: no se
+                                    // corrompe una contraseña en silencio.
+                                    let _ = responder.send(None);
+                                }
+                            }
                         }
                         _ => {
                             let _ = responder.send(None);
@@ -387,7 +404,7 @@ fn nueva_sesion(
     estado_inicial: EstadoSesion,
     detalle: Option<String>,
 ) -> Arc<SesionViva> {
-    let (comandos, _receptor) = mpsc::unbounded_channel();
+    let (comandos, receptor) = mpsc::unbounded_channel();
     Arc::new(SesionViva {
         id,
         host_uuid: host_uuid.to_string(),
@@ -395,6 +412,7 @@ fn nueva_sesion(
         estado: std::sync::Mutex::new(estado_inicial),
         detalle: std::sync::Mutex::new(detalle),
         comandos: std::sync::Mutex::new(comandos),
+        receptor: std::sync::Mutex::new(Some(receptor)),
         pantalla,
         abierta_en: Some(chrono::Utc::now().timestamp()),
     })
@@ -402,30 +420,72 @@ fn nueva_sesion(
 
 async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     let host_uuid = sesion.host_uuid.clone();
+    // Los comandos que llegan mientras la sesión abre no se pierden: el tamaño
+    // pedido se aplica al PTY y un cierre se atiende antes de abrir el canal.
+    let mut receptor = sesion
+        .receptor
+        .lock()
+        .ok()
+        .and_then(|mut receptor| receptor.take());
+    let mut tamano_pedido: Option<(u16, u16)> = None;
+    let mut bytes_tempranos: Vec<u8> = Vec::new();
+    if let Some(receptor) = receptor.as_mut() {
+        while let Ok(comando) = receptor.try_recv() {
+            match comando {
+                ComandoSesion::Datos(bytes) => bytes_tempranos.extend_from_slice(&bytes),
+                ComandoSesion::Redimensionar(columnas, filas) => {
+                    tamano_pedido = Some((columnas.max(2), filas.max(1)));
+                }
+                ComandoSesion::Cerrar => {
+                    fallar_sesion(&estado, &sesion, "cerrada antes de abrir").await;
+                    return;
+                }
+                ComandoSesion::Desplazar(_) => {}
+            }
+        }
+    }
     let conexion = match conexion_para_host(&estado, &host_uuid).await {
         Ok(conexion) => conexion,
         Err(error) => {
-            fallar_sesion(&estado, &sesion, &error.to_string());
+            fallar_sesion(&estado, &sesion, &error.to_string()).await;
             return;
         }
     };
     sesion.fijar_estado(EstadoSesion::Abriendo, Some("conectando".to_string()));
     estado.emitir_sesiones();
-    let (filas, columnas) = match sesion.pantalla.lock() {
-        Ok(pantalla) => pantalla.screen().size(),
-        Err(_) => (24, 80),
+    let (columnas, filas) = match tamano_pedido {
+        Some(tamano) => tamano,
+        None => match sesion.pantalla.lock() {
+            Ok(pantalla) => pantalla.screen().size(),
+            Err(_) => (80, 24),
+        },
     };
-    let mut canal = match abrir_canal(&conexion.handle, columnas, filas).await {
-        Ok(canal) => canal,
-        Err(error) => {
-            fallar_sesion(&estado, &sesion, &error.to_string());
+    if let Ok(mut pantalla) = sesion.pantalla.lock() {
+        pantalla.screen_mut().set_size(filas, columnas);
+    }
+    let mut canal = match tokio::time::timeout(
+        Duration::from_secs(10),
+        abrir_canal(&conexion.handle, columnas, filas),
+    )
+    .await
+    {
+        Err(_) => {
+            fallar_sesion(&estado, &sesion, "se agotó el plazo abriendo el PTY (10 s)").await;
             return;
         }
+        Ok(Err(error)) => {
+            fallar_sesion(&estado, &sesion, &error.to_string()).await;
+            return;
+        }
+        Ok(Ok(canal)) => canal,
     };
-    let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
-    if let Ok(mut comandos) = sesion.comandos.lock() {
-        *comandos = tx_comandos;
+    if !bytes_tempranos.is_empty() {
+        let _ = canal.data_bytes(bytes_tempranos).await;
     }
+    let rx_comandos = match receptor {
+        Some(receptor) => receptor,
+        None => mpsc::unbounded_channel().1,
+    };
     sesion.fijar_estado(EstadoSesion::Abierta, None);
     let _ = estado.escritor.con_almacen({
         let host_uuid = host_uuid.clone();
@@ -437,7 +497,7 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     bucle_sesion(estado, sesion, &mut canal, rx_comandos).await;
 }
 
-fn fallar_sesion(estado: &EstadoNucleo, sesion: &SesionViva, motivo: &str) {
+async fn fallar_sesion(estado: &Arc<EstadoNucleo>, sesion: &SesionViva, motivo: &str) {
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.remove(&sesion.id);
     }
@@ -453,6 +513,7 @@ fn fallar_sesion(estado: &EstadoNucleo, sesion: &SesionViva, motivo: &str) {
         }
     });
     estado.emitir_sesiones();
+    soltar_conexion(estado, &sesion.host_uuid).await;
 }
 
 async fn bucle_sesion(
@@ -466,6 +527,10 @@ async fn bucle_sesion(
     let mut sucio = true;
     let mut completa = true;
     let mut vio_eof = false;
+    // El redimensionado se agrupa 50 ms (F7): la UI puede pedir varios al
+    // abrirse o cerrarse el teclado y el remoto recibe el último.
+    let mut redimension_pendiente: Option<(u16, u16)> = None;
+    let mut ultimo_redimension = std::time::Instant::now();
     loop {
         tokio::select! {
             comando = comandos.recv() => match comando {
@@ -473,19 +538,18 @@ async fn bucle_sesion(
                     if canal.data_bytes(bytes).await.is_err() {
                         sesion.fijar_estado(EstadoSesion::Caida, Some("la conexión se ha perdido".to_string()));
                         estado.emitir_sesiones();
+                        marcar_tuneles_caidos(
+                            &estado,
+                            &sesion.host_uuid,
+                            "la conexión se ha perdido",
+                        );
+                        soltar_conexion(&estado, &sesion.host_uuid).await;
                         actualizar_automaticos(&estado, &sesion.host_uuid);
                         return;
                     }
                 }
                 Some(ComandoSesion::Redimensionar(columnas, filas)) => {
-                    let columnas = columnas.max(2);
-                    let filas = filas.max(1);
-                    let _ = canal.window_change(u32::from(columnas), u32::from(filas), 0, 0).await;
-                    if let Ok(mut pantalla) = sesion.pantalla.lock() {
-                        pantalla.screen_mut().set_size(filas, columnas);
-                    }
-                    completa = true;
-                    sucio = true;
+                    redimension_pendiente = Some((columnas.max(2), filas.max(1)));
                 }
                 Some(ComandoSesion::Desplazar(filas)) => {
                     if let Ok(mut pantalla) = sesion.pantalla.lock() {
@@ -529,6 +593,20 @@ async fn bucle_sesion(
                 _ => {}
             },
             _ = intervalo.tick() => {
+                if let Some((columnas, filas)) = redimension_pendiente {
+                    if ultimo_redimension.elapsed() >= Duration::from_millis(50) {
+                        let _ = canal
+                            .window_change(u32::from(columnas), u32::from(filas), 0, 0)
+                            .await;
+                        if let Ok(mut pantalla) = sesion.pantalla.lock() {
+                            pantalla.screen_mut().set_size(filas, columnas);
+                        }
+                        redimension_pendiente = None;
+                        ultimo_redimension = std::time::Instant::now();
+                        completa = true;
+                        sucio = true;
+                    }
+                }
                 if sucio {
                     let pantalla = sesion.pantalla.lock().ok().and_then(|pantalla| {
                         generador.actualizar(&pantalla, completa)
@@ -774,6 +852,7 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
             detalle: "solo se reconecta una sesión caída".to_string(),
         });
     }
+    soltar_conexion(estado, &sesion.host_uuid).await;
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.remove(&id);
     }
@@ -909,6 +988,30 @@ pub fn tuneles(
     Ok(lista)
 }
 
+/// Marca caídos los túneles activos de un host cuya conexión se ha perdido.
+fn marcar_tuneles_caidos(estado: &EstadoNucleo, host_uuid: &str, motivo: &str) {
+    if let Ok(activos) = estado.tuneles.lock() {
+        for tunel in activos.values() {
+            if tunel.host_uuid != host_uuid {
+                continue;
+            }
+            if !matches!(
+                tunel.estado(),
+                EstadoTunelVivo::Activo | EstadoTunelVivo::Activando
+            ) {
+                continue;
+            }
+            tunel.fijar_estado(EstadoTunelVivo::Caido(motivo.to_string()));
+            if let Ok(mut parada) = tunel.parada.lock() {
+                if let Some(parada) = parada.take() {
+                    let _ = parada.send(());
+                }
+            }
+        }
+    }
+    emitir_tuneles(estado);
+}
+
 pub fn emitir_tuneles(estado: &EstadoNucleo) {
     if let Ok(lista) = tuneles(estado, None) {
         estado.retrollamadas.oyente.tuneles(lista);
@@ -957,19 +1060,6 @@ pub async fn activar_tunel(
             detalle: "el host del túnel".to_string(),
         });
     };
-    {
-        let activos = estado.tuneles.lock().map_err(|_| ErrorNucleo::General {
-            detalle: "estado de túneles envenenado".to_string(),
-        })?;
-        if let Some(activo) = activos.get(uuid) {
-            if matches!(
-                activo.estado(),
-                EstadoTunelVivo::Activo | EstadoTunelVivo::Activando
-            ) {
-                return Ok(());
-            }
-        }
-    }
     let escucha =
         escucha_movil(tunel.tipo, &tunel.escucha).map_err(|detalle| ErrorNucleo::General {
             detalle: format!("la escucha del túnel no es válida: {detalle}"),
@@ -1003,12 +1093,57 @@ pub async fn activar_tunel(
         puerto_efectivo: std::sync::Mutex::new(None),
         id_numerico: estado.siguiente_id() as i64,
     });
-    if let Ok(mut activos) = estado.tuneles.lock() {
+    {
+        let mut activos = estado.tuneles.lock().map_err(|_| ErrorNucleo::General {
+            detalle: "estado de túneles envenenado".to_string(),
+        })?;
+        if let Some(existente) = activos.get(uuid) {
+            if matches!(
+                existente.estado(),
+                EstadoTunelVivo::Activo | EstadoTunelVivo::Activando
+            ) {
+                return Ok(());
+            }
+        }
         activos.insert(uuid.to_string(), activo.clone());
     }
     emitir_tuneles(estado);
     let resultado =
         levantar_tunel(estado, &activo, &host, &tunel, puerto, receptor_cancelacion).await;
+    // M3: si se pidió parar mientras el túnel se levantaba, se deshace lo
+    // levantado (listener y reenvío) en vez de dejarlo huérfano.
+    if *activo.cancelacion.borrow() {
+        if let Ok(mut parada) = activo.parada.lock() {
+            if let Some(parada) = parada.take() {
+                let _ = parada.send(());
+            }
+        }
+        if let Some((direccion, puerto_reenvio)) = activo
+            .reenvio
+            .lock()
+            .ok()
+            .and_then(|reenvio| reenvio.clone())
+        {
+            let conexiones = estado.conexiones.lock().await;
+            if let Some(conexion) = conexiones.get(&activo.host_uuid) {
+                let _ = conexion
+                    .handle
+                    .cancel_tcpip_forward(direccion, puerto_reenvio)
+                    .await;
+            }
+        }
+        if let Ok(mut activos) = estado.tuneles.lock() {
+            if activos
+                .get(uuid)
+                .map(|existente| Arc::ptr_eq(existente, &activo))
+                .unwrap_or(false)
+            {
+                activos.remove(uuid);
+            }
+        }
+        emitir_tuneles(estado);
+        return Ok(());
+    }
     match resultado {
         Ok(()) => {
             activo.fijar_estado(EstadoTunelVivo::Activo);
@@ -1292,6 +1427,21 @@ pub fn actualizar_automaticos(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
     }
 }
 
+/// Suelta la conexión del host y desconecta el handle con plazo corto.
+async fn soltar_conexion(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
+    let conexion = estado.conexiones.lock().await.remove(host_uuid);
+    if let Some(conexion) = conexion {
+        let handle: Arc<Handle<magi_nucleo::conexion::cliente::Cliente>> = conexion.handle.clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                handle.disconnect(russh::Disconnect::ByApplication, "", ""),
+            )
+            .await;
+        });
+    }
+}
+
 async fn cerrar_conexion_sin_trabajo(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
     let hay_sesiones = estado
         .sesiones
@@ -1310,15 +1460,7 @@ async fn cerrar_conexion_sin_trabajo(estado: &Arc<EstadoNucleo>, host_uuid: &str
     if hay_sesiones || hay_tuneles {
         return;
     }
-    let conexion = estado.conexiones.lock().await.remove(host_uuid);
-    if let Some(conexion) = conexion {
-        let handle: Arc<Handle<magi_nucleo::conexion::cliente::Cliente>> = conexion.handle.clone();
-        tokio::spawn(async move {
-            let _ = handle
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
-        });
-    }
+    soltar_conexion(estado, host_uuid).await;
 }
 
 // ------------------------------------------------------- instalar mi clave
@@ -1387,28 +1529,40 @@ pub async fn instalar_clave_en_host(
         .map_err(|error| ErrorNucleo::General {
             detalle: error.to_string(),
         })?;
-    let mut canal = transporte
-        .handle
-        .channel_open_session()
-        .await
-        .map_err(|error| ErrorNucleo::General {
-            detalle: format!("no se pudo abrir el canal: {error}"),
-        })?;
-    canal
-        .exec(true, comando.into_bytes())
-        .await
-        .map_err(|error| ErrorNucleo::General {
-            detalle: format!("no se pudo ejecutar el script: {error}"),
-        })?;
+    let mut canal = tokio::time::timeout(
+        Duration::from_secs(10),
+        transporte.handle.channel_open_session(),
+    )
+    .await
+    .map_err(|_| ErrorNucleo::General {
+        detalle: "se agotó el plazo abriendo el canal (10 s)".to_string(),
+    })?
+    .map_err(|error| ErrorNucleo::General {
+        detalle: format!("no se pudo abrir el canal: {error}"),
+    })?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        canal.exec(true, comando.into_bytes()),
+    )
+    .await
+    .map_err(|_| ErrorNucleo::General {
+        detalle: "se agotó el plazo lanzando el script (10 s)".to_string(),
+    })?
+    .map_err(|error| ErrorNucleo::General {
+        detalle: format!("no se pudo ejecutar el script: {error}"),
+    })?;
     let mut salida = Vec::new();
-    while let Some(mensaje) = canal.wait().await {
-        match mensaje {
-            ChannelMsg::Data { data } => salida.extend_from_slice(&data),
-            ChannelMsg::Close | ChannelMsg::Eof => break,
-            _ => {}
+    let _ = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(mensaje) = canal.wait().await {
+            match mensaje {
+                ChannelMsg::Data { data } => salida.extend_from_slice(&data),
+                ChannelMsg::Close | ChannelMsg::Eof => break,
+                _ => {}
+            }
         }
-    }
-    let _ = canal.close().await;
+    })
+    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), canal.close()).await;
     let texto = String::from_utf8_lossy(&salida);
     let ya_estaba = texto.contains("YA_ESTABA");
     let instalada = texto.contains("INSTALADA");
@@ -1476,11 +1630,14 @@ async fn comprobar_clave_movil(
     };
     match conectar_cadena_movil(&cadena, &contexto, &clave).await {
         Ok(transporte) => {
-            let con_clave = transporte.identidad.descripcion == "clave del móvil";
+            let con_clave =
+                transporte.identidad.descripcion == magi_nucleo::conexion::DESCRIPCION_CLAVE_MOVIL;
             let handle = transporte.handle.clone();
-            let _ = handle
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                handle.disconnect(russh::Disconnect::ByApplication, "", ""),
+            )
+            .await;
             con_clave
         }
         Err(_) => false,

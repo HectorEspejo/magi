@@ -92,7 +92,7 @@ class VistaModeloMagi(
         }
         alcance.launch {
             fuente.peticiones.collect { peticion ->
-                if (peticion != null) agregarDialogo(DialogoVista.DeNucleo(peticion))
+                agregarDialogo(DialogoVista.DeNucleo(peticion))
             }
         }
         alcance.launch {
@@ -122,7 +122,8 @@ class VistaModeloMagi(
 
     /**
      * Al arrancar, avisa si Android cerró MAGI con sesiones abiertas y ofrece la
-     * guía de batería (informe §4.6). Sin plataforma inyectada no se muestra.
+     * guía de batería (informe §4.6). Es un aviso no bloqueante: solo si el
+     * núcleo no tiene sesiones vivas. Sin plataforma inyectada no se muestra.
      */
     fun comprobarAvisosDePlataforma() {
         val avisos = avisosPlataforma ?: return
@@ -132,10 +133,11 @@ class VistaModeloMagi(
             val perdidas = try {
                 avisos.sesionesQueQuedaronAbiertas()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 0
             }
-            if (perdidas > 0) {
-                agregarDialogo(DialogoVista.SesionesPerdidas(perdidas))
+            if (perdidas > 0 && _estado.value.sesiones.isEmpty()) {
+                _estado.update { it.copy(sesionesPerdidas = perdidas) }
             }
         }
     }
@@ -148,6 +150,7 @@ class VistaModeloMagi(
             val ofrecer = try {
                 avisos.debeOfrecerseGuiaBateria()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 false
             }
             if (ofrecer) agregarDialogo(DialogoVista.GuiaBateria)
@@ -156,7 +159,8 @@ class VistaModeloMagi(
 
     /** «ABRIR LA GUÍA»: marca la guía como vista y abre Ajustes > Batería. */
     fun abrirGuiaBateria() {
-        quitarAvisosDeBateria()
+        _estado.update { it.copy(sesionesPerdidas = null) }
+        quitarDialogoGuiaBateria()
         avisosPlataforma?.let { avisos ->
             alcance.launch { runCatching { avisos.marcarGuiaBateriaOfrecida() } }
         }
@@ -165,26 +169,20 @@ class VistaModeloMagi(
 
     /** «AHORA NO»: no se vuelve a ofrecer automáticamente. */
     fun descartarGuiaBateria() {
-        quitarAvisosDeBateria()
+        quitarDialogoGuiaBateria()
         avisosPlataforma?.let { avisos ->
             alcance.launch { runCatching { avisos.marcarGuiaBateriaOfrecida() } }
         }
     }
 
-    /** «ENTENDIDO» del aviso de sesiones perdidas. */
-    fun descartarAvisoSesionesPerdidas() {
-        _estado.update { actual ->
-            actual.copy(dialogos = actual.dialogos.filter { it !is DialogoVista.SesionesPerdidas })
-        }
+    /** Cierra el aviso no bloqueante de sesiones perdidas. */
+    fun descartarSesionesPerdidas() {
+        _estado.update { it.copy(sesionesPerdidas = null) }
     }
 
-    private fun quitarAvisosDeBateria() {
+    private fun quitarDialogoGuiaBateria() {
         _estado.update { actual ->
-            actual.copy(
-                dialogos = actual.dialogos.filter {
-                    it !is DialogoVista.GuiaBateria && it !is DialogoVista.SesionesPerdidas
-                },
-            )
+            actual.copy(dialogos = actual.dialogos.filter { it !is DialogoVista.GuiaBateria })
         }
     }
 
@@ -197,6 +195,7 @@ class VistaModeloMagi(
             val resultado = try {
                 fuente.iniciar()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAccion.Error(e.message.orEmpty())
             }
             when (resultado) {
@@ -223,6 +222,7 @@ class VistaModeloMagi(
             val permitido = try {
                 bloqueo.solicitarDesbloqueo()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 false
             }
             _estado.update {
@@ -241,6 +241,7 @@ class VistaModeloMagi(
         val hayQueBloquear = try {
             bloqueo.alVolverALaApp()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             true
         }
         if (hayQueBloquear) {
@@ -253,6 +254,7 @@ class VistaModeloMagi(
         try {
             bloqueo.alSalirDeLaApp()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             // Sin bloqueo disponible no se pierde nada: la app queda como estaba.
         }
     }
@@ -318,6 +320,7 @@ class VistaModeloMagi(
             val inventario = try {
                 fuente.inventario(filtro.ifBlank { null })
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 avisoNucleo(e.message.orEmpty(), true)
                 return@launch
             }
@@ -344,6 +347,7 @@ class VistaModeloMagi(
             val ficha = try {
                 fuente.fichaHost(hostUuid)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 avisoNucleo(e.message.orEmpty(), true)
                 null
             }
@@ -355,6 +359,7 @@ class VistaModeloMagi(
             val tuneles = try {
                 fuente.tuneles(hostUuid)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 emptyList()
             }
             _estado.update { it.copy(tunelesFicha = tuneles) }
@@ -367,6 +372,7 @@ class VistaModeloMagi(
             val resultado = try {
                 fuente.abrirSesion(hostUuid)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAperturaVista.Error(e.message.orEmpty())
             }
             _estado.update { it.copy(cargando = false) }
@@ -402,6 +408,7 @@ class VistaModeloMagi(
             val sincronizacion = try {
                 fuente.sincronizacionEstado()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 return@launch
             }
             _estado.update { it.copy(sincronizacion = sincronizacion) }
@@ -413,6 +420,7 @@ class VistaModeloMagi(
             val conflictos = try {
                 fuente.conflictosHuella()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 emptyList()
             }
             _estado.update { it.copy(conflictos = conflictos) }
@@ -428,6 +436,7 @@ class VistaModeloMagi(
             val resultado = try {
                 fuente.sincronizarAhora()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAccion.Error(e.message.orEmpty())
             }
             when (resultado) {
@@ -466,6 +475,7 @@ class VistaModeloMagi(
             val resultado = try {
                 fuente.elegirCarpeta(uri)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAccion.Error(e.message.orEmpty())
             }
             when (resultado) {
@@ -490,6 +500,7 @@ class VistaModeloMagi(
             val resultado = try {
                 fuente.unirConClave(texto)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAccion.Error(e.message.orEmpty())
             }
             when (resultado) {
@@ -523,6 +534,7 @@ class VistaModeloMagi(
             val clave = try {
                 fuente.clavePublicaMovil()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
             _estado.update { it.copy(claveMovil = clave) }
@@ -534,9 +546,35 @@ class VistaModeloMagi(
             val version = try {
                 fuente.version()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
             if (version != null) _estado.update { it.copy(version = version) }
+        }
+    }
+
+    /**
+     * Crea una clave nueva del móvil cuando Android invalidó la anterior
+     * (CA 31). El adaptador real olvida la clave del Keystore, crea otra y
+     * limpia la caché del núcleo; aquí solo se avisa y se refresca la ficha.
+     */
+    fun crearClaveMovil() {
+        if (_estado.value.creandoClave) return
+        _estado.update { it.copy(creandoClave = true) }
+        alcance.launch {
+            val creada = try {
+                fuente.crearClaveMovil()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                false
+            }
+            _estado.update { it.copy(creandoClave = false) }
+            if (creada) {
+                refrescarClaveMovil()
+                avisoInterfaz(TipoAviso.CLAVE_MOVIL_CREADA)
+            } else {
+                avisoInterfaz(TipoAviso.CLAVE_MOVIL_NO_CREADA)
+            }
         }
     }
 
@@ -597,6 +635,18 @@ class VistaModeloMagi(
         refrescarTuneles()
     }
 
+    /**
+     * «DESCARTAR» de un túnel caído: el núcleo lo quita llamando a
+     * parar_tunel(uuid), así deja de bloquear «dejar de sincronizar» (M1).
+     */
+    fun descartarTunel(tunel: TunelVista) {
+        lanzarAccion(
+            bloque = { fuente.pararTunel(tunel.uuid) },
+            exito = { avisoInterfaz(TipoAviso.TUNEL_DESCARTADO) },
+        )
+        refrescarTuneles()
+    }
+
     fun tunelEnPuertoLibre(tunel: TunelVista) {
         lanzarAccion(
             { fuente.activarEnPuertoLibre(tunel.uuid) },
@@ -610,6 +660,7 @@ class VistaModeloMagi(
             val lista = try {
                 fuente.tuneles(null)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 return@launch
             }
             _estado.update { it.copy(tuneles = lista) }
@@ -666,6 +717,7 @@ class VistaModeloMagi(
                 val resultado = fuente.responderDialogo(peticionId, respuesta)
                 if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje, true)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 avisoNucleo(e.message.orEmpty(), true)
             } finally {
                 // La contraseña no se queda en memoria más de lo necesario (§8).
@@ -716,6 +768,7 @@ class VistaModeloMagi(
                     val resultado = try {
                         fuente.instalarClaveEnHost(hostUuid)
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         ResultadoInstalacionVista.Error(e.message.orEmpty())
                     }
                     when (resultado) {
@@ -800,6 +853,7 @@ class VistaModeloMagi(
             val ficha = try {
                 fuente.fichaHost(hostUuid)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             } ?: return@launch
             _estado.update { it.copy(ficha = ficha) }
@@ -839,6 +893,7 @@ class VistaModeloMagi(
             val resultado = try {
                 bloque()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAccion.Error(e.message.orEmpty())
             }
             when (resultado) {

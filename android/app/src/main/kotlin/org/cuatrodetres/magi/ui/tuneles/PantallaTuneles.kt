@@ -27,6 +27,7 @@ fun PantallaTuneles(
     alRelanzar: (TunelVista) -> Unit,
     alPuertoLibre: (TunelVista) -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
+    alDescartar: (TunelVista) -> Unit,
     alIrAHosts: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -60,6 +61,7 @@ fun PantallaTuneles(
                             alRelanzar = alRelanzar,
                             alPuertoLibre = alPuertoLibre,
                             alAbrirNavegador = alAbrirNavegador,
+                            alDescartar = alDescartar,
                         )
                     }
                 }

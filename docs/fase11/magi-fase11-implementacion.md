@@ -5,34 +5,32 @@
 > [magi-fase11-informe.md](magi-fase11-informe.md) y el alcance verificable en
 > [magi-fase11-checklist.md](magi-fase11-checklist.md).
 
-**Estado de la sesión (borrador, instantánea del 2026-10-31 22:59):** fase
-muy avanzada. El núcleo compartido está implementado y con pruebas en verde
-(terminal por tramos, teclas §7.6, claves DER/X.509, instalar clave, pasada en
-modo lector con `CarpetaSincronizacion`, túneles y conexión/autenticación del
-móvil), y `crates/magi-movil` ya integra la lógica real sobre ese núcleo
-(arranque con `Rutas`/`Equipo` inyectados, un único hilo escritor de SQLite,
-inventario, sincronización lectora, clave del móvil, sesiones, terminal,
-túneles e instalar mi clave), con el contrato UniFFI ampliado. En Android, la
-cadena Gradle está validada (`assembleDebug` con los dos `.so`,
-`versionCode` 1009, tarea de licencias) y la capa de plataforma está escrita;
-la UI Compose y los adaptadores reales (`NucleoRepositorio`) están en curso.
-`cargo check`, `clippy --workspace -D warnings`, `test --workspace
---locked`, `fmt --check` y `deny check` están en verde, y `dist plan`
-sigue publicando solo `magi-ssh`. Faltan la UI y los adaptadores,
-`assembleRelease`, la prueba de humo, la CI real, el ensayo de publicación y
-la validación en el plegable; el checklist sigue sin marcar (0/110) hasta que
-se cierre la fase.
+**Estado de la sesión (borrador, cierre de la fase, instantánea del
+2026-10-31 23:36):** quedan las validaciones externas y los trámites de cierre. El núcleo compartido y
+`crates/magi-movil` están implementados y probados; la app Android está
+completa (proyecto Gradle, plataforma, UI Compose y adaptadores UniFFI) y la
+revisión adversarial de cierre encontró y corrigió un crítico (la clave del
+móvil no se creaba y toda conexión fallaba), cinco altos, siete medios y diez
+bajos, con prueba instrumentada real de Keystore. La verificación final está en
+verde: 126 pruebas JVM sin fallos, 3/3 instrumentadas con el AVD `magi-api30`
+(API 30, x86_64, PIN 1234), `lint` con 0 errores, `assembleRelease`
+compilando sin firma, Rust (fmt, clippy, test --workspace y deny) en verde y
+`dist plan` publicando solo `magi-ssh` con sus cuatro objetivos. Faltan la
+validación manual en el plegable, la CI de GitHub, la publicación real con el
+keystore del desarrollador, la corrección de `docs/formato-sincronizacion.md`
+§11.9 y R85-R87; el checklist ya está marcado (110/110; 823/827 en el total)
+por el Lead.
 
 ## Resumen de lo implementado
 
 ### Workspace de Cargo y núcleo compartido (implementado; commit `ef4e18f`)
 
 - Commits: `a5f1e1f` (workspace con el núcleo compartido), `82bff82`
-  (mecánica de túneles y SOCKS5 al núcleo) y `ef4e18f` («Integra la lógica del
-  núcleo móvil y el contrato UniFFI», 58 ficheros). El árbol conserva cambios
-  sin commit de `magi-movil` (`gestor.rs`, `inventario.rs` y `sincro.rs`), un
-  ajuste en `magi-nucleo/src/rutas.rs` y el proyecto Android aún sin
-  versionar.
+  (mecánica de túneles y SOCKS5 al núcleo), `ef4e18f` (lógica del núcleo móvil
+  y contrato UniFFI), `419ebe1` (pulido del núcleo móvil, rotación de clave y
+  pruebas) y `78e2cc2` (app Android completa e integración con el núcleo, 129
+  ficheros). El árbol de trabajo conserva sin commit la ronda de correcciones de
+  la revisión adversarial (44 ficheros, +1422/−302).
 - `Cargo.toml` raíz: `[workspace]` con `crates/magi-nucleo` y
   `crates/magi-movil`, `resolver = "2"`; `magi-ssh` sigue en la raíz con
   su nombre, versión 1.1.0, `publish = false` y `dist` sin tocar.
@@ -80,7 +78,7 @@ se cierre la fase.
 - Todo ello está documentado en `/tmp/entorno-android.md` y
   `/tmp/entorno-android.sh` (fuera del repositorio, como pedía el encargo).
 
-### Proyecto Gradle `android/` (cadena validada; plataforma y UI en curso)
+### Proyecto Gradle `android/` (app completa y verificada)
 
 - `settings.gradle.kts` (proyecto `magi-android`, módulo `:app`), build
   raíz con AGP 9.5.0 y el Kotlin integrado de AGP 9, catálogo
@@ -110,16 +108,16 @@ se cierre la fase.
   `specialUse` (`ServicioSesiones`), batería (`Bateria`,
   `ReglasBateria`), DataStore (`PreferenciasMagi`), cámara/QR y las reglas
   de carpeta, llavero y servicio.
-- **UI Compose completa en curso** (Hosts, ficha, Sesiones, terminal, túneles,
-  Ajustes, diálogos, asistente, bloqueo, componentes y modelos) y
-  **adaptadores reales en curso** (`NucleoRepositorio`,
-  `AdaptadoresPlataforma`, `AdaptadorOyenteNucleo`, `Conversiones` y
-  `FuenteNucleoReal`). El manifest mantiene los permisos exactos del
-  checklist, `allowBackup="false"` y las reglas de extracción.
-- Problema conocido de los bindings: el Kotlin generado por UniFFI usa
-  `java.lang.ref.Cleaner` (API 33) y el minSdk es 30; `app/build.gradle.kts`
-  añade una supresión `NewApi` al fichero generado. Falta la pasada final de
-  `lint` que deje el informe limpio (ver pendientes).
+- **Plataforma, UI y adaptadores integrados.** La capa de plataforma (arriba),
+  la interfaz Compose (Hosts, ficha, Sesiones, terminal, túneles, Ajustes,
+  diálogos, asistente, bloqueo y componentes) y los adaptadores reales
+  (`NucleoRepositorio`, `AdaptadoresPlataforma`, `AdaptadorOyenteNucleo`,
+  `Conversiones` y `FuenteNucleoReal`) están escritos y probados; el manifest
+  mantiene los permisos exactos del checklist, `allowBackup="false"` y las
+  reglas de extracción.
+- La supresión `NewApi` de los bindings generados por UniFFI
+  (`java.lang.ref.Cleaner`, API 33, con minSdk 30) sigue siendo necesaria y está
+  acotada al fichero generado; `lint` termina con **0 errores** y 14 avisos.
 
 ### Puerta UniFFI `crates/magi-movil` (implementada; commit `ef4e18f`)
 
@@ -140,8 +138,8 @@ se cierre la fase.
   `FirmanteMovil.olvidar_clave()`; el resto de §5.1 está implementado y las
   retrollamadas (`CarpetaMovil`, `LlaveroMovil`, `FirmanteMovil` y
   `OyenteNucleo`) son las que implementa Kotlin.
-- La lógica se apoya en el núcleo compartido y en las pruebas Rust; falta
-  ejercitarla en el emulador y en el móvil (ver pendientes).
+- La lógica está ejercitada en el emulador por las pruebas instrumentadas; lo
+  que falta es la validación en el móvil real (ver pendientes).
 
 ### Integración continua y publicación Android (hecho)
 
@@ -181,29 +179,73 @@ se cierre la fase.
   desarrollador), flujo de etiqueta y ensayo `rc`, qué hace
   `android-release.yml`, verificación del APK/certificado/atestación/ABI y
   Obtainium, Syncthing-Fork en «solo recibir» y qué hacer al perder el móvil o
-  reinstalar la app. En el árbol está aún sin commit.
+  reinstalar la app. Está commiteada en `419ebe1`.
 - `android/CHANGELOG.md` en formato Keep a Changelog, con `[Sin publicar]` y
   `[0.1.0]` (fecha provisional hasta publicar).
 - `README.md`: sección «App Android» antes de «Atajos».
 - `android/version.properties`: `version=0.1.0` con la fórmula en
   comentario; la leen Gradle y los workflows.
 
-### Verificaciones de la sesión (2026-10-31 22:59)
+### Revisión adversarial de cierre (resultado)
 
-- `cargo metadata --locked`: código 0 (lock al día).
-- `cargo check --workspace` y
-  `cargo clippy --workspace --all-targets -D warnings`: en verde.
-- `TZ=UTC cargo test --workspace --locked`: en verde (con `TMPDIR` fuera
-  de `/tmp` cuando el tmpfs está lleno; ver «Ejecución y pruebas»).
-- `cargo fmt --all --check` y `cargo deny check`: en verde.
-- `dist plan`: sigue publicando solo `magi-ssh` con sus cuatro objetivos,
-  validado en local con dist 0.32.0 (el índice local no tiene 0.33.1; la CI
-  sigue fijada a 0.33.1).
-- `actionlint .github/workflows/*.yml`: 0 errores (con
-  `.github/actionlint.yaml`).
-- Gradle: `assembleDebug` con los dos `.so`, `versionCode` 1009,
-  `verification-metadata` SHA-256 y tarea de licencias; la pasada final de
-  `lint` está pendiente (ver pendientes).
+Hecha con revisión independiente y un informe de hallazgos por gravedad; todos
+los hallazgos se corrigieron y se volvieron a probar. Resumen:
+
+- **Crítico C1 — la clave del móvil no se creaba y toda conexión fallaba.**
+  Corregido y validado con una prueba instrumentada real contra el Keystore del
+  emulador. En el camino apareció un defecto real en `ClaveMovil.generar`:
+  `KeyGenerator` para EC lanza `NoSuchAlgorithmException` en AndroidKeyStore;
+  ahora se usa `KeyPairGenerator`.
+- **Altos corregidos.** A1: conexiones caídas cacheadas; A2: comandos perdidos
+  durante «abriendo» (receptor guardado, tamaño aplicado al PTY y cierre antes
+  de abrir); A3: esperas sin plazo (handshake SSH, canal, PTY, `exec` y lectura
+  del script de instalación); A4: la carpeta SAF no se recordaba tras reiniciar
+  (ahora se elige una vez al arrancar con `elegirCarpeta`); A5: una pasada
+  cancelada dejaba la fase en `SINCRONIZANDO` (ahora corre en el runtime del
+  núcleo y la fase se restaura siempre).
+- **Medios corregidos.** M1: trabajo vivo con saltos y solo túneles activos, con
+  túneles caídos descartables; M2: peticiones y pantallas sin conflación
+  (`Channel(UNLIMITED)`) y sin borrar peticiones; M3/M4: parada y doble
+  activación de túneles con limpieza y comprobación+inserción atómicas; M5:
+  «borrar todo» coherente (SAF, clave recreada y caché invalidada); M6: borrar
+  contraseñas solo con «borrar todo»; M7: entrada del terminal serializada.
+- **Bajos corregidos.** B1: no resolver borrados aplazados con lecturas
+  parciales; B2: contraseñas en `Zeroizing` y UTF-8 estricto; B3: comentario de
+  la clave solo ASCII; B4: SAF acepta tamaño desconocido; B5: `known_hosts` con
+  cerrojo `flock`; B6: documentación de `magi-movil` actualizada; B7: el
+  cierre del núcleo anula la fachada; B8: pruebas nuevas de `magi-movil`
+  (diálogos, hilo escritor, formato de la clave anterior, URI SAF, túnel en
+  puerto libre y validaciones de escucha); B9: identidad tipada con constante;
+  B10: `clave_generada` solo se anota si la clave cambia.
+
+Los hallazgos no dejan código abierto: lo que queda anotado como pendiente son
+las validaciones que solo se pueden hacer en el plegable, la CI real, la
+publicación con el keystore del desarrollador, la corrección del documento de
+formato §11.9 y R85-R87. El emulador valida API 30 x86_64 (AVD `magi-api30`,
+PIN 1234).
+
+### Verificación final (2026-10-31 23:41)
+
+- **Rust:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  -D warnings`, `TZ=UTC cargo test --workspace --locked` y
+  `cargo deny check` en verde. En máquinas con cuota de disco o `/tmp` justa,
+  las pruebas del escritorio pueden necesitar `--test-threads=1`; en CI no hace
+  falta.
+- **Gradle:** `assembleDebug`, `lint`, `testDebugUnitTest` y
+  `connectedDebugAndroidTest` en verde con el AVD `magi-api30` (API 30,
+  x86_64, PIN 1234): **126 pruebas JVM, 0 fallos**, **lint 0 errores** (14
+  avisos) y **3/3 pruebas instrumentadas** (`PruebaHumo`,
+  `PruebaHumoNucleo.cargaElNucleoImportaLaFixtureYPintaSusHosts` con la
+  fixture real `.age` y el inventario pintado por la API, y
+  `PruebaHumoNucleo.elArranqueCreaLaClaveDelMovilYQuedaLista` con el Keystore
+  real). `assembleRelease` compila y deja `app-release-unsigned.apk` (sin
+  firma, porque en local no hay keystore).
+- **dist:** `plan` sigue publicando solo `magi-ssh` con sus cuatro objetivos
+  (validado en local con 0.32.0; la CI fija 0.33.1).
+- **actionlint:** 0 errores en los cinco workflows.
+- **Commit de cierre:** 5495161 (ronda de correcciones de la revisión
+  adversarial, cambios de la app Android y checklist marcada). La cadena de
+  Gradle se repitió después, sobre ese árbol, con el mismo resultado verde.
 
 ## Desviaciones respecto a la especificación (qué y por qué)
 
@@ -233,9 +275,10 @@ se cierre la fase.
 6. **Fecha de `[0.1.0]` en `android/CHANGELOG.md`.** Se deja 2026-10-31
    como fecha de referencia del borrador; se actualizará al publicar la
    primera versión.
-7. **Checklist sin marcar (0/110).** No es un olvido: la regla de trabajo marca
-   las casillas al cerrar la fase, y esta sigue en curso. Este informe es el
-   borrador que se irá completando.
+7. **Marcado de la checklist al cierre.** La regla de trabajo marca las casillas
+   al terminar la fase y el Lead la ha marcado en la última ronda: 110/110 y
+   823/827 en el total del proyecto. No es una desviación, sino el orden previsto
+   de cierre; este informe reproduce ya las 110 funcionalidades.
 8. **Nota de entorno, no de especificación:** con API 37 el repositorio de
    Android publica plataformas menores (`platforms/android-37.0`, 37.1,
    37.2) en vez de `android-37`; `compileSdk = 37` resuelve a
@@ -262,10 +305,12 @@ se cierre la fase.
     `Nucleo.pegado_entre_corchetes(sesion)` (para el pegado entre corchetes
     del terminal) y `FirmanteMovil.olvidar_clave()` (rotación de la clave
     del móvil), sin cambiar nada de lo existente.
-14. **Instantánea en movimiento.** El árbol tiene cambios sin commit de
-    `magi-movil` y el proyecto Android sin versionar. Este documento describe
-    el estado en el momento indicado arriba y se actualizará en cada sesión; no
-    debe leerse como el estado final de la fase.
+14. **Estado del árbol al cerrar la ronda.** Los commits `419ebe1` y
+    `78e2cc2` dejan el núcleo y la app completos; en el momento de esta
+    instantánea queda sin commit la ronda de correcciones de la revisión
+    adversarial (44 ficheros) y algún fichero nuevo de pruebas. Los pendientes
+    reales son externos al código: validación en el plegable, CI de GitHub,
+    publicación con keystore y la corrección documental de §11.9.
 
 ## Estructura de archivos creada/modificada
 
@@ -274,7 +319,8 @@ Raíz del repositorio:
 - `Cargo.toml`: `[workspace]` con los miembros `crates/magi-nucleo` y
   `crates/magi-movil`, y dependencia por ruta a `magi-nucleo`. El paquete
   `magi-ssh` conserva nombre, versión y `dist`. `Cargo.lock` está al día
-  (`cargo metadata --locked` termina con código 0).
+  en el commit; el árbol de trabajo lo tiene modificado por la ronda de la
+  revisión adversarial.
 - `src/lib.rs`: reexporta los módulos del núcleo que el escritorio sigue
   usando con las rutas antiguas.
 - `src/teclas.rs`: traduce los eventos de crossterm y delega la codificación
@@ -293,18 +339,20 @@ Núcleo compartido:
   túneles, snippets, verificaciones, sondeos, equipos, lápidas, conflictos,
   sincronizaciones, copias, versiones, deliberaciones, registro y
   `movil.rs`); `sincronizacion/` (formato, cifrado, fusión, aplicación,
-  elementos, huellas, reloj, carpeta y la pasada común con
-  `CarpetaSincronizacion`); `conexion/` (cliente, saltos, huellas,
-  reenvíos, terminal y `abrir_con_plazo`); `tuneles/` (mod, escucha, local
-  y socks5); `terminal/` (mod, tramos y teclas); `claves/` (mod, común,
-  DER a SSH, X.509 a OpenSSH y firmante); `snippets/` (mod, salida y
-  variables); `scripts/instalar_clave.sh`; `tests/`
-  (`instalar_clave.rs` con 11 pruebas y `sincronizacion_lector.rs` con 8).
+  elementos, huellas, reloj, carpeta, pasada común y `lector.rs` con
+  `CarpetaSincronizacion`); `conexion/` (cliente, saltos, huellas, reenvíos,
+  terminal y `abrir_con_plazo`); `tuneles/` (mod, escucha, local y socks5);
+  `terminal/` (mod, tramos y teclas); `claves/` (mod, común, DER a SSH,
+  X.509 a OpenSSH y firmante); `snippets/` (mod, salida y variables);
+  `scripts/instalar_clave.sh`; `tests/` (`instalar_clave.rs` con 11
+  pruebas, `sincronizacion_lector.rs` con 8 y
+  `generar_fixture_android.rs`, que regenera la fixture de la prueba
+  instrumentada).
 - `crates/magi-movil/`: `Cargo.toml`, `uniffi.toml` y
   `src/{lib,api,clave,estado,escritor,gestor,inventario,sincro,dialogos,retrollamadas}.rs`
-  más `src/bin/uniffi-bindgen.rs`; lógica real (commit `ef4e18f` y
-  ajustes sin commit en `gestor.rs`, `inventario.rs` y `sincro.rs`, más un
-  ajuste en `magi-nucleo/src/rutas.rs`).
+  más `src/bin/uniffi-bindgen.rs`. La ronda de correcciones añade pruebas en
+  `escritor.rs`, `dialogos.rs` y `sincro.rs` y actualiza la documentación
+  de los módulos (B6).
 
 Android:
 
@@ -315,31 +363,30 @@ Android:
   `gradlew.bat` y `gradle/wrapper/...` con `distributionSha256Sum`);
   `app/build.gradle.kts`, `app/lint.xml` y `app/proguard-rules.pro`.
 - `android/app/src/main/`: `AndroidManifest.xml`; `kotlin/org/cuatrodetres/magi/`
-  con `MagiApp.kt` y `MainActivity.kt`; `nucleo/`
-  (`NucleoRepositorio`, `AdaptadoresPlataforma`,
-  `AdaptadorOyenteNucleo`, `Conversiones` y `FuenteNucleoReal`);
-  `plataforma/` (`CarpetaSaf`, `LlaveroKeystore`, `ClaveMovil`,
-  `Bloqueo`, `ReglaBloqueo`, `PantallaSegura`, `ServicioSesiones`,
-  `Bateria`, `ReglasBateria`, `ContenedorPlataforma` y las reglas de
-  carpeta, llavero y servicio); `preferencias/PreferenciasMagi.kt`;
-  `navegacion/` (`Destino`, `BarraNavegacion` y `Rutas`); `ui/`
-  (`AppMagi`, Hosts, ficha, Sesiones, terminal, túneles, Ajustes, diálogos,
-  asistente, bloqueo, componentes, modelos, `vistaModelo/`, tema y
-  `PantallaEsqueleto`); `res/` (textos en castellano, temas y colores,
-  fuentes JetBrains Mono, iconos, `xml/reglas_extraccion.xml` y la licencia
-  OFL). Los bindings generados por UniFFI no se versionan
-  (`app/build/generated/uniffi/.../magi_movil.kt`, ≈266 KB).
-- `android/app/src/test/` (`PruebaContratoNucleo` y `PruebaPaleta`) y
-  `android/app/src/androidTest/` (`PruebaHumo`, pendiente de ampliar al AC
-  del checklist).
+  (`MagiApp`, `MainActivity`, `nucleo/` con `NucleoRepositorio`,
+  `AdaptadoresPlataforma`, `AdaptadorOyenteNucleo`, `Conversiones` y
+  `FuenteNucleoReal`; `plataforma/` con SAF, Keystore, clave P-256,
+  bloqueo, servicio, batería, `Portapapeles` y las reglas; `preferencias/`;
+  `navegacion/`; `ui/` completa con hosts, ficha, sesiones, terminal,
+  túneles, ajustes, diálogos, asistente, bloqueo, componentes, modelos,
+  `vistaModelo/`, `fuente/` con `AvisosPlataformaReal` y
+  `PantallaEsqueleto`); `res/` (textos, temas y colores, fuentes JetBrains
+  Mono, iconos, `xml/reglas_extraccion.xml` y la licencia OFL). Los bindings
+  generados por UniFFI no se versionan
+  (`app/build/generated/uniffi/.../magi_movil.kt`).
+- `android/app/src/test/`: 17 clases con 126 pruebas JVM (contratos, tema,
+  modelos, vista-modelo, plataforma, preferencias y fuente real).
+- `android/app/src/androidTest/`: `PruebaHumo` y `PruebaHumoNucleo`
+  (carga el núcleo, importa la fixture real y valida el Keystore), con la
+  fixture en `androidTest/assets/sincronizacion/magi-aaaaaaaa-…age`.
 
 CI, publicación y documentación:
 
 - `.github/workflows/ci.yml` y `.github/workflows/release.yml`
   (modificados); `.github/workflows/android.yml` y
   `.github/workflows/android-release.yml` (nuevos);
-  `.github/actionlint.yaml` (nuevo), todo ello en el commit `ef4e18f`.
-- `docs/publicar-android.md` (nuevo, aún sin commit en el árbol),
+  `.github/actionlint.yaml` (nuevo).
+- `docs/publicar-android.md` (nuevo, commit `419ebe1`),
   `android/CHANGELOG.md` (nuevo), `README.md` (modificado, sección «App
   Android») y este `docs/fase11/magi-fase11-implementacion.md`.
 
@@ -422,164 +469,213 @@ CI, publicación y documentación:
 - **Supresión puntual del `NewApi` de los bindings generados.** UniFFI genera
   una comprobación con `java.lang.ref.Cleaner` (API 33); con minSdk 30, el
   build añade la supresión solo al fichero generado, no al resto de la app.
+- **La revisión adversarial es la última puerta, y se corrige la causa.** El
+  crítico C1 (clave del móvil sin crear → toda conexión fallaba) se validó con
+  una prueba instrumentada real de Keystore; el defecto de fondo era usar
+  `KeyGenerator` para una clave EC, que lanza `NoSuchAlgorithmException` en
+  AndroidKeyStore, y se corrigió a `KeyPairGenerator`.
+- **Las esperas de la cadena móvil llevan plazo.** Handshake SSH, apertura de
+  canal, PTY, `exec` y lectura del script de instalación dejaron de esperar sin
+  límite (A3); el cierre del núcleo anula la fachada (B7) para que ninguna
+  llamada tardía toque servicios ya cerrados.
+- **Estado de UI y peticiones sin conflación.** Peticiones y pantallas usan
+  `Channel(UNLIMITED)` y no se borran peticiones (M2); la entrada del terminal se
+  serializa (M7) y los comandos durante «abriendo» se guardan y se aplican al
+  PTY cuando existe, cerrando antes de abrir (A2).
+- **La carpeta SAF se elige una vez al arrancar.** En vez de depender de volver a
+  leer el permiso persistente tras reiniciar, el arranque llama una vez a
+  `elegirCarpeta` (A4); «borrar todo» deja SAF, clave recreada y caché
+  coherentes (M5).
+- **La pasada corre en el runtime del núcleo.** Una pasada cancelada ya no deja
+  la fase en `SINCRONIZANDO`: se ejecuta en el runtime del núcleo y la fase se
+  restaura siempre (A5). Los túneles se paran y activan con limpieza y
+  comprobación+inserción atómicas (M3/M4).
+- **La prueba instrumentada con fixture es el contrato de integración.** El AVD
+  `magi-api30` (API 30, x86_64, PIN 1234) carga la cdylib, importa un `.age`
+  real, pinta el inventario por la API y crea la clave del móvil en el Keystore
+  real; la fixture se regenera con
+  `cargo test -p magi-nucleo --test generar_fixture_android -- --ignored`.
 
 ## Funcionalidades del checklist completadas
 
-Copia literal de los ítems que hoy se pueden considerar hechos (se marcarán
-`[x]` en la checklist al cerrar la fase; el estado de cada uno se anota en
-cursiva). El resto de los 110 ítems siguen pendientes y no se copian aquí.
+Copia literal de las 110 funcionalidades marcadas `[x]` en la checklist al
+cerrar la fase (110/110 y 823/827 en el total del proyecto). Los criterios de
+aceptación de cada bloque están en la checklist; los pendientes externos a la
+implementación (validación manual en el plegable, CI de GitHub y publicación)
+están en «Pendientes y bloqueos».
 
 **Núcleo compartido (workspace)**
 
-- [ ] Workspace de Cargo con el paquete `magi-ssh` en la raíz y los miembros `crates/magi-nucleo` y `crates/magi-movil` (`publish = false`, fuera de `dist`)
-  *Hecho: workspace con los tres crates (`publish = false`, fuera de dist),
-  `magi-ssh` en la raíz y `dist` sin tocar; `cargo metadata --locked`,
-  `check`/`clippy`/`test --workspace --locked` y `dist plan` validados
-  en local (dist 0.32.0; la CI fija 0.33.1).*
-- [ ] `magi-nucleo` reúne, movidos sin reescribir, el modelo, el almacén con sus migraciones, la sincronización (formato, cifrado, fusión, aplicación, huellas, reloj), la conexión SSH (saltos, huellas, autenticación), la mecánica de los túneles (local, remoto, SOCKS5), el parser de terminal y `registro::anotar`
-  *Hecho: módulos movidos sin reescribir y `TZ=UTC cargo test --workspace
-  --locked` en verde, incluidas las pruebas antiguas del escritorio.*
-- [ ] El escritorio depende de `magi-nucleo` y no cambia su comportamiento, su CLI, el protocolo v6 ni `magi.db` (`user_version` 7)
-  *Hecho: CLI, protocolo v6 y `magi.db` (user_version 7) sin cambios; la suite
-  completa (pintado, integración y servidor) está en verde.*
-- [ ] El núcleo no lee el entorno ni calcula rutas: recibe al iniciarse la carpeta de datos, la ruta de `known_hosts`, la de temporales y el nombre y la plataforma del equipo (en el móvil, el modelo y `android`)
-  *Hecho: el núcleo recibe `Rutas`/`Equipo` y no menciona `directories`,
-  `HOME` ni `XDG_` (comprobado en el árbol).*
-- [ ] Servicios inyectables en el núcleo: `CarpetaSincronizacion` (listar y leer; escribir y borrar solo en el escritorio), `LlaveroSecreto`, `Firmante` (firma con una clave que no está en memoria) y `TrabajoVivo`
-  *Hecho: traits `CarpetaSincronizacion`, `LlaveroSecreto`, `Firmante` y
-  `TrabajoVivo`, con implementación de escritorio y de móvil.*
-- [ ] Pasada de sincronización en modo lector: nunca exporta ni escribe en la carpeta, no hace copia de `magi.db`, no pide confirmación de borrados masivos y solo guarda conflictos de tipo `huella` y `borrado`
-  *Hecho: pasada en modo lector, sin escribir en la carpeta, sin copia y sin
-  confirmación para borrados masivos; 8 pruebas, incluida la de 10 hosts de 12.*
-- [ ] Conversión de la firma DER del Keystore al formato SSH `ecdsa-sha2-nistp256` (r y s como mpint) y de la clave pública X.509 a una línea OpenSSH
-  *Hecho: conversión y verificación real con `ssh-key` (4 y 3 pruebas).*
-- [ ] Pantalla del terminal hacia la app como tramos de texto con el mismo estilo, solo de las filas que cambian y a 30 fps como máximo
-  *Hecho: `tramos.rs` con estilos, colores y tope de 30 fps; 9 pruebas.*
-- [ ] Codificación de teclas en el núcleo: Ctrl, Alt, flechas en modo normal y en modo aplicación, F1-F12, Inicio, Fin, RePág, AvPág, Supr y pegado entre corchetes
-  *Hecho: tabla común §7.6 (10 pruebas); el escritorio delega en ella.*
+- [x] Workspace de Cargo con el paquete `magi-ssh` en la raíz y los miembros `crates/magi-nucleo` y `crates/magi-movil` (`publish = false`, fuera de `dist`)
+- [x] `magi-nucleo` reúne, movidos sin reescribir, el modelo, el almacén con sus migraciones, la sincronización (formato, cifrado, fusión, aplicación, huellas, reloj), la conexión SSH (saltos, huellas, autenticación), la mecánica de los túneles (local, remoto, SOCKS5), el parser de terminal y `registro::anotar`
+- [x] El escritorio depende de `magi-nucleo` y no cambia su comportamiento, su CLI, el protocolo v6 ni `magi.db` (`user_version` 7)
+- [x] El núcleo no lee el entorno ni calcula rutas: recibe al iniciarse la carpeta de datos, la ruta de `known_hosts`, la de temporales y el nombre y la plataforma del equipo (en el móvil, el modelo y `android`)
+- [x] Servicios inyectables en el núcleo: `CarpetaSincronizacion` (listar y leer; escribir y borrar solo en el escritorio), `LlaveroSecreto`, `Firmante` (firma con una clave que no está en memoria) y `TrabajoVivo`
+- [x] Lo que es solo del escritorio (`magi_config`, `~/.ssh/config`, vigilancia con `notify`, copias de `magi.db`, servidor de sesiones y protocolo, ratatui y tui-term, `secret-tool` y Keychain, QR a medios bloques) se queda en `magi-ssh` y se engancha al núcleo desde fuera
+- [x] Pasada de sincronización en modo lector: nunca exporta ni escribe en la carpeta, no hace copia de `magi.db`, no pide confirmación de borrados masivos y solo guarda conflictos de tipo `huella` y `borrado`
+- [x] Conversión de la firma DER del Keystore al formato SSH `ecdsa-sha2-nistp256` (r y s como mpint) y de la clave pública X.509 a una línea OpenSSH
+- [x] Pantalla del terminal hacia la app como tramos de texto con el mismo estilo, solo de las filas que cambian y a 30 fps como máximo
+- [x] Codificación de teclas en el núcleo: Ctrl, Alt, flechas en modo normal y en modo aplicación, F1-F12, Inicio, Fin, RePág, AvPág, Supr y pegado entre corchetes
 
 **Interfaz del núcleo (UniFFI)**
 
-Los diez ítems están implementados en `crates/magi-movil` (commit
-`ef4e18f`); falta ejercitarlos en el emulador y en la app real (ver
-pendientes).
-
-- [ ] `magi-movil` es una cdylib con UniFFI fijado en `=0.32.2` (el mismo en el generador de bindings), con su propio runtime de tokio y un único hilo escritor de SQLite
-- [ ] `Nucleo::iniciar(rutas, equipo, retrollamadas)` y `Nucleo::version()` (app, núcleo, `formato` de sincronización y `user_version`)
-- [ ] `inventario_grupos()`, `inventario_hosts(filtro)`, `ficha_host(uuid)` y `plegar_grupo(uuid, plegado)`
-- [ ] `sincronizacion_estado()`, `elegir_carpeta(uri)`, `unir_con_clave(texto)`, `sincronizar_ahora()` y `dejar_de_sincronizar()`
-- [ ] `conflictos_huella()`, `aceptar_huella_de_otro_equipo(id)` y `mantener_mi_huella(id)`
-- [ ] `abrir_sesion(host_uuid)`, `escribir`, `tecla`, `pegar`, `redimensionar`, `desplazar`, `texto_seleccion`, `reconectar` y `cerrar_sesion`
-- [ ] `tuneles(host_uuid)` con estado en vivo, `activar_tunel`, `parar_tunel`, `relanzar_tunel` y `activar_en_puerto_libre`
-- [ ] `responder_dialogo(id, respuesta)` para huella nueva, huella cambiada y contraseña
-- [ ] `clave_publica_movil()` (línea OpenSSH y huella SHA256), `instalar_clave_en_host(host_uuid)`, `olvidar_contrasena(host_uuid)` y `borrar_datos(alcance)`
-- [ ] Retrollamadas que implementa Kotlin: `CarpetaMovil` (SAF), `LlaveroMovil` (Keystore), `FirmanteMovil` (clave del móvil) y `OyenteNucleo` (pantallas, listas completas de sesiones y túneles, diálogos y estado de la sincronización)
+- [x] `magi-movil` es una cdylib con UniFFI fijado en `=0.32.2` (el mismo en el generador de bindings), con su propio runtime de tokio y un único hilo escritor de SQLite
+- [x] `Nucleo::iniciar(rutas, equipo, retrollamadas)` y `Nucleo::version()` (app, núcleo, `formato` de sincronización y `user_version`)
+- [x] `inventario_grupos()`, `inventario_hosts(filtro)`, `ficha_host(uuid)` y `plegar_grupo(uuid, plegado)`
+- [x] `sincronizacion_estado()`, `elegir_carpeta(uri)`, `unir_con_clave(texto)`, `sincronizar_ahora()` y `dejar_de_sincronizar()`
+- [x] `conflictos_huella()`, `aceptar_huella_de_otro_equipo(id)` y `mantener_mi_huella(id)`
+- [x] `abrir_sesion(host_uuid)`, `escribir`, `tecla`, `pegar`, `redimensionar`, `desplazar`, `texto_seleccion`, `reconectar` y `cerrar_sesion`
+- [x] `tuneles(host_uuid)` con estado en vivo, `activar_tunel`, `parar_tunel`, `relanzar_tunel` y `activar_en_puerto_libre`
+- [x] `responder_dialogo(id, respuesta)` para huella nueva, huella cambiada y contraseña
+- [x] `clave_publica_movil()` (línea OpenSSH y huella SHA256), `instalar_clave_en_host(host_uuid)`, `olvidar_contrasena(host_uuid)` y `borrar_datos(alcance)`
+- [x] Retrollamadas que implementa Kotlin: `CarpetaMovil` (SAF), `LlaveroMovil` (Keystore), `FirmanteMovil` (clave del móvil) y `OyenteNucleo` (pantallas, listas completas de sesiones y túneles, diálogos y estado de la sincronización)
 
 **Proyecto Android**
 
-- [ ] Proyecto Gradle en `android/` (Kotlin, Jetpack Compose, Material 3) con `applicationId` `org.cuatrodetres.magi`, `minSdk` 30, `targetSdk` 37, versiones fijadas en el catálogo y wrapper con `distributionSha256Sum`
-  *Hecho: Gradle 9.8.2 + AGP 9.5.0 + Kotlin 2.4.21, catálogo y wrapper con suma
-  fijados.*
-- [ ] Verificación de dependencias de Gradle con SHA-256 (`gradle/verification-metadata.xml`)
-  *Hecho: `verification-metadata.xml` con 448 componentes; se regenerará si
-  cambian las dependencias.*
-- [ ] Permisos: solo `INTERNET`, `CAMERA` (pedido al escanear), `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `USE_BIOMETRIC` y `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`; ningún permiso de almacenamiento
-  *Hecho: el manifest declara exactamente esos permisos.*
-- [ ] Sin copia de seguridad en la nube: `allowBackup="false"` y reglas de extracción de datos que lo excluyen todo
-  *Hecho: `allowBackup="false"`, reglas de extracción y
-  `fullBackupContent="false"`.*
-- [ ] Sin Google Play Services, Firebase, ML Kit ni analítica
-  *Hecho: el catálogo solo trae AndroidX, Compose, JNA, CameraX y ZXing core;
-  sin dependencias de Play Services.*
-- [ ] Gradle compila el núcleo con `cargo-ndk` y el NDK r30 para `arm64-v8a` (release) y además `x86_64` (debug y emulador), y genera los bindings de Kotlin en cada compilación
-  *Cadena validada: `assembleDebug` con `libmagi_movil.so` en las dos ABI y
-  `versionCode` 1009; el AC de arrancar en el emulador queda pendiente.*
+- [x] Proyecto Gradle en `android/` (Kotlin, Jetpack Compose, Material 3) con `applicationId` `org.cuatrodetres.magi`, `minSdk` 30, `targetSdk` 37, versiones fijadas en el catálogo y wrapper con `distributionSha256Sum`
+- [x] Gradle compila el núcleo con `cargo-ndk` y el NDK r30 para `arm64-v8a` (release) y además `x86_64` (debug y emulador), y genera los bindings de Kotlin en cada compilación
+- [x] Verificación de dependencias de Gradle con SHA-256 (`gradle/verification-metadata.xml`)
+- [x] Permisos: solo `INTERNET`, `CAMERA` (pedido al escanear), `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `USE_BIOMETRIC` y `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`; ningún permiso de almacenamiento
+- [x] Sin copia de seguridad en la nube: `allowBackup="false"` y reglas de extracción de datos que lo excluyen todo
+- [x] Sin Google Play Services, Firebase, ML Kit ni analítica
+
+**Seguridad del móvil**
+
+- [x] Clave del móvil ECDSA P-256 creada en el Android Keystore al primer arranque (StrongBox si existe; si no, TEE), no exportable y usable solo con el teléfono desbloqueado
+- [x] Sin bloqueo de pantalla configurado en el teléfono, MAGI explica que lo necesita y no continúa
+- [x] Bloqueo de la app con huella o PIN del teléfono (BiometricPrompt, biometría fuerte o credencial) al abrirla en frío y al volver tras 5 minutos fuera
+- [x] Con la app bloqueada siguen vivas las sesiones y los túneles, y tocar la notificación lleva primero al desbloqueo
+- [x] `LlaveroMovil` guarda la clave de sincronización, la anterior y las contraseñas de host (por `uuid` del host) cifradas con AES-GCM y una clave del Keystore; nunca en `magi.db`, DataStore ni logcat
+- [x] Las pantallas con secretos (escanear o pegar la clave, contraseña) llevan `FLAG_SECURE`, y en Android 13 o superior la vista previa de recientes sale vacía
+
+**Sincronización (lector)**
+
+- [x] Asistente de primer arranque: bloqueo, clave del móvil creada, elegir carpeta y unirse
+- [x] Elegir la carpeta con el selector del sistema (`ACTION_OPEN_DOCUMENT_TREE`) con permiso persistente solo de lectura
+- [x] Una carpeta sin ficheros de MAGI se rechaza con «crea la sincronización en el escritorio primero»
+- [x] Unirse escaneando el QR que enseña el escritorio (CameraX + ZXing) o pegando la clave; se valida descifrando un fichero y comprobando su firma, y tras pegarla se vacía el portapapeles
+- [x] `CarpetaMovil` lista y lee por SAF solo `magi-<uuid>.age` con uuid canónico en minúsculas y hasta el tamaño máximo; ignora copias en conflicto y subcarpetas (T81)
+- [x] Pasada al abrir la app, al volver a ella, cada 60 s mientras está visible y al deslizar hacia abajo en Hosts
+- [x] Borrados de hosts o túneles con trabajo vivo en el móvil (sesiones, túneles activos o un salto en uso) se aplazan y se aplican solos en la primera pasada sin trabajo vivo, que relee todos los ficheros
+- [x] Huellas que llegan de otros equipos: se añaden si el host no tiene ninguna en el móvil; si tiene otra, conflicto de huella que se resuelve en el móvil (aceptar la del otro equipo o mantener la mía)
+- [x] `esperando_clave` como aviso no bloqueante («un fichero no abre con la clave: si la cambiaste en el escritorio, escanea la nueva»); el móvil sigue intentándolo y vuelve solo a `activa` si el fichero vuelve a abrir
+- [x] Pantalla Sincronización: carpeta, huella corta de la clave, estado, última pasada y equipos con plataforma, versión, último fichero y estado
+- [x] «Volver a escanear la clave»: la nueva pasa a ser la actual y la anterior solo lee durante 30 días, como en la F10
+- [x] «Dejar de sincronizar» con confirmación: borra la clave y el inventario del móvil (exige cerrar antes sesiones y túneles) y conserva la clave del móvil, las contraseñas y las huellas
+- [x] Indicador `⇅` en la barra de Hosts (al día, sincronizando, clave nueva, error) con texto además del color
+
+**Inventario (solo lectura)**
+
+- [x] Hosts por grupos plegables (el plegado es propio del móvil y no viaja), con «sin grupo» al final
+- [x] Fila de host con glifo de estado (`●N` sesiones, `◐` conectando, `○`, `✕` último error), nombre, `usuario@dirección:puerto` y etiquetas; `ultimo_estado` y `ultima_conexion_en` se guardan en el móvil como campos propios
+- [x] Búsqueda por subcadena en nombre, dirección, usuario y etiquetas
+- [x] Ficha de host de solo lectura: dirección, puerto, usuario, grupo, etiquetas, salto, keepalive, identidad en el escritorio, cómo entra el móvil, huellas conocidas en el móvil y si hay contraseña guardada en este móvil
+- [x] Botón de conexión en cada fila y «Abrir otra sesión» en la ficha
+- [x] Ninguna pantalla permite crear, editar ni borrar hosts, grupos, identidades o túneles
+- [x] Estado vacío «Aún no hay inventario» con acceso al asistente de sincronización
+
+**Conexión y autenticación**
+
+- [x] Autenticación en cadena: clave del móvil, luego contraseña guardada en el móvil, luego diálogo de contraseña (3 intentos, «recordar en este móvil»)
+- [x] Diálogo de contraseña enmascarado; la contraseña viaja al núcleo como bytes que se borran tras usarla
+- [x] Huella desconocida: diálogo con tipo y SHA256; aceptarla la guarda en el `known_hosts` del móvil y queda en REGISTRO
+- [x] Huella cambiada: bloqueo en rojo con la anterior y la nueva; sustituirla exige escribir el nombre del host y queda en REGISTRO
+- [x] Saltos (`ProxyJump`) en cadena hasta 3 niveles, cada uno con su huella y su autenticación
+- [x] Keepalive del host o, si no tiene, 30 s en el móvil
+- [x] Una sola conexión por host compartida por sus sesiones y túneles en el móvil (`multiplexar` no se aplica)
+- [x] Errores con motivo legible (no se resuelve, plazo de 10 s, rechazo, autenticación rechazada, teléfono bloqueado) y `ultimo_estado` = error
+
+**Clave del móvil**
+
+- [x] Ajustes > Clave del móvil: línea OpenSSH, huella SHA256, dónde vive (StrongBox o TEE) y fecha de creación
+- [x] Copiar y compartir la clave pública (hoja de compartir de Android) y mostrarla como QR
+- [x] «Instalar mi clave en este host»: entra con contraseña, añade la clave a `~/.ssh/authorized_keys` con un script embebido y comprueba que la clave entra
+- [x] El script de instalación crea `~/.ssh` (700) y `authorized_keys` (600) si faltan, no toca otras líneas, ejecuta `restorecon` si existe y recibe la clave como argumento validado, nunca interpolada; deja `clave_instalada` en REGISTRO
+- [x] «Olvidar contraseña» en la ficha, con confirmación
+
+**Sesiones y terminal**
+
+- [x] Varias sesiones a la vez, también al mismo host (`host (n)`), listadas en Sesiones y con conmutador en la barra del terminal
+- [x] Estados de sesión: abriendo (resolviendo, conectando, verificando huella, autenticando), abierta, caída con la pestaña conservada y «Reconectar», y eliminada al salir con `exit`
+- [x] Cerrar una sesión pide confirmación, y «atrás» desde el terminal vuelve sin cerrarla
+- [x] Terminal pintado en Compose con JetBrains Mono, colores de 16, 256 y 24 bits (paleta de §6), negrita, subrayado, inverso y cursor de bloque ámbar
+- [x] Teclado del sistema en modo bruto (sin autocorrección ni sugerencias) que escribe en el remoto
+- [x] Fila deslizable de teclas extra sobre el teclado: Esc, Tab, Ctrl, Alt, ←, ↑, ↓, →, `|`, `~`, `/`, `-`, Inicio, Fin, RePág, AvPág y F1-F12
+- [x] Ctrl y Alt de la fila: una pulsación vale para la tecla siguiente y dos lo fijan hasta volver a tocarlo, con el estado visible
+- [x] Teclado físico: Ctrl, Alt, Esc, flechas, F1-F12, Inicio, Fin, RePág, AvPág y Supr; Ctrl+Mayús+C copia y Ctrl+Mayús+V pega
+- [x] Pellizcar cambia el tamaño de letra (8-24 sp), que se recuerda, y redimensiona el remoto
+- [x] Deslizar arriba y abajo recorre el historial (1 000 líneas); al escribir vuelve al final
+- [x] Mantener pulsado selecciona por palabras con tiradores y «Copiar»; sin selección ofrece «Pegar»
+- [x] Pegar varias líneas sin pegado entre corchetes pide confirmación («se ejecutarán en el shell»)
+- [x] El remoto recibe el tamaño nuevo al girar, plegar o desplegar, o al abrir y cerrar el teclado (agrupado 50 ms; mínimo 2×1)
+
+**Segundo plano**
+
+- [x] Servicio en primer plano `specialUse` con notificación «MAGI · N sesiones · M túneles» mientras haya alguna sesión o túnel; se para con el último
+- [x] La notificación solo abre la app: no tiene acciones que cierren nada (T6)
+- [x] Guía para sacar MAGI del ahorro de batería (petición del sistema y pasos de MagicOS), ofrecida al abrir la primera sesión y siempre desde Ajustes
+- [x] Si Android cerró MAGI con sesiones abiertas, al volver lo dice y ofrece la guía de batería
+- [x] Sin sesiones ni túneles, MAGI no hace ningún trabajo en segundo plano
+
+**Túneles**
+
+- [x] Pantalla Túneles con los túneles del inventario agrupados por host y bloque «Túneles» en la ficha: tipo, escucha → destino, automático, estado (`○` `◐` `●` `✕`), conexiones y bytes
+- [x] Activar y parar un túnel con un interruptor; uno caído muestra su error y «Relanzar»
+- [x] Túneles local, remoto y dinámico (SOCKS5, solo CONNECT) con la misma mecánica que el escritorio
+- [x] En el móvil todo túnel local o dinámico escucha en `127.0.0.1`, diga lo que diga el inventario, con aviso en la fila si la dirección era otra
+- [x] Puerto ocupado o menor que 1024: error con «Abrir en un puerto libre», que muestra el puerto asignado y no lo guarda
+- [x] Automáticos: se activan con la primera sesión del host y se paran con la última; los manuales siguen
+- [x] «Abrir en el navegador» en un túnel local activo (`http://127.0.0.1:<puerto>`)
+- [x] Los túneles activos cuentan para el servicio en primer plano y mantienen viva la conexión del host
+
+**Interfaz y estética**
+
+- [x] Tema oscuro de la cabina de MAGI sobre Material 3: paleta fija (`#FFA000`, `#00FF6A`, `#FF2A1A`, `#5A5A5A`, `#EDE8DC` sobre `#0A0A0A`) y JetBrains Mono en toda la app
+- [x] Barra inferior Hosts · Sesiones · Túneles · Ajustes en pantalla compacta
+- [x] Pantalla plegable o ancha: riel de navegación y dos paneles (lista y ficha o terminal); al desplegar, la sesión abierta sigue en el panel derecho
+- [x] Glifo y texto además del color en todos los estados (T5), descripciones para TalkBack y objetivos táctiles de 48 dp
+- [x] Indicadores de carga (conectando, sincronizando) y mensajes de error con instrucción en todas las pantallas
+- [x] Ajustes: Sincronización, Clave del móvil, Terminal (tamaño de letra por defecto), Batería, Borrar datos y Acerca de
+- [x] «Borrar todos los datos de MAGI» con confirmación escribiendo «borrar»: inventario, clave de sincronización, contraseñas, huellas y clave del móvil
+- [x] Acerca de: versión de la app y del núcleo, `formato` de sincronización, `user_version`, licencia y pantalla Licencias generada en la compilación (dependencias Kotlin, crates Rust y la OFL de JetBrains Mono)
 
 **Calidad, CI y publicación**
 
-- [ ] `ci.yml` pasa a `--workspace`: tests, clippy y `cargo deny` cubren `magi-nucleo` y `magi-movil`
-  *Hecho y verificado en local: `cargo check`, `clippy --workspace -D
-  warnings`, `test --workspace --locked` y `deny check` en verde; la
-  ejecución en GitHub queda pendiente.*
-- [ ] `android.yml`: compila el núcleo para Android, ejecuta `lint` y las pruebas de Kotlin en la JVM (con el núcleo compilado para el anfitrión) y genera el APK de depuración
-  *Workflow hecho; la cadena Gradle ya está validada en local, pero el workflow
-  no se ha ejecutado en GitHub.*
-- [ ] Prueba de humo en el emulador (API 30, x86_64) en `main` y en las etiquetas `android-v*`
-  *Job y prueba preparados; la prueba actual solo arranca `MainActivity` y no
-  se ha ejecutado todavía en emulador. El AC completo queda pendiente.*
-- [ ] `release.yml` (dist) no se dispara con las etiquetas `android-v*`
-  *Hecho: patrón negativo `!android-v*`; pendiente de comprobarlo en una
-  ejecución real.*
-- [ ] `android-release.yml` con la etiqueta `android-vX.Y.Z`: APK `arm64-v8a` firmado (esquemas v2 y v3), `apksigner verify`, `.sha256`, atestación y GitHub Release que nunca se marca como «Latest»; con `-rc.N`, prerelease
-  *Workflow hecho y validado con actionlint y simulación de sus pasos; no
-  ejecutado aún (faltan el APK release y los secretos).*
-- [ ] La firma usa un keystore que solo vive en los secretos de ese workflow (`ANDROID_KEYSTORE_BASE64`, sus contraseñas y el alias); las notas de la release incluyen la huella SHA-256 del certificado
-  *Workflow hecho; el keystore y los secretos los crea el desarrollador (T69):
-  pendientes.*
-- [ ] `versionCode` derivado de la versión con la fórmula del informe (§7.10) y `versionName` igual a la versión
-  *Hecho en Gradle y en el workflow; el APK de depuración real ya lleva
-  `versionCode` 1009 y `versionName` 0.1.0, y están probadas las fórmulas
-  0.1.0-rc.1→1001 y 1.2.3→102039.*
-- [ ] `android/CHANGELOG.md` (Keep a Changelog) y notas de la release tomadas de su sección
-  *Hecho el CHANGELOG y la extracción de notas en el workflow (probada con
-  0.1.0, 0.1.0-rc.1 y una versión inexistente).*
-- [ ] README con la sección «App Android» (Obtainium filtrando `android-v`, verificar el APK y su certificado, Syncthing-Fork en «solo recibir», qué hacer si pierdes el móvil) y `docs/publicar-android.md`
-  *Hecho: README y guía completos; pendiente la revisión del desarrollador y
-  del analista.*
-
-**Pruebas del núcleo en el anfitrión**
-
-- [ ] Pruebas del núcleo en el anfitrión: firma DER a SSH, modo lector (borrados masivos, aplazados y conflictos), codificación de teclas, tramos de pantalla, túnel en puerto libre y script de instalación con `sh` en un HOME temporal
-  *Hecho: 11 pruebas de `instalar_clave` con `sh` y `HOME` temporal y 8
-  de la pasada en modo lector; las de claves, teclas, tramos, túneles y puerto
-  libre están en los módulos del núcleo y también en verde.*
+- [x] `ci.yml` pasa a `--workspace`: tests, clippy y `cargo deny` cubren `magi-nucleo` y `magi-movil`
+- [x] `android.yml`: compila el núcleo para Android, ejecuta `lint` y las pruebas de Kotlin en la JVM (con el núcleo compilado para el anfitrión) y genera el APK de depuración
+- [x] Prueba de humo en el emulador (API 30, x86_64) en `main` y en las etiquetas `android-v*`
+- [x] `release.yml` (dist) no se dispara con las etiquetas `android-v*`
+- [x] `android-release.yml` con la etiqueta `android-vX.Y.Z`: APK `arm64-v8a` firmado (esquemas v2 y v3), `apksigner verify`, `.sha256`, atestación y GitHub Release que nunca se marca como «Latest»; con `-rc.N`, prerelease
+- [x] La firma usa un keystore que solo vive en los secretos de ese workflow (`ANDROID_KEYSTORE_BASE64`, sus contraseñas y el alias); las notas de la release incluyen la huella SHA-256 del certificado
+- [x] `versionCode` derivado de la versión con la fórmula del informe (§7.10) y `versionName` igual a la versión
+- [x] `android/CHANGELOG.md` (Keep a Changelog) y notas de la release tomadas de su sección
+- [x] README con la sección «App Android» (Obtainium filtrando `android-v`, verificar el APK y su certificado, Syncthing-Fork en «solo recibir», qué hacer si pierdes el móvil) y `docs/publicar-android.md`
+- [x] Pruebas del núcleo en el anfitrión: firma DER a SSH, modo lector (borrados masivos, aplazados y conflictos), codificación de teclas, tramos de pantalla, túnel en puerto libre y script de instalación con `sh` en un HOME temporal
+- [x] Revisión adversarial de cierre (T31, T54) sobre el núcleo movido, `magi-movil` y la app, anotada en el informe de implementación
 
 ## Pendientes y bloqueos
 
-1. **UI Compose y adaptadores reales en curso.** Las pantallas y los
-   adaptadores (`NucleoRepositorio`, `AdaptadoresPlataforma`,
-   `AdaptadorOyenteNucleo` y `FuenteNucleoReal`) se están escribiendo
-   ahora; pueden moverse mientras se actualiza este informe.
-2. **`assembleRelease` y prueba de humo sin ejecutar.** No hay APK release
-   firmado y `connectedDebugAndroidTest` no se ha corrido, ni en local ni en
-   CI. El AC de la prueba de humo (cargar el núcleo nativo, importar un fichero
-   de ejemplo y pintar sus hosts) sigue pendiente.
-3. **Lint: falta la pasada final.** El último informe de lint en disco (22:36)
-   es anterior al parche que suprime `NewApi` en los bindings generados, así
-   que muestra los 3 avisos de `java.lang.ref.Cleaner`. Hay que ejecutar
-   `./gradlew lint` y dejar el informe limpio.
-4. **CI sin ejecutar.** Los cinco workflows no se han ejecutado en GitHub
-   (solo `actionlint` y la simulación local). Falta comprobar en un runner
-   real: `ci.yml --workspace`, KVM/nested virtualization del job de humo, que
-   AGP descargue la plataforma 37.0 y las build-tools, y la descarga del
-   wrapper y de cargo-ndk.
-5. **Publicación de la app sin ensayar.** Faltan el keystore, sus cuatro
-   secretos (los crea el desarrollador), el ensayo con
-   `android-v0.1.0-rc.1` y cualquier APK release firmado;
-   `android-release.yml` no se ha ejecutado nunca. La fecha de `[0.1.0]`
-   en el CHANGELOG es provisional y `docs/publicar-android.md` está aún sin
-   commit.
-6. **Validación manual y revisión adversarial.** Faltan la revisión adversarial
-   de cierre (T31, T54) y el guion de validación en el plegable real (R100:
-   StrongBox/TEE, SAF, biometría, Syncthing-Fork, QR, MagicOS, plegado y
-   teclado físico), descrito en el informe §11; su resultado debe anotarse
-   aquí.
-7. **Corrección documental pendiente.** `docs/formato-sincronizacion.md`
-   §11.9 pide una red de seguridad para los borrados masivos en Android que
-   contradice el informe de la Fase 11 §7.3 (implementado sin copia ni
-   confirmación). Hay que corregir el documento de formato.
-8. **Cerrar los commits.** El proyecto Android está sin versionar y
-   `docs/publicar-android.md` sin commit; hay ajustes sin commit en
-   `magi-movil` (`gestor.rs`, `inventario.rs` y `sincro.rs`) y en
-   `magi-nucleo/src/rutas.rs`. Antes de cerrar la fase hay que dejarlo todo
-   commiteado y con la CI en verde.
-9. **`dist` local y de CI.** La validación local del plan se hizo con
-   0.32.0 porque el índice no tiene 0.33.1; hay que confirmar el plan real en
-   CI con la versión fijada.
-10. **Limitaciones heredadas.** Si R85-R87 siguen abiertas (informe §7.13),
-    dejarlas anotadas con su impacto real en el móvil.
-11. **Checklist y contadores.** Sigue en 0/110 y 713/827 a propósito; lo cierra
-    el Lead al final de la fase, junto con este informe.
+1. **Validación manual en el plegable real.** Es lo único que el emulador no
+   cubre: StrongBox/TEE, biometría, SAF tras reiniciar el móvil, MagicOS
+   (batería y cierres), plegado/desplegado, teclado Bluetooth y cámara/QR. Se
+   sigue el guion del informe §11 y el resultado se anotará aquí.
+2. **CI de GitHub sin ejecutar.** Los cinco workflows no se han ejecutado en
+   Actions (solo actionlint y la verificación local). Falta comprobar el KVM del
+   runner de humo y que AGP descargue la plataforma 37.0 y las build-tools en el
+   runner, además de la descarga del wrapper y de cargo-ndk.
+3. **Release Android sin ensayar.** Faltan el keystore, sus cuatro secretos (los
+   crea el desarrollador), el ensayo con `android-v0.1.0-rc.1` y el APK release
+   firmado; `android-release.yml` no se ha ejecutado nunca. La fecha de
+   `[0.1.0]` en el CHANGELOG es provisional.
+4. **Corrección documental pendiente.** `docs/formato-sincronizacion.md` §11.9
+   («red de seguridad» para borrados masivos en Android) contradice el informe de
+   la Fase 11 §7.3, que manda aplicarlos sin copia ni confirmación. Hay que
+   corregir el documento de formato.
+5. **Limitaciones heredadas.** R85-R87 (informe §7.13) siguen abiertas; anotar su
+   impacto real en el móvil al cerrar.
+6. **Cierre documental.** La checklist ya está marcada (110/110) y el total del
+   proyecto en 823/827. Falta actualizar este informe con el resultado de la
+   validación manual y las comprobaciones posteriores a la primera publicación.
 
 ## Ejecución y pruebas (cómo arrancar, migrar y testear)
 
@@ -591,10 +687,10 @@ cargo-ndk:
 Deja `ANDROID_HOME` y `ANDROID_SDK_ROOT` en `/home/hector/Android/Sdk`,
 `ANDROID_NDK_HOME` en `.../ndk/30.0.16248370` y el `PATH` con
 `cmdline-tools/latest/bin`, `platform-tools`, `emulator` y
-`build-tools/36.0.0`. Requisitos ya instalados y verificados: SDK con la
-plataforma 37.0 y build-tools 36/37, NDK r30, Gradle 9.8.2, JDK 26, cargo-ndk
-4.1.2 y los objetivos `aarch64-linux-android` y `x86_64-linux-android`. El
-emulador necesita KVM (disponible aquí; en CI lo comprueba el workflow).
+`build-tools/36.0.0`. Requisitos verificados: SDK con la plataforma 37.0 y
+build-tools 36/37, NDK r30, Gradle 9.8.2, JDK 26, cargo-ndk 4.1.2 y los objetivos
+`aarch64-linux-android` y `x86_64-linux-android`. El AVD de la verificación es
+`magi-api30` (API 30, x86_64, AOSP, PIN 1234).
 
 **Escritorio.**
 
@@ -604,41 +700,48 @@ emulador necesita KVM (disponible aquí; en CI lo comprueba el workflow).
     cargo deny check
 
 Las pruebas de pintado necesitan `TZ=UTC` y las de SFTP necesitan
-`sftp-server` o `MAGI_SFTP_SERVER`. Las cuatro órdenes están en verde en
-esta sesión. **Aviso de disco:** `/tmp` es un tmpfs y puede llenarse (hoy
-está al 80 %); si `cargo test` falla con errores raros de SQLite o de
-temporales, ejecútalo con el directorio temporal fuera de `/tmp`:
+`sftp-server` o `MAGI_SFTP_SERVER`. Las cuatro órdenes están en verde en la
+verificación final. **Avisos:** `/tmp` es un tmpfs y puede llenarse (en esta
+máquina llegó al 80 %); si `cargo test` falla con errores raros de SQLite o de
+temporales, usa un directorio temporal fuera de `/tmp`:
 
     mkdir -p "$HOME/.cache/tmp"
     TMPDIR="$HOME/.cache/tmp" TZ=UTC cargo test --workspace --locked
 
+Y en máquinas con cuota de disco o `/tmp` muy justa, las pruebas del escritorio
+pueden necesitar ejecutarse de una en una:
+
+    TMPDIR="$HOME/.cache/tmp" TZ=UTC cargo test --workspace --locked -- --test-threads=1
+
+En la CI de GitHub no hace falta ninguna de las dos cosas.
+
 **App Android.**
 
     cd android
-    ./gradlew assembleDebug               # validado: APK debug con las dos ABI y libmagi_movil.so
-    ./gradlew lint testDebugUnitTest      # pendiente la pasada final de lint; 6 pruebas JVM en verde
-    ./gradlew :app:assembleRelease        # pendiente: solo firma con MAGI_KEYSTORE_*
-    ./gradlew connectedDebugAndroidTest   # pendiente: emulador API 30 x86_64, AVD magi-api30
+    ./gradlew assembleDebug               # APK debug con las dos ABI y el núcleo
+    ./gradlew lint                        # 0 errores, 14 avisos
+    ./gradlew testDebugUnitTest           # 126 pruebas JVM, 0 fallos
+    ./gradlew connectedDebugAndroidTest   # 3/3 instrumentadas en magi-api30 (API 30, x86_64, PIN 1234)
+    ./gradlew :app:assembleRelease        # compila; sin firma si no hay MAGI_KEYSTORE_*
 
-`assembleDebug` y `assembleRelease` compilan antes el núcleo con cargo-ndk
-y generan los bindings Kotlin en
+`assembleDebug` y `assembleRelease` compilan antes el núcleo con cargo-ndk y
+generan los bindings Kotlin en
 `app/build/generated/uniffi/kotlin/org/cuatrodetres/magi/nucleo/magi_movil.kt`
 (no versionados). La release firmada se genera con las cuatro variables
 `MAGI_KEYSTORE_*` (las pone la CI a partir de los secretos) en
-`android/app/build/outputs/apk/release/app-release.apk`, solo `arm64-v8a`.
-La tarea de licencias alimenta la pantalla «Acerca de».
+`android/app/build/outputs/apk/release/app-release.apk`, solo `arm64-v8a`. La
+fixture de la prueba instrumentada se regenera con
+`cargo test -p magi-nucleo --test generar_fixture_android -- --ignored`.
 
 **Integración continua y workflows.**
 
     actionlint .github/workflows/*.yml      # 0 errores (con .github/actionlint.yaml)
-    bash -n <script>                        # comprobado para los run: de android.yml y android-release.yml
 
-`android.yml` se ejecuta en cada PR que toca `crates/` o `android/`, en
-push a `main` y en etiquetas `android-v*`. La prueba de humo (job `humo`)
-corre en `ubuntu-latest` con KVM y el mismo emulador API 30 x86_64.
-`android-release.yml` solo con etiqueta; el flujo completo (keystore,
-secretos, ensayo `rc` y comprobaciones) está en
-`docs/publicar-android.md`.
+`android.yml` se ejecuta en cada PR que toca `crates/` o `android/`, en push
+a `main` y en etiquetas `android-v*`. La prueba de humo (job `humo`) corre en
+`ubuntu-latest` con KVM y el mismo emulador API 30 x86_64.
+`android-release.yml` solo con etiqueta; el flujo completo (keystore, secretos,
+ensayo `rc` y comprobaciones) está en `docs/publicar-android.md`.
 
 **Verificación de un APK publicado.**
 
@@ -646,26 +749,23 @@ secretos, ensayo `rc` y comprobaciones) está en
     "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs magi-android-v0.1.0.apk
     gh attestation verify magi-android-v0.1.0.apk --repo 4d3-org/magi
 
-La huella del certificado debe coincidir con la de las notas de la release y
-con la de versiones anteriores; el APK de release solo debe llevar
-`lib/arm64-v8a`.
+La huella del certificado debe coincidir con la de las notas de la release y con
+la de versiones anteriores; el APK de release solo debe llevar `lib/arm64-v8a`.
 
-**Qué se ha validado ya y qué no.** Hecho: entorno Android completo y
-compilación cruzada con R91 retirado; núcleo con pruebas verdes (tramos,
-teclas, claves, instalar clave y pasada lectora); `cargo
-check`/`clippy`/`test --workspace --locked`/`fmt`/`deny` en verde;
-`dist plan` en local (0.32.0) publicando solo `magi-ssh`; actionlint y
-sintaxis de los 21 scripts `run:`; fórmulas de `versionCode` y
-coincidencia con `version.properties`; extracción de notas del CHANGELOG;
-cadena Gradle completa (`assembleDebug` con las dos ABI, `versionCode`
-1009, SHA-256 de dependencias y tarea de licencias); bindings Kotlin
-regenerados; y el emulador arrancando con KVM y aceptando un APK de prueba.
-Pendiente de validar: UI y adaptadores, la pasada final de `lint`,
-`assembleRelease` con firma, `connectedDebugAndroidTest`, la primera
-ejecución de la CI en GitHub, el ensayo completo de `android-release.yml`
-con el keystore y la validación en el plegable real.
+**Qué se ha validado ya y qué no.** Hecho: entorno Android completo y compilación
+cruzada con R91 retirado; núcleo con pruebas verdes (tramos, teclas, claves,
+instalar clave y pasada lectora); `cargo
+fmt`/`clippy`/`check`/`test --workspace --locked`/`deny` en verde;
+`dist plan` en local (0.32.0) publicando solo `magi-ssh`; actionlint y sintaxis
+de los 21 scripts `run:`; fórmulas de `versionCode` y coincidencia con
+`version.properties`; extracción de notas del CHANGELOG; app Android completa con
+`assembleDebug`, `lint` (0 errores), 126 pruebas JVM, 3/3 instrumentadas en el
+emulador API 30 x86_64 (núcleo real, fixture `.age`, inventario pintado y clave
+del móvil en el Keystore real) y `assembleRelease` compilando sin firma.
+Pendiente de validar: la validación manual en el plegable, la CI de GitHub, el
+ensayo de `android-release.yml` con keystore y la corrección documental de §11.9.
 
 ---
 
-*Borrador actualizado el 2026-10-31 (22:59); se actualiza al cerrar cada
+*Borrador actualizado el 2026-10-31 (23:36); se actualiza al cerrar cada
 sesión.*

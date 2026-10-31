@@ -27,7 +27,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::almacen::{conflictos, copias, equipos as equipos_bd, versiones};
+use crate::almacen::{conflictos, equipos as equipos_bd, versiones};
 use crate::configuracion::SeccionSincronizacion;
 use crate::modelo::ResultadoRegistro;
 use crate::registro;
@@ -53,8 +53,10 @@ pub struct OpcionesPasada<'a> {
     pub politica_borrados: PoliticaBorrados,
     pub trabajo_vivo: &'a dyn Fn(&str, &str) -> bool,
     /// Gancho del escritorio al aplicar cambios en el inventario (regenerar
-    /// magi_config si toca). El movil, que es lector, no lo usa.
+    /// magi_config si toca). El móvil, que es lector, no lo usa.
     pub al_aplicar: Option<&'a dyn Fn(&Connection)>,
+    /// Copia previa de magi.db (solo el escritorio; el móvil no la hace).
+    pub copia_previa: Option<&'a dyn Fn(&Connection) -> anyhow::Result<std::path::PathBuf>>,
 }
 
 impl<'a> OpcionesPasada<'a> {
@@ -66,6 +68,7 @@ impl<'a> OpcionesPasada<'a> {
             politica_borrados: politica,
             trabajo_vivo: &ninguno,
             al_aplicar: None,
+            copia_previa: None,
         }
     }
 }
@@ -600,7 +603,12 @@ pub fn pasada(
         ajustes.umbral_borrado_pct,
     );
     if umbral && opciones.politica_borrados == PoliticaBorrados::Preguntar && cambia {
-        let copia = copias::copiar(conexion, rutas, ajustes.copias)?;
+        let Some(copia_previa) = opciones.copia_previa else {
+            return Ok(ResultadoPasada::nuevo(EstadoPasada::Error(
+                "la pasada en modo escritor necesita el gancho de copia previa".to_string(),
+            )));
+        };
+        let copia = copia_previa(conexion)?;
         return Ok(ResultadoPasada {
             estado: EstadoPasada::DecisionPendiente(BorradosPendientes {
                 copia,
@@ -644,8 +652,10 @@ pub fn pasada(
         equipos: leidos.len(),
         ..ResumenImportacion::default()
     };
-    if cambia || hay_cambios_huellas {
-        copias::copiar(conexion, rutas, ajustes.copias)?;
+    if (cambia || hay_cambios_huellas) {
+        if let Some(copia_previa) = opciones.copia_previa {
+            copia_previa(conexion)?;
+        }
     }
     if cambia {
         // Borrados con trabajo vivo: se aplazan y quedan como conflicto.

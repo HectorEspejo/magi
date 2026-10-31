@@ -8,6 +8,8 @@ import org.cuatrodetres.magi.navegacion.DetalleVista
 import org.cuatrodetres.magi.navegacion.SeccionAjustes
 import org.cuatrodetres.magi.ui.dobles.ControlBloqueoPrueba
 import org.cuatrodetres.magi.ui.dobles.FuenteNucleoFalsa
+import org.cuatrodetres.magi.ui.modelos.AvisoVista
+import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
 import org.cuatrodetres.magi.ui.modelos.DialogoVista
 import org.cuatrodetres.magi.ui.modelos.EstadoBloqueoVista
@@ -27,6 +29,7 @@ import org.cuatrodetres.magi.ui.modelos.TipoAviso
 import org.cuatrodetres.magi.ui.modelos.TipoConfirmacion
 import org.cuatrodetres.magi.ui.modelos.TunelVista
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -240,11 +243,21 @@ class PruebaVistaModeloMagi {
         val avisos = org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso(sesionesPerdidas = 2)
         val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
         vm.iniciar()
-        val dialogo = vm.estado.value.dialogoActual
-        assertTrue(dialogo is DialogoVista.SesionesPerdidas)
-        assertEquals(2, (dialogo as DialogoVista.SesionesPerdidas).cantidad)
-        vm.descartarAvisoSesionesPerdidas()
-        assertNull(vm.estado.value.dialogoActual)
+        assertEquals(2, vm.estado.value.sesionesPerdidas)
+        vm.descartarSesionesPerdidas()
+        assertNull(vm.estado.value.sesionesPerdidas)
+    }
+
+    @Test
+    fun noAvisaDeSesionesPerdidasSiElNucleoTieneSesionesVivas() {
+        val fuente = FuenteNucleoFalsa()
+        // Las sesiones llegan antes de arrancar el núcleo (p. ej. al volver sin
+        // que Android haya matado el proceso): no hay nada perdido que avisar.
+        fuente.emitirSesiones(listOf(sesion()))
+        val avisos = org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso(sesionesPerdidas = 3)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        assertNull(vm.estado.value.sesionesPerdidas)
     }
 
     @Test
@@ -271,6 +284,80 @@ class PruebaVistaModeloMagi {
         vm.descartarGuiaBateria()
         assertTrue(avisos.guiaMarcada)
         assertNull(vm.estado.value.dialogoActual)
+    }
+
+    @Test
+    fun descartarUnTunelCaidoLlamaAPararTunel() {
+        val fuente = FuenteNucleoFalsa()
+        val caido = tunel().copy(estado = org.cuatrodetres.magi.ui.modelos.EstadoTunelVista.CAIDO)
+        fuente.tunelesRespuesta = listOf(caido)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.descartarTunel(caido)
+        assertTrue(fuente.llamadas.contains("pararTunel:t1"))
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is AvisoVista.DeInterfaz)
+        assertEquals(TipoAviso.TUNEL_DESCARTADO, (aviso as AvisoVista.DeInterfaz).tipo)
+    }
+
+    @Test
+    fun lasPeticionesApiladasNoSeConflatan() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        fuente.emitirPeticion(
+            PeticionDialogoVista.HuellaNueva(1, "h1", "web-01", "ed25519", "SHA256:a"),
+        )
+        fuente.emitirPeticion(
+            PeticionDialogoVista.HuellaNueva(2, "h2", "db-01", "ed25519", "SHA256:b"),
+        )
+        assertEquals(
+            2,
+            vm.estado.value.dialogos.count { it is DialogoVista.DeNucleo },
+        )
+    }
+
+    @Test
+    fun crearClaveMovilAvisaYRefrescaLaClaveInvalidada() {
+        val fuente = FuenteNucleoFalsa()
+        fuente.claveRespuesta = ClaveMovilVista(
+            lineaOpenssh = "ecdsa-sha2-nistp256 AAAA vieja",
+            huellaSha256 = "SHA256:vieja",
+            invalidada = true,
+        )
+        fuente.claveTrasCrear = ClaveMovilVista(
+            lineaOpenssh = "ecdsa-sha2-nistp256 BBBB nueva",
+            huellaSha256 = "SHA256:nueva",
+            invalidada = false,
+        )
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        assertEquals(true, vm.estado.value.claveMovil?.invalidada)
+        vm.crearClaveMovil()
+        assertEquals(1, fuente.vecesCrearClave)
+        assertEquals(false, vm.estado.value.claveMovil?.invalidada)
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is AvisoVista.DeInterfaz)
+        assertEquals(TipoAviso.CLAVE_MOVIL_CREADA, (aviso as AvisoVista.DeInterfaz).tipo)
+        assertFalse(vm.estado.value.creandoClave)
+    }
+
+    @Test
+    fun crearClaveMovilAvisaSiNoSePuedeCrear() {
+        val fuente = FuenteNucleoFalsa()
+        fuente.claveRespuesta = ClaveMovilVista(
+            lineaOpenssh = "ecdsa-sha2-nistp256 AAAA vieja",
+            huellaSha256 = "SHA256:vieja",
+            invalidada = true,
+        )
+        fuente.claveCreada = false
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.crearClaveMovil()
+        assertEquals(1, fuente.vecesCrearClave)
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is AvisoVista.DeInterfaz)
+        assertEquals(TipoAviso.CLAVE_MOVIL_NO_CREADA, (aviso as AvisoVista.DeInterfaz).tipo)
     }
 
     private fun conflicto() = ConflictoHuellaVista(

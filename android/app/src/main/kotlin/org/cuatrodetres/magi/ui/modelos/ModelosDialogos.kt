@@ -88,9 +88,6 @@ sealed interface DialogoVista {
     /** Conflicto de huella que llega de otro equipo; se resuelve en el móvil. */
     data class ConflictoHuella(val conflicto: ConflictoHuellaVista) : DialogoVista
 
-    /** Android cerró MAGI con sesiones abiertas (informe §4.6). */
-    data class SesionesPerdidas(val cantidad: Int) : DialogoVista
-
     /** Oferta de la guía de batería al abrir la primera sesión. */
     data object GuiaBateria : DialogoVista
 }

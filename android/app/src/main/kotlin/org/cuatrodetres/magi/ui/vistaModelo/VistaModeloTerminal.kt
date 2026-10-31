@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
@@ -69,17 +70,33 @@ class VistaModeloTerminal(
     private var trabajoPersistenciaZoom: Job? = null
     private var contadorAvisos = 0L
 
+    /**
+     * Un único canal para toda la entrada del terminal (M7): texto, teclas de
+     * la fila, teclado físico y pegado. Un solo consumidor las manda al núcleo
+     * en orden; con una corrutina por evento el orden podía perderse porque el
+     * adaptador envía en IO.
+     */
+    private val canalEntrada = Channel<ComandoEntrada>(Channel.UNLIMITED)
+
     init {
         alcance.launch {
-            fuente.pantallas.collect { pantalla ->
-                if (pantalla != null) recibirPantalla(pantalla)
+            for (comando in canalEntrada) {
+                procesarComando(comando)
             }
+        }
+        alcance.launch {
+            fuente.pantallas.collect { pantalla -> recibirPantalla(pantalla) }
         }
         alcance.launch {
             fuente.tamanoLetra.collect { tamano ->
                 _estado.update { it.copy(zoom = acotarZoom(tamano)) }
             }
         }
+    }
+
+    override fun onCleared() {
+        canalEntrada.close()
+        super.onCleared()
     }
 
     private fun recibirPantalla(nueva: PantallaVista) {
@@ -123,22 +140,8 @@ class VistaModeloTerminal(
     /** Texto del teclado del sistema en modo bruto (sin autocorrección). */
     fun alEscribir(texto: String) {
         val sesion = _estado.value.sesionVisible ?: return
-        val entradas = interpretarEntrada(texto)
-        if (entradas.isEmpty()) return
-        alcance.launch {
-            for (entrada in entradas) {
-                val resultado = try {
-                    when (entrada) {
-                        is EntradaVista.Texto -> fuente.escribir(sesion, entrada.texto.toByteArray(Charsets.UTF_8))
-                        is EntradaVista.Pulsacion -> fuente.tecla(sesion, entrada.tecla, entrada.modificadores)
-                    }
-                } catch (e: Exception) {
-                    ResultadoAccion.Error(e.message.orEmpty())
-                }
-                if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
-            }
-            volverAlFinal(sesion)
-        }
+        if (texto.isEmpty()) return
+        canalEntrada.trySend(ComandoEntrada.Escribir(sesion, texto))
     }
 
     /** Tecla de la fila extra: usa los modificadores activos (pendiente o fijo). */
@@ -146,15 +149,13 @@ class VistaModeloTerminal(
         val sesion = _estado.value.sesionVisible ?: return
         val modificadores = _estado.value.modificadores.aModificadores()
         _estado.update { it.copy(modificadores = it.modificadores.trasTecla()) }
-        enviarTecla(sesion, tecla, modificadores)
-        alcance.launch { volverAlFinal(sesion) }
+        canalEntrada.trySend(ComandoEntrada.Pulsar(sesion, tecla, modificadores))
     }
 
     /** Teclado físico: la tecla y sus modificadores van tal cual al núcleo. */
     fun alTeclaFisica(tecla: TeclaVista, modificadores: ModificadoresVista = ModificadoresVista.NINGUNO) {
         val sesion = _estado.value.sesionVisible ?: return
-        enviarTecla(sesion, tecla, modificadores)
-        alcance.launch { volverAlFinal(sesion) }
+        canalEntrada.trySend(ComandoEntrada.Pulsar(sesion, tecla, modificadores))
     }
 
     fun alPulsarCtrl() {
@@ -165,14 +166,68 @@ class VistaModeloTerminal(
         _estado.update { it.copy(modificadores = it.modificadores.alPulsarAlt()) }
     }
 
-    private fun enviarTecla(sesion: Long, tecla: TeclaVista, modificadores: ModificadoresVista) {
-        alcance.launch {
-            val resultado = try {
-                fuente.tecla(sesion, tecla, modificadores)
-            } catch (e: Exception) {
-                ResultadoAccion.Error(e.message.orEmpty())
+    /** Órdenes que viajan por el canal único de entrada. */
+    private sealed interface ComandoEntrada {
+        data class Escribir(val sesion: Long, val texto: String) : ComandoEntrada
+        data class Pulsar(
+            val sesion: Long,
+            val tecla: TeclaVista,
+            val modificadores: ModificadoresVista,
+        ) : ComandoEntrada
+        data class Pegar(val sesion: Long, val texto: String) : ComandoEntrada
+    }
+
+    /** Consumidor único de la entrada: preserva el orden de teclas y texto. */
+    private suspend fun procesarComando(comando: ComandoEntrada) {
+        when (comando) {
+            is ComandoEntrada.Escribir -> {
+                for (entrada in interpretarEntrada(comando.texto)) {
+                    val resultado = try {
+                        when (entrada) {
+                            is EntradaVista.Texto -> fuente.escribir(
+                                comando.sesion,
+                                entrada.texto.toByteArray(Charsets.UTF_8),
+                            )
+                            is EntradaVista.Pulsacion -> fuente.tecla(
+                                comando.sesion,
+                                entrada.tecla,
+                                entrada.modificadores,
+                            )
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        ResultadoAccion.Error(e.message.orEmpty())
+                    }
+                    if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
+                }
+                volverAlFinal(comando.sesion)
             }
-            if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
+            is ComandoEntrada.Pulsar -> {
+                val resultado = try {
+                    fuente.tecla(comando.sesion, comando.tecla, comando.modificadores)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ResultadoAccion.Error(e.message.orEmpty())
+                }
+                if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
+                volverAlFinal(comando.sesion)
+            }
+            is ComandoEntrada.Pegar -> {
+                val resultado = try {
+                    fuente.pegar(comando.sesion, comando.texto)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ResultadoAccion.Error(e.message.orEmpty())
+                }
+                if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
+                volverAlFinal(comando.sesion)
+            }
         }
     }
 
@@ -188,6 +243,7 @@ class VistaModeloTerminal(
             try {
                 fuente.desplazar(sesion, filas)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // El historial se reintentará en el siguiente gesto.
             }
         }
@@ -200,6 +256,7 @@ class VistaModeloTerminal(
             try {
                 fuente.desplazar(sesion, -pantalla.desplazamiento)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Sin historial desplazado no hay nada que deshacer.
             }
         }
@@ -220,6 +277,7 @@ class VistaModeloTerminal(
             try {
                 fuente.redimensionar(sesion, columnasSaneadas, filasSaneadas)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 tamanosEnviados.remove(sesion)
             }
         }
@@ -251,6 +309,7 @@ class VistaModeloTerminal(
             try {
                 fuente.cambiarTamanoLetra(_estado.value.zoom)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Si no se puede guardar, el zoom vale para esta vista.
             }
         }
@@ -314,6 +373,7 @@ class VistaModeloTerminal(
         val texto = try {
             fuente.textoSeleccion(sesion, seleccion.desde, seleccion.hasta)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             null
         }
         limpiarSeleccion()
@@ -344,15 +404,7 @@ class VistaModeloTerminal(
     }
 
     private fun pegar(sesion: Long, texto: String) {
-        alcance.launch {
-            val resultado = try {
-                fuente.pegar(sesion, texto)
-            } catch (e: Exception) {
-                ResultadoAccion.Error(e.message.orEmpty())
-            }
-            if (resultado is ResultadoAccion.Error) avisoNucleo(resultado.mensaje)
-            volverAlFinal(sesion)
-        }
+        canalEntrada.trySend(ComandoEntrada.Pegar(sesion, texto))
     }
 
     // -----------------------------------------------------------------------

@@ -2,6 +2,8 @@ package org.cuatrodetres.magi.ui.tuneles
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -36,6 +38,7 @@ import org.cuatrodetres.magi.ui.tema.Paleta
  * escucha → destino, automático, estado con glifo y texto, conexiones y bytes,
  * relanzar, puerto libre y abrir en el navegador.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FilaTunel(
     tunel: TunelVista,
@@ -43,6 +46,7 @@ fun FilaTunel(
     alRelanzar: (TunelVista) -> Unit,
     alPuertoLibre: (TunelVista) -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
+    alDescartar: (TunelVista) -> Unit,
     modifier: Modifier = Modifier,
     mostrarHost: Boolean = false,
 ) {
@@ -146,15 +150,19 @@ fun FilaTunel(
                 modifier = Modifier.padding(start = 52.dp),
             )
         }
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth().padding(start = 44.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (tunel.estado == EstadoTunelVista.CAIDO) {
                 BotonCabina(
                     texto = stringResource(R.string.accion_relanzar),
                     alPulsar = { alRelanzar(tunel) },
+                )
+                BotonCabina(
+                    texto = stringResource(R.string.accion_descartar),
+                    alPulsar = { alDescartar(tunel) },
                 )
                 BotonCabina(
                     texto = stringResource(R.string.accion_puerto_libre),

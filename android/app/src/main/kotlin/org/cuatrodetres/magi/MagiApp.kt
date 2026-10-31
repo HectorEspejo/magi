@@ -35,11 +35,23 @@ class MagiApp : Application() {
 
     private val alcance = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * Lanza una pasada de sincronización en el ámbito de la aplicación (A5 de
+     * la revisión): no muere si la Activity se cancela. La agenda la Activity
+     * mientras está visible, así que no hay trabajo de fondo.
+     */
+    fun sincronizarEnSegundoPlano() {
+        alcance.launch { fuente.sincronizarAhora() }
+    }
+
     override fun onCreate() {
         super.onCreate()
         plataforma = ContenedorPlataforma(this)
         fuente = FuenteNucleoReal(
             iniciarNucleo = { oyente ->
+                // A4: restaura la carpeta SAF recordada antes de arrancar, para
+                // que el núcleo la reconozca en la primera pasada.
+                plataforma.iniciar()
                 NucleoRepositorio.iniciar(this, plataforma, oyente)
             },
             preferencias = plataforma.preferencias,
@@ -59,6 +71,19 @@ class MagiApp : Application() {
             actualizarServicio = { sesiones, tuneles ->
                 ServicioSesiones.actualizar(this, sesiones, tuneles)
             },
+            alUsarClave = { texto ->
+                // La clave de sincronización es un secreto: si sigue en el
+                // portapapeles después de unirla, se vacía (informe §4.1).
+                plataforma.portapapeles.vaciarSiContiene(texto)
+            },
+            // Recrear la clave del móvil cuando Android la invalida (CA 31).
+            olvidarClaveMovil = { plataforma.firmante.olvidarClave() },
+            asegurarClaveMovil = {
+                val descripcion = plataforma.firmante.asegurarClave()
+                descripcion.estado == ClaveMovil.Estado.LISTA
+            },
+            // M5: al borrar datos, el móvil vuelve a «sin configurar» y suelta SAF.
+            olvidarCarpeta = { plataforma.carpeta.olvidarCarpeta() },
         )
         alcance.launch { plataforma.iniciar() }
         alcance.launch {

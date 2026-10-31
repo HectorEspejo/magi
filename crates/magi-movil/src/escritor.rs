@@ -69,3 +69,34 @@ impl Escritor {
             .map_err(|error| format!("la tarea de la base de datos se interrumpió: {error}"))?
     }
 }
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+    use magi_nucleo::rutas::Equipo;
+
+    #[test]
+    fn el_hilo_escritor_ejecuta_las_tareas_en_orden() {
+        let carpeta = tempfile::tempdir().expect("directorio temporal");
+        let ruta = carpeta.path().join("magi.db");
+        let equipo = Equipo::nuevo("pruebas", "linux");
+        let escritor = Escritor::arrancar(&ruta, &equipo, "0.0.0").expect("hilo escritor");
+        escritor
+            .con_almacen(|almacen| {
+                almacen.conexion().execute_batch(
+                    "CREATE TEMP TABLE si (valor INTEGER); INSERT INTO si (valor) VALUES (1);",
+                )
+            })
+            .expect("primera tarea")
+            .expect("sql");
+        let valor: i64 = escritor
+            .con_almacen(|almacen| {
+                almacen
+                    .conexion()
+                    .query_row("SELECT valor FROM si", [], |fila| fila.get(0))
+            })
+            .expect("segunda tarea")
+            .expect("consulta");
+        assert_eq!(valor, 1);
+    }
+}

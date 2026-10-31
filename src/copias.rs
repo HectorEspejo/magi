@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::rutas::Rutas;
+use crate::config::Rutas;
 
 /// `<datos>/copias`.
 pub fn directorio(rutas: &Rutas) -> PathBuf {

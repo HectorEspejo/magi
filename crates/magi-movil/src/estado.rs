@@ -30,6 +30,8 @@ pub struct ConexionHost {
     /// Canal de eventos de la conexión: mantenerlo vivo conserva el bucle que
     /// traduce huellas y contraseñas a diálogos de la app.
     pub tx: mpsc::UnboundedSender<magi_nucleo::conexion::EventoConexion>,
+    /// uuid de los hosts de salto de la cadena (cuentan como trabajo vivo).
+    pub saltos_uuids: Vec<String>,
 }
 
 /// Órdenes de la app hacia una sesión viva.
@@ -49,6 +51,9 @@ pub struct SesionViva {
     pub estado: Mutex<EstadoSesion>,
     pub detalle: Mutex<Option<String>>,
     pub comandos: Mutex<mpsc::UnboundedSender<ComandoSesion>>,
+    /// Receptor de comandos mientras la sesión aún está abriendo; la tarea lo
+    /// toma al empezar el bucle para no perder teclas, cierres ni tamaños.
+    pub receptor: Mutex<Option<mpsc::UnboundedReceiver<ComandoSesion>>>,
     pub pantalla: Arc<Mutex<vt100::Parser>>,
     pub abierta_en: Option<i64>,
 }
@@ -357,27 +362,61 @@ impl EstadoNucleo {
         }
     }
 
-    /// Instantánea del trabajo vivo para la pasada de sincronización (§7.4).
+    /// Instantánea del trabajo vivo para la pasada de sincronización (§7.4):
+    /// hosts con sesión (también caída con pestaña), hosts con túnel activo o
+    /// activándose y hosts usados como salto por una conexión viva.
     pub fn trabajo_vivo(&self) -> InstantaneaTrabajoVivo {
         let mut hosts = HashSet::new();
+        let mut tuneles = HashSet::new();
         if let Ok(sesiones) = self.sesiones.lock() {
             for sesion in sesiones.values() {
                 hosts.insert(sesion.host_uuid.clone());
             }
         }
-        let mut tuneles = HashSet::new();
         if let Ok(activos) = self.tuneles.lock() {
             for (uuid, tunel) in activos.iter() {
-                hosts.insert(tunel.host_uuid.clone());
                 if matches!(
                     tunel.estado(),
                     EstadoTunelVivo::Activo | EstadoTunelVivo::Activando
                 ) {
+                    hosts.insert(tunel.host_uuid.clone());
                     tuneles.insert(uuid.clone());
                 }
             }
         }
+        if let Ok(conexiones) = self.conexiones.try_lock() {
+            for (host_uuid, conexion) in conexiones.iter() {
+                hosts.insert(host_uuid.clone());
+                for salto in &conexion.saltos_uuids {
+                    hosts.insert(salto.clone());
+                }
+            }
+        }
         InstantaneaTrabajoVivo { hosts, tuneles }
+    }
+
+    /// ¿Hay sesiones vivas o túneles activos/activándose? Un túnel caído o una
+    /// entrada inactiva no cuentan.
+    pub fn hay_trabajo_activo(&self) -> bool {
+        if self
+            .sesiones
+            .lock()
+            .map(|sesiones| !sesiones.is_empty())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        self.tuneles
+            .lock()
+            .map(|tuneles| {
+                tuneles.iter().any(|(_, tunel)| {
+                    matches!(
+                        tunel.estado(),
+                        EstadoTunelVivo::Activo | EstadoTunelVivo::Activando
+                    )
+                })
+            })
+            .unwrap_or(false)
     }
 }
 

@@ -118,8 +118,10 @@ class CarpetaSaf(
             .map { hijo ->
                 FicheroCarpeta(
                     nombre = hijo.nombre,
-                    // Un tamaño desconocido no se puede validar contra el tope: se descarta.
-                    tamano = hijo.tamano ?: -1L,
+                    // B4: un proveedor SAF puede no dar COLUMN_SIZE. El tamaño
+                    // desconocido se lista como 0 y el tope se aplica en leer(),
+                    // que lee como mucho «maximo» bytes del flujo.
+                    tamano = hijo.tamano?.coerceAtLeast(0L) ?: 0L,
                     modificadoEn = hijo.modificadoMs?.takeIf { it > 0L }?.div(1_000L) ?: 0L,
                 )
             }

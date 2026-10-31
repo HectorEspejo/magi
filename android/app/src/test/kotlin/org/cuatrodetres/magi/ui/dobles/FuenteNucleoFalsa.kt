@@ -1,7 +1,10 @@
 package org.cuatrodetres.magi.ui.dobles
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
@@ -36,11 +39,13 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
     private val _tuneles = MutableStateFlow<List<TunelVista>>(emptyList())
     override val tuneles: StateFlow<List<TunelVista>> = _tuneles.asStateFlow()
 
-    private val _pantallas = MutableStateFlow<PantallaVista?>(null)
-    override val pantallas: StateFlow<PantallaVista?> = _pantallas.asStateFlow()
+    // Con buffer: una pantalla perdida descuadraría el terminal y una petición
+    // perdida dejaría una conexión esperando; nunca se conflan (M2).
+    private val _pantallas = MutableSharedFlow<PantallaVista>(extraBufferCapacity = 64)
+    override val pantallas: Flow<PantallaVista> = _pantallas.asSharedFlow()
 
-    private val _peticiones = MutableStateFlow<PeticionDialogoVista?>(null)
-    override val peticiones: StateFlow<PeticionDialogoVista?> = _peticiones.asStateFlow()
+    private val _peticiones = MutableSharedFlow<PeticionDialogoVista>(extraBufferCapacity = 16)
+    override val peticiones: Flow<PeticionDialogoVista> = _peticiones.asSharedFlow()
 
     private val _sincronizacion = MutableStateFlow(EstadoSincronizacionVista())
     override val sincronizacion: StateFlow<EstadoSincronizacionVista> = _sincronizacion.asStateFlow()
@@ -62,6 +67,8 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
 
     // Llamadas registradas.
     val llamadas: MutableList<String> = mutableListOf()
+    /** Eventos de entrada en el orden en que llegaron al núcleo (M7). */
+    val eventos: MutableList<String> = mutableListOf()
     val escrituras: MutableList<String> = mutableListOf()
     val teclas: MutableList<Pair<TeclaVista, ModificadoresVista>> = mutableListOf()
     val pegados: MutableList<String> = mutableListOf()
@@ -82,12 +89,12 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
         _tuneles.value = lista
     }
 
-    fun emitirPantalla(pantalla: PantallaVista?) {
-        _pantallas.value = pantalla
+    fun emitirPantalla(pantalla: PantallaVista) {
+        _pantallas.tryEmit(pantalla)
     }
 
-    fun emitirPeticion(peticion: PeticionDialogoVista?) {
-        _peticiones.value = peticion
+    fun emitirPeticion(peticion: PeticionDialogoVista) {
+        _peticiones.tryEmit(peticion)
     }
 
     fun emitirSincronizacion(estado: EstadoSincronizacionVista) {
@@ -159,7 +166,9 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
     }
 
     override suspend fun escribir(sesion: Long, bytes: ByteArray): ResultadoAccion {
-        escrituras.add(String(bytes, Charsets.UTF_8))
+        val texto = String(bytes, Charsets.UTF_8)
+        escrituras.add(texto)
+        eventos.add("escribir:" + texto)
         return respuesta()
     }
 
@@ -169,11 +178,13 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
         modificadores: ModificadoresVista,
     ): ResultadoAccion {
         teclas.add(tecla to modificadores)
+        eventos.add("tecla:" + tecla)
         return respuesta()
     }
 
     override suspend fun pegar(sesion: Long, texto: String): ResultadoAccion {
         pegados.add(texto)
+        eventos.add("pegar:" + texto)
         return respuesta()
     }
 
@@ -237,6 +248,17 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
     }
 
     override suspend fun clavePublicaMovil(): ClaveMovilVista? = claveRespuesta
+
+    /** Si la creación de la clave del móvil sale bien y qué clave queda. */
+    var claveCreada: Boolean = true
+    var claveTrasCrear: ClaveMovilVista? = null
+    var vecesCrearClave: Int = 0
+
+    override suspend fun crearClaveMovil(): Boolean {
+        vecesCrearClave++
+        if (claveCreada && claveTrasCrear != null) claveRespuesta = claveTrasCrear
+        return claveCreada
+    }
 
     override suspend fun instalarClaveEnHost(hostUuid: String): ResultadoInstalacionVista {
         llamadas.add("instalarClave:" + hostUuid)

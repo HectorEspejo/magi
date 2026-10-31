@@ -414,7 +414,12 @@ pub fn pasada_lector(
     //    marca `recuperado`; si ya no existe, el borrado se aplicó y se marca
     //    `aceptado`. Sin esto, un conflicto pendiente obligaría a releer todos
     //    los ficheros en cada pasada para siempre.
-    resolver_borrados_obsoletos(conexion, &plan)?;
+    // Si algún fichero no se pudo leer, la fusión es parcial: no se resuelven
+    // los borrados aplazados o se daría por «recuperado» un host que solo
+    // parecía vivo por no haber leído la lápida.
+    if fallos_de_lectura == 0 && !matches!(resultado.estado, EstadoLectura::EsperandoClave(_)) {
+        resolver_borrados_obsoletos(conexion, &plan)?;
+    }
 
     if cambia || hay_cambios_huellas {
         resultado.resumen = Some(resumen);

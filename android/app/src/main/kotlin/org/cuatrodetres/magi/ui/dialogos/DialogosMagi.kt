@@ -43,7 +43,6 @@ fun DialogosMagi(
     alResolverConflicto: (ConflictoHuellaVista, Boolean) -> Unit,
     alAbrirGuiaBateria: () -> Unit = {},
     alDescartarGuia: () -> Unit = {},
-    alDescartarSesionesPerdidas: () -> Unit = {},
 ) {
     when (dialogo) {
         null -> Unit
@@ -76,45 +75,11 @@ fun DialogosMagi(
             dialogo = dialogo,
             alResolver = alResolverConflicto,
         )
-        is DialogoVista.SesionesPerdidas -> DialogoSesionesPerdidas(
-            dialogo = dialogo,
-            alAbrirGuia = alAbrirGuiaBateria,
-            alEntendido = alDescartarSesionesPerdidas,
-        )
         DialogoVista.GuiaBateria -> DialogoGuiaBateria(
             alAbrirGuia = alAbrirGuiaBateria,
             alAhoraNo = alDescartarGuia,
         )
     }
-}
-
-/** «Android cerró MAGI con N sesiones abiertas» y oferta de la guía (§4.6). */
-@Composable
-private fun DialogoSesionesPerdidas(
-    dialogo: DialogoVista.SesionesPerdidas,
-    alAbrirGuia: () -> Unit,
-    alEntendido: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = alEntendido,
-        title = {
-            Text(
-                text = stringResource(R.string.avisos_sesiones_perdidas_titulo),
-                color = Paleta.ROJO,
-            )
-        },
-        text = { Text(stringResource(R.string.avisos_sesiones_perdidas_texto, dialogo.cantidad)) },
-        confirmButton = {
-            TextButton(onClick = alAbrirGuia) {
-                Text(stringResource(R.string.avisos_abrir_guia))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = alEntendido) {
-                Text(stringResource(R.string.avisos_entendido))
-            }
-        },
-    )
 }
 
 /** Guía de batería ofrecida al abrir la primera sesión (§4.6). */

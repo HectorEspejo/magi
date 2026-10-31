@@ -4,6 +4,7 @@ pub mod archivos;
 pub mod cliente;
 pub mod conexion;
 pub mod config;
+pub mod copias;
 pub mod deliberacion;
 pub mod diagnostico;
 pub use magi_nucleo::{ficheros, modelo, registro, rutas};

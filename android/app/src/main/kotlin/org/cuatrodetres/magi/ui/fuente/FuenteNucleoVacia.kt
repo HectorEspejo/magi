@@ -1,8 +1,10 @@
 package org.cuatrodetres.magi.ui.fuente
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import org.cuatrodetres.magi.BuildConfig
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
@@ -43,11 +45,9 @@ object FuenteNucleoVacia : FuenteNucleo {
     private val _tuneles = MutableStateFlow<List<TunelVista>>(emptyList())
     override val tuneles: StateFlow<List<TunelVista>> = _tuneles.asStateFlow()
 
-    private val _pantallas = MutableStateFlow<PantallaVista?>(null)
-    override val pantallas: StateFlow<PantallaVista?> = _pantallas.asStateFlow()
+    override val pantallas: Flow<PantallaVista> = emptyFlow()
 
-    private val _peticiones = MutableStateFlow<PeticionDialogoVista?>(null)
-    override val peticiones: StateFlow<PeticionDialogoVista?> = _peticiones.asStateFlow()
+    override val peticiones: Flow<PeticionDialogoVista> = emptyFlow()
 
     private val _sincronizacion = MutableStateFlow(EstadoSincronizacionVista())
     override val sincronizacion: StateFlow<EstadoSincronizacionVista> = _sincronizacion.asStateFlow()
@@ -139,6 +139,8 @@ object FuenteNucleoVacia : FuenteNucleo {
     ): ResultadoAccion = ResultadoAccion.Error(SIN_NUCLEO)
 
     override suspend fun clavePublicaMovil(): ClaveMovilVista? = null
+
+    override suspend fun crearClaveMovil(): Boolean = false
 
     override suspend fun instalarClaveEnHost(hostUuid: String): ResultadoInstalacionVista =
         ResultadoInstalacionVista.Error(SIN_NUCLEO)

@@ -129,6 +129,9 @@ pub enum EventoConexion {
 }
 
 /// De dónde sale una contraseña cuando el host autentica con una.
+/// Descripción de la identidad cuando se autentica con la clave del móvil.
+pub const DESCRIPCION_CLAVE_MOVIL: &str = "clave del móvil";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FuenteContrasena {
     /// El propio proceso la lee del llavero del sistema (conexiones efímeras

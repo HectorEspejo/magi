@@ -23,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import org.cuatrodetres.magi.R
+import org.cuatrodetres.magi.plataforma.RecintoSeguro
 import org.cuatrodetres.magi.ui.componentes.BarraAviso
 import org.cuatrodetres.magi.ui.componentes.BotonCabina
 import org.cuatrodetres.magi.ui.componentes.CabeceraVolver
@@ -44,13 +45,18 @@ import org.cuatrodetres.magi.ui.tema.Paleta
 fun PantallaClaveMovil(
     estado: EstadoMagi,
     alVolver: () -> Unit,
+    alCrearClaveNueva: () -> Unit,
+    alAbrirSincronizacion: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contexto = LocalContext.current
     val clave = estado.claveMovil
     val textoCompartir = stringResource(R.string.clave_compartir)
     var verQr by remember { mutableStateOf(false) }
-    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    // La clave pública y su QR no son secretos, pero la pantalla enseña datos
+    // de la identidad del móvil: sin capturas mientras se muestran (§8).
+    RecintoSeguro {
+        Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         CabeceraVolver(
             titulo = stringResource(R.string.clave_titulo),
             alVolver = alVolver,
@@ -64,6 +70,26 @@ fun PantallaClaveMovil(
                 texto = stringResource(R.string.clave_invalidada),
                 tipo = TipoBarra.ERROR,
             )
+            if (estado.creandoClave) {
+                IndicadorCarga(texto = stringResource(R.string.clave_creando_nueva))
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                BotonCabina(
+                    texto = stringResource(R.string.clave_crear_nueva),
+                    alPulsar = alCrearClaveNueva,
+                    primario = true,
+                    habilitado = !estado.creandoClave,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                BotonCabina(
+                    texto = stringResource(R.string.clave_escanear_sincronizacion),
+                    alPulsar = alAbrirSincronizacion,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
         FilaDato(
             etiqueta = stringResource(R.string.clave_ubicacion),
@@ -133,8 +159,9 @@ fun PantallaClaveMovil(
             )
         }
     }
-    if (verQr && clave != null) {
-        DialogoQrClave(clave = clave, alCerrar = { verQr = false })
+        if (verQr && clave != null) {
+            DialogoQrClave(clave = clave, alCerrar = { verQr = false })
+        }
     }
 }
 

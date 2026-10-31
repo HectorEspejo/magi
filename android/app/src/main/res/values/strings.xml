@@ -24,6 +24,7 @@
     <string name="accion_reconectar">RECONECTAR</string>
     <string name="accion_relanzar">RELANZAR</string>
     <string name="accion_puerto_libre">PUERTO LIBRE</string>
+    <string name="accion_descartar">DESCARTAR</string>
     <string name="accion_abrir_navegador">ABRIR</string>
     <string name="accion_abrir_ficha">Abrir ficha del host</string>
     <string name="accion_abrir_terminal">Abrir terminal</string>
@@ -237,6 +238,9 @@
     <string name="clave_compartir">COMPARTIR</string>
     <string name="clave_ver_qr">VER QR</string>
     <string name="clave_qr_titulo">Clave del móvil · QR</string>
+    <string name="clave_crear_nueva">CREAR CLAVE NUEVA</string>
+    <string name="clave_creando_nueva">Creando la clave nueva en el Keystore…</string>
+    <string name="clave_escanear_sincronizacion">ESCANEAR LA CLAVE DE SINCRONIZACIÓN</string>
 
     <!-- Batería -->
     <string name="bateria_explicacion">MagicOS y otros sistemas Android cierran las apps en segundo plano de forma agresiva. Para que tus sesiones y túneles sigan vivos, saca MAGI del ahorro de batería.</string>
@@ -322,11 +326,14 @@
     <string name="aviso_datos_borrados">Datos de MAGI borrados de este móvil.</string>
     <string name="aviso_tunel_activado">Túnel activado.</string>
     <string name="aviso_tunel_parado">Túnel parado.</string>
+    <string name="aviso_tunel_descartado">Túnel caído descartado.</string>
     <string name="aviso_host_desaparecido">Ese host ya no está en el inventario. Sincroniza para actualizarlo.</string>
     <string name="aviso_error_inesperado">Error inesperado del núcleo. Inténtalo otra vez.</string>
     <string name="aviso_texto_copiado">Texto copiado al portapapeles.</string>
     <string name="aviso_portapapeles_vacio">El portapapeles está vacío.</string>
     <string name="aviso_seleccion_vacia">No hay texto seleccionado.</string>
+    <string name="aviso_clave_movil_creada">Clave del móvil creada. Vuelve a instalarla en tus hosts y escanea de nuevo la clave de sincronización.</string>
+    <string name="aviso_clave_movil_no_creada">No se pudo crear la clave del móvil. Revisa el bloqueo de pantalla del teléfono e inténtalo otra vez.</string>
 
     <!-- Tiempo relativo -->
     <string name="tiempo_ahora">ahora mismo</string>
@@ -348,11 +355,10 @@
     <string name="bloqueo_abrir_seguridad">ABRIR SEGURIDAD DEL TELÉFONO</string>
 
     <!-- Avisos del segundo plano (informe §4.6) -->
-    <string name="avisos_sesiones_perdidas_titulo">ANDROID CERRÓ MAGI</string>
     <string name="avisos_sesiones_perdidas_texto">Android cerró MAGI con %1$d sesiones abiertas. Las sesiones y túneles se han perdido. Para que no vuelva a pasar, revisa el ahorro de batería.</string>
     <string name="avisos_guia_bateria_titulo">GUÍA DE BATERÍA</string>
     <string name="avisos_guia_bateria_texto">Android y MagicOS cierran las apps en segundo plano con agresividad. Sigue la guía para que MAGI conserve tus sesiones y túneles cuando salgas de la app.</string>
     <string name="avisos_abrir_guia">ABRIR LA GUÍA</string>
     <string name="avisos_ahora_no">AHORA NO</string>
-    <string name="avisos_entendido">ENTENDIDO</string>
+    <string name="avisos_ver_guia">VER LA GUÍA</string>
 </resources>

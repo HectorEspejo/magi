@@ -12,13 +12,13 @@ import android.security.keystore.UserNotAuthenticatedException
 import org.cuatrodetres.magi.R
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
+import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.UnrecoverableKeyException
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
-import javax.crypto.KeyGenerator
 
 /**
  * Clave del móvil (informe §7.2 y §9): ECDSA P-256 en el Android Keystore,
@@ -239,9 +239,11 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
             .setUserAuthenticationRequired(false) // D174
             .setUnlockedDeviceRequired(true)
         if (conStrongBox) constructor.setIsStrongBoxBacked(true)
-        val generador = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, PROVEEDOR)
-        generador.init(constructor.build())
-        generador.generateKey()
+        // Una clave EC se genera con KeyPairGenerator: KeyGenerator solo vale
+        // para claves simétricas y AndroidKeyStore lanza NoSuchAlgorithm para EC.
+        val generador = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, PROVEEDOR)
+        generador.initialize(constructor.build())
+        generador.generateKeyPair()
     }
 
     /**

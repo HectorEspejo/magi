@@ -33,3 +33,6 @@ uniffi = { version = "=0.32.2", features = ["tokio"] }
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 required-features = ["bindgen"]
+
+[dev-dependencies]
+tempfile = "3"

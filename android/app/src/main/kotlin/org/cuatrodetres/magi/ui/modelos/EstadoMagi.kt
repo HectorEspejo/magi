@@ -28,8 +28,12 @@ data class EstadoMagi(
     val claveMovil: ClaveMovilVista? = null,
     val version: VersionVista? = null,
     val cargando: Boolean = false,
+    /** Se está creando una clave del móvil nueva (CA 31). */
+    val creandoClave: Boolean = false,
     val iniciado: Boolean = false,
     val tamanoLetra: Int = ZOOM_POR_DEFECTO,
+    /** Sesiones que quedaron abiertas cuando Android mató MAGI (aviso §4.6). */
+    val sesionesPerdidas: Int? = null,
     val aviso: AvisoVista? = null,
 ) {
     /** Diálogo visible: el último que llegó. */

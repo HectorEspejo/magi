@@ -1,5 +1,6 @@
 package org.cuatrodetres.magi.ui.fuente
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
@@ -31,7 +32,8 @@ import org.cuatrodetres.magi.ui.modelos.VersionVista
  *
  * Reglas que respeta el adaptador:
  * - las listas de sesiones y túneles son completas (nunca mensajes finos);
- * - [pantallas] entrega pantallas por tramos, solo las filas cambiadas;
+ * - [pantallas] y [peticiones] llegan por flujos con buffer (no se conflan);
+ * - [pantallas] entrega tramos, solo las filas cambiadas;
  * - los errores llegan ya en castellano y con instrucción cuando aplica.
  */
 interface FuenteNucleo {
@@ -46,11 +48,17 @@ interface FuenteNucleo {
     /** Lista completa de túneles del inventario con su estado en vivo. */
     val tuneles: StateFlow<List<TunelVista>>
 
-    /** Última pantalla recibida (con `sesion` para saber de cuál es). */
-    val pantallas: StateFlow<PantallaVista?>
+    /**
+     * Pantallas por tramos en orden; el adaptador las entrega con buffer y no
+     * se puede perder ninguna (perder filas descuadraría el terminal).
+     */
+    val pantallas: Flow<PantallaVista>
 
-    /** Petición de diálogo pendiente (huella nueva, cambiada o contraseña). */
-    val peticiones: StateFlow<PeticionDialogoVista?>
+    /**
+     * Peticiones de diálogo (huella nueva, cambiada o contraseña), en orden y
+     * sin conflar: el ViewModel las apila (informe §7.1).
+     */
+    val peticiones: Flow<PeticionDialogoVista>
 
     /** Estado completo de la sincronización (indicador ⇅ y Ajustes). */
     val sincronizacion: StateFlow<EstadoSincronizacionVista>
@@ -163,6 +171,14 @@ interface FuenteNucleo {
 
     /** Línea OpenSSH y huella de la clave del móvil; null si aún no está creada. */
     suspend fun clavePublicaMovil(): ClaveMovilVista?
+
+    /**
+     * Crea una clave del móvil nueva en el Keystore cuando Android invalidó la
+     * anterior (CA 31). Devuelve true si la clave queda lista para firmar. La
+     * implementa el adaptador real (FuenteNucleoReal); por defecto no se crea
+     * nada, para que la interfaz compile sin el núcleo conectado.
+     */
+    suspend fun crearClaveMovil(): Boolean = false
 
     /** Instala la clave del móvil en el host (§4.4 y §7.9). */
     suspend fun instalarClaveEnHost(hostUuid: String): ResultadoInstalacionVista

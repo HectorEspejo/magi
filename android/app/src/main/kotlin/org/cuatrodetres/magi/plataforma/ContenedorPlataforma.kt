@@ -31,6 +31,9 @@ class ContenedorPlataforma(contexto: Context) : FachadaPlataforma {
     /** Guía de batería y su marca en DataStore. */
     val bateria: GuiaBateria = GuiaBateria(aplicacion, preferencias)
 
+    /** Portapapeles del sistema: se vacía la clave de sincronización tras usarla. */
+    val portapapeles: Portapapeles = Portapapeles(aplicacion)
+
     /** Restaura la carpeta recordada; lo llama el arranque de la app. */
     suspend fun iniciar() {
         carpeta.cargarCarpeta()

@@ -2,11 +2,13 @@ package org.cuatrodetres.magi.nucleo
 
 import android.content.Context
 import android.os.Build
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.cuatrodetres.magi.plataforma.FachadaPlataforma
+import org.cuatrodetres.magi.plataforma.ClaveMovil
+import org.cuatrodetres.magi.plataforma.ContenedorPlataforma
 import java.io.File
 
 /**
@@ -14,6 +16,9 @@ import java.io.File
  *
  * - Carga la cdylib que UniFFI empaqueta por ABI en `jniLibs` (lo hace el
  *   propio código generado al primer uso).
+ * - Antes de arrancar, asegura la clave del móvil (C1 de la revisión): si aún no
+ *   existe se crea; si Android la invalidó NO se recrea a ciegas (la interfaz
+ *   muestra el aviso y ofrece crear una nueva).
  * - Construye las rutas privadas de la app (nada de `HOME`: el núcleo no lee el
  *   entorno), el nombre del equipo y las retrollamadas de plataforma.
  * - Llama a `Nucleo.iniciar` UNA vez, en un hilo de E/S y tras el desbloqueo
@@ -60,12 +65,26 @@ object NucleoRepositorio {
     fun nucleo(): Nucleo? = instancia
 
     /**
+     * C1 de la revisión adversarial: la clave del móvil tiene que existir antes
+     * de abrir sesiones. Si está SIN_CREAR se crea aquí (en E/S); si está
+     * INVALIDADA no se toca: la interfaz ofrece crearla y reescanear la clave.
+     */
+    suspend fun asegurarClaveMovil(firmante: ClaveMovil) {
+        withContext(Dispatchers.IO) {
+            when (firmante.estado()) {
+                ClaveMovil.Estado.SIN_CREAR -> firmante.asegurarClave()
+                ClaveMovil.Estado.LISTA, ClaveMovil.Estado.INVALIDADA -> Unit
+            }
+        }
+    }
+
+    /**
      * Arranca el núcleo (idempotente). Es la única llamada a
      * `Nucleo.iniciar`: si ya está listo, devuelve la instancia.
      */
     suspend fun iniciar(
         contexto: Context,
-        plataforma: FachadaPlataforma,
+        plataforma: ContenedorPlataforma,
         oyente: OyenteNucleo,
     ): Nucleo {
         instancia?.let {
@@ -80,6 +99,8 @@ object NucleoRepositorio {
             estado = Estado.INICIANDO
             try {
                 val nucleo = withContext(Dispatchers.IO) {
+                    // La clave del móvil primero: sin ella no se puede autenticar.
+                    asegurarClaveMovil(plataforma.firmante)
                     Nucleo.iniciar(
                         rutas = rutas(contexto),
                         equipo = equipo(),
@@ -94,6 +115,10 @@ object NucleoRepositorio {
                 instancia = nucleo
                 estado = Estado.LISTO
                 nucleo
+            } catch (e: CancellationException) {
+                // Un reinicio de la Activity no puede dejar el repositorio a medias.
+                estado = Estado.SIN_INICIAR
+                throw e
             } catch (e: Throwable) {
                 estado = Estado.ERROR
                 throw e

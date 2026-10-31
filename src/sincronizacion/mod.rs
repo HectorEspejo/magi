@@ -8,7 +8,7 @@ pub use magi_nucleo::sincronizacion::*;
 pub mod equipos;
 pub mod qr;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -44,6 +44,9 @@ pub fn pasada(
     let exportar = |conn: &Connection| {
         let _ = crate::sshconfig::exportar::exportar(conn, &rutas.dir_ssh());
     };
+    let copia_previa = |conn: &Connection| -> Result<PathBuf> {
+        crate::copias::copiar(conn, rutas, config.sincronizacion.copias)
+    };
     let nucleo = magi_nucleo::sincronizacion::OpcionesPasada {
         politica_borrados: opciones.politica_borrados,
         trabajo_vivo: opciones.trabajo_vivo,
@@ -52,6 +55,7 @@ pub fn pasada(
         } else {
             None
         },
+        copia_previa: Some(&copia_previa as &dyn Fn(&Connection) -> Result<PathBuf>),
     };
     magi_nucleo::sincronizacion::pasada(
         conexion,

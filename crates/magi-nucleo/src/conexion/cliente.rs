@@ -959,7 +959,7 @@ pub async fn autenticar_movil(
                 Ok(resultado) => {
                     if resultado.success() {
                         return Ok(IdentidadUsada {
-                            descripcion: "clave del móvil".to_string(),
+                            descripcion: super::DESCRIPCION_CLAVE_MOVIL.to_string(),
                             huella: Some(huella),
                         });
                     }

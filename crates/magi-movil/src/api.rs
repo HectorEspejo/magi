@@ -4,9 +4,10 @@
 //! tipos de magi-nucleo (el núcleo no depende de UniFFI). Las funciones de red
 //! son async y en Kotlin se convierten en funciones suspend.
 //!
-//! En esta entrega el crate es el contrato compilable: solo version() está
-//! implementada; el resto son stubs con unimplemented! y TODO(F11) que el Lead
-//! sustituye al integrar la lógica.
+//! La puerta está implementada sobre magi-nucleo: inventario de solo lectura,
+//! sincronización en modo lector, clave del móvil por Firmante, sesiones con
+//! terminal por tramos, túneles y diálogos. Los DTO de UniFFI son propios y no
+//! dependen de los tipos internos del núcleo.
 
 use std::sync::Arc;
 
@@ -457,7 +458,7 @@ pub enum RespuestaDialogo {
 
 /// Clave pública de la clave del móvil, a partir de la X.509 que da
 /// FirmanteMovil (informe §7.2).
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, uniffi::Record, PartialEq, Eq)]
 pub struct ClavePublicaMovil {
     /// Línea OpenSSH completa (ecdsa-sha2-nistp256 AAAA... comentario).
     pub linea_openssh: String,
@@ -654,6 +655,24 @@ impl Nucleo {
     /// Línea OpenSSH y huella SHA256 de la clave del móvil.
     pub fn clave_publica_movil(&self) -> Result<ClavePublicaMovil, ErrorNucleo> {
         self.estado.clave_publica()
+    }
+
+    /// Olvida la clave pública del móvil cacheada en el núcleo y vuelve a
+    /// leerla del Keystore: la app lo llama después de recrear la clave cuando
+    /// Android la invalidó (se quitó el bloqueo de pantalla). Queda anotada en
+    /// REGISTRO como clave nueva.
+    pub fn olvidar_cache_clave_movil(&self) -> Result<(), ErrorNucleo> {
+        let anterior = self
+            .estado
+            .clave_publica
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.take());
+        let nueva = self.estado.clave_publica()?;
+        if anterior.as_ref() != Some(&nueva) {
+            crate::sincro::anotar_clave_generada(&self.estado);
+        }
+        Ok(())
     }
 
     /// Olvida la contraseña guardada de un host; devuelve si había una.

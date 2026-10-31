@@ -258,7 +258,35 @@ pub async fn sincronizar_ahora(estado: &Arc<EstadoNucleo>) -> Result<(), ErrorNu
         sincro.error = None;
     }
     estado.emitir_sincronizacion();
-    let claves = claves_guardadas(estado);
+    // La pasada corre en el runtime del núcleo: si la app cancela la corrutina
+    // (pantalla apagada, salida de la Activity), la pasada termina igual y la
+    // fase nunca se queda clavada en «sincronizando».
+    let estado_tarea = estado.clone();
+    let tarea = estado
+        .runtime
+        .spawn(async move { pasada_en_segundo_plano(estado_tarea).await });
+    match tarea.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(error) => {
+            let mut sincro = estado.sincro.lock().await;
+            if sincro.fase == FaseSincro::Sincronizando {
+                sincro.fase = FaseSincro::ErrorCarpeta;
+                sincro.error = Some(format!(
+                    "la pasada de sincronización se interrumpió: {error}"
+                ));
+            }
+            drop(sincro);
+            estado.emitir_sincronizacion();
+            Err(ErrorNucleo::General {
+                detalle: format!("la pasada de sincronización se interrumpió: {error}"),
+            })
+        }
+    }
+}
+
+async fn pasada_en_segundo_plano(estado: Arc<EstadoNucleo>) -> Result<(), ErrorNucleo> {
+    let claves = claves_guardadas(&estado);
     let carpeta = Arc::new(CarpetaRetrollamada::nueva(
         estado.retrollamadas.carpeta.clone(),
     ));
@@ -276,8 +304,18 @@ pub async fn sincronizar_ahora(estado: &Arc<EstadoNucleo>) -> Result<(), ErrorNu
                 &trabajo as &dyn TrabajoVivo,
             )
         })
-        .await
-        .map_err(|detalle| ErrorNucleo::General { detalle })?;
+        .await;
+    let resultado = match resultado {
+        Ok(resultado) => resultado,
+        Err(detalle) => {
+            let mut sincro = estado.sincro.lock().await;
+            sincro.fase = FaseSincro::ErrorCarpeta;
+            sincro.error = Some(detalle.clone());
+            drop(sincro);
+            estado.emitir_sincronizacion();
+            return Err(ErrorNucleo::General { detalle });
+        }
+    };
     let resultado = match resultado {
         Ok(resultado) => resultado,
         Err(error) => {
@@ -345,24 +383,29 @@ pub async fn borrar_datos(
 ) -> Result<(), ErrorNucleo> {
     comprobar_sin_trabajo(estado)?;
     let todo = matches!(alcance, AlcanceBorrado::Todo);
-    let uuids = con_almacen(estado, |almacen| {
-        movil_bd::uuid_por_id(almacen.conexion(), Tabla::Hosts)
-    })
-    .map_err(|error| ErrorNucleo::General {
-        detalle: error.to_string(),
-    })?
-    .map_err(|error| ErrorNucleo::General {
-        detalle: format!("leyendo los hosts: {error:#}"),
-    })?;
-    for uuid in uuids.values() {
-        let _ = estado
-            .llavero
-            .borrar(&crate::clave::cuenta_contrasena(uuid));
-    }
     let _ = estado.llavero.borrar(CUENTA_CLAVE);
     let _ = estado.llavero.borrar(CUENTA_CLAVE_ANTERIOR);
     if todo {
+        // Las contraseñas solo se borran con «borrar todo»; dejar de
+        // sincronizar las conserva (contrato de la app).
+        let uuids = con_almacen(estado, |almacen| {
+            movil_bd::uuid_por_id(almacen.conexion(), Tabla::Hosts)
+        })
+        .map_err(|error| ErrorNucleo::General {
+            detalle: error.to_string(),
+        })?
+        .map_err(|error| ErrorNucleo::General {
+            detalle: format!("leyendo los hosts: {error:#}"),
+        })?;
+        for uuid in uuids.values() {
+            let _ = estado
+                .llavero
+                .borrar(&crate::clave::cuenta_contrasena(uuid));
+        }
         let _ = estado.retrollamadas.firmante.olvidar_clave();
+        if let Ok(mut cache) = estado.clave_publica.lock() {
+            *cache = None;
+        }
         let ruta_known_hosts = estado.rutas.fichero_known_hosts();
         let _ = std::fs::remove_file(&ruta_known_hosts);
     }
@@ -381,17 +424,9 @@ pub async fn borrar_datos(
 }
 
 fn comprobar_sin_trabajo(estado: &EstadoNucleo) -> Result<(), ErrorNucleo> {
-    let hay_sesiones = estado
-        .sesiones
-        .lock()
-        .map(|sesiones| !sesiones.is_empty())
-        .unwrap_or(false);
-    let hay_tuneles = estado
-        .tuneles
-        .lock()
-        .map(|tuneles| !tuneles.is_empty())
-        .unwrap_or(false);
-    if hay_sesiones || hay_tuneles {
+    // Una entrada de túnel caída o inactiva no es trabajo vivo: no debe impedir
+    // «dejar de sincronizar» ni «borrar todos los datos».
+    if estado.hay_trabajo_activo() {
         return Err(ErrorNucleo::EstadoInvalido {
             detalle: "cierra antes las sesiones y los túneles".to_string(),
         });

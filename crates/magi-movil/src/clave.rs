@@ -164,7 +164,11 @@ pub fn clave_publica_movil(
         .nombre
         .chars()
         .map(|caracter| {
-            if caracter.is_alphanumeric() || caracter == '.' || caracter == '_' || caracter == '-' {
+            if caracter.is_ascii_alphanumeric()
+                || caracter == '.'
+                || caracter == '_'
+                || caracter == '-'
+            {
                 caracter
             } else {
                 '-'

@@ -47,6 +47,9 @@ private fun textoDeTipoAviso(tipo: TipoAviso, detalle: String?): String = when (
     TipoAviso.TEXTO_COPIADO -> stringResource(R.string.aviso_texto_copiado)
     TipoAviso.PORTAPAPELES_VACIO -> stringResource(R.string.aviso_portapapeles_vacio)
     TipoAviso.SELECCION_VACIA -> stringResource(R.string.aviso_seleccion_vacia)
+    TipoAviso.TUNEL_DESCARTADO -> stringResource(R.string.aviso_tunel_descartado)
+    TipoAviso.CLAVE_MOVIL_CREADA -> stringResource(R.string.aviso_clave_movil_creada)
+    TipoAviso.CLAVE_MOVIL_NO_CREADA -> stringResource(R.string.aviso_clave_movil_no_creada)
 }
 
 /** Snackbar de la cabina: barra inferior con el aviso y una ✕ para cerrarlo. */

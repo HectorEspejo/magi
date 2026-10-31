@@ -75,20 +75,25 @@ pub async fn conectar_cadena(
         let identidad = autenticar(&mut handle, host, contexto).await?;
         if indice + 1 < cadena.len() {
             let siguiente = &cadena[indice + 1];
-            let nuevo_canal = handle
-                .channel_open_direct_tcpip(
+            let nuevo_canal = tokio::time::timeout(
+                PLAZO_SALUDO,
+                handle.channel_open_direct_tcpip(
                     siguiente.direccion.clone(),
                     siguiente.puerto as u32,
                     "127.0.0.1".to_string(),
                     0,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                ErrorCliente::Mensaje("se agotó el plazo abriendo el canal del salto".to_string())
+            })?
+            .with_context(|| {
+                format!(
+                    "abriendo el canal hacia {} a través de {}",
+                    siguiente.nombre, host.nombre
                 )
-                .await
-                .with_context(|| {
-                    format!(
-                        "abriendo el canal hacia {} a través de {}",
-                        siguiente.nombre, host.nombre
-                    )
-                })?;
+            })?;
             saltos.push(handle);
             canal = Some(nuevo_canal);
         } else {
@@ -156,12 +161,24 @@ pub async fn conectar_cadena_movil(
         )
         .con_reenvios(contexto.reenvios.clone());
         let mut handle = match canal.take() {
-            Some(canal) => {
-                russh::client::connect_stream(config, canal.into_stream(), manejador).await?
-            }
+            Some(canal) => tokio::time::timeout(
+                PLAZO_SALUDO,
+                russh::client::connect_stream(config, canal.into_stream(), manejador),
+            )
+            .await
+            .map_err(|_| {
+                ErrorCliente::Mensaje("se agotó el plazo del saludo SSH (10 s)".to_string())
+            })??,
             None => {
                 let socket = conectar_tcp(&host.direccion, host.puerto).await?;
-                russh::client::connect_stream(config, socket, manejador).await?
+                tokio::time::timeout(
+                    PLAZO_SALUDO,
+                    russh::client::connect_stream(config, socket, manejador),
+                )
+                .await
+                .map_err(|_| {
+                    ErrorCliente::Mensaje("se agotó el plazo del saludo SSH (10 s)".to_string())
+                })??
             }
         };
         let identidad =
@@ -195,6 +212,9 @@ pub async fn conectar_cadena_movil(
         identidad: identidad_usada,
     })
 }
+
+/// Plazo del saludo SSH y de cada apertura de canal de un salto.
+const PLAZO_SALUDO: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn config_cliente_movil(host: &Host) -> russh::client::Config {
     russh::client::Config {

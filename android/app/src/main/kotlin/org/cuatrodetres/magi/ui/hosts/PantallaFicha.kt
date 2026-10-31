@@ -57,6 +57,7 @@ fun PantallaFicha(
     alRelanzarTunel: (TunelVista) -> Unit,
     alTunelPuertoLibre: (TunelVista) -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
+    alDescartarTunel: (TunelVista) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val estadoTexto = textoEstadoHost(estadoHost, sesionesAbiertas)
@@ -160,6 +161,7 @@ fun PantallaFicha(
                     alRelanzar = alRelanzarTunel,
                     alPuertoLibre = alTunelPuertoLibre,
                     alAbrirNavegador = alAbrirNavegador,
+                    alDescartar = alDescartarTunel,
                 )
             }
         }

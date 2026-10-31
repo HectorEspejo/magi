@@ -307,6 +307,7 @@ fun BarraAviso(
     glifo: String? = null,
     textoAccion: String? = null,
     alAccion: (() -> Unit)? = null,
+    alCerrar: (() -> Unit)? = null,
 ) {
     val color = when (tipo) {
         TipoBarra.INFO -> Paleta.GRIS
@@ -340,6 +341,14 @@ fun BarraAviso(
         )
         if (textoAccion != null && alAccion != null) {
             BotonCabina(texto = textoAccion, alPulsar = alAccion, modifier = Modifier.heightIn(min = 48.dp))
+        }
+        if (alCerrar != null) {
+            BotonGlifo(
+                glifo = "✕",
+                descripcion = stringResource(R.string.accion_cerrar_aviso),
+                alPulsar = alCerrar,
+                color = Paleta.GRIS,
+            )
         }
     }
 }

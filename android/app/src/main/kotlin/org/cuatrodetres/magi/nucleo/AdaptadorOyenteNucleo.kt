@@ -23,7 +23,7 @@ class AdaptadorOyenteNucleo(
     private val alRecibirSesiones: (List<SesionVista>) -> Unit,
     private val alRecibirTuneles: (List<TunelVista>) -> Unit,
     private val alRecibirPantalla: (PantallaVista) -> Unit,
-    private val alRecibirPeticion: (PeticionDialogoVista?) -> Unit,
+    private val alRecibirPeticion: (PeticionDialogoVista) -> Unit,
     private val alRecibirSincronizacion: (EstadoSincronizacionVista) -> Unit,
     private val alCambiarTrabajoVivo: (sesiones: Int, tuneles: Int) -> Unit,
 ) : OyenteNucleo {

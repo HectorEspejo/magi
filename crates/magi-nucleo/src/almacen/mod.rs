@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 pub mod conflictos;
-pub mod copias;
 pub mod deliberaciones;
 pub mod equipos;
 pub mod etiquetas;

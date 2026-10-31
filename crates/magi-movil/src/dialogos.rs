@@ -63,3 +63,27 @@ impl Dialogos {
         }
     }
 }
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+    use crate::api::RespuestaDialogo;
+
+    #[test]
+    fn un_dialogo_registrado_recibe_su_respuesta() {
+        let dialogos = Dialogos::nuevo();
+        let (id, receptor) = dialogos.registrar();
+        assert!(dialogos.responder(id, RespuestaDialogo::AceptarHuella));
+        let respuesta = receptor.blocking_recv().expect("respuesta");
+        assert!(matches!(respuesta, RespuestaDialogo::AceptarHuella));
+    }
+
+    #[test]
+    fn una_respuesta_sin_peticion_en_vuelo_se_descarta() {
+        let dialogos = Dialogos::nuevo();
+        assert!(!dialogos.responder(99, RespuestaDialogo::CancelarHuella));
+        let (id, _receptor) = dialogos.registrar();
+        dialogos.descartar(id);
+        assert!(!dialogos.responder(id, RespuestaDialogo::CancelarHuella));
+    }
+}

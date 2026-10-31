@@ -4,6 +4,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use nix::fcntl::{Flock, FlockArg};
 use russh::keys::known_hosts::known_host_keys_path;
 use russh::keys::{HashAlg, PublicKey};
 
@@ -62,7 +63,33 @@ fn linea_nueva(host: &str, puerto: u16, clave: &PublicKey) -> Result<String> {
 }
 
 /// Aprende una huella desconocida añadiendo una línea a `known_hosts`.
+fn con_cerrojo_known_hosts<T>(ruta: &Path, tarea: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if let Some(directorio) = ruta.parent() {
+        std::fs::create_dir_all(directorio)?;
+    }
+    let nombre = ruta
+        .file_name()
+        .and_then(|nombre| nombre.to_str())
+        .unwrap_or("known_hosts");
+    let ruta_cerrojo = ruta.with_file_name(format!(".{nombre}.lock"));
+    let fichero = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&ruta_cerrojo)
+        .with_context(|| format!("abriendo {}", ruta_cerrojo.display()))?;
+    let _guardia = Flock::lock(fichero, FlockArg::LockExclusive)
+        .map_err(|(_fichero, errno)| anyhow::anyhow!("no se pudo bloquear known_hosts: {errno}"))?;
+    tarea()
+}
+
 pub fn aprender(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Result<()> {
+    con_cerrojo_known_hosts(ruta, || aprender_sin_cerrojo(ruta, host, puerto, clave))
+}
+
+fn aprender_sin_cerrojo(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Result<()> {
     let linea = linea_nueva(host, puerto, clave)?;
     if let Some(directorio) = ruta.parent() {
         fs::create_dir_all(directorio)?;
@@ -93,8 +120,12 @@ pub fn aprender(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Resu
 /// Sustituye una huella cambiada: copia `known_hosts.old`, elimina las líneas
 /// previas de esa dirección y añade la nueva.
 pub fn sustituir(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Result<()> {
+    con_cerrojo_known_hosts(ruta, || sustituir_sin_cerrojo(ruta, host, puerto, clave))
+}
+
+fn sustituir_sin_cerrojo(ruta: &Path, host: &str, puerto: u16, clave: &PublicKey) -> Result<()> {
     if !ruta.exists() {
-        return aprender(ruta, host, puerto, clave);
+        return aprender_sin_cerrojo(ruta, host, puerto, clave);
     }
     let anteriores = known_host_keys_path(host, puerto, ruta)
         .with_context(|| format!("leyendo {}", ruta.display()))?;

@@ -57,6 +57,9 @@ enum class TipoAviso {
     TEXTO_COPIADO,
     PORTAPAPELES_VACIO,
     SELECCION_VACIA,
+    CLAVE_MOVIL_CREADA,
+    CLAVE_MOVIL_NO_CREADA,
+    TUNEL_DESCARTADO,
 }
 
 /** Estado del bloqueo de la app (diagrama de §3 y regla de §7.8). */

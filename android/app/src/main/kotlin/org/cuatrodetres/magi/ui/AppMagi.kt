@@ -62,6 +62,9 @@ import org.cuatrodetres.magi.ui.componentes.BarraAvisoMagi
 import org.cuatrodetres.magi.ui.componentes.MensajeVacio
 import org.cuatrodetres.magi.ui.dialogos.DialogosMagi
 import org.cuatrodetres.magi.ui.dialogos.PantallaAsistente
+import org.cuatrodetres.magi.ui.componentes.BarraAviso
+import org.cuatrodetres.magi.ui.componentes.TipoBarra
+import org.cuatrodetres.magi.ui.fuente.AvisosPlataformaReal
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
 import org.cuatrodetres.magi.ui.hosts.PantallaFicha
@@ -107,10 +110,17 @@ fun AppMagi(
     recordarCarpeta: (suspend (Uri) -> Unit)? = null,
     alAbrirBateria: (() -> Unit)? = null,
 ) {
+    val contexto = LocalContext.current
+    // Si MainActivity no pasa los avisos del segundo plano, se toman del
+    // contenedor de plataforma de la aplicación (MagiApp).
+    val avisosSegundoPlano: AvisosPlataforma? = avisosPlataforma ?: runCatching {
+        val aplicacion = contexto.applicationContext as org.cuatrodetres.magi.MagiApp
+        AvisosPlataformaReal(aplicacion.plataforma.preferencias, aplicacion.plataforma.bateria)
+    }.getOrNull()
     val vm: VistaModeloMagi = viewModel(
         key = "magi-magi",
         factory = viewModelFactory {
-            initializer { VistaModeloMagi(fuente, controlBloqueo, avisosPlataforma = avisosPlataforma) }
+            initializer { VistaModeloMagi(fuente, controlBloqueo, avisosPlataforma = avisosSegundoPlano) }
         },
     )
     val vmTerminal: VistaModeloTerminal = viewModel(
@@ -119,7 +129,6 @@ fun AppMagi(
     )
     val estado by vm.estado.collectAsStateWithLifecycle()
     val estadoTerminal by vmTerminal.estado.collectAsStateWithLifecycle()
-    val contexto = LocalContext.current
     val alcance = rememberCoroutineScope()
     val propietarioCiclo = LocalLifecycleOwner.current
 
@@ -242,6 +251,20 @@ fun AppMagi(
             }
         }
 
+        // Aviso no bloqueante: Android cerró MAGI con sesiones abiertas (§4.6).
+        val sesionesPerdidas = estado.sesionesPerdidas
+        if (sesionesPerdidas != null) {
+            Box(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                BarraAviso(
+                    texto = stringResource(R.string.avisos_sesiones_perdidas_texto, sesionesPerdidas),
+                    tipo = TipoBarra.AVISO,
+                    textoAccion = stringResource(R.string.avisos_ver_guia),
+                    alAccion = vm::abrirGuiaBateria,
+                    alCerrar = vm::descartarSesionesPerdidas,
+                )
+            }
+        }
+
         // Asistente de sincronización a pantalla completa.
         val asistente = estado.asistente
         if (asistente != null) {
@@ -285,7 +308,6 @@ fun AppMagi(
             },
             alAbrirGuiaBateria = vm::abrirGuiaBateria,
             alDescartarGuia = vm::descartarGuiaBateria,
-            alDescartarSesionesPerdidas = vm::descartarAvisoSesionesPerdidas,
         )
 
         // Aviso efímero (errores del núcleo o avisos de la interfaz).
@@ -455,6 +477,7 @@ private fun ContenidoDestino(
             alRelanzar = vm::relanzarTunel,
             alPuertoLibre = vm::tunelEnPuertoLibre,
             alAbrirNavegador = alAbrirNavegador,
+            alDescartar = vm::descartarTunel,
             alIrAHosts = { vm.elegirDestino(Destino.HOSTS) },
             modifier = modifier,
         )
@@ -506,6 +529,7 @@ private fun ContenidoDetalle(
                     alRelanzarTunel = vm::relanzarTunel,
                     alTunelPuertoLibre = vm::tunelEnPuertoLibre,
                     alAbrirNavegador = alAbrirNavegador,
+                    alDescartarTunel = vm::descartarTunel,
                     modifier = modifier,
                 )
             }
@@ -532,6 +556,8 @@ private fun ContenidoDetalle(
             SeccionAjustes.CLAVE_MOVIL -> PantallaClaveMovil(
                 estado = estado,
                 alVolver = vm::volver,
+                alCrearClaveNueva = vm::crearClaveMovil,
+                alAbrirSincronizacion = { vm.abrirSeccionAjustes(SeccionAjustes.SINCRONIZACION) },
                 modifier = modifier,
             )
             SeccionAjustes.TERMINAL -> PantallaAjustesTerminal(

@@ -3,10 +3,14 @@ package org.cuatrodetres.magi.nucleo
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.cuatrodetres.magi.preferencias.PreferenciasMagi
 import org.cuatrodetres.magi.ui.modelos.EstadoSesionVista
 import org.cuatrodetres.magi.ui.modelos.EstadoTunelVista
@@ -17,6 +21,7 @@ import org.cuatrodetres.magi.ui.modelos.ResultadoAperturaVista
 import org.cuatrodetres.magi.ui.modelos.UbicacionClaveVista
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,6 +42,9 @@ class PruebaFuenteNucleoReal {
         var falloAlAbrir: Throwable? = null
         var falloAlPlegar: Throwable? = null
         var versionLlamada: Int = 0
+        var cacheClaveOlvidada: Int = 0
+        var alcanceBorrado: AlcanceBorrado? = null
+        val carpetasElegidas = mutableListOf<String>()
         var responder: Pair<ULong, RespuestaDialogo>? = null
         var pegandoEntreCorchetes: Boolean = true
         var hosts: List<HostInventario> = listOf(
@@ -66,7 +74,9 @@ class PruebaFuenteNucleoReal {
 
         override suspend fun activarTunel(uuid: String) = Unit
 
-        override suspend fun borrarDatos(alcance: AlcanceBorrado) = Unit
+        override suspend fun borrarDatos(alcance: AlcanceBorrado) {
+            alcanceBorrado = alcance
+        }
 
         override fun cerrarSesion(sesion: ULong) = Unit
 
@@ -81,7 +91,9 @@ class PruebaFuenteNucleoReal {
 
         override fun desplazar(sesion: ULong, filas: Int) = Unit
 
-        override suspend fun elegirCarpeta(uri: String) = Unit
+        override suspend fun elegirCarpeta(uri: String) {
+            carpetasElegidas += uri
+        }
 
         override fun escribir(sesion: ULong, bytes: ByteArray) = Unit
 
@@ -95,6 +107,10 @@ class PruebaFuenteNucleoReal {
         override fun inventarioHosts(filtro: String?): List<HostInventario> = hosts
 
         override suspend fun mantenerMiHuella(id: ULong) = Unit
+
+        override fun olvidarCacheClaveMovil() {
+            cacheClaveOlvidada += 1
+        }
 
         override fun olvidarContrasena(hostUuid: String): Boolean = true
 
@@ -168,6 +184,9 @@ class PruebaFuenteNucleoReal {
         alIniciar: (OyenteNucleo) -> Unit = {},
         servicio: MutableList<Pair<Int, Int>> = mutableListOf(),
         vecesIniciado: () -> Unit = {},
+        olvidarClaveMovil: () -> Unit = {},
+        asegurarClaveMovil: () -> Boolean = { false },
+        olvidarCarpeta: suspend () -> Unit = {},
     ): FuenteNucleoReal = FuenteNucleoReal(
         iniciarNucleo = { oyente ->
             vecesIniciado()
@@ -178,6 +197,9 @@ class PruebaFuenteNucleoReal {
         hayBloqueoDePantalla = { bloqueoDePantalla },
         infoClave = infoClave,
         actualizarServicio = { sesiones, tuneles -> servicio += sesiones to tuneles },
+        olvidarClaveMovil = olvidarClaveMovil,
+        asegurarClaveMovil = asegurarClaveMovil,
+        olvidarCarpeta = olvidarCarpeta,
     )
 
     private fun sesion(id: Long, hostUuid: String, hostNombre: String, estado: EstadoSesion): Sesion =
@@ -189,6 +211,26 @@ class PruebaFuenteNucleoReal {
             detalle = null,
             abiertaEn = null,
         )
+
+    private fun peticionContrasena(id: Long): PeticionDialogo = PeticionDialogo.Contrasena(
+        id = id.toULong(),
+        hostUuid = "h1",
+        hostNombre = "web-01",
+        usuario = "usuario",
+        direccion = "192.0.2.10:22",
+        intentosRestantes = 3U,
+        recordarOfrecido = true,
+    )
+
+    private fun pantallaDePrueba(sesion: Long, completa: Boolean): Pantalla = Pantalla(
+        sesion = sesion.toULong(),
+        columnas = 80U,
+        filas = 24U,
+        filasCambiadas = emptyList(),
+        cursor = null,
+        desplazamiento = 0U,
+        completa = completa,
+    )
 
     private fun tunel(estado: EstadoTunel): TunelVivo = TunelVivo(
         uuid = "t-" + estado.name,
@@ -282,24 +324,24 @@ class PruebaFuenteNucleoReal {
             fuente.sincronizacion.value.fase,
         )
 
-        oyente.dialogo(
-            PeticionDialogo.Contrasena(
-                id = 9UL,
-                hostUuid = "h1",
-                hostNombre = "web-01",
-                usuario = "usuario",
-                direccion = "192.0.2.10:22",
-                intentosRestantes = 3U,
-                recordarOfrecido = true,
-            ),
-        )
-        val peticion = fuente.peticiones.value
-        assertEquals(9L, peticion?.peticionId)
+        // M2: dos peticiones seguidas no se pierden y responder la primera no
+        // puede borrar la segunda.
+        oyente.dialogo(peticionContrasena(9L))
+        oyente.dialogo(peticionContrasena(10L))
+        val primeraPeticion = withTimeout(1_000) { fuente.peticiones.first() }
+        assertEquals(9L, primeraPeticion.peticionId)
         assertEquals(
             ResultadoAccion.Ok,
             fuente.responderDialogo(9L, RespuestaDialogoVista.CancelarContrasena),
         )
-        assertNull(fuente.peticiones.value)
+        val segundaPeticion = withTimeout(1_000) { fuente.peticiones.first() }
+        assertEquals(10L, segundaPeticion.peticionId)
+
+        // M2: dos tramos seguidos llegan completos, sin conflación.
+        oyente.pantalla(pantallaDePrueba(1L, completa = true))
+        oyente.pantalla(pantallaDePrueba(1L, completa = false))
+        assertTrue(withTimeout(1_000) { fuente.pantallas.first() }.completa)
+        assertFalse(withTimeout(1_000) { fuente.pantallas.first() }.completa)
     }
 
     @Test
@@ -397,8 +439,137 @@ class PruebaFuenteNucleoReal {
     }
 
     @Test
-    fun lasSesionesSinNucleoNoTienenPantalla() {
-        assertNull(fuente(NucleoFalso()).pantallas.value)
-        assertTrue(fuente(NucleoFalso()).sesiones.value.isEmpty())
+    fun crearClaveMovilRecreaLaClaveEInvalidaLaCacheDelNucleo() = runBlocking {
+        val nucleo = NucleoFalso()
+        var olvidada = false
+        var asegurada = false
+        var descripcionLeida = 0
+        val fuente = fuente(
+            nucleo,
+            olvidarClaveMovil = { olvidada = true },
+            asegurarClaveMovil = {
+                asegurada = true
+                true
+            },
+            infoClave = {
+                descripcionLeida += 1
+                InfoClavePlataforma(
+                    ubicacion = UbicacionClaveVista.TEE,
+                    creadaEnMs = 1_700_000_000_000L,
+                    invalidada = false,
+                )
+            },
+        )
+        fuente.iniciar()
+        assertTrue(fuente.crearClaveMovil())
+        assertTrue("debe borrar la clave vieja del Keystore", olvidada)
+        assertTrue("debe crear la clave nueva", asegurada)
+        assertEquals("debe invalidar la caché del núcleo", 1, nucleo.cacheClaveOlvidada)
+        assertEquals("debe refrescar la descripción de la clave", 1, descripcionLeida)
+    }
+
+    @Test
+    fun crearClaveMovilDevuelveFalseSiLaClaveNoQuedaLista() = runBlocking {
+        val nucleo = NucleoFalso()
+        val fuente = fuente(nucleo, asegurarClaveMovil = { false })
+        fuente.iniciar()
+        assertFalse(fuente.crearClaveMovil())
+        assertEquals("si no queda LISTA no hay caché que invalidar", 0, nucleo.cacheClaveOlvidada)
+    }
+
+    @Test
+    fun crearClaveMovilFuncionaAunqueElNucleoNoEsteIniciado() = runBlocking {
+        var asegurada = false
+        val fuente = fuente(
+            NucleoFalso(),
+            asegurarClaveMovil = {
+                asegurada = true
+                true
+            },
+        )
+        assertTrue(fuente.crearClaveMovil())
+        assertTrue(asegurada)
+    }
+
+    @Test
+    fun sinNucleoLosFlujosDePantallaYPeticionEstanVacios() = runBlocking {
+        val fuente = fuente(NucleoFalso())
+        assertTrue(fuente.sesiones.value.isEmpty())
+        assertNull(withTimeoutOrNull(100) { fuente.pantallas.first() })
+        assertNull(withTimeoutOrNull(100) { fuente.peticiones.first() })
+    }
+
+    @Test
+    fun alArrancarSeEligeLaCarpetaRecordadaUnaVez() = runBlocking {
+        val nucleo = NucleoFalso()
+        val preferencias = preferencias()
+        preferencias.guardarCarpetaUri("content://recordada")
+        val fuente = fuente(nucleo, preferencias = preferencias)
+        assertEquals(ResultadoAccion.Ok, fuente.iniciar())
+        assertEquals(listOf("content://recordada"), nucleo.carpetasElegidas)
+    }
+
+    @Test
+    fun borrarDatosTodoOlvidaLaCarpetaYRecreaLaClave() = runBlocking {
+        val nucleo = NucleoFalso()
+        var carpetaOlvidada = false
+        var claveOlvidada = false
+        var claveCreada = false
+        val fuente = fuente(
+            nucleo,
+            olvidarCarpeta = { carpetaOlvidada = true },
+            olvidarClaveMovil = { claveOlvidada = true },
+            asegurarClaveMovil = {
+                claveCreada = true
+                true
+            },
+        )
+        fuente.iniciar()
+        assertEquals(ResultadoAccion.Ok, fuente.borrarDatos(todo = true))
+        assertEquals(AlcanceBorrado.TODO, nucleo.alcanceBorrado)
+        assertTrue("debe soltar el permiso SAF", carpetaOlvidada)
+        assertTrue("debe olvidar la clave vieja", claveOlvidada)
+        assertTrue("debe crear una clave nueva", claveCreada)
+        assertEquals("debe invalidar la caché de la clave", 1, nucleo.cacheClaveOlvidada)
+    }
+
+    @Test
+    fun borrarSoloLaSincronizacionOlvidaLaCarpetaPeroConservaLaClave() = runBlocking {
+        val nucleo = NucleoFalso()
+        var carpetaOlvidada = false
+        var claveOlvidada = false
+        val fuente = fuente(
+            nucleo,
+            olvidarCarpeta = { carpetaOlvidada = true },
+            olvidarClaveMovil = { claveOlvidada = true },
+        )
+        fuente.iniciar()
+        assertEquals(ResultadoAccion.Ok, fuente.borrarDatos(todo = false))
+        assertEquals(AlcanceBorrado.SINCRONIZACION, nucleo.alcanceBorrado)
+        assertTrue(carpetaOlvidada)
+        assertFalse("conservar la clave del móvil", claveOlvidada)
+    }
+
+    @Test
+    fun cerrarNucleoLiberaLaReferencia() = runBlocking {
+        val fuente = fuente(NucleoFalso())
+        fuente.iniciar()
+        assertNotNull(fuente.version())
+        fuente.cerrarNucleo()
+        assertNull(fuente.version())
+        assertEquals(
+            ResultadoAccion.Error(FuenteNucleoReal.SIN_NUCLEO),
+            fuente.plegarGrupo("g1", true),
+        )
+    }
+
+    @Test
+    fun laCancelacionNoSeConvierteEnError() = runBlocking {
+        val nucleo = NucleoFalso()
+        val fuente = fuente(nucleo)
+        fuente.iniciar()
+        nucleo.falloAlPlegar = CancellationException("cancelada")
+        val error = runCatching { fuente.plegarGrupo("g1", true) }.exceptionOrNull()
+        assertTrue("la cancelación debe propagarse", error is CancellationException)
     }
 }
