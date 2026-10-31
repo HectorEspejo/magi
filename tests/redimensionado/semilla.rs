@@ -22,6 +22,10 @@ pub struct Sembrado {
     pub hosts: Vec<(String, i64)>,
     pub tuneles: Vec<i64>,
     pub snippets: Vec<i64>,
+    /// Equipos de la sincronización: nombre y uuid (este equipo primero).
+    pub equipos: Vec<(String, String)>,
+    /// Ids de los conflictos pendientes sembrados.
+    pub conflictos: Vec<i64>,
 }
 
 impl Sembrado {
@@ -306,6 +310,156 @@ pub fn sembrar(rutas: &Rutas) -> Sembrado {
             )
             .unwrap();
     }
+
+    // Sincronización del inventario (Fase 10): este equipo y tres más de la
+    // carpeta compartida, con fechas fijas (las relativas, lejos de los
+    // redondeos, para que las instantáneas no dependan del momento).
+    let este_uuid: String = conexion
+        .query_row("SELECT uuid FROM EQUIPOS WHERE es_este = 1", [], |fila| {
+            fila.get(0)
+        })
+        .unwrap();
+    let mac_uuid = "6b1e2f3a-4c5d-4e6f-8a7b-9c0d1e2f3a41".to_string();
+    let ostravauuid = "6b1e2f3a-4c5d-4e6f-8a7b-9c0d1e2f3a42".to_string();
+    let viejo_uuid = "6b1e2f3a-4c5d-4e6f-8a7b-9c0d1e2f3a43".to_string();
+    conexion
+        .execute(
+            "UPDATE EQUIPOS SET nombre = 'omarchy-portatil', plataforma = 'linux',
+                    app_version = '1.1.0', ultimo_fichero_en = ?1, estado = 'este'
+              WHERE es_este = 1",
+            rusqlite::params![hace(130)],
+        )
+        .unwrap();
+    for (uuid, nombre, plataforma, version, ultimo, estado, quitado) in [
+        (
+            mac_uuid.as_str(),
+            "mac-mini",
+            "macos",
+            Some("1.1.0"),
+            Some(hace(3600)),
+            "al_dia",
+            None,
+        ),
+        (
+            ostravauuid.as_str(),
+            "framework-ostrava",
+            "linux",
+            Some("1.1.0"),
+            Some(hace(9 * 86_400)),
+            "ilegible",
+            None,
+        ),
+        (
+            viejo_uuid.as_str(),
+            "portatil-viejo",
+            "linux",
+            None,
+            Some(hace(30 * 86_400)),
+            "quitado",
+            Some(hace(30 * 86_400)),
+        ),
+    ] {
+        conexion
+            .execute(
+                "INSERT INTO EQUIPOS (
+                    uuid, nombre, plataforma, es_este, app_version,
+                    ultimo_fichero_en, estado, quitado_en
+                 ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)",
+                rusqlite::params![uuid, nombre, plataforma, version, ultimo, estado, quitado],
+            )
+            .unwrap();
+        sembrado
+            .equipos
+            .push((nombre.to_string(), uuid.to_string()));
+    }
+    sembrado
+        .equipos
+        .insert(0, ("omarchy-portatil".to_string(), este_uuid.clone()));
+
+    let uuid_de = |tabla: &str, id: i64| -> String {
+        conexion
+            .query_row(
+                &format!("SELECT uuid FROM {tabla} WHERE id = ?1"),
+                rusqlite::params![id],
+                |fila| fila.get(0),
+            )
+            .unwrap()
+    };
+    let host_web = uuid_de("HOSTS", id("hetzner-01"));
+    let host_db = uuid_de("HOSTS", id("hetzner-02"));
+    let host_backup = uuid_de("HOSTS", id("backup-nas"));
+    let tunel_socks = uuid_de("TUNELES", sembrado.tuneles[2]);
+    let version_ganadora = "1793873500001.6b1e2f3a-4c5d-4e6f-8a7b-9c0d1e2f3a41";
+    let perdedora_web =
+        r#"{"nombre":"hetzner-01","direccion":"192.0.2.5","puerto":22,"etiquetas":["web"]}"#;
+    let perdedora_huella = format!(
+        r#"{{"mias":[{{"tipo":"ssh-ed25519","clave":"AAAAC3NzaC1lZDI1NTE5AAAAIMiOtraClave","huella":"SHA256:Ab3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9","aceptada_en":"2026-09-01T10:00:00+00:00"}}],"suyas":[{{"equipo":"{mac_uuid}","nombre":"mac-mini","generado_en":"2026-11-05T09:12:44+00:00","tipo":"ssh-ed25519","clave":"AAAAC3NzaC1lZDI1NTE5AAAAIOtroClave","huella":"SHA256:Zy9xW7vU5tS3rQ1pO9nM7lK5jI3hG1fE9dC7bA5zY3","aceptada_en":"{aceptada}"}}]}}"#,
+        aceptada = hace(3900),
+    );
+    for (tipo, elemento_tipo, uuid, nombre, perdedora, ganadora, equipo, detectado) in [
+        (
+            "elemento",
+            "host",
+            host_web.as_str(),
+            "hetzner-01",
+            Some(perdedora_web.to_string()),
+            Some(version_ganadora.to_string()),
+            Some(mac_uuid.clone()),
+            hace(3900),
+        ),
+        (
+            "huella",
+            "host",
+            host_db.as_str(),
+            "hetzner-02",
+            Some(perdedora_huella),
+            Some("AAAAC3NzaC1lZDI1NTE5AAAAIOtroClave".to_string()),
+            Some(mac_uuid.clone()),
+            hace(3600),
+        ),
+        (
+            "borrado",
+            "host",
+            host_backup.as_str(),
+            "backup-nas",
+            None,
+            None,
+            Some(mac_uuid.clone()),
+            hace(3 * 3600),
+        ),
+        (
+            "huerfano",
+            "tunel",
+            tunel_socks.as_str(),
+            "socks",
+            None,
+            None,
+            Some(mac_uuid.clone()),
+            hace(2 * 86_400),
+        ),
+    ] {
+        conexion
+            .execute(
+                "INSERT INTO CONFLICTOS (
+                    tipo, elemento_tipo, uuid, nombre, version_perdedora_json,
+                    version_ganadora, equipo_ganador, detectado_en
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    tipo,
+                    elemento_tipo,
+                    uuid,
+                    nombre,
+                    perdedora,
+                    ganadora,
+                    equipo,
+                    detectado
+                ],
+            )
+            .unwrap();
+        sembrado.conflictos.push(conexion.last_insert_rowid());
+    }
+    // El formato de la huella de la versión ajena, ya con el mismo estilo.
+    let _ = &este_uuid;
 
     almacen.cerrar().unwrap();
     sembrado

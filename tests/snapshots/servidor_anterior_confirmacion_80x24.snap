@@ -8,7 +8,7 @@ source: tests/redimensionado/vistas_l.rs
 │  ○ dgx-spark    FRÍA                                                         │
 │  ● het┌ SERVIDOR DE SESIONES ANTERIOR ───────────────────────────────┐       │
 │  ● het│                                                              │       │
-│  ◐ mac│    Este magi:       1.0.0 · protocolo 6                      │       │
+│  ◐ mac│    Este magi:       1.1.0 · protocolo 6                      │       │
 │  ✕ rin│    Servidor activo: 0.9.0 · protocolo 5 · pid 48211          │       │
 │  ● vps│                                                              │       │
 │       │    Custodia:  2 sesiones · 1 túnel                           │       │

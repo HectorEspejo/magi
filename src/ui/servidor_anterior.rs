@@ -254,7 +254,14 @@ mod pruebas {
     fn la_cabecera_alinea_las_dos_versiones() {
         let tema = Tema::respaldo();
         let lineas = cabecera(&rechazo(), &tema);
-        assert_eq!(texto(&lineas[0]), "  Este magi:       1.0.0 · protocolo 6");
+        assert_eq!(
+            texto(&lineas[0]),
+            format!(
+                "  Este magi:       {} · protocolo {}",
+                crate::VERSION_APP,
+                crate::protocolo::VERSION_PROTOCOLO
+            )
+        );
         assert_eq!(
             texto(&lineas[1]),
             "  Servidor activo: 0.9.0 · protocolo 5 · pid 48211"

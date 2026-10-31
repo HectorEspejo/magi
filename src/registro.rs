@@ -51,6 +51,8 @@ pub const SINCRONIZACION: &str = "sincronizacion";
 pub const PERMISOS_CAMBIADOS: &str = "permisos_cambiados";
 
 // Fase 10: inventario sincronizado entre equipos.
+/// Una huella recibida se añadió a known_hosts (no había ninguna).
+pub const HUELLA_SINCRONIZADA: &str = "huella_sincronizada";
 /// Una importación aplicada (equipos, creados, actualizados, borrados,
 /// conflictos).
 pub const INVENTARIO_IMPORTADO: &str = "inventario_importado";
@@ -67,7 +69,7 @@ pub const INVENTARIO_SINC_DESACTIVADA: &str = "inventario_sinc_desactivada";
 /// La sincronización se detuvo o falló (solo al cambiar de estado).
 pub const INVENTARIO_SINC_ERROR: &str = "inventario_sinc_error";
 
-pub const TIPOS: [&str; 34] = [
+pub const TIPOS: [&str; 35] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -95,6 +97,7 @@ pub const TIPOS: [&str; 34] = [
     DELIBERACION_CANCELADA,
     SINCRONIZACION,
     PERMISOS_CAMBIADOS,
+    HUELLA_SINCRONIZADA,
     INVENTARIO_IMPORTADO,
     INVENTARIO_CONFLICTO,
     INVENTARIO_EQUIPO_QUITADO,
@@ -122,7 +125,10 @@ pub const FILTROS: [(&str, &[&str]); 9] = [
             TUNEL_FALLIDO,
         ],
     ),
-    ("huellas", &[HUELLA_ACEPTADA, HUELLA_SUSTITUIDA]),
+    (
+        "huellas",
+        &[HUELLA_ACEPTADA, HUELLA_SUSTITUIDA, HUELLA_SINCRONIZADA],
+    ),
     (
         "claves",
         &[CLAVE_GENERADA, CLAVE_IMPORTADA, REFERENCIA_REVOCADA],

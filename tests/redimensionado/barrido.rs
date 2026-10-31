@@ -36,7 +36,7 @@ fn vista(tema: Tema, abrir: Abrir) -> AppPrueba {
     prueba
 }
 
-const VISTAS: [(&str, Abrir); 12] = [
+const VISTAS: [(&str, Abrir); 14] = [
     ("flota", |_| {}),
     ("hosts", |p| p.tecla(KeyCode::F(2))),
     ("ficha", |p| {
@@ -62,6 +62,8 @@ const VISTAS: [(&str, Abrir); 12] = [
         p.tecla(KeyCode::Char('t'));
         assert_eq!(p.app.vista, Vista::Resultados);
     }),
+    ("sincronizacion", crate::vistas_m::abrir_sincronizacion),
+    ("conflictos", crate::vistas_m::abrir_conflictos),
     ("paleta", |p| {
         p.tecla(KeyCode::F(2));
         p.tecla_con(KeyCode::Char('p'), KeyModifiers::CONTROL);

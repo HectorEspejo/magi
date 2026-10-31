@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH magi 1 2026-10-30 "magi 1.0.0" MAGI
+.TH magi 1 2026-10-31 "magi 1.1.0" MAGI
 .SH NOMBRE
 magi \- Gestor SSH de terminal (TUI) con estética de cabina técnica
 .SH SINOPSIS
@@ -47,7 +47,10 @@ magi snippets
 Lista los snippets con sus destinos resueltos, si son críticos y su último uso
 .TP
 magi sincronizaciones
-Lista las sincronizaciones guardadas con su host, dirección, rutas, borrado y último resultado
+Lista las sincronizaciones de directorio guardadas con su host, dirección, rutas, borrado y último resultado
+.TP
+magi sincronizar
+Sincroniza el inventario entre equipos por la carpeta cifrada, sin abrir la TUI
 .TP
 magi diagnostico
 Comprueba lo que MAGI necesita en este sistema sin modificar nada
@@ -61,4 +64,4 @@ Escribe la página man de MAGI en la salida estándar
 magi help
 Muestra este mensaje o la ayuda del subcomando indicado
 .SH VERSIÓN
-v1.0.0
+v1.1.0

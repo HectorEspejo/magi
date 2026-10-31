@@ -21,6 +21,7 @@ pub mod resultados;
 pub mod servidor_anterior;
 pub mod sesion;
 pub mod sesiones;
+pub mod sincronizacion;
 pub mod sincronizaciones;
 pub mod sincronizar;
 pub mod snippets;
@@ -66,6 +67,11 @@ pub enum Vista {
     Snippets,
     /// Resultados de las ejecuciones de snippets (subvista de F8).
     Resultados,
+    /// Vista SINCRONIZACIÓN (Fase 10): equipos de la carpeta compartida y su
+    /// estado. Sin tecla de función: se abre desde la paleta.
+    Sincronizacion,
+    /// Vista CONFLICTOS de sincronización (Fase 10).
+    Conflictos,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -113,6 +119,9 @@ pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
             Vista::Tuneles => tuneles::dibujar(marco, vista, app, &mut disp),
             Vista::Snippets => snippets::dibujar(marco, vista, app, &mut disp),
             Vista::Resultados => resultados::dibujar(marco, vista, app, &mut disp),
+            Vista::Sincronizacion | Vista::Conflictos => {
+                sincronizacion::dibujar(marco, vista, app, &mut disp)
+            }
         }
         barra::dibujar(marco, trozos[1], app, &mut disp);
         // La deliberación es modal sobre cualquier vista; su mínimo entra en

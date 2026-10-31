@@ -3,9 +3,11 @@
 //! El fichero es una instantánea completa del inventario de un equipo,
 //! cifrada con age y con una firma HMAC dentro. En claro, antes de cifrar:
 //!
-//!     MAGI-SINCRONIZACION 1
-//!     firma: <64 hex>
-//!     {"formato":1,...}
+//! \`\`\`text
+//! MAGI-SINCRONIZACION 1
+//! firma: <64 hex>
+//! {"formato":1,...}
+//! \`\`\`
 //!
 //! La firma es HMAC-SHA256 del JSON (los bytes que empiezan en la llave de
 //! apertura y acaban en la de cierre, sin el salto de línea final) con una

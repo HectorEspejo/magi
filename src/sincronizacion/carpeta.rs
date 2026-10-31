@@ -118,33 +118,14 @@ pub fn adquirir_cerrojo(rutas: &Rutas, espera: Option<Duration>) -> Result<Optio
         .open(&ruta)
         .with_context(|| format!("abriendo {}", ruta.display()))?;
     let limite = std::time::Instant::now() + espera.unwrap_or(Duration::ZERO);
+    let mut fichero = fichero;
     loop {
         match Flock::lock(fichero, FlockArg::LockExclusiveNonblock) {
             Ok(flock) => return Ok(Some(Cerrojo { _flock: flock })),
             Err((devuelto, _errno)) => {
-                if std::time::Instant::now() >= limite {
-                    return Ok(None);
-                }
-                std::thread::sleep(Duration::from_millis(100));
                 // El Flock devuelve el fichero: se reintenta con él.
-                return intentar_de_nuevo(devuelto, espera, limite);
-            }
-        }
-    }
-}
-
-fn intentar_de_nuevo(
-    mut fichero: fs::File,
-    espera: Option<Duration>,
-    limite: std::time::Instant,
-) -> Result<Option<Cerrojo>> {
-    loop {
-        match Flock::lock(fichero, FlockArg::LockExclusiveNonblock) {
-            Ok(flock) => return Ok(Some(Cerrojo { _flock: flock })),
-            Err((devuelto, _errno)) => {
                 fichero = devuelto;
                 if std::time::Instant::now() >= limite {
-                    let _ = espera;
                     return Ok(None);
                 }
                 std::thread::sleep(Duration::from_millis(100));

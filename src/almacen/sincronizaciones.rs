@@ -5,6 +5,7 @@
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::modelo::{
     fecha_ahora, validar_sincronizacion, DatosSincronizacion, ResultadoSincronizacion,
     Sincronizacion,
@@ -105,7 +106,8 @@ pub fn crear(conexion: &Connection, datos: &DatosSincronizacion) -> Result<i64> 
     validar_sincronizacion(datos).map_err(|motivo| anyhow!(motivo))?;
     let nombre = datos.nombre.trim().to_string();
     let ahora = fecha_ahora();
-    conexion
+    let transaccion = conexion.unchecked_transaction()?;
+    transaccion
         .execute(
             "INSERT INTO SINCRONIZACIONES_DIR (host_id, nombre, ruta_local, ruta_remota, \
              direccion, borrar, exclusiones, creado_en, actualizado_en) \
@@ -122,12 +124,22 @@ pub fn crear(conexion: &Connection, datos: &DatosSincronizacion) -> Result<i64> 
             ],
         )
         .map_err(|error| conflicto(error, &nombre))?;
-    Ok(conexion.last_insert_rowid())
+    let id = transaccion.last_insert_rowid();
+    // Una sincronización nueva nace con uuid, versión y vector (Fase 10).
+    versiones::registrar_nuevo(
+        &transaccion,
+        versiones::Tabla::SincronizacionesDir,
+        id,
+        None,
+    )?;
+    transaccion.commit()?;
+    Ok(id)
 }
 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSincronizacion) -> Result<()> {
     validar_sincronizacion(datos).map_err(|motivo| anyhow!(motivo))?;
     let nombre = datos.nombre.trim().to_string();
+    let antes = versiones::datos_de(conexion, versiones::Tabla::SincronizacionesDir, id)?;
     let cambiadas = conexion
         .execute(
             "UPDATE SINCRONIZACIONES_DIR SET host_id = ?1, nombre = ?2, ruta_local = ?3, \
@@ -149,14 +161,34 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSincronizacion) -
     if cambiadas == 0 {
         return Err(anyhow!("esa sincronización ya no existe"));
     }
+    versiones::subir_si_cambio(
+        conexion,
+        versiones::Tabla::SincronizacionesDir,
+        id,
+        antes.as_deref(),
+    )?;
     Ok(())
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
-    conexion.execute(
+    let transaccion = conexion.unchecked_transaction()?;
+    let Some(sincronizacion) =
+        crate::almacen::fila_para_lapida(&transaccion, versiones::Tabla::SincronizacionesDir, id)?
+    else {
+        return Ok(());
+    };
+    crate::almacen::dejar_lapida(
+        &transaccion,
+        versiones::Tabla::SincronizacionesDir,
+        &sincronizacion.uuid,
+        &sincronizacion.nombre,
+        &sincronizacion.vector,
+    )?;
+    transaccion.execute(
         "DELETE FROM SINCRONIZACIONES_DIR WHERE id = ?1",
         params![id],
     )?;
+    transaccion.commit()?;
     Ok(())
 }
 

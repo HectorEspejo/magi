@@ -7,7 +7,7 @@ source: tests/redimensionado/vistas_l.rs
 │▸ ◐ backup-nas   CARGA                                                        │
 │  ○ dgx┌ SERVIDOR DE SESIONES ANTERIOR ───────────────────────────────┐       │
 │  ● het│                                                              │       │
-│  ● het│    Este magi:       1.0.0 · protocolo 6                      │       │
+│  ● het│    Este magi:       1.1.0 · protocolo 6                      │       │
 │  ◐ mac│    Servidor activo: 0.9.0 · protocolo 5 · pid 48211          │       │
 │  ✕ rin│                                                              │       │
 │  ● vps│    Custodia:  2 sesiones · 1 túnel                           │       │

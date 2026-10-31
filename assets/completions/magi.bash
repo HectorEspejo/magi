@@ -46,6 +46,9 @@ _magi() {
             magi,sincronizaciones)
                 cmd="magi__subcmd__sincronizaciones"
                 ;;
+            magi,sincronizar)
+                cmd="magi__subcmd__sincronizar"
+                ;;
             magi,snippets)
                 cmd="magi__subcmd__snippets"
                 ;;
@@ -88,6 +91,9 @@ _magi() {
             magi__subcmd__help,sincronizaciones)
                 cmd="magi__subcmd__help__subcmd__sincronizaciones"
                 ;;
+            magi__subcmd__help,sincronizar)
+                cmd="magi__subcmd__help__subcmd__sincronizar"
+                ;;
             magi__subcmd__help,snippets)
                 cmd="magi__subcmd__help__subcmd__snippets"
                 ;;
@@ -108,6 +114,9 @@ _magi() {
                 ;;
             magi__subcmd__help__subcmd__servidor,parar)
                 cmd="magi__subcmd__help__subcmd__servidor__subcmd__parar"
+                ;;
+            magi__subcmd__help__subcmd__sincronizar,estado)
+                cmd="magi__subcmd__help__subcmd__sincronizar__subcmd__estado"
                 ;;
             magi__subcmd__help__subcmd__tunel,activar)
                 cmd="magi__subcmd__help__subcmd__tunel__subcmd__activar"
@@ -145,6 +154,18 @@ _magi() {
             magi__subcmd__servidor__subcmd__help,parar)
                 cmd="magi__subcmd__servidor__subcmd__help__subcmd__parar"
                 ;;
+            magi__subcmd__sincronizar,estado)
+                cmd="magi__subcmd__sincronizar__subcmd__estado"
+                ;;
+            magi__subcmd__sincronizar,help)
+                cmd="magi__subcmd__sincronizar__subcmd__help"
+                ;;
+            magi__subcmd__sincronizar__subcmd__help,estado)
+                cmd="magi__subcmd__sincronizar__subcmd__help__subcmd__estado"
+                ;;
+            magi__subcmd__sincronizar__subcmd__help,help)
+                cmd="magi__subcmd__sincronizar__subcmd__help__subcmd__help"
+                ;;
             magi__subcmd__tunel,activar)
                 cmd="magi__subcmd__tunel__subcmd__activar"
                 ;;
@@ -170,7 +191,7 @@ _magi() {
 
     case "${cmd}" in
         magi)
-            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones diagnostico autocompletado man help"
+            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -240,7 +261,7 @@ _magi() {
             return 0
             ;;
         magi__subcmd__help)
-            opts="importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones diagnostico autocompletado man help"
+            opts="importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -424,6 +445,34 @@ _magi() {
         magi__subcmd__help__subcmd__sincronizaciones)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__sincronizar)
+            opts="estado"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__sincronizar__subcmd__estado)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -722,6 +771,76 @@ _magi() {
         magi__subcmd__sincronizaciones)
             opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sincronizar)
+            opts="-h --help estado help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sincronizar__subcmd__estado)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sincronizar__subcmd__help)
+            opts="estado help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sincronizar__subcmd__help__subcmd__estado)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sincronizar__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

@@ -220,6 +220,21 @@ pub fn marcar_quitado(conexion: &Connection, id: i64, quitado_en: &str) -> Resul
     Ok(())
 }
 
+/// Reincorpora este equipo como equipo nuevo (tras haber sido quitado por
+/// otro): le asigna un uuid nuevo, vuelve a estado `este` y borra el hash del
+/// último fichero propio para forzar la exportación. Los uuid de los elementos
+/// y sus vectores no se tocan: son su historia.
+pub fn reincorporar(conexion: &Connection, id: i64, nuevo_uuid: &str) -> Result<()> {
+    conexion.execute(
+        "UPDATE EQUIPOS SET uuid = ?1, estado = ?2, quitado_en = NULL,
+                hash_ultimo_fichero = NULL, ultimo_fichero_en = NULL,
+                ultima_importacion_en = NULL
+          WHERE id = ?3 AND es_este = 1",
+        params![nuevo_uuid, ESTADO_ESTE, id],
+    )?;
+    Ok(())
+}
+
 /// Quita la fila de un equipo desconocido cuyo fichero ya no está (solo se
 /// usa al desactivar; los equipos conocidos nunca se borran, se marcan).
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {

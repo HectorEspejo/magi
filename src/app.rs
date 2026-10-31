@@ -41,6 +41,7 @@ pub mod lanzar;
 pub mod permisos;
 mod resultados;
 pub mod servidor_anterior;
+pub mod sincronizacion;
 pub mod sincronizar;
 mod snippets;
 pub mod teclado;
@@ -556,6 +557,9 @@ pub enum Evento {
     /// Resultado de un hilo de Archivos (Fase 8).
     Archivos(EventoArchivos),
     ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
+    /// Eventos de la sincronización del inventario (Fase 10): el bucle es el
+    /// único escritor de SQLite y aquí llegan las esperas ya cumplidas.
+    Inventario(sincronizacion::EventoInventario),
 }
 
 #[derive(Debug, Clone)]
@@ -1601,6 +1605,34 @@ pub enum AccionDialogo {
     Sincronizar(sincronizar::AccionSincronizar),
     /// Sincronizaciones guardadas (Fase 8): borrar una.
     Guardadas(guardadas::AccionGuardadas),
+    /// Acciones confirmadas de la sincronización del inventario (Fase 10).
+    Inventario(AccionInventario),
+}
+
+/// Acciones de la Fase 10 que sobreviven al cierre del diálogo (se ejecutan en
+/// ejecutar_accion).
+pub enum AccionInventario {
+    /// k: mostrar la clave del llavero (texto y QR).
+    MostrarClave,
+    /// x: quitar un equipo de la carpeta (cambia la clave).
+    QuitarEquipo(String),
+    /// r: cambiar la clave sin quitar equipos.
+    RotarClave,
+    /// d: desactivar la sincronización en este equipo.
+    Desactivar,
+    /// a del diálogo de borrados: aplicar.
+    AplicarBorrados,
+    /// m del diálogo de borrados: mantener los míos.
+    MantenerMios,
+    /// r de CONFLICTOS: recuperar mi versión.
+    RecuperarConflicto(i64),
+    /// a de CONFLICTOS: aceptar la del otro equipo.
+    AceptarConflicto(i64),
+    /// d de CONFLICTOS: descartar el conflicto.
+    DescartarConflicto(i64),
+    /// Este equipo fue quitado: reincorporarse como equipo nuevo y unir con
+    /// la clave nueva.
+    ReunirEquipo,
 }
 
 pub enum EntradaTextoAccion {
@@ -1624,6 +1656,8 @@ pub enum EntradaTextoAccion {
         ejecucion_id: u32,
         host_ids: Vec<i64>,
     },
+    /// n en SINCRONIZACIÓN: elegir la carpeta compartida.
+    CarpetaSincronizacion,
 }
 
 pub enum Dialogo {
@@ -1761,6 +1795,25 @@ pub enum Dialogo {
         ruta: std::path::PathBuf,
         campo: CampoTexto,
     },
+    /// CLAVE DE SINCRONIZACIÓN (Fase 10): texto completo y QR si cabe.
+    ClaveSincronizacion {
+        clave: Zeroizing<String>,
+        qr: Option<crate::sincronizacion::qr::QrClave>,
+        /// Al confirmar con s, lanzar una pasada (crear, rotar o quitar).
+        sincronizar_al_cerrar: bool,
+    },
+    /// UNIR ESTE EQUIPO (Fase 10): clave pegada para abrir los ficheros.
+    UnirEquipo {
+        carpeta: std::path::PathBuf,
+        equipos: Vec<String>,
+        campo: CampoTexto,
+        visible: bool,
+        error: Option<String>,
+    },
+    /// IMPORTACIÓN CON BORRADOS (Fase 10): a aplicar, m mantener, esc en pausa.
+    ImportacionBorrados {
+        pendientes: crate::sincronizacion::BorradosPendientes,
+    },
 }
 
 pub struct ImportacionPendiente {
@@ -1855,6 +1908,12 @@ pub enum AccionPaleta {
     Lanzar(AccionPaletaLanzar),
     /// `sync · <host> · <nombre>`, `sincronizar directorio`, `editar fichero`.
     Archivos(guardadas::AccionPaletaArchivos),
+    /// Paleta: ir a la vista SINCRONIZACIÓN.
+    IrASincronizacion,
+    /// Paleta: lanzar una pasada ahora mismo.
+    SincronizarAhora,
+    /// Paleta: ir a la vista CONFLICTOS.
+    IrAConflictos,
 }
 
 pub struct PaletaCmd {
@@ -2056,6 +2115,8 @@ pub struct App {
     /// Operaciones de Archivos de la Fase 8 en vuelo, por `peticion_id`.
     pub peticiones_archivos: HashMap<u64, PeticionArchivos>,
     siguiente_peticion_archivos: u64,
+    /// Sincronización del inventario (Fase 10): vista, conflictos e indicador.
+    pub sincronizacion: sincronizacion::EstadoSincronizacion,
 }
 
 impl App {
@@ -2075,6 +2136,8 @@ impl App {
         app.entrar_en_flota();
         // Conexión con el servidor de sesiones (autolanzado si hace falta).
         app.conectar_con_servidor();
+        // Sincronización del inventario (Fase 10): primera pasada al abrir.
+        app.iniciar_sincronizacion();
         Ok(app)
     }
 
@@ -2220,6 +2283,7 @@ impl App {
             sincronizar: sincronizar::EstadoSincronizar::default(),
             peticiones_archivos: HashMap::new(),
             siguiente_peticion_archivos: RANGO_ARCHIVOS_APP,
+            sincronizacion: sincronizacion::EstadoSincronizacion::default(),
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
@@ -2407,6 +2471,8 @@ impl App {
                 self.ver_en_editor(&mut terminal, peticion)?;
             }
         }
+        // Una exportación pendiente se hace antes de cerrar (Fase 10).
+        self.exportar_al_salir();
         crate::ui::restaurar_terminal();
         self.teclado.salir();
         // Las sesiones sobreviven a la ventana; el servidor se entera del
@@ -2586,6 +2652,12 @@ impl App {
         }
         if let Some(inicio) = inicio(Lista::Tuneles) {
             self.desplazamiento_tuneles = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Sincronizacion) {
+            self.sincronizacion.desplazamiento = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::Conflictos) {
+            self.sincronizacion.desplazamiento_conflicto = inicio;
         }
         if let Some(inicio) = inicio(Lista::Snippets) {
             self.snippets.desplazamiento = inicio;
@@ -2791,10 +2863,15 @@ impl App {
                 self.sucio = true;
                 self.evento_clave_generada(resultado);
             }
+            Evento::Inventario(evento) => {
+                self.sucio = true;
+                self.evento_inventario(evento);
+            }
         }
     }
 
     fn tick(&mut self) {
+        self.tick_sincronizacion();
         if let Some(estado) = &mut self.archivos {
             estado.muestrear(Instant::now());
         }
@@ -2819,6 +2896,10 @@ impl App {
         }
         if matches!(self.vista, Vista::Sesion | Vista::Sesiones) {
             // El tiempo conectado cambia cada segundo.
+            self.sucio = true;
+        }
+        if matches!(self.vista, Vista::Sincronizacion | Vista::Conflictos) {
+            // «hace N» y el aviso de la barra cambian solos.
             self.sucio = true;
         }
         if self.vista == Vista::Flota {
@@ -5256,6 +5337,22 @@ impl App {
             categoria: "servidor",
             accion: AccionPaleta::ApagarServidor,
         });
+        // Sincronización del inventario (Fase 10, §5.5).
+        entradas.push(EntradaPaleta {
+            etiqueta: "sincronización".to_string(),
+            categoria: "sync",
+            accion: AccionPaleta::IrASincronizacion,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "sincronizar ahora".to_string(),
+            categoria: "sync",
+            accion: AccionPaleta::SincronizarAhora,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "conflictos de sincronización".to_string(),
+            categoria: "sync",
+            accion: AccionPaleta::IrAConflictos,
+        });
         let mut paleta = PaletaCmd {
             desplazamiento: 0,
             consulta: CampoTexto::default(),
@@ -5473,6 +5570,18 @@ impl App {
                             accion: AccionDialogo::ApagarServidor,
                         });
                     }
+                    Some(AccionPaleta::IrASincronizacion) => {
+                        self.paleta = None;
+                        self.ir_a_sincronizacion();
+                    }
+                    Some(AccionPaleta::SincronizarAhora) => {
+                        self.paleta = None;
+                        self.sincronizar_ahora();
+                    }
+                    Some(AccionPaleta::IrAConflictos) => {
+                        self.paleta = None;
+                        self.ir_a_conflictos();
+                    }
                     None => {}
                 }
             }
@@ -5566,6 +5675,8 @@ impl App {
             Vista::Tuneles => self.ir_a_tuneles(),
             Vista::Snippets => self.ir_a_snippets(),
             Vista::Resultados => self.ir_a_resultados(),
+            Vista::Sincronizacion => self.ir_a_sincronizacion(),
+            Vista::Conflictos => self.ir_a_conflictos(),
         }
     }
 
@@ -7276,6 +7387,8 @@ impl App {
             Vista::Tuneles => self.tecla_tuneles(tecla),
             Vista::Snippets => self.tecla_snippets(tecla),
             Vista::Resultados => self.tecla_resultados(tecla),
+            Vista::Sincronizacion => self.tecla_sincronizacion(tecla),
+            Vista::Conflictos => self.tecla_conflictos(tecla),
         }
     }
 
@@ -7381,6 +7494,7 @@ impl App {
                 | Dialogo::ConflictoImportacion { .. }
                 | Dialogo::Conflicto { .. }
                 | Dialogo::Detalle { .. }
+                | Dialogo::ImportacionBorrados { .. }
                 | Dialogo::Edicion(_)
         )
     }
@@ -7420,6 +7534,86 @@ impl App {
             Dialogo::Permisos(dialogo) => self.tecla_dialogo_permisos(dialogo, tecla),
             Dialogo::Sincronizar(dialogo) => self.tecla_dialogo_sincronizar(dialogo, tecla),
             Dialogo::Guardadas(dialogo) => self.tecla_dialogo_guardadas(dialogo, tecla),
+            Dialogo::ClaveSincronizacion {
+                clave,
+                qr,
+                sincronizar_al_cerrar,
+            } => match tecla.code {
+                KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+                    if sincronizar_al_cerrar {
+                        self.solicitar_pasada();
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {}
+                _ => {
+                    self.dialogo = Some(Dialogo::ClaveSincronizacion {
+                        clave,
+                        qr,
+                        sincronizar_al_cerrar,
+                    });
+                }
+            },
+            Dialogo::UnirEquipo {
+                carpeta,
+                equipos,
+                mut campo,
+                mut visible,
+                error,
+            } => match tecla.code {
+                KeyCode::Esc => {}
+                KeyCode::Tab | KeyCode::BackTab => {
+                    visible = !visible;
+                    self.dialogo = Some(Dialogo::UnirEquipo {
+                        carpeta,
+                        equipos,
+                        campo,
+                        visible,
+                        error,
+                    });
+                }
+                KeyCode::Enter => {
+                    let texto = campo.texto.trim().to_string();
+                    let equipos_dialogo = equipos.clone();
+                    let carpeta_dialogo = carpeta.clone();
+                    let error_dialogo = error.clone();
+                    if texto.is_empty() {
+                        self.dialogo = Some(Dialogo::UnirEquipo {
+                            carpeta: carpeta_dialogo,
+                            equipos: equipos_dialogo,
+                            campo,
+                            visible,
+                            error: Some("pega la clave de sincronización".to_string()),
+                        });
+                    } else {
+                        let _ = error_dialogo;
+                        self.unir_equipo(&carpeta, &texto);
+                    }
+                }
+                _ => {
+                    campo.manejar_tecla(&tecla);
+                    self.dialogo = Some(Dialogo::UnirEquipo {
+                        carpeta,
+                        equipos,
+                        campo,
+                        visible,
+                        error,
+                    });
+                }
+            },
+            Dialogo::ImportacionBorrados { pendientes } => match tecla.code {
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.solicitar_pasada_con(crate::sincronizacion::PoliticaBorrados::Aplicar);
+                }
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    self.solicitar_pasada_con(crate::sincronizacion::PoliticaBorrados::Mantener);
+                }
+                KeyCode::Esc => {
+                    // Queda en pausa hasta que se decida desde la vista.
+                }
+                _ => {
+                    self.dialogo = Some(Dialogo::ImportacionBorrados { pendientes });
+                }
+            },
             Dialogo::Conflicto {
                 nombre,
                 es_dir,
@@ -7847,6 +8041,9 @@ impl App {
                             } => {
                                 self.guardar_salida_en(nombre, ejecucion_id, host_ids);
                             }
+                            EntradaTextoAccion::CarpetaSincronizacion => {
+                                self.configurar_carpeta(&nombre);
+                            }
                             EntradaTextoAccion::EditarAliasIdentidad(id) => {
                                 match self.almacen.renombrar_identidad(id, &nombre) {
                                     Ok(()) => {
@@ -8047,6 +8244,1344 @@ impl App {
         }
     }
 
+    // ------------------------------------------------- sincronización (F10)
+
+    /// Entra en la vista SINCRONIZACIÓN releyendo equipos, conflictos y la
+    /// huella de la clave.
+    pub(crate) fn ir_a_sincronizacion(&mut self) {
+        self.salir_de_sesion_si_hace_falta();
+        if !matches!(self.vista, Vista::Sincronizacion | Vista::Conflictos) {
+            self.sincronizacion.vista_previa = Some(self.vista);
+        }
+        self.vista = Vista::Sincronizacion;
+        self.ficha = None;
+        self.paleta = None;
+        self.recargar_sincronizacion();
+        // Si un fichero de un equipo conocido no se abre con la clave, se
+        // ofrece unir este equipo con la clave nueva.
+        if let crate::sincronizacion::EstadoPasada::EsperandoClave(nombre) =
+            &self.sincronizacion.estado
+        {
+            let nombre = nombre.clone();
+            self.abrir_unir_equipo(vec![nombre]);
+        } else if matches!(
+            self.sincronizacion.estado,
+            crate::sincronizacion::EstadoPasada::Quitado
+        ) && self.dialogo.is_none()
+        {
+            self.avisar_quitado();
+        }
+    }
+
+    /// Entra en la vista CONFLICTOS.
+    pub(crate) fn ir_a_conflictos(&mut self) {
+        self.salir_de_sesion_si_hace_falta();
+        if !matches!(self.vista, Vista::Sincronizacion | Vista::Conflictos) {
+            self.sincronizacion.vista_previa = Some(self.vista);
+        }
+        self.vista = Vista::Conflictos;
+        self.ficha = None;
+        self.paleta = None;
+        self.recargar_conflictos();
+    }
+
+    /// Relee EQUIPOS, los conflictos pendientes y la huella de la clave.
+    pub fn recargar_sincronizacion(&mut self) {
+        let seleccionado = self
+            .sincronizacion
+            .equipo_seleccionado()
+            .map(|equipo| equipo.uuid.clone());
+        match crate::almacen::equipos::listar(self.almacen.conexion()) {
+            Ok(equipos) => self.sincronizacion.equipos = equipos,
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                self.sincronizacion.equipos.clear();
+            }
+        }
+        if let Some(uuid) = seleccionado {
+            if let Some(indice) = self
+                .sincronizacion
+                .equipos
+                .iter()
+                .position(|equipo| equipo.uuid == uuid)
+            {
+                self.sincronizacion.seleccion = indice;
+            }
+        }
+        self.actualizar_huella();
+        self.recargar_conflictos();
+    }
+
+    /// Huella corta de la clave del llavero (solo lectura; no descifra nada).
+    fn actualizar_huella(&mut self) {
+        // En las pruebas de pintado no se toca el llavero del sistema: la
+        // huella es una constante para que las instantáneas no dependan de
+        // la clave real de quien ejecuta los tests.
+        if !self.efectos_externos {
+            self.sincronizacion.huella = Some("7f3a·91c2".to_string());
+            return;
+        }
+        let llavero = crate::llavero::LlaveroDelSistema;
+        self.sincronizacion.huella = crate::sincronizacion::equipos::clave_del_llavero(&llavero)
+            .ok()
+            .flatten()
+            .map(|clave| clave.huella_corta());
+    }
+
+    /// Relee los conflictos pendientes y reajusta la selección.
+    pub fn recargar_conflictos(&mut self) {
+        let seleccionado = self
+            .sincronizacion
+            .conflicto_seleccionado()
+            .map(|conflicto| conflicto.id);
+        match crate::almacen::conflictos::listar_pendientes(self.almacen.conexion()) {
+            Ok(conflictos) => {
+                self.sincronizacion.conflictos = conflictos;
+                self.sincronizacion.conflictos_pendientes =
+                    self.sincronizacion.conflictos.len() as i64;
+            }
+            Err(error) => self.mensaje(error.to_string(), true),
+        }
+        if let Some(id) = seleccionado {
+            if let Some(indice) = self
+                .sincronizacion
+                .conflictos
+                .iter()
+                .position(|conflicto| conflicto.id == id)
+            {
+                self.sincronizacion.seleccion_conflicto = indice;
+            }
+        }
+        self.sincronizacion.ajustar_selecciones();
+        self.actualizar_detalle_conflicto();
+    }
+
+    /// Vuelve del área de sincronización a la vista de la que se entró.
+    fn volver_de_sincronizacion(&mut self) {
+        let destino = match self.sincronizacion.vista_previa {
+            Some(Vista::Ficha) if self.ficha.is_none() => Vista::Hosts,
+            Some(vista) if !matches!(vista, Vista::Sincronizacion | Vista::Conflictos) => vista,
+            _ => Vista::Hosts,
+        };
+        self.sincronizacion.vista_previa = None;
+        match destino {
+            Vista::Flota => self.entrar_en_flota(),
+            Vista::Hosts => self.ir_a_hosts(),
+            Vista::Sesion => self.ir_a_sesion(),
+            Vista::Identidades => self.ir_a_identidades(),
+            Vista::Registro => self.ir_a_registro(),
+            Vista::Tuneles => self.ir_a_tuneles(),
+            Vista::Snippets => self.ir_a_snippets(),
+            Vista::Resultados => self.ir_a_resultados(),
+            otro => self.vista = otro,
+        }
+    }
+
+    /// Deja la fila seleccionada de la lista de equipos dentro de la ventana.
+    fn ajustar_equipos(&mut self, altura: usize, total: usize) {
+        let altura = altura.max(1);
+        if self.sincronizacion.seleccion < self.sincronizacion.desplazamiento {
+            self.sincronizacion.desplazamiento = self.sincronizacion.seleccion;
+        }
+        if self.sincronizacion.seleccion >= self.sincronizacion.desplazamiento + altura {
+            self.sincronizacion.desplazamiento = self.sincronizacion.seleccion + 1 - altura;
+        }
+        if self.sincronizacion.desplazamiento + altura > total {
+            self.sincronizacion.desplazamiento = total.saturating_sub(altura);
+        }
+    }
+
+    /// Deja la fila seleccionada de la lista de conflictos a la vista.
+    fn ajustar_conflictos(&mut self, altura: usize, total: usize) {
+        let altura = altura.max(1);
+        if self.sincronizacion.seleccion_conflicto < self.sincronizacion.desplazamiento_conflicto {
+            self.sincronizacion.desplazamiento_conflicto = self.sincronizacion.seleccion_conflicto;
+        }
+        if self.sincronizacion.seleccion_conflicto
+            >= self.sincronizacion.desplazamiento_conflicto + altura
+        {
+            self.sincronizacion.desplazamiento_conflicto =
+                self.sincronizacion.seleccion_conflicto + 1 - altura;
+        }
+        if self.sincronizacion.desplazamiento_conflicto + altura > total {
+            self.sincronizacion.desplazamiento_conflicto = total.saturating_sub(altura);
+        }
+    }
+
+    /// Teclas de la vista SINCRONIZACIÓN (informe §5.3).
+    fn tecla_sincronizacion(&mut self, tecla: KeyEvent) {
+        let total = self.sincronizacion.equipos.len();
+        let altura = self.disposicion.filas(Lista::Sincronizacion);
+        match tecla.code {
+            KeyCode::Up => {
+                self.sincronizacion.seleccion = self.sincronizacion.seleccion.saturating_sub(1);
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::Down => {
+                if total > 0 {
+                    self.sincronizacion.seleccion =
+                        (self.sincronizacion.seleccion + 1).min(total - 1);
+                }
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::PageUp => {
+                self.sincronizacion.seleccion =
+                    self.sincronizacion.seleccion.saturating_sub(altura);
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::PageDown => {
+                self.sincronizacion.seleccion =
+                    (self.sincronizacion.seleccion + altura).min(total.saturating_sub(1));
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::Home => {
+                self.sincronizacion.seleccion = 0;
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::End => {
+                self.sincronizacion.seleccion = total.saturating_sub(1);
+                self.ajustar_equipos(altura, total);
+            }
+            KeyCode::Char('s') => self.sincronizar_ahora(),
+            KeyCode::Char('c') => self.ir_a_conflictos(),
+            KeyCode::Char('k') => self.confirmar_mostrar_clave(),
+            KeyCode::Char('x') => self.confirmar_quitar_equipo(),
+            KeyCode::Char('r') => self.confirmar_rotar_clave(),
+            KeyCode::Char('d') => self.confirmar_desactivar(),
+            KeyCode::Char('n') => {
+                if !self.config.sincronizacion.activa() {
+                    self.pedir_carpeta();
+                }
+            }
+            KeyCode::Char('?') => self.ayuda = true,
+            KeyCode::Esc | KeyCode::Char('q') => self.volver_de_sincronizacion(),
+            _ => {}
+        }
+    }
+
+    /// Teclas de la vista CONFLICTOS (informe §5.4).
+    fn tecla_conflictos(&mut self, tecla: KeyEvent) {
+        let total = self.sincronizacion.conflictos.len();
+        let altura = self.disposicion.filas(Lista::Conflictos);
+        match tecla.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.sincronizacion.seleccion_conflicto =
+                    self.sincronizacion.seleccion_conflicto.saturating_sub(1);
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if total > 0 {
+                    self.sincronizacion.seleccion_conflicto =
+                        (self.sincronizacion.seleccion_conflicto + 1).min(total - 1);
+                }
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::PageUp => {
+                self.sincronizacion.seleccion_conflicto = self
+                    .sincronizacion
+                    .seleccion_conflicto
+                    .saturating_sub(altura);
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::PageDown => {
+                self.sincronizacion.seleccion_conflicto =
+                    (self.sincronizacion.seleccion_conflicto + altura).min(total.saturating_sub(1));
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::Home => {
+                self.sincronizacion.seleccion_conflicto = 0;
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::End => {
+                self.sincronizacion.seleccion_conflicto = total.saturating_sub(1);
+                self.ajustar_conflictos(altura, total);
+                self.actualizar_detalle_conflicto();
+            }
+            KeyCode::Enter => self.detalle_conflicto_seleccionado(),
+            KeyCode::Char('r') => self.confirmar_recuperar_conflicto(),
+            KeyCode::Char('a') => self.confirmar_aceptar_conflicto(),
+            KeyCode::Char('d') => self.confirmar_descartar_conflicto(),
+            KeyCode::Char('?') => self.ayuda = true,
+            KeyCode::Esc | KeyCode::Char('q') => self.volver_de_sincronizacion(),
+            _ => {}
+        }
+    }
+
+    // ------------------------------------------------------ pasada y diálogos
+
+    /// Primera pasada al abrir MAGI (solo con efectos externos y carpeta).
+    pub(crate) fn iniciar_sincronizacion(&mut self) {
+        let llavero = crate::llavero::LlaveroDelSistema;
+        if let Ok(true) =
+            crate::sincronizacion::equipos::olvidar_anterior_si_vencida(&mut self.config, &llavero)
+        {
+            if let Err(error) = self.config.guardar(&self.rutas.fichero_config()) {
+                warn!("no se pudo guardar config.toml: {error}");
+            }
+        }
+        self.sincronizacion.reloj_visto = self.reloj_de_este();
+        if !self.efectos_externos || !self.config.sincronizacion.activa() {
+            return;
+        }
+        self.iniciar_vigilancia();
+        self.solicitar_pasada();
+    }
+
+    /// (Re)lanza la vigilancia de la carpeta y descarta la anterior.
+    fn iniciar_vigilancia(&mut self) {
+        self.sincronizacion.generacion_vigilancia += 1;
+        if let Some(tarea) = self.sincronizacion.vigilancia.take() {
+            tarea.abort();
+        }
+        let Some(carpeta) = self.config.sincronizacion.ruta_carpeta(&self.rutas.hogar) else {
+            return;
+        };
+        let generacion = self.sincronizacion.generacion_vigilancia;
+        let eventos = self.eventos_tx.clone();
+        self.sincronizacion.vigilancia = Some(self.runtime.spawn(async move {
+            crate::app::sincronizacion::vigilar(carpeta, generacion, eventos).await;
+        }));
+    }
+
+    /// Reloj híbrido de este equipo (señal de que viaja un cambio local).
+    fn reloj_de_este(&self) -> Option<i64> {
+        self.almacen
+            .conexion()
+            .query_row(
+                "SELECT reloj_ms FROM EQUIPOS WHERE es_este = 1",
+                [],
+                |fila| fila.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+    }
+
+    /// Un cambio local que viaja se exporta retraso_seg segundos después del
+    /// último; la señal es el reloj híbrido del equipo.
+    fn tick_sincronizacion(&mut self) {
+        if !self.config.sincronizacion.activa() {
+            self.sincronizacion.cambio_desde = None;
+            return;
+        }
+        let reloj = self.reloj_de_este();
+        if self.sincronizacion.reloj_visto.is_none() {
+            self.sincronizacion.reloj_visto = reloj;
+        } else if reloj != self.sincronizacion.reloj_visto {
+            self.sincronizacion.reloj_visto = reloj;
+            self.sincronizacion.cambio_desde = Some(Instant::now());
+        }
+        let retraso = self.config.sincronizacion.retraso_seg.max(1);
+        let vencido = self
+            .sincronizacion
+            .cambio_desde
+            .is_some_and(|instante| instante.elapsed().as_secs() >= retraso);
+        if vencido && !self.sincronizacion.sincronizando && self.sincronizacion.pausa.is_none() {
+            self.sincronizacion.cambio_desde = None;
+            self.solicitar_pasada();
+        }
+    }
+
+    /// Al salir: si queda un cambio local sin exportar (o la última pasada no
+    /// llegó a escribir el fichero), se hace una pasada más antes de cerrar.
+    /// Es lo único bloqueante del cierre y espera al cerrojo como máximo 3 s.
+    fn exportar_al_salir(&mut self) {
+        if !self.efectos_externos || !self.config.sincronizacion.activa() {
+            return;
+        }
+        let pendiente = self.sincronizacion.cambio_desde.is_some()
+            || self.reloj_de_este() != self.sincronizacion.reloj_visto;
+        if !pendiente {
+            return;
+        }
+        let llavero = crate::llavero::LlaveroDelSistema;
+        let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &llavero)
+        else {
+            return;
+        };
+        let Ok(Some(cerrojo)) = crate::sincronizacion::carpeta::adquirir_cerrojo(
+            &self.rutas,
+            Some(std::time::Duration::from_secs(3)),
+        ) else {
+            return;
+        };
+        let opciones = crate::sincronizacion::OpcionesPasada::sin_trabajo_vivo(
+            crate::sincronizacion::PoliticaBorrados::Preguntar,
+        );
+        let _ = crate::sincronizacion::pasada(
+            self.almacen.conexion(),
+            &self.rutas,
+            &self.config,
+            &claves,
+            &opciones,
+        );
+        drop(cerrojo);
+    }
+
+    /// Pide una pasada con la política normal (preguntar los borrados).
+    fn solicitar_pasada(&mut self) {
+        self.solicitar_pasada_con(crate::sincronizacion::PoliticaBorrados::Preguntar);
+    }
+
+    /// Pide una pasada con una política concreta; las esperas (llavero y
+    /// cerrojo) van en tokio y la pasada la hace el bucle.
+    pub(crate) fn solicitar_pasada_con(
+        &mut self,
+        politica: crate::sincronizacion::PoliticaBorrados,
+    ) {
+        if !self.efectos_externos || !self.config.sincronizacion.activa() {
+            return;
+        }
+        if self.sincronizacion.sincronizando {
+            self.sincronizacion.reintentar = true;
+            return;
+        }
+        self.sincronizacion.sincronizando = true;
+        self.sincronizacion.politica = politica;
+        self.sucio = true;
+        crate::app::sincronizacion::lanzar_espera(
+            &self.runtime,
+            self.eventos_tx.clone(),
+            self.rutas.clone(),
+            self.config.clone(),
+        );
+    }
+
+    /// Llega de la tarea de fondo: cerrojo tomado, error al tomarlo o cambio
+    /// en la carpeta.
+    fn evento_inventario(&mut self, evento: crate::app::sincronizacion::EventoInventario) {
+        use crate::app::sincronizacion::EventoInventario;
+        match evento {
+            EventoInventario::Listo { cerrojo, claves } => {
+                self.ejecutar_pasada(cerrojo, claves);
+            }
+            EventoInventario::Error(motivo) => {
+                self.sincronizacion.sincronizando = false;
+                self.anotar_error_sincronizacion(&motivo, true);
+                self.sincronizacion.estado = crate::sincronizacion::EstadoPasada::Error(motivo);
+                self.sucio = true;
+            }
+            EventoInventario::CarpetaCambiada { generacion } => {
+                if generacion == self.sincronizacion.generacion_vigilancia {
+                    self.solicitar_pasada();
+                }
+            }
+        }
+    }
+
+    /// Ejecuta la pasada en el hilo de la UI (único escritor de SQLite).
+    fn ejecutar_pasada(
+        &mut self,
+        cerrojo: crate::sincronizacion::carpeta::Cerrojo,
+        claves: Vec<crate::sincronizacion::cifrado::ClaveSincronizacion>,
+    ) {
+        let politica = self.sincronizacion.politica;
+        self.sincronizacion.politica = crate::sincronizacion::PoliticaBorrados::Preguntar;
+        let resultado = {
+            let opciones = crate::sincronizacion::OpcionesPasada {
+                politica_borrados: politica,
+                trabajo_vivo: &|tipo, uuid| self.hay_trabajo_vivo(tipo, uuid),
+            };
+            crate::sincronizacion::pasada(
+                self.almacen.conexion(),
+                &self.rutas,
+                &self.config,
+                &claves,
+                &opciones,
+            )
+        };
+        drop(cerrojo);
+        self.sincronizacion.sincronizando = false;
+        self.sincronizacion.reloj_visto = self.reloj_de_este();
+        self.sucio = true;
+        match resultado {
+            Ok(resultado) => self.resultado_pasada(resultado),
+            Err(error) => {
+                let motivo = format!("{error:#}");
+                self.resultado_pasada(crate::sincronizacion::ResultadoPasada::nuevo(
+                    crate::sincronizacion::EstadoPasada::Error(motivo),
+                ));
+            }
+        }
+        if self.sincronizacion.reintentar {
+            self.sincronizacion.reintentar = false;
+            self.solicitar_pasada();
+        }
+    }
+
+    /// Aplica el resultado de una pasada: estado, pausa, diálogos y recargas.
+    fn resultado_pasada(&mut self, resultado: crate::sincronizacion::ResultadoPasada) {
+        use crate::sincronizacion::EstadoPasada;
+        let habia_error = matches!(self.sincronizacion.estado, EstadoPasada::Error(_));
+        self.sincronizacion.terminada_en = Some(chrono::Local::now());
+        self.sincronizacion.conflictos_pendientes = resultado.conflictos_pendientes;
+        if let Some(resumen) = &resultado.resumen {
+            self.sincronizacion.resumen = Some(resumen.clone());
+        }
+        self.sincronizacion.avisos = resultado.avisos.clone();
+        self.sincronizacion.pausa = match &resultado.estado {
+            EstadoPasada::DecisionPendiente(pendientes) => Some(pendientes.clone()),
+            _ => None,
+        };
+        self.sincronizacion.estado = resultado.estado.clone();
+        match &resultado.estado {
+            EstadoPasada::DecisionPendiente(pendientes) => {
+                if self.dialogo.is_none() {
+                    self.dialogo = Some(Dialogo::ImportacionBorrados {
+                        pendientes: pendientes.clone(),
+                    });
+                }
+            }
+            EstadoPasada::EsperandoClave(nombre) => {
+                let nombre = nombre.clone();
+                if self.dialogo.is_none() {
+                    self.abrir_unir_equipo(vec![nombre]);
+                } else {
+                    self.mensaje(
+                        format!("el fichero de «{nombre}» no se abre con la clave de este equipo"),
+                        true,
+                    );
+                }
+            }
+            EstadoPasada::Quitado => {
+                if self.dialogo.is_none() {
+                    self.avisar_quitado();
+                }
+            }
+            EstadoPasada::Error(motivo) => {
+                if !habia_error {
+                    self.anotar_error_sincronizacion(motivo, false);
+                }
+                self.mensaje(motivo.clone(), true);
+            }
+            EstadoPasada::SinClave => {
+                self.mensaje("falta la clave de sincronización en el llavero", true);
+            }
+            EstadoPasada::SinConfigurar | EstadoPasada::AlDia => {}
+        }
+        if resultado.resumen.is_some() {
+            if let Err(error) = self.recargar_inventario() {
+                warn!("no se pudo recargar el inventario: {error}");
+            }
+            self.recargar_tuneles();
+            self.recargar_snippets();
+            self.recargar_identidades();
+        }
+        if matches!(self.vista, Vista::Sincronizacion | Vista::Conflictos) {
+            self.recargar_sincronizacion();
+        }
+    }
+
+    /// Anota el fallo de la sincronización en REGISTRO solo al cambiar de
+    /// estado de error.
+    fn anotar_error_sincronizacion(&mut self, motivo: &str, ya_anotado: bool) {
+        if ya_anotado {
+            return;
+        }
+        self.anotar(
+            crate::registro::INVENTARIO_SINC_ERROR,
+            None,
+            None,
+            motivo,
+            ResultadoRegistro::Error,
+        );
+    }
+
+    /// Aviso y oferta de reunirse cuando este equipo fue quitado.
+    fn avisar_quitado(&mut self) {
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "EQUIPO QUITADO".to_string(),
+            lineas: vec![
+                "Otro equipo ha quitado este de la sincronización.".to_string(),
+                "Puede reincorporarse como equipo nuevo y unirse con la clave".to_string(),
+                "nueva que te dé un equipo activo.".to_string(),
+            ],
+            peligro: false,
+            accion: AccionDialogo::Inventario(AccionInventario::ReunirEquipo),
+        });
+        self.mensaje("este equipo ha sido quitado de la sincronización", true);
+    }
+
+    /// n sin configurar: pide la carpeta compartida.
+    fn pedir_carpeta(&mut self) {
+        self.dialogo = Some(Dialogo::EntradaTexto {
+            titulo: "CARPETA DE SINCRONIZACIÓN".to_string(),
+            etiqueta: "Carpeta".to_string(),
+            campo: CampoTexto::nuevo("~/Sync/magi"),
+            accion: EntradaTextoAccion::CarpetaSincronizacion,
+        });
+    }
+
+    /// Valida la carpeta elegida y abre CREAR (sin ficheros) o UNIR (con
+    /// ficheros de otros equipos). Si no vale, se vuelve a pedir.
+    fn configurar_carpeta(&mut self, texto: &str) {
+        let texto = texto.trim().to_string();
+        let ruta = conexion::cliente::expandir_home(&texto, &self.rutas.hogar);
+        if !ruta.is_dir() {
+            self.mensaje(
+                format!(
+                    "la carpeta {} no existe o no es un directorio",
+                    ruta.display()
+                ),
+                true,
+            );
+            self.reabrir_carpeta(&texto);
+            return;
+        }
+        match crate::sincronizacion::carpeta::hay_ficheros(&ruta) {
+            Ok(true) => self.abrir_unir_equipo_para(&ruta),
+            Ok(false) => {
+                let llavero = crate::llavero::LlaveroDelSistema;
+                match crate::sincronizacion::equipos::crear(
+                    self.almacen.conexion(),
+                    &self.rutas,
+                    &ruta,
+                    &mut self.config,
+                    &llavero,
+                ) {
+                    Ok(clave) => {
+                        self.iniciar_vigilancia();
+                        self.abrir_clave(&clave, true);
+                        self.recargar_sincronizacion();
+                    }
+                    Err(error) => {
+                        self.mensaje(error.to_string(), true);
+                        self.reabrir_carpeta(&texto);
+                    }
+                }
+            }
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                self.reabrir_carpeta(&texto);
+            }
+        }
+    }
+
+    /// Vuelve a pedir la carpeta conservando lo escrito.
+    fn reabrir_carpeta(&mut self, texto: &str) {
+        self.dialogo = Some(Dialogo::EntradaTexto {
+            titulo: "CARPETA DE SINCRONIZACIÓN".to_string(),
+            etiqueta: "Carpeta".to_string(),
+            campo: CampoTexto::nuevo(texto),
+            accion: EntradaTextoAccion::CarpetaSincronizacion,
+        });
+    }
+
+    /// Abre UNIR ESTE EQUIPO para la carpeta ya configurada.
+    fn abrir_unir_equipo(&mut self, equipos: Vec<String>) {
+        let Some(carpeta) = self.config.sincronizacion.ruta_carpeta(&self.rutas.hogar) else {
+            self.mensaje("la sincronización no está configurada", true);
+            return;
+        };
+        self.dialogo = Some(Dialogo::UnirEquipo {
+            carpeta,
+            equipos,
+            campo: CampoTexto::nuevo(""),
+            visible: false,
+            error: None,
+        });
+    }
+
+    /// Abre UNIR ESTE EQUIPO para una carpeta recién elegida, con los nombres
+    /// de los equipos que ya conocemos de ella.
+    fn abrir_unir_equipo_para(&mut self, carpeta: &std::path::Path) {
+        let mut nombres = Vec::new();
+        if let Ok(ficheros) = crate::sincronizacion::carpeta::listar(carpeta) {
+            for fichero in ficheros {
+                if let Ok(Some(equipo)) =
+                    crate::almacen::equipos::por_uuid(self.almacen.conexion(), &fichero.uuid)
+                {
+                    if !equipo.es_este && equipo.estado != crate::almacen::equipos::ESTADO_QUITADO {
+                        nombres.push(equipo.nombre);
+                    }
+                }
+            }
+        }
+        self.dialogo = Some(Dialogo::UnirEquipo {
+            carpeta: carpeta.to_path_buf(),
+            equipos: nombres,
+            campo: CampoTexto::nuevo(""),
+            visible: false,
+            error: None,
+        });
+    }
+
+    /// Intenta unir este equipo con la clave pegada. Si la clave no abre los
+    /// ficheros, el diálogo sigue abierto con el motivo.
+    fn unir_equipo(&mut self, carpeta: &std::path::Path, texto: &str) {
+        let llavero = crate::llavero::LlaveroDelSistema;
+        match crate::sincronizacion::equipos::unir(
+            self.almacen.conexion(),
+            &self.rutas,
+            carpeta,
+            texto,
+            &mut self.config,
+            &llavero,
+        ) {
+            Ok(_clave) => {
+                self.iniciar_vigilancia();
+                self.recargar_sincronizacion();
+                self.mensaje("este equipo se ha unido a la sincronización", false);
+                self.solicitar_pasada();
+            }
+            Err(error) => {
+                let equipos = match &self.dialogo {
+                    Some(Dialogo::UnirEquipo { equipos, .. }) => equipos.clone(),
+                    _ => Vec::new(),
+                };
+                self.dialogo = Some(Dialogo::UnirEquipo {
+                    carpeta: carpeta.to_path_buf(),
+                    equipos,
+                    campo: CampoTexto::nuevo(texto),
+                    visible: false,
+                    error: Some(error.to_string()),
+                });
+            }
+        }
+    }
+
+    /// Abre el diálogo CLAVE con el texto y el QR si cabe.
+    fn abrir_clave(
+        &mut self,
+        clave: &crate::sincronizacion::cifrado::ClaveSincronizacion,
+        sincronizar_al_cerrar: bool,
+    ) {
+        let texto = clave.texto();
+        let qr = crate::sincronizacion::qr::lineas(texto.as_str()).ok();
+        self.dialogo = Some(Dialogo::ClaveSincronizacion {
+            clave: texto,
+            qr,
+            sincronizar_al_cerrar,
+        });
+    }
+
+    /// k: muestra la clave guardada en el llavero.
+    fn mostrar_clave(&mut self) {
+        let llavero = crate::llavero::LlaveroDelSistema;
+        match crate::sincronizacion::equipos::clave_del_llavero(&llavero) {
+            Ok(Some(clave)) => self.abrir_clave(&clave, false),
+            Ok(None) => self.mensaje("no hay clave de sincronización en el llavero", true),
+            Err(error) => self.mensaje(error, true),
+        }
+    }
+
+    /// s: pasada inmediata, o el diálogo de borrados si está en pausa.
+    fn sincronizar_ahora(&mut self) {
+        if !self.config.sincronizacion.activa() {
+            self.mensaje(
+                "la sincronización no está configurada: n para elegir la carpeta",
+                true,
+            );
+            return;
+        }
+        if let Some(pendientes) = self.sincronizacion.pausa.clone() {
+            self.dialogo = Some(Dialogo::ImportacionBorrados { pendientes });
+            return;
+        }
+        self.solicitar_pasada();
+    }
+
+    fn confirmar_mostrar_clave(&mut self) {
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "MOSTRAR CLAVE".to_string(),
+            lineas: vec![
+                "Se mostrará la clave de sincronización en pantalla.".to_string(),
+                "No la guardes en un fichero ni la envíes por un canal inseguro.".to_string(),
+            ],
+            peligro: false,
+            accion: AccionDialogo::Inventario(AccionInventario::MostrarClave),
+        });
+    }
+
+    fn confirmar_quitar_equipo(&mut self) {
+        let Some(equipo) = self.sincronizacion.equipo_seleccionado().cloned() else {
+            return;
+        };
+        if equipo.es_este {
+            self.mensaje("este equipo no se puede quitar a sí mismo", true);
+            return;
+        }
+        if equipo.estado == crate::almacen::equipos::ESTADO_QUITADO {
+            self.mensaje("ese equipo ya está quitado", true);
+            return;
+        }
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "QUITAR EQUIPO".to_string(),
+            lineas: vec![
+                format!(
+                    "Se quitará «{}» de la sincronización y se borrará su fichero",
+                    equipo.nombre
+                ),
+                "de la carpeta. La clave cambiará: los demás equipos tendrán que".to_string(),
+                "introducir la nueva.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::Inventario(AccionInventario::QuitarEquipo(equipo.uuid)),
+        });
+    }
+
+    fn confirmar_rotar_clave(&mut self) {
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "CAMBIAR LA CLAVE".to_string(),
+            lineas: vec![
+                "Se generará una clave nueva y este equipo volverá a cifrar su".to_string(),
+                "fichero. Los demás equipos tendrán que introducirla.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::Inventario(AccionInventario::RotarClave),
+        });
+    }
+
+    fn confirmar_desactivar(&mut self) {
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "DESACTIVAR AQUÍ".to_string(),
+            lineas: vec![
+                "Se borrará el fichero de este equipo de la carpeta y la clave del".to_string(),
+                "llavero. magi.db y los datos de este equipo quedan intactos.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::Inventario(AccionInventario::Desactivar),
+        });
+    }
+
+    fn confirmar_recuperar_conflicto(&mut self) {
+        let Some(conflicto) = self.sincronizacion.conflicto_seleccionado().cloned() else {
+            return;
+        };
+        use crate::almacen::conflictos as conflictos_bd;
+        if conflicto.tipo == conflictos_bd::TIPO_BORRADO {
+            self.mensaje(
+                "un borrado aplazado no se recupera: a lo acepta o d lo descarta",
+                true,
+            );
+            return;
+        }
+        if conflicto.tipo == conflictos_bd::TIPO_HUERFANO {
+            self.mensaje("un huérfano no se recupera: d lo descarta", true);
+            return;
+        }
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "RECUPERAR MI VERSIÓN".to_string(),
+            lineas: vec![
+                format!(
+                    "Se volverá a escribir {} «{}» con tu versión perdedora,",
+                    conflicto.elemento_tipo, conflicto.nombre
+                ),
+                "con una edición nueva que ganará en todos los equipos.".to_string(),
+            ],
+            peligro: false,
+            accion: AccionDialogo::Inventario(AccionInventario::RecuperarConflicto(conflicto.id)),
+        });
+    }
+
+    fn confirmar_aceptar_conflicto(&mut self) {
+        let Some(conflicto) = self.sincronizacion.conflicto_seleccionado().cloned() else {
+            return;
+        };
+        use crate::almacen::conflictos as conflictos_bd;
+        let (titulo, lineas, peligro) = match conflicto.tipo.as_str() {
+            conflictos_bd::TIPO_HUELLA => (
+                "ACEPTAR LA HUELLA DEL OTRO EQUIPO",
+                vec![
+                    format!(
+                        "Se sustituirá la huella de «{}» por la que aceptó el otro",
+                        conflicto.nombre
+                    ),
+                    "equipo, con copia previa de known_hosts.".to_string(),
+                ],
+                true,
+            ),
+            conflictos_bd::TIPO_BORRADO => {
+                if self.hay_trabajo_vivo(&conflicto.elemento_tipo, &conflicto.uuid) {
+                    self.mensaje(
+                        "no se puede aceptar el borrado: hay sesiones o túneles en marcha",
+                        true,
+                    );
+                    return;
+                }
+                (
+                    "ACEPTAR EL BORRADO APLAZADO",
+                    vec![
+                        format!(
+                            "Se borrará {} «{}» de este equipo (la copia ya existe).",
+                            conflicto.elemento_tipo, conflicto.nombre
+                        ),
+                        "El borrado ya se aplicó en el otro equipo.".to_string(),
+                    ],
+                    true,
+                )
+            }
+            _ => {
+                self.mensaje(
+                    "ese conflicto no se acepta: r recupera tu versión o d lo descarta",
+                    true,
+                );
+                return;
+            }
+        };
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: titulo.to_string(),
+            lineas: lineas.into_iter().collect(),
+            peligro,
+            accion: AccionDialogo::Inventario(AccionInventario::AceptarConflicto(conflicto.id)),
+        });
+    }
+
+    fn confirmar_descartar_conflicto(&mut self) {
+        let Some(conflicto) = self.sincronizacion.conflicto_seleccionado().cloned() else {
+            return;
+        };
+        self.dialogo = Some(Dialogo::Confirmar {
+            titulo: "DESCARTAR CONFLICTO".to_string(),
+            lineas: vec![
+                format!(
+                    "Se descartará el conflicto del {} «{}».",
+                    conflicto.elemento_tipo, conflicto.nombre
+                ),
+                "Se conservará 90 días en el registro de conflictos.".to_string(),
+            ],
+            peligro: true,
+            accion: AccionDialogo::Inventario(AccionInventario::DescartarConflicto(conflicto.id)),
+        });
+    }
+
+    /// Muestra el detalle de los campos que difieren del conflicto elegido.
+    fn detalle_conflicto_seleccionado(&mut self) {
+        let Some(conflicto) = self.sincronizacion.conflicto_seleccionado().cloned() else {
+            return;
+        };
+        let lineas = self.detalle_de_conflicto(&conflicto);
+        self.dialogo = Some(Dialogo::Detalle {
+            titulo: "CONFLICTO DE SINCRONIZACIÓN".to_string(),
+            lineas,
+            tunel_caido: None,
+        });
+    }
+
+    /// Detalle legible de un conflicto: quién ganó y en qué campos difieren.
+    fn detalle_de_conflicto(
+        &self,
+        conflicto: &crate::almacen::conflictos::Conflicto,
+    ) -> Vec<String> {
+        use crate::almacen::conflictos as conflictos_bd;
+        let cuando = crate::app::sincronizacion::hace(&conflicto.detectado_en)
+            .unwrap_or_else(|| conflicto.detectado_en.clone());
+        let equipo = conflicto
+            .equipo_ganador
+            .as_deref()
+            .map(|uuid| {
+                self.sincronizacion
+                    .equipos
+                    .iter()
+                    .find(|equipo| equipo.uuid == uuid)
+                    .map(|equipo| equipo.nombre.clone())
+                    .unwrap_or_else(|| uuid.to_string())
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let mut lineas = Vec::new();
+        match conflicto.tipo.as_str() {
+            conflictos_bd::TIPO_HUELLA => {
+                lineas.push(format!(
+                    "huella de «{}» · detectada {cuando}",
+                    conflicto.nombre
+                ));
+                match crate::sincronizacion::huellas::datos_huella_ganadora(conflicto) {
+                    Some(datos) => {
+                        let autor = if datos.nombre.is_empty() {
+                            "otro equipo".to_string()
+                        } else {
+                            datos.nombre.clone()
+                        };
+                        lineas.push(format!("{autor} aceptó {} {}", datos.tipo, datos.huella));
+                        if !datos.aceptada_en.is_empty() {
+                            lineas.push(format!(
+                                "aceptada {}",
+                                crate::app::sincronizacion::fecha_corta(&datos.aceptada_en)
+                            ));
+                        }
+                        lineas.push("a aceptar la del otro equipo · d mantener la mía".to_string());
+                    }
+                    None => lineas
+                        .push("no se pudo leer la huella que ganó; d mantiene la tuya".to_string()),
+                }
+            }
+            conflictos_bd::TIPO_BORRADO => {
+                lineas.push(format!(
+                    "borrado aplazado de {} «{}» · {cuando}",
+                    conflicto.elemento_tipo, conflicto.nombre
+                ));
+                if self.hay_trabajo_vivo(&conflicto.elemento_tipo, &conflicto.uuid) {
+                    lineas.push(
+                        "tiene sesiones, túneles o transferencias en marcha: a espera a que terminen"
+                            .to_string(),
+                    );
+                } else {
+                    lineas.push("sin trabajo vivo: a lo acepta, d lo descarta".to_string());
+                }
+            }
+            conflictos_bd::TIPO_HUERFANO => {
+                lineas.push(format!(
+                    "huérfano: {} «{}» perdió su host · {cuando}",
+                    conflicto.elemento_tipo, conflicto.nombre
+                ));
+                lineas.push("d lo descarta; no se puede recuperar sin su host".to_string());
+            }
+            _ => {
+                lineas.push(format!(
+                    "{} «{}» · ganó {equipo} · {cuando}",
+                    conflicto.elemento_tipo, conflicto.nombre
+                ));
+                if let Some(perdedora) = &conflicto.version_perdedora_json {
+                    if let Ok(valor) = serde_json::from_str::<serde_json::Value>(perdedora) {
+                        let actual = self.contenido_actual(&conflicto.uuid);
+                        if let (Some(perdidos), Some(ganados)) = (
+                            valor.as_object(),
+                            actual.as_ref().and_then(serde_json::Value::as_object),
+                        ) {
+                            let mut claves: Vec<&String> = perdidos.keys().collect();
+                            for clave in ganados.keys() {
+                                if !perdidos.contains_key(clave) {
+                                    claves.push(clave);
+                                }
+                            }
+                            claves.sort();
+                            for clave in claves {
+                                let mio = perdidos.get(clave);
+                                let suyo = ganados.get(clave);
+                                if mio != suyo {
+                                    lineas.push(format!(
+                                        "campo «{clave}»: tu versión {} · ganó {}",
+                                        valor_legible(mio),
+                                        valor_legible(suyo)
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                lineas.push("r recupera tu versión como edición nueva · d descarta".to_string());
+            }
+        }
+        lineas
+    }
+
+    /// Contenido actual de un elemento que viaja, por su uuid.
+    fn contenido_actual(&self, uuid: &str) -> Option<serde_json::Value> {
+        let candidatos = crate::sincronizacion::elementos::estado_local(
+            self.almacen.conexion(),
+            &self.rutas.hogar,
+        )
+        .ok()?;
+        candidatos
+            .into_iter()
+            .find(|candidato| candidato.uuid == uuid)
+            .and_then(|candidato| candidato.contenido)
+    }
+
+    /// Actualiza el detalle que pinta la vista CONFLICTOS.
+    fn actualizar_detalle_conflicto(&mut self) {
+        self.sincronizacion.detalle = match self.sincronizacion.conflicto_seleccionado() {
+            Some(conflicto) => self.detalle_de_conflicto(conflicto),
+            None => Vec::new(),
+        };
+    }
+
+    /// ¿Hay trabajo vivo que impida aplicar un borrado? (Fase 10, §7.3).
+    fn hay_trabajo_vivo(&self, tipo: &str, uuid: &str) -> bool {
+        match tipo {
+            "host" => match self.id_por_uuid("HOSTS", uuid) {
+                Some(id) => self.host_con_trabajo(id),
+                None => false,
+            },
+            "tunel" => match self.id_por_uuid("TUNELES", uuid) {
+                Some(id) => self.tuneles_activos.contains_key(&id),
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// id local de una fila por su uuid (solo tablas del inventario).
+    fn id_por_uuid(&self, tabla: &str, uuid: &str) -> Option<i64> {
+        self.almacen
+            .conexion()
+            .query_row(
+                &format!("SELECT id FROM {tabla} WHERE uuid = ?1"),
+                rusqlite::params![uuid],
+                |fila| fila.get(0),
+            )
+            .ok()
+    }
+
+    /// Sesiones, túneles, transferencias o ejecuciones en curso de un host.
+    fn host_con_trabajo(&self, host_id: i64) -> bool {
+        if self.host_conectando == Some(host_id) {
+            return true;
+        }
+        if self
+            .pestanas
+            .iter()
+            .any(|pestaña| pestaña.host_id == host_id && pestaña.viva())
+        {
+            return true;
+        }
+        if self
+            .tuneles_activos
+            .values()
+            .any(|info| info.host_id == host_id)
+        {
+            return true;
+        }
+        if self.resultados.ejecuciones.iter().any(|ejecucion| {
+            ejecucion.estado == protocolo::EstadoEjecucion::EnCurso
+                && ejecucion.hosts.iter().any(|host| host.host_id == host_id)
+        }) {
+            return true;
+        }
+        if let Some(archivos) = &self.archivos {
+            if archivos.host_id == host_id
+                && archivos
+                    .cola
+                    .iter()
+                    .any(|transferencia| !transferencia.estado.terminada())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Acciones confirmadas de la sincronización del inventario.
+    fn ejecutar_accion_inventario(&mut self, accion: AccionInventario) {
+        use crate::almacen::conflictos as conflictos_bd;
+        match accion {
+            AccionInventario::MostrarClave => self.mostrar_clave(),
+            AccionInventario::QuitarEquipo(uuid) => {
+                let llavero = crate::llavero::LlaveroDelSistema;
+                match crate::sincronizacion::equipos::quitar(
+                    self.almacen.conexion(),
+                    &self.rutas,
+                    &mut self.config,
+                    &uuid,
+                    &llavero,
+                ) {
+                    Ok(clave) => {
+                        self.iniciar_vigilancia();
+                        self.recargar_sincronizacion();
+                        self.abrir_clave(&clave, true);
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionInventario::RotarClave => {
+                let llavero = crate::llavero::LlaveroDelSistema;
+                match crate::sincronizacion::equipos::rotar(
+                    self.almacen.conexion(),
+                    &self.rutas,
+                    &mut self.config,
+                    &llavero,
+                ) {
+                    Ok(clave) => {
+                        self.recargar_sincronizacion();
+                        self.abrir_clave(&clave, true);
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionInventario::Desactivar => {
+                let llavero = crate::llavero::LlaveroDelSistema;
+                match crate::sincronizacion::equipos::desactivar(
+                    self.almacen.conexion(),
+                    &self.rutas,
+                    &mut self.config,
+                    &llavero,
+                ) {
+                    Ok(()) => {
+                        self.sincronizacion.generacion_vigilancia += 1;
+                        if let Some(tarea) = self.sincronizacion.vigilancia.take() {
+                            tarea.abort();
+                        }
+                        self.sincronizacion.estado =
+                            crate::sincronizacion::EstadoPasada::SinConfigurar;
+                        self.sincronizacion.pausa = None;
+                        self.sincronizacion.huella = None;
+                        self.sincronizacion.avisos.clear();
+                        self.recargar_sincronizacion();
+                        self.mensaje("sincronización desactivada; magi.db queda intacta", false);
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionInventario::AplicarBorrados => {
+                self.solicitar_pasada_con(crate::sincronizacion::PoliticaBorrados::Aplicar);
+            }
+            AccionInventario::MantenerMios => {
+                self.solicitar_pasada_con(crate::sincronizacion::PoliticaBorrados::Mantener);
+            }
+            AccionInventario::RecuperarConflicto(id) => {
+                let conflicto = match conflictos_bd::obtener(self.almacen.conexion(), id) {
+                    Ok(Some(conflicto)) => conflicto,
+                    Ok(None) => {
+                        self.mensaje("el conflicto ya no existe", true);
+                        self.recargar_conflictos();
+                        return;
+                    }
+                    Err(error) => {
+                        self.mensaje(error.to_string(), true);
+                        return;
+                    }
+                };
+                match crate::sincronizacion::aplicacion::recuperar_version(
+                    self.almacen.conexion(),
+                    &conflicto,
+                    &self.rutas.hogar,
+                ) {
+                    Ok(()) => {
+                        self.mensaje("versión recuperada como edición nueva", false);
+                        self.recargar_tras_conflicto();
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionInventario::AceptarConflicto(id) => {
+                let conflicto = match conflictos_bd::obtener(self.almacen.conexion(), id) {
+                    Ok(Some(conflicto)) => conflicto,
+                    Ok(None) => {
+                        self.mensaje("el conflicto ya no existe", true);
+                        self.recargar_conflictos();
+                        return;
+                    }
+                    Err(error) => {
+                        self.mensaje(error.to_string(), true);
+                        return;
+                    }
+                };
+                match conflicto.tipo.as_str() {
+                    conflictos_bd::TIPO_HUELLA => {
+                        match crate::sincronizacion::huellas::aceptar_conflicto(
+                            self.almacen.conexion(),
+                            &self.rutas.fichero_known_hosts(),
+                            &conflicto,
+                        ) {
+                            Ok(()) => {
+                                self.mensaje("huella del otro equipo aceptada", false);
+                                self.recargar_tras_conflicto();
+                            }
+                            Err(error) => self.mensaje(error.to_string(), true),
+                        }
+                    }
+                    conflictos_bd::TIPO_BORRADO => {
+                        if self.hay_trabajo_vivo(&conflicto.elemento_tipo, &conflicto.uuid) {
+                            self.mensaje("no se puede aceptar el borrado: hay trabajo vivo", true);
+                            return;
+                        }
+                        let borrado = match conflicto.elemento_tipo.as_str() {
+                            "host" => self
+                                .id_por_uuid("HOSTS", &conflicto.uuid)
+                                .map(|host_id| self.almacen.borrar_host(host_id)),
+                            "tunel" => self
+                                .id_por_uuid("TUNELES", &conflicto.uuid)
+                                .map(|tunel_id| self.almacen.borrar_tunel(tunel_id)),
+                            _ => None,
+                        };
+                        match borrado {
+                            Some(Ok(())) => {
+                                if let Err(error) = conflictos_bd::resolver(
+                                    self.almacen.conexion(),
+                                    conflicto.id,
+                                    conflictos_bd::RESOLUCION_ACEPTADO,
+                                ) {
+                                    self.mensaje(error.to_string(), true);
+                                } else {
+                                    self.mensaje("borrado aplazado aplicado", false);
+                                    self.recargar_tras_conflicto();
+                                }
+                            }
+                            Some(Err(error)) => self.mensaje(error.to_string(), true),
+                            None => self.mensaje(
+                                "ya no se puede aplicar ese borrado: el elemento no existe",
+                                true,
+                            ),
+                        }
+                    }
+                    _ => self.mensaje(
+                        "ese conflicto no se acepta: r recupera tu versión o d lo descarta",
+                        true,
+                    ),
+                }
+            }
+            AccionInventario::DescartarConflicto(id) => {
+                match conflictos_bd::resolver(
+                    self.almacen.conexion(),
+                    id,
+                    conflictos_bd::RESOLUCION_DESCARTADO,
+                ) {
+                    Ok(()) => {
+                        self.mensaje("conflicto descartado", false);
+                        self.recargar_tras_conflicto();
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+            AccionInventario::ReunirEquipo => {
+                match crate::sincronizacion::equipos::reunir(
+                    self.almacen.conexion(),
+                    &self.rutas,
+                    &mut self.config,
+                ) {
+                    Ok(_uuid) => {
+                        self.iniciar_vigilancia();
+                        self.recargar_sincronizacion();
+                        self.abrir_unir_equipo(Vec::new());
+                        self.mensaje(
+                            "equipo reincorporado: pega la clave nueva de la carpeta",
+                            false,
+                        );
+                    }
+                    Err(error) => self.mensaje(error.to_string(), true),
+                }
+            }
+        }
+    }
+
+    /// Tras resolver un conflicto: recarga inventario, conflictos y vista.
+    fn recargar_tras_conflicto(&mut self) {
+        if let Err(error) = self.recargar_inventario() {
+            warn!("no se pudo recargar el inventario: {error}");
+        }
+        self.recargar_tuneles();
+        self.recargar_snippets();
+        self.recargar_sincronizacion();
+    }
+
+    /// Deja la App en la vista SINCRONIZACIÓN con una carpeta configurada y un
+    /// estado de pasada, para las instantáneas (superficie de pruebas).
+    #[doc(hidden)]
+    pub fn probar_sincronizacion(
+        &mut self,
+        carpeta: &str,
+        estado: crate::sincronizacion::EstadoPasada,
+    ) {
+        self.config.sincronizacion.carpeta = Some(carpeta.to_string());
+        self.sincronizacion.estado = estado;
+        self.sincronizacion.terminada_en = Some(chrono::Local::now());
+        self.sincronizacion.reloj_visto = self.reloj_de_este();
+        self.recargar_sincronizacion();
+        self.sucio = true;
+    }
+
+    /// Procesa un resultado de pasada como si llegara de una pasada real (lo
+    /// usan las pruebas de interfaz, que no ejecutan el backend entero).
+    #[doc(hidden)]
+    pub fn probar_resultado_pasada(&mut self, resultado: crate::sincronizacion::ResultadoPasada) {
+        self.resultado_pasada(resultado);
+        self.sucio = true;
+    }
+
     fn ejecutar_accion(&mut self, accion: AccionDialogo) {
         match accion {
             AccionDialogo::Nada => {}
@@ -8057,6 +9592,7 @@ impl App {
             AccionDialogo::Permisos(accion) => self.ejecutar_accion_permisos(accion),
             AccionDialogo::Sincronizar(accion) => self.ejecutar_accion_sincronizar(accion),
             AccionDialogo::Guardadas(accion) => self.ejecutar_accion_guardadas(accion),
+            AccionDialogo::Inventario(accion) => self.ejecutar_accion_inventario(accion),
             AccionDialogo::BorrarHost(id) => {
                 if let Err(error) = self.almacen.borrar_host(id) {
                     self.mensaje(error.to_string(), true);
@@ -8227,6 +9763,30 @@ impl App {
                     ),
                     Err(error) => self.mensaje(error.to_string(), true),
                 }
+            }
+        }
+    }
+}
+
+/// Valor legible de un campo JSON para el detalle de un conflicto.
+fn valor_legible(valor: Option<&serde_json::Value>) -> String {
+    match valor {
+        None | Some(serde_json::Value::Null) => "—".to_string(),
+        Some(serde_json::Value::String(texto)) => texto.clone(),
+        Some(serde_json::Value::Bool(cierto)) => if *cierto { "sí" } else { "no" }.to_string(),
+        Some(serde_json::Value::Array(lista)) => {
+            let partes: Vec<String> = lista
+                .iter()
+                .map(|valor| valor_legible(Some(valor)))
+                .collect();
+            partes.join(", ")
+        }
+        Some(otro) => {
+            let texto = otro.to_string();
+            if texto.chars().count() > 60 {
+                format!("{}…", texto.chars().take(59).collect::<String>())
+            } else {
+                texto
             }
         }
     }

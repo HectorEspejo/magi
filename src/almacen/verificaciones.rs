@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, Row};
 
+use crate::almacen::versiones;
 use crate::deliberacion::{validar_verificaciones, DatosVerificaciones, Verificaciones};
 use crate::modelo::fecha_ahora;
 
@@ -55,6 +56,9 @@ pub fn guardar(conexion: &Connection, host_id: i64, datos: &DatosVerificaciones)
     if !datos.alguna_activa() && de_host(conexion, host_id)?.is_none() {
         return Ok(());
     }
+    // Las verificaciones viajan dentro del host: cambiarlas sube su versión
+    // (Fase 10).
+    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, host_id)?;
     conexion.execute(
         "INSERT INTO VERIFICACIONES_HOST (host_id, salud, backup, backup_ruta, backup_patron, \
          tests, tests_comando, actualizado_en) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
@@ -73,5 +77,6 @@ pub fn guardar(conexion: &Connection, host_id: i64, datos: &DatosVerificaciones)
             fecha_ahora()
         ],
     )?;
+    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, host_id, antes.as_deref())?;
     Ok(())
 }

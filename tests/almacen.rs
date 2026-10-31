@@ -1733,3 +1733,711 @@ fn el_servidor_rechaza_una_base_de_datos_de_version_futura() {
         "no puede quedar un socket huérfano"
     );
 }
+
+// ------------------------------------------------------- Fase 10: versiones
+
+/// uuid del equipo de este almacén (la única fila de EQUIPOS con `es_este = 1`).
+fn uuid_del_equipo(almacen: &Almacen) -> String {
+    magi::almacen::equipos::este(almacen.conexion())
+        .expect("fila de este equipo")
+        .uuid
+}
+
+/// (uuid, version, vector) de una fila de una tabla que viaja.
+fn version_de_fila(almacen: &Almacen, tabla: &str, id: i64) -> (String, String, String) {
+    almacen
+        .conexion()
+        .query_row(
+            &format!("SELECT uuid, version, vector FROM {tabla} WHERE id = ?1"),
+            [id],
+            |fila| Ok((fila.get(0)?, fila.get(1)?, fila.get(2)?)),
+        )
+        .unwrap()
+}
+
+/// Milisegundos de una versión `<ms>.<uuid del equipo>`.
+fn ms_de_version(version: &str) -> i64 {
+    let (ms, uuid) = version.split_once('.').expect("versión con ms y equipo");
+    assert!(
+        !uuid.is_empty(),
+        "la versión lleva el uuid del equipo: {version}"
+    );
+    assert_eq!(
+        ms.len(),
+        13,
+        "los ms de la versión van con 13 cifras: {version}"
+    );
+    ms.parse().unwrap()
+}
+
+fn vector_de(texto: &str) -> std::collections::BTreeMap<String, i64> {
+    serde_json::from_str(texto).unwrap()
+}
+
+/// Comprueba que una fila nació con uuid, versión y vector de este equipo.
+fn comprobar_nueva(almacen: &Almacen, tabla: &str, id: i64) {
+    let (uuid, version, vector) = version_de_fila(almacen, tabla, id);
+    let equipo = uuid_del_equipo(almacen);
+    assert!(!uuid.is_empty(), "{tabla} {id} sin uuid");
+    let ms = ms_de_version(&version);
+    assert_eq!(
+        version.split_once('.').unwrap().1,
+        equipo,
+        "{tabla} {id} no lleva el uuid de este equipo en la versión"
+    );
+    assert_eq!(
+        vector_de(&vector).get(&equipo),
+        Some(&ms),
+        "{tabla} {id} no tiene la entrada del vector de este equipo"
+    );
+}
+
+/// Comprueba que una edición subió la versión de la fila: los ms crecen, la
+/// versión la firma este equipo y su entrada del vector avanza con ella.
+/// Devuelve la versión nueva para encadenar comprobaciones.
+fn comprobar_sube(almacen: &Almacen, tabla: &str, id: i64, version_antes: &str) -> String {
+    let (_, version, vector) = version_de_fila(almacen, tabla, id);
+    let equipo = uuid_del_equipo(almacen);
+    let ms = ms_de_version(&version);
+    assert!(
+        ms > ms_de_version(version_antes),
+        "{tabla} {id} no subió la versión: {version_antes} -> {version}"
+    );
+    assert_eq!(
+        version.split_once('.').unwrap().1,
+        equipo,
+        "{tabla} {id} no lleva el uuid de este equipo en la versión"
+    );
+    assert_eq!(vector_de(&vector).get(&equipo), Some(&ms));
+    version
+}
+
+/// Una base de la fase 9 (`user_version = 6`) sube a la 7: todo lo que ya
+/// existía recibe uuid, versión y vector de este equipo, las identidades
+/// llevan el UUIDv5 de su huella y se estrenan EQUIPOS (una sola fila, la de
+/// este equipo), LAPIDAS y CONFLICTOS.
+#[test]
+fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        for migracion in &magi::almacen::migraciones::MIGRACIONES[..6] {
+            conexion.execute_batch(migracion).unwrap();
+        }
+        conexion.pragma_update(None, "user_version", 6).unwrap();
+        conexion
+            .execute_batch(
+                "INSERT INTO GRUPOS (nombre, orden, plegado, creado_en)
+                 VALUES ('viejo', 1, 0, '2026-01-01T00:00:00+01:00');
+                 INSERT INTO HOSTS (nombre, grupo_id, direccion, puerto, opciones_extra,
+                                    origen, creado_en, actualizado_en)
+                 VALUES ('host-viejo', 1, '192.0.2.10', 22, '', 'manual',
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00');
+                 INSERT INTO IDENTIDADES (alias, tipo, huella, origen, anadida_en)
+                 VALUES ('clave-vieja', 'ed25519', 'SHA256:vieja', 'agente',
+                         '2026-01-01T00:00:00+01:00');
+                 INSERT INTO TUNELES (host_id, nombre, tipo, escucha, destino, automatico,
+                                      creado_en, actualizado_en)
+                 VALUES (1, 'pg', 'local', '127.0.0.1:5432', '192.0.2.5:5432', 0,
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00');
+                 INSERT INTO SNIPPETS (nombre, comando, creado_en, actualizado_en)
+                 VALUES ('uptime', 'uptime',
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00');
+                 INSERT INTO SINCRONIZACIONES_DIR (host_id, nombre, ruta_local, ruta_remota,
+                                                   direccion, borrar, exclusiones,
+                                                   creado_en, actualizado_en)
+                 VALUES (1, 'web', '/tmp/web', '/var/www', 'subida', 0, '',
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00');",
+            )
+            .unwrap();
+    }
+    let almacen = Almacen::abrir(&ruta).unwrap();
+    let version_esquema: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version_esquema, 7);
+
+    // Una sola fila de este equipo, con uuid, estado y reloj.
+    let equipos = magi::almacen::equipos::listar(almacen.conexion()).unwrap();
+    assert_eq!(
+        equipos.len(),
+        1,
+        "EQUIPOS estrena solo la fila de este equipo"
+    );
+    assert!(equipos[0].es_este);
+    assert_eq!(equipos[0].estado, magi::almacen::equipos::ESTADO_ESTE);
+    assert!(!equipos[0].uuid.is_empty());
+    assert!(equipos[0].reloj_ms.is_some());
+
+    // Todas las filas que ya existían tienen uuid, versión y vector.
+    for (tabla, id) in [
+        ("GRUPOS", 1),
+        ("HOSTS", 1),
+        ("IDENTIDADES", 1),
+        ("TUNELES", 1),
+        ("SNIPPETS", 1),
+        ("SINCRONIZACIONES_DIR", 1),
+    ] {
+        comprobar_nueva(&almacen, tabla, id);
+    }
+    // La identidad lleva el UUIDv5 de su huella, igual en todos los equipos.
+    let (uuid_identidad, _, _) = version_de_fila(&almacen, "IDENTIDADES", 1);
+    assert_eq!(
+        uuid_identidad,
+        magi::almacen::identidades::uuid_de_huella("SHA256:vieja")
+    );
+    // Las tablas nuevas de la sincronización existen y están vacías.
+    assert_eq!(
+        magi::almacen::lapidas::contar(almacen.conexion()).unwrap(),
+        0
+    );
+    let conflictos: i64 = almacen
+        .conexion()
+        .query_row("SELECT COUNT(*) FROM CONFLICTOS", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(conflictos, 0);
+}
+
+/// Crear cualquier elemento de las seis tablas que viajan deja uuid, versión y
+/// vector de este equipo; los uuid son distintos entre filas y el de la
+/// identidad es el UUIDv5 de su huella.
+#[test]
+fn crear_deja_version_y_vector_de_este_equipo_en_cada_tabla() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let grupo = almacen.crear_grupo("produccion").unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let identidad = almacen
+        .crear_identidad(
+            "ed25519",
+            "SHA256:abc",
+            magi::modelo::OrigenIdentidad::Agente,
+            None,
+            Some("prueba"),
+        )
+        .unwrap();
+    let tunel = almacen
+        .crear_tunel(&tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let sincronizacion = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web"))
+        .unwrap();
+
+    let filas = [
+        ("GRUPOS", grupo),
+        ("HOSTS", host),
+        ("IDENTIDADES", identidad),
+        ("TUNELES", tunel),
+        ("SNIPPETS", snippet),
+        ("SINCRONIZACIONES_DIR", sincronizacion),
+    ];
+    for (tabla, id) in filas {
+        comprobar_nueva(&almacen, tabla, id);
+    }
+    let mut uuids = std::collections::HashSet::new();
+    for (tabla, id) in filas {
+        uuids.insert(version_de_fila(&almacen, tabla, id).0);
+    }
+    assert_eq!(uuids.len(), filas.len(), "cada fila tiene su uuid");
+    assert_eq!(
+        version_de_fila(&almacen, "IDENTIDADES", identidad).0,
+        magi::almacen::identidades::uuid_de_huella("SHA256:abc")
+    );
+}
+
+/// Conectar, cambiar el estado, navegar por SFTP, plegar un grupo, contar usos
+/// de identidad y snippet o lanzar una sincronización guardada son campos
+/// propios del equipo: no tocan la versión ni el vector (Fase 10).
+#[test]
+fn conectar_navegar_y_usar_no_cambian_la_version() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let grupo = almacen.crear_grupo("web").unwrap();
+    let identidad = almacen
+        .crear_identidad(
+            "ed25519",
+            "SHA256:abc",
+            magi::modelo::OrigenIdentidad::Agente,
+            None,
+            Some("prueba"),
+        )
+        .unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let sincronizacion = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web"))
+        .unwrap();
+
+    let antes_host = version_de_fila(&almacen, "HOSTS", host).1;
+    let antes_grupo = version_de_fila(&almacen, "GRUPOS", grupo).1;
+    let antes_identidad = version_de_fila(&almacen, "IDENTIDADES", identidad).1;
+    let antes_snippet = version_de_fila(&almacen, "SNIPPETS", snippet).1;
+    let antes_sincronizacion = version_de_fila(&almacen, "SINCRONIZACIONES_DIR", sincronizacion).1;
+
+    almacen.marcar_conexion(host).unwrap();
+    almacen
+        .marcar_estado(host, Some(UltimoEstado::Error))
+        .unwrap();
+    almacen
+        .fijar_dirs_sftp(host, Some("/home/usuario"), Some("/srv"))
+        .unwrap();
+    almacen.alternar_plegado(grupo, true).unwrap();
+    almacen.marcar_uso_identidad("SHA256:abc").unwrap();
+    almacen.marcar_uso_snippet(snippet).unwrap();
+    almacen
+        .marcar_ejecucion_sincronizacion(sincronizacion)
+        .unwrap();
+    magi::almacen::sincronizaciones::fijar_resultado(
+        almacen.conexion(),
+        sincronizacion,
+        ResultadoSincronizacion::Ok,
+    )
+    .unwrap();
+
+    assert_eq!(version_de_fila(&almacen, "HOSTS", host).1, antes_host);
+    assert_eq!(version_de_fila(&almacen, "GRUPOS", grupo).1, antes_grupo);
+    assert_eq!(
+        version_de_fila(&almacen, "IDENTIDADES", identidad).1,
+        antes_identidad
+    );
+    assert_eq!(
+        version_de_fila(&almacen, "SNIPPETS", snippet).1,
+        antes_snippet
+    );
+    assert_eq!(
+        version_de_fila(&almacen, "SINCRONIZACIONES_DIR", sincronizacion).1,
+        antes_sincronizacion
+    );
+}
+
+/// Cada escritura del almacén sobre un campo del host que viaja sube su
+/// versión; repetir la misma escritura no la sube.
+#[test]
+fn editar_un_campo_que_viaja_del_host_sube_la_version() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let otro = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
+    let grupo = almacen.crear_grupo("web").unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+
+    // Repetir la ficha tal cual no es una edición.
+    let version = version_de_fila(&almacen, "HOSTS", host).1;
+    almacen.actualizar_host(host, &datos("uno")).unwrap();
+    assert_eq!(version_de_fila(&almacen, "HOSTS", host).1, version);
+
+    let mut ficha = datos("uno");
+    ficha.direccion = "192.0.2.99".to_string();
+    almacen.actualizar_host(host, &ficha).unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen.mover_host_a_grupo(host, Some(grupo)).unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen.marcar_origen(host, Origen::SshConfig).unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen.fijar_salto(host, Some(otro)).unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen
+        .anadir_opciones_extra(host, "ServerAliveInterval 10")
+        .unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen
+        .marcar_identidad_ref(host, &IdentidadRef::Agente("SHA256:abc".to_string()))
+        .unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    almacen
+        .fijar_snippet_al_conectar(host, Some(snippet))
+        .unwrap();
+    comprobar_sube(&almacen, "HOSTS", host, &version);
+}
+
+/// Las etiquetas y las verificaciones viajan dentro del host: cambiarlas sube
+/// su versión (checklist de la Fase 10).
+#[test]
+fn cambiar_etiquetas_o_verificaciones_sube_la_version_del_host() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let version = version_de_fila(&almacen, "HOSTS", host).1;
+
+    let mut ficha = datos("uno");
+    ficha.etiquetas = vec!["web".to_string(), "nueva".to_string()];
+    almacen.actualizar_host(host, &ficha).unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    let verificaciones = DatosVerificaciones {
+        salud: true,
+        ..DatosVerificaciones::default()
+    };
+    almacen
+        .guardar_verificaciones(host, &verificaciones)
+        .unwrap();
+    let version = comprobar_sube(&almacen, "HOSTS", host, &version);
+
+    // Guardar las mismas verificaciones no es una edición.
+    almacen
+        .guardar_verificaciones(host, &verificaciones)
+        .unwrap();
+    assert_eq!(version_de_fila(&almacen, "HOSTS", host).1, version);
+}
+
+/// Grupos (renombrar y mover), identidades (renombrar, revocar y reactivar),
+/// túneles, snippets y sincronizaciones suben su versión al editar un campo
+/// que viaja; repetir la edición no la sube.
+#[test]
+fn editar_grupo_identidad_tunel_snippet_o_sincronizacion_sube_su_version() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let grupo = almacen.crear_grupo("web").unwrap();
+    let otro_grupo = almacen.crear_grupo("datos").unwrap();
+    let identidad = almacen
+        .crear_identidad(
+            "ed25519",
+            "SHA256:abc",
+            magi::modelo::OrigenIdentidad::Agente,
+            None,
+            Some("prueba"),
+        )
+        .unwrap();
+    let tunel = almacen
+        .crear_tunel(&tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let sincronizacion = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web"))
+        .unwrap();
+
+    let version = version_de_fila(&almacen, "GRUPOS", grupo).1;
+    almacen.renombrar_grupo(grupo, "web-prod").unwrap();
+    let version = comprobar_sube(&almacen, "GRUPOS", grupo, &version);
+    almacen.mover_grupo(otro_grupo, -1).unwrap();
+    comprobar_sube(&almacen, "GRUPOS", grupo, &version);
+
+    let version = version_de_fila(&almacen, "IDENTIDADES", identidad).1;
+    almacen
+        .renombrar_identidad(identidad, "clave-nueva")
+        .unwrap();
+    let version = comprobar_sube(&almacen, "IDENTIDADES", identidad, &version);
+    // El host usa la identidad: al revocarla se queda en `auto` y eso viaja.
+    almacen
+        .marcar_identidad_ref(host, &IdentidadRef::Agente("SHA256:abc".to_string()))
+        .unwrap();
+    let version_host = version_de_fila(&almacen, "HOSTS", host).1;
+    almacen
+        .revocar_identidad(identidad, std::path::Path::new("/home/nadie"))
+        .unwrap();
+    comprobar_sube(&almacen, "IDENTIDADES", identidad, &version);
+    comprobar_sube(&almacen, "HOSTS", host, &version_host);
+    almacen.reactivar_identidad(identidad).unwrap();
+
+    let version = version_de_fila(&almacen, "TUNELES", tunel).1;
+    let mut datos_tunel = tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432");
+    datos_tunel.escucha = "127.0.0.1:15432".to_string();
+    almacen.actualizar_tunel(tunel, &datos_tunel).unwrap();
+    let version = comprobar_sube(&almacen, "TUNELES", tunel, &version);
+    almacen.alternar_tunel_automatico(tunel, true).unwrap();
+    comprobar_sube(&almacen, "TUNELES", tunel, &version);
+
+    let version = version_de_fila(&almacen, "SNIPPETS", snippet).1;
+    let mut datos_snippet = snippet_de("reiniciar", vec![etiqueta("datos")]);
+    datos_snippet.comando = "systemctl restart postgresql".to_string();
+    almacen.actualizar_snippet(snippet, &datos_snippet).unwrap();
+    let version = comprobar_sube(&almacen, "SNIPPETS", snippet, &version);
+    // Los destinos van dentro del snippet: cambiarlos también es editar.
+    let datos_snippet = snippet_de("reiniciar", vec![suelto(host, "uno")]);
+    almacen.actualizar_snippet(snippet, &datos_snippet).unwrap();
+    let version = comprobar_sube(&almacen, "SNIPPETS", snippet, &version);
+    // Repetir la misma edición no sube la versión.
+    almacen.actualizar_snippet(snippet, &datos_snippet).unwrap();
+    assert_eq!(version_de_fila(&almacen, "SNIPPETS", snippet).1, version);
+
+    let version = version_de_fila(&almacen, "SINCRONIZACIONES_DIR", sincronizacion).1;
+    let mut datos_sincronizacion = sincronizacion_de(host, "web");
+    datos_sincronizacion.borrar = true;
+    almacen
+        .actualizar_sincronizacion(sincronizacion, &datos_sincronizacion)
+        .unwrap();
+    comprobar_sube(&almacen, "SINCRONIZACIONES_DIR", sincronizacion, &version);
+}
+
+/// Borrar un host deja lápida suya y de sus túneles y sincronizaciones, que
+/// caen en cascada; cada lápida parte del vector del elemento borrado.
+#[test]
+fn borrar_un_host_deja_lapida_suya_y_de_sus_tuneles_y_sincronizaciones() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let tunel = almacen
+        .crear_tunel(&tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+    let sincronizacion = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web"))
+        .unwrap();
+    let uuid_host = version_de_fila(&almacen, "HOSTS", host).0;
+    let uuid_tunel = version_de_fila(&almacen, "TUNELES", tunel).0;
+    let uuid_sincronizacion = version_de_fila(&almacen, "SINCRONIZACIONES_DIR", sincronizacion).0;
+    let version_host = version_de_fila(&almacen, "HOSTS", host).1;
+
+    almacen.borrar_host(host).unwrap();
+
+    let equipo = uuid_del_equipo(&almacen);
+    let lapida_host = magi::almacen::lapidas::obtener(almacen.conexion(), &uuid_host)
+        .unwrap()
+        .expect("lápida del host");
+    assert_eq!(lapida_host.tipo, "host");
+    assert_eq!(lapida_host.nombre, "uno");
+    assert!(
+        ms_de_version(&lapida_host.version) > ms_de_version(&version_host),
+        "la lápida es posterior a la última edición"
+    );
+    assert!(vector_de(&lapida_host.vector).contains_key(&equipo));
+    let lapida_tunel = magi::almacen::lapidas::obtener(almacen.conexion(), &uuid_tunel)
+        .unwrap()
+        .expect("lápida del túnel");
+    assert_eq!(lapida_tunel.tipo, "tunel");
+    assert_eq!(lapida_tunel.nombre, "pg");
+    let lapida_sincronizacion =
+        magi::almacen::lapidas::obtener(almacen.conexion(), &uuid_sincronizacion)
+            .unwrap()
+            .expect("lápida de la sincronización");
+    assert_eq!(lapida_sincronizacion.tipo, "sincronizacion_dir");
+    assert_eq!(lapida_sincronizacion.nombre, "web");
+    assert_eq!(
+        magi::almacen::lapidas::contar(almacen.conexion()).unwrap(),
+        3
+    );
+    assert!(almacen.listar_tuneles().unwrap().is_empty());
+    assert!(almacen.listar_sincronizaciones().unwrap().is_empty());
+}
+
+/// Borrar un grupo sube la versión de los hosts que se quedan sin él (el
+/// `ON DELETE SET NULL` cuenta como edición suya) y deja la lápida del grupo.
+#[test]
+fn borrar_un_grupo_sube_la_version_de_los_hosts_que_se_quedan_sin_el() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let grupo = almacen.crear_grupo("web").unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    almacen.mover_host_a_grupo(host, Some(grupo)).unwrap();
+    let uuid_grupo = version_de_fila(&almacen, "GRUPOS", grupo).0;
+    let version_host = version_de_fila(&almacen, "HOSTS", host).1;
+
+    almacen.borrar_grupo(grupo).unwrap();
+
+    comprobar_sube(&almacen, "HOSTS", host, &version_host);
+    assert_eq!(almacen.obtener_host(host).unwrap().grupo_id, None);
+    let lapida = magi::almacen::lapidas::obtener(almacen.conexion(), &uuid_grupo)
+        .unwrap()
+        .expect("lápida del grupo");
+    assert_eq!(lapida.tipo, "grupo");
+    assert_eq!(lapida.nombre, "web");
+}
+
+/// Borrar el host por el que saltaban otros sube la versión de esos hosts: el
+/// `ON DELETE SET NULL` de `salto_host_id` cuenta como edición.
+#[test]
+fn borrar_un_host_sube_la_version_de_los_que_saltaban_por_el() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let salto = almacen.crear_host(&datos("salto"), Origen::Manual).unwrap();
+    let mut ficha = datos("detras");
+    ficha.salto_host_id = Some(salto);
+    let detras = almacen.crear_host(&ficha, Origen::Manual).unwrap();
+    let version_detras = version_de_fila(&almacen, "HOSTS", detras).1;
+
+    almacen.borrar_host(salto).unwrap();
+
+    comprobar_sube(&almacen, "HOSTS", detras, &version_detras);
+    assert_eq!(almacen.obtener_host(detras).unwrap().salto_host_id, None);
+}
+
+/// Borrar un snippet sube la versión de los hosts que lo tenían como «snippet
+/// al conectar» (el `ON DELETE SET NULL` cuenta como edición) y deja su
+/// lápida.
+#[test]
+fn borrar_un_snippet_sube_la_version_de_los_hosts_que_lo_usaban_al_conectar() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    almacen
+        .fijar_snippet_al_conectar(host, Some(snippet))
+        .unwrap();
+    let uuid_snippet = version_de_fila(&almacen, "SNIPPETS", snippet).0;
+    let version_host = version_de_fila(&almacen, "HOSTS", host).1;
+
+    almacen.borrar_snippet(snippet).unwrap();
+
+    comprobar_sube(&almacen, "HOSTS", host, &version_host);
+    assert_eq!(
+        almacen.obtener_host(host).unwrap().snippet_al_conectar_id,
+        None
+    );
+    let lapida = magi::almacen::lapidas::obtener(almacen.conexion(), &uuid_snippet)
+        .unwrap()
+        .expect("lápida del snippet");
+    assert_eq!(lapida.tipo, "snippet");
+    assert_eq!(lapida.nombre, "reiniciar");
+}
+
+/// Borrar un grupo, un túnel, un snippet o una sincronización deja su lápida
+/// con el nombre y el tipo que le toca.
+#[test]
+fn borrar_deja_lapida_con_su_tipo_y_nombre() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let grupo = almacen.crear_grupo("web").unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let tunel = almacen
+        .crear_tunel(&tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432"))
+        .unwrap();
+    let snippet = almacen
+        .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
+        .unwrap();
+    let sincronizacion = almacen
+        .crear_sincronizacion(&sincronizacion_de(host, "web"))
+        .unwrap();
+    let uuid_tunel = version_de_fila(&almacen, "TUNELES", tunel).0;
+    let uuid_snippet = version_de_fila(&almacen, "SNIPPETS", snippet).0;
+    let uuid_sincronizacion = version_de_fila(&almacen, "SINCRONIZACIONES_DIR", sincronizacion).0;
+    let uuid_grupo = version_de_fila(&almacen, "GRUPOS", grupo).0;
+
+    almacen.borrar_tunel(tunel).unwrap();
+    almacen.borrar_snippet(snippet).unwrap();
+    almacen.borrar_sincronizacion(sincronizacion).unwrap();
+    almacen.borrar_grupo(grupo).unwrap();
+
+    for (uuid, tipo, nombre) in [
+        (uuid_tunel.as_str(), "tunel", "pg"),
+        (uuid_snippet.as_str(), "snippet", "reiniciar"),
+        (uuid_sincronizacion.as_str(), "sincronizacion_dir", "web"),
+        (uuid_grupo.as_str(), "grupo", "web"),
+    ] {
+        let lapida = magi::almacen::lapidas::obtener(almacen.conexion(), uuid)
+            .unwrap()
+            .unwrap_or_else(|| panic!("falta la lápida de {tipo}"));
+        assert_eq!(lapida.tipo, tipo);
+        assert_eq!(lapida.nombre, nombre);
+        assert!(!lapida.version.is_empty());
+        assert!(vector_de(&lapida.vector).contains_key(&uuid_del_equipo(&almacen)));
+        assert!(!lapida.borrado_en.is_empty());
+    }
+    assert_eq!(
+        magi::almacen::lapidas::contar(almacen.conexion()).unwrap(),
+        4
+    );
+}
+
+/// Borrar algo que ya no existe no deja lápida de nada.
+#[test]
+fn borrar_lo_que_no_existe_no_deja_lapida() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let id = 99_999;
+    almacen.borrar_host(id).unwrap();
+    almacen.borrar_grupo(id).unwrap();
+    almacen.borrar_tunel(id).unwrap();
+    almacen.borrar_snippet(id).unwrap();
+    almacen.borrar_sincronizacion(id).unwrap();
+    assert_eq!(
+        magi::almacen::lapidas::contar(almacen.conexion()).unwrap(),
+        0
+    );
+}
+
+/// El uuid de una identidad sale de la huella (UUIDv5): la misma clave lo
+/// tiene igual en todos los equipos, se cree con `crear` o con el escaneo.
+#[test]
+fn el_uuid_de_las_identidades_es_el_mismo_en_todos_los_equipos() {
+    let huella = "SHA256:identidad-compartida";
+    let esperado = uuid::Uuid::new_v5(
+        &magi::sincronizacion::formato::NAMESPACE_IDENTIDADES,
+        huella.as_bytes(),
+    )
+    .to_string();
+    assert_eq!(magi::almacen::identidades::uuid_de_huella(huella), esperado);
+
+    let primero = Almacen::abrir_en_memoria().unwrap();
+    let uno = primero
+        .crear_identidad(
+            "ed25519",
+            huella,
+            magi::modelo::OrigenIdentidad::Agente,
+            None,
+            Some("4d3"),
+        )
+        .unwrap();
+    let segundo = Almacen::abrir_en_memoria().unwrap();
+    let dos = segundo
+        .crear_identidad(
+            "ed25519",
+            huella,
+            magi::modelo::OrigenIdentidad::Fichero,
+            Some("~/.ssh/id_ed25519"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        version_de_fila(&primero, "IDENTIDADES", uno).0,
+        version_de_fila(&segundo, "IDENTIDADES", dos).0
+    );
+    // El escaneo del agente llega a la misma identidad (upsert por huella).
+    let claves = vec![magi::almacen::identidades::ClaveSincronizada {
+        tipo: "ed25519".to_string(),
+        huella: huella.to_string(),
+        origen: magi::modelo::OrigenIdentidad::Agente,
+        ruta: None,
+        comentario: Some("4d3".to_string()),
+    }];
+    primero.sincronizar_identidades(&claves).unwrap();
+    let por_huella = primero.identidad_por_huella(huella).unwrap().unwrap();
+    assert_eq!(
+        version_de_fila(&primero, "IDENTIDADES", por_huella.id).0,
+        esperado
+    );
+    assert_eq!(
+        version_de_fila(&primero, "IDENTIDADES", uno).0,
+        version_de_fila(&primero, "IDENTIDADES", por_huella.id).0
+    );
+}
+
+/// Las ediciones de este equipo hacen crecer la versión de forma monótona, el
+/// reloj híbrido de EQUIPOS la acompaña y el vector solo ve a este equipo
+/// mientras no se importe nada.
+#[test]
+fn la_version_crece_de_forma_monotona_y_el_reloj_la_acompana() {
+    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
+    let equipo = uuid_del_equipo(&almacen);
+    let mut version = version_de_fila(&almacen, "HOSTS", host).1;
+    let mut ms = ms_de_version(&version);
+    for indice in 0..5 {
+        let mut ficha = datos("uno");
+        ficha.direccion = format!("192.0.2.{}", indice + 20);
+        almacen.actualizar_host(host, &ficha).unwrap();
+        let nueva = version_de_fila(&almacen, "HOSTS", host).1;
+        let ms_nueva = ms_de_version(&nueva);
+        assert!(ms_nueva > ms, "la versión no crece: {version} -> {nueva}");
+        assert_eq!(nueva.split_once('.').unwrap().1, equipo);
+        let vector = vector_de(&version_de_fila(&almacen, "HOSTS", host).2);
+        assert_eq!(vector.len(), 1, "sin importar nada solo ve a este equipo");
+        assert_eq!(vector.get(&equipo), Some(&ms_nueva));
+        version = nueva;
+        ms = ms_nueva;
+    }
+    let reloj = magi::almacen::versiones::reloj_de_este(almacen.conexion()).unwrap();
+    assert!(
+        reloj >= ms,
+        "el reloj híbrido no se queda por detrás de la última versión"
+    );
+    // El uuid del elemento no cambia al editar.
+    assert_eq!(version_de_fila(&almacen, "HOSTS", host).0.len(), 36);
+}

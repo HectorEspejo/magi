@@ -24,7 +24,14 @@ pub const PRIORIDAD_ATAJOS_FLOTA: u8 = 5;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
-    let ancho = usize::from(area.width);
+    // El indicador de sincronización reserva su ancho antes de los atajos: si
+    // no, se saldría de la línea y ratatui lo recortaría.
+    let indicador = indicador_sincronizacion(app);
+    let ancho_indicador = indicador
+        .as_ref()
+        .map_or(0, |(texto, _)| texto.chars().count() as u16 + 1);
+    let disponible = area.width.saturating_sub(ancho_indicador);
+    let ancho = usize::from(disponible);
     let linea = if let Some(rechazo) = &app.servidor_incompatible {
         // Mientras el servidor siga siendo de otra versión: uno más nuevo no
         // se puede parar desde aquí; uno anterior sin sustituir hay que
@@ -50,9 +57,111 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
             Style::default().fg(color),
         ))
     } else {
-        linea_atajos(app, area.width, disp)
+        linea_atajos(app, disponible, disp)
     };
-    marco.render_widget(Paragraph::new(linea), area);
+    marco.render_widget(
+        Paragraph::new(con_indicador(linea, indicador, area.width)),
+        area,
+    );
+}
+
+/// Pega el indicador de sincronización al final de la línea, dejando un hueco
+/// si el contenido no la llena.
+fn con_indicador(
+    mut linea: Line<'static>,
+    indicador: Option<(String, ratatui::style::Color)>,
+    ancho: u16,
+) -> Line<'static> {
+    let Some((texto, color)) = indicador else {
+        return linea;
+    };
+    let usado = linea.width();
+    let hueco = usize::from(ancho).saturating_sub(usado + texto.chars().count());
+    if hueco > 0 {
+        linea.spans.push(Span::raw(" ".repeat(hueco)));
+        linea
+            .spans
+            .push(Span::styled(texto, Style::default().fg(color)));
+    }
+    linea
+}
+
+/// Indicador de la sincronización en la barra inferior (informe §6.6): signo,
+/// texto y color. No aparece si la sincronización está desactivada.
+fn indicador_sincronizacion(app: &App) -> Option<(String, ratatui::style::Color)> {
+    if !app.config.sincronizacion.activa() {
+        return None;
+    }
+    let tema = &app.tema;
+    let estado = &app.sincronizacion;
+    let ascii = tema.ascii;
+    let (texto, color) = if estado.sincronizando {
+        (
+            if ascii {
+                "sync ...".to_string()
+            } else {
+                format!("{} …", tema.glifos.tuneles)
+            },
+            tema.paleta.acento,
+        )
+    } else {
+        match &estado.estado {
+            crate::sincronizacion::EstadoPasada::AlDia => {
+                if estado.conflictos_pendientes > 0 {
+                    (
+                        if ascii {
+                            format!("sync {}!", estado.conflictos_pendientes)
+                        } else if estado.conflictos_pendientes == 1 {
+                            format!("{} 1 conflicto", tema.glifos.tuneles)
+                        } else {
+                            format!(
+                                "{} {} conflictos",
+                                tema.glifos.tuneles, estado.conflictos_pendientes
+                            )
+                        },
+                        tema.paleta.acento,
+                    )
+                } else {
+                    (
+                        if ascii {
+                            "sync ok".to_string()
+                        } else {
+                            format!("{} al día", tema.glifos.tuneles)
+                        },
+                        tema.paleta.correcto,
+                    )
+                }
+            }
+            crate::sincronizacion::EstadoPasada::DecisionPendiente(_) => (
+                if ascii {
+                    "sync pausa".to_string()
+                } else {
+                    format!("{} pausa", tema.glifos.tuneles)
+                },
+                tema.paleta.acento,
+            ),
+            crate::sincronizacion::EstadoPasada::EsperandoClave(_)
+            | crate::sincronizacion::EstadoPasada::SinClave => (
+                if ascii {
+                    "sync clave".to_string()
+                } else {
+                    format!("{} clave nueva", tema.glifos.tuneles)
+                },
+                tema.paleta.critico,
+            ),
+            crate::sincronizacion::EstadoPasada::Quitado
+            | crate::sincronizacion::EstadoPasada::Error(_) => (
+                if ascii {
+                    "sync error".to_string()
+                } else {
+                    format!("{} error", tema.glifos.tuneles)
+                },
+                tema.paleta.critico,
+            ),
+            crate::sincronizacion::EstadoPasada::SinConfigurar => return None,
+        }
+    };
+    Some((format!(" {texto} "), color))
 }
 
 /// Texto de la barra ajustado al ancho, con la marca de recorte. En ASCII los
@@ -325,6 +434,32 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             Atajo::new("x", "cerrar", 2),
             Atajo::new("S", "apagar", 3),
             Atajo::new(format!("{} l", app.config.prefijo_escape), "pestañas", 3),
+        ],
+        Vista::Sincronizacion => {
+            let mut atajos = vec![
+                Atajo::new("s", "sincronizar", 1),
+                Atajo::new("c", "conflictos", 1),
+                Atajo::new("k", "clave", 2),
+            ];
+            if app.config.sincronizacion.activa() {
+                atajos.extend([
+                    Atajo::new("x", "quitar equipo", 3),
+                    Atajo::new("r", "cambiar clave", 3),
+                    Atajo::new("d", "desactivar", 3),
+                ]);
+            } else {
+                atajos.push(Atajo::new("n", "configurar carpeta", 1));
+            }
+            atajos.push(Atajo::new("q", "volver", 2));
+            atajos
+        }
+        Vista::Conflictos => vec![
+            Atajo::new(mover, "mover", 4),
+            Atajo::new(intro, "detalle", 1),
+            Atajo::new("r", "recuperar", 1),
+            Atajo::new("a", "aceptar", 2),
+            Atajo::new("d", "descartar", 2),
+            Atajo::new("q", "volver", 2),
         ],
         // La vista Sesión lleva su propia barra de estado.
         Vista::Sesion => vec![],

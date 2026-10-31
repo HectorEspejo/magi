@@ -107,6 +107,44 @@ pub enum AgenteObservado {
     Claves(usize),
 }
 
+/// Un equipo de la sincronización del inventario, leído de EQUIPOS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquipoObservado {
+    pub nombre: String,
+    pub plataforma: String,
+    /// `este`, `al_dia`, `ilegible`, `danado`, `formato_nuevo` o `quitado`.
+    pub estado: String,
+    pub ultimo_fichero_en: Option<String>,
+}
+
+/// Lo que se pudo averiguar de los equipos y conflictos de la sincronización.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResultadoEquipos {
+    /// `magi.db` no existe o es anterior a la Fase 10: todavía no hay equipos.
+    SinDatos,
+    /// No se pudo leer EQUIPOS (base de datos futura o error de lectura).
+    NoLegible(String),
+    Equipos(Vec<EquipoObservado>),
+}
+
+/// Lo que se observó de la sincronización del inventario, sin leer nunca la
+/// clave del llavero ni descifrar ficheros.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SincronizacionObservada {
+    /// Sin carpeta en config.toml: la sincronización está desactivada.
+    #[default]
+    Desactivada,
+    Configurada {
+        carpeta: EstadoDirectorio,
+        equipos: ResultadoEquipos,
+        /// Conflictos pendientes, si se pudieron contar.
+        conflictos_pendientes: Option<i64>,
+        /// Copias en conflicto de la herramienta de sincronización (Syncthing,
+        /// Nextcloud…) que hay en la carpeta.
+        copias_conflicto: usize,
+    },
+}
+
 /// Hechos observados del sistema. Se construye con `recoger` en producción y
 /// a mano en las pruebas: la interpretación (`comprobar`) no toca el sistema.
 #[derive(Debug, Clone)]
@@ -118,6 +156,8 @@ pub struct Datos {
     pub directorios: Directorios,
     pub config: ResultadoConfig,
     pub base_datos: ResultadoBaseDatos,
+    /// Sincronización del inventario: carpeta, equipos y conflictos.
+    pub sincronizacion: SincronizacionObservada,
     pub servidor: ServidorObservado,
     pub agente: AgenteObservado,
     /// Programas que importan y si están disponibles (en el `PATH` y
@@ -287,6 +327,7 @@ pub fn recoger(rutas: Rutas) -> Datos {
     let servidor = observar_servidor(&rutas);
     let agente = observar_agente(&variables);
     let base_datos = observar_base_datos(&rutas.base_datos());
+    let sincronizacion = observar_sincronizacion(&rutas, &valores, &base_datos);
     let directorios = Directorios {
         datos: observar_directorio(&rutas.datos),
         configuracion: observar_directorio(&rutas.config),
@@ -301,6 +342,7 @@ pub fn recoger(rutas: Rutas) -> Datos {
         directorios,
         config,
         base_datos,
+        sincronizacion,
         servidor,
         agente,
         binarios,
@@ -487,8 +529,25 @@ fn observar_base_datos(ruta: &Path) -> ResultadoBaseDatos {
     if !ruta.exists() {
         return ResultadoBaseDatos::NoExiste;
     }
+    match con_fichero_legible(ruta, |ruta, es_original| {
+        Ok(leer_version(ruta, es_original))
+    }) {
+        Ok(resultado) => resultado,
+        Err(mensaje) => ResultadoBaseDatos::Error(mensaje),
+    }
+}
+
+/// Ejecuta una lectura sobre `magi.db` sin crear ni tocar ficheros laterales:
+/// directamente si no los hay, o sobre una copia temporal si los hay (WAL
+/// pendiente o journal caliente). `leer` recibe la ruta y si es el original
+/// (que se abre en solo lectura) o la copia (que se puede abrir normal para
+/// que SQLite aplique el WAL).
+fn con_fichero_legible<T>(
+    ruta: &Path,
+    leer: impl FnOnce(&Path, bool) -> std::result::Result<T, String>,
+) -> std::result::Result<T, String> {
     if !tiene_laterales(ruta) {
-        return leer_version(ruta, true);
+        return leer(ruta, true);
     }
     let marca = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -497,14 +556,14 @@ fn observar_base_datos(ruta: &Path) -> ResultadoBaseDatos {
     let temporal =
         std::env::temp_dir().join(format!("magi-diagnostico-{}-{marca}", std::process::id()));
     if let Err(error) = std::fs::create_dir(&temporal) {
-        return ResultadoBaseDatos::Error(format!(
+        return Err(format!(
             "no se puede crear un temporal para comprobar la base de datos: {error}"
         ));
     }
-    let resultado = (|| -> ResultadoBaseDatos {
+    let resultado = (|| -> std::result::Result<T, String> {
         let copia = temporal.join("magi.db");
         if let Err(error) = std::fs::copy(ruta, &copia) {
-            return ResultadoBaseDatos::Error(format!(
+            return Err(format!(
                 "no se puede copiar la base de datos para comprobarla: {error}"
             ));
         }
@@ -513,16 +572,129 @@ fn observar_base_datos(ruta: &Path) -> ResultadoBaseDatos {
             if origen.exists() {
                 let destino = ruta_lateral(&copia, sufijo);
                 if let Err(error) = std::fs::copy(&origen, &destino) {
-                    return ResultadoBaseDatos::Error(format!(
+                    return Err(format!(
                         "no se puede copiar {sufijo} para comprobar la base de datos: {error}"
                     ));
                 }
             }
         }
-        leer_version(&copia, false)
+        leer(&copia, false)
     })();
     let _ = std::fs::remove_dir_all(&temporal);
     resultado
+}
+
+/// Observa la sincronización del inventario sin leer la clave del llavero ni
+/// descifrar ningún fichero: carpeta, equipos (leyendo EQUIPOS), conflictos
+/// pendientes y copias en conflicto de la herramienta de sincronización.
+fn observar_sincronizacion(
+    rutas: &Rutas,
+    config: &Config,
+    base_datos: &ResultadoBaseDatos,
+) -> SincronizacionObservada {
+    let Some(carpeta) = config.sincronizacion.ruta_carpeta(&rutas.hogar) else {
+        return SincronizacionObservada::Desactivada;
+    };
+    let estado = observar_directorio(&carpeta);
+    let utilizable = estado.existe && estado.es_directorio;
+    let (equipos, conflictos_pendientes) = if !utilizable {
+        (ResultadoEquipos::SinDatos, None)
+    } else {
+        match base_datos {
+            ResultadoBaseDatos::Version(version) if *version >= VERSION_BD => {
+                match leer_equipos_y_conflictos(&rutas.base_datos()) {
+                    Ok((equipos, pendientes)) => {
+                        (ResultadoEquipos::Equipos(equipos), Some(pendientes))
+                    }
+                    Err(mensaje) => (ResultadoEquipos::NoLegible(mensaje), None),
+                }
+            }
+            // Sin base de datos o con una anterior a la Fase 10: aún no hay
+            // equipos; MAGI la migrará al abrirse.
+            ResultadoBaseDatos::NoExiste | ResultadoBaseDatos::Version(_) => {
+                (ResultadoEquipos::SinDatos, None)
+            }
+            ResultadoBaseDatos::Futura(_) => (
+                ResultadoEquipos::NoLegible("magi.db es de una versión más nueva".to_string()),
+                None,
+            ),
+            ResultadoBaseDatos::Error(_) => (
+                ResultadoEquipos::NoLegible("no se pudo abrir magi.db".to_string()),
+                None,
+            ),
+        }
+    };
+    let copias_conflicto = if utilizable {
+        contar_copias_conflicto(&carpeta)
+    } else {
+        0
+    };
+    SincronizacionObservada::Configurada {
+        carpeta: estado,
+        equipos,
+        conflictos_pendientes,
+        copias_conflicto,
+    }
+}
+
+/// Lee los equipos y los conflictos pendientes de `magi.db` sin crear ficheros
+/// laterales (si hay WAL o journal, sobre una copia temporal).
+fn leer_equipos_y_conflictos(
+    ruta: &Path,
+) -> std::result::Result<(Vec<EquipoObservado>, i64), String> {
+    con_fichero_legible(ruta, |ruta, es_original| {
+        let conexion = if es_original {
+            Connection::open_with_flags(ruta, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        } else {
+            Connection::open(ruta)
+        }
+        .map_err(|error| format!("no se puede abrir magi.db: {error}"))?;
+        let mut sentencia = conexion
+            .prepare(
+                "SELECT nombre, plataforma, estado, ultimo_fichero_en
+                   FROM EQUIPOS ORDER BY es_este DESC, nombre",
+            )
+            .map_err(|error| format!("no se puede leer EQUIPOS: {error}"))?;
+        let filas = sentencia
+            .query_map([], |fila| {
+                Ok(EquipoObservado {
+                    nombre: fila.get(0)?,
+                    plataforma: fila.get(1)?,
+                    estado: fila.get(2)?,
+                    ultimo_fichero_en: fila.get(3)?,
+                })
+            })
+            .map_err(|error| format!("no se puede leer EQUIPOS: {error}"))?;
+        let equipos = filas
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("no se puede leer EQUIPOS: {error}"))?;
+        let pendientes: i64 = conexion
+            .query_row(
+                "SELECT COUNT(*) FROM CONFLICTOS WHERE resuelto_en IS NULL",
+                [],
+                |fila| fila.get(0),
+            )
+            .map_err(|error| format!("no se puede leer CONFLICTOS: {error}"))?;
+        Ok((equipos, pendientes))
+    })
+}
+
+/// Copias en conflicto de las herramientas de sincronización de ficheros en la
+/// carpeta compartida (Syncthing, Nextcloud, iCloud Drive…).
+fn contar_copias_conflicto(carpeta: &Path) -> usize {
+    let Ok(entradas) = std::fs::read_dir(carpeta) else {
+        return 0;
+    };
+    entradas
+        .filter_map(|entrada| entrada.ok())
+        .filter(|entrada| entrada.path().is_file())
+        .filter(|entrada| {
+            entrada.file_name().to_str().is_some_and(|nombre| {
+                nombre.starts_with("magi-")
+                    && (nombre.contains("sync-conflict") || nombre.contains("conflicted copy"))
+            })
+        })
+        .count()
 }
 
 /// Consulta el servidor por el socket local: nunca lo arranca.
@@ -724,6 +896,7 @@ pub fn comprobar(datos: &Datos) -> Informe {
         comprobar_paginador(datos, &config),
         comprobar_terminal(datos, &config),
         comprobar_ssh_config(datos),
+        comprobar_sincronizacion(datos),
     ];
     let avisos = comprobaciones
         .iter()
@@ -1248,6 +1421,161 @@ fn comprobar_ssh_config(datos: &Datos) -> Comprobacion {
     .con_nota(Some(
         "(MAGI lo añade al exportar desde la ficha o con `magi exportar`)".to_string(),
     ))
+}
+
+fn comprobar_sincronizacion(datos: &Datos) -> Comprobacion {
+    let SincronizacionObservada::Configurada {
+        carpeta,
+        equipos,
+        conflictos_pendientes,
+        copias_conflicto,
+    } = &datos.sincronizacion
+    else {
+        return Comprobacion::correcto(
+            "sincronización",
+            "desactivada (sin carpeta en config.toml)".to_string(),
+        );
+    };
+    // La carpeta compartida solo tiene que existir y poder escribirse: es una
+    // carpeta del usuario (Syncthing, Nextcloud…), no un directorio privado de
+    // MAGI, así que no se avisa de permisos más abiertos.
+    let ruta = ruta_legible(&carpeta.ruta, &datos.rutas.hogar);
+    let (mut estado, mut detalle, mut arreglo): (Estado, String, Option<String>) = if !carpeta
+        .existe
+    {
+        (
+            Estado::Error,
+            format!("carpeta {ruta} no existe"),
+            Some("crea la carpeta o cambia [sincronizacion] carpeta en config.toml".to_string()),
+        )
+    } else if !carpeta.es_directorio {
+        (
+            Estado::Error,
+            format!("carpeta {ruta} no es un directorio"),
+            Some("cambia [sincronizacion] carpeta en config.toml".to_string()),
+        )
+    } else if !carpeta.escribible {
+        (
+            Estado::Error,
+            format!("carpeta {ruta}: no se puede escribir"),
+            Some(format!("revisa los permisos de {ruta}")),
+        )
+    } else {
+        (
+            Estado::Correcto,
+            format!("carpeta {ruta} (escribible)"),
+            None,
+        )
+    };
+    let (estado_equipos, detalle_equipos, arreglo_equipos) = describir_equipos(datos, equipos);
+    if let Some(pendientes) = conflictos_pendientes {
+        if *pendientes > 0 {
+            let plural = if *pendientes == 1 {
+                "conflicto pendiente"
+            } else {
+                "conflictos pendientes"
+            };
+            (estado, detalle, arreglo) = combinar(
+                (estado, detalle, arreglo),
+                (
+                    Estado::Aviso,
+                    format!("{pendientes} {plural}"),
+                    Some("resuélvelos desde la vista CONFLICTOS (tecla c)".to_string()),
+                ),
+            );
+        }
+    }
+    if *copias_conflicto > 0 {
+        let plural = if *copias_conflicto == 1 {
+            "copia en conflicto"
+        } else {
+            "copias en conflicto"
+        };
+        (estado, detalle, arreglo) = combinar(
+            (estado, detalle, arreglo),
+            (
+                Estado::Aviso,
+                format!("{copias_conflicto} {plural} en la carpeta"),
+                Some("resuélvelas en la herramienta de sincronización".to_string()),
+            ),
+        );
+    }
+    // Los equipos ilegibles se combinan al final: su instrucción (introducir
+    // la clave nueva) es la más importante y es la que se queda.
+    (estado, detalle, arreglo) = combinar(
+        (estado, detalle, arreglo),
+        (estado_equipos, detalle_equipos, arreglo_equipos),
+    );
+    Comprobacion {
+        nombre: "sincronización",
+        estado,
+        detalle,
+        arreglo,
+        nota: None,
+    }
+}
+
+/// ¿Qué se puede decir de los equipos de la sincronización?
+fn describir_equipos(
+    datos: &Datos,
+    equipos: &ResultadoEquipos,
+) -> (Estado, String, Option<String>) {
+    match equipos {
+        ResultadoEquipos::SinDatos => match &datos.base_datos {
+            ResultadoBaseDatos::Version(version) if *version < VERSION_BD => (
+                Estado::Correcto,
+                format!("magi.db versión {version} (se migrará al abrir MAGI)"),
+                None,
+            ),
+            ResultadoBaseDatos::NoExiste => (
+                Estado::Correcto,
+                "sin equipos todavía (magi.db no existe)".to_string(),
+                None,
+            ),
+            _ => (
+                Estado::Correcto,
+                "sin equipos que mostrar".to_string(),
+                None,
+            ),
+        },
+        ResultadoEquipos::NoLegible(motivo) => (
+            Estado::Aviso,
+            format!("no se pudieron leer los equipos: {motivo}"),
+            Some("mira la comprobación «datos»".to_string()),
+        ),
+        ResultadoEquipos::Equipos(equipos) => {
+            let total = equipos.len();
+            let mut resumen = format!("{total} {}", if total == 1 { "equipo" } else { "equipos" });
+            let mut problemas: Vec<String> = Vec::new();
+            let mut hay_ilegible = false;
+            for equipo in equipos {
+                match equipo.estado.as_str() {
+                    crate::almacen::equipos::ESTADO_ILEGIBLE => {
+                        hay_ilegible = true;
+                        problemas.push(format!("«{}» ilegible", equipo.nombre));
+                    }
+                    crate::almacen::equipos::ESTADO_DANADO => {
+                        problemas.push(format!("«{}» dañado", equipo.nombre));
+                    }
+                    crate::almacen::equipos::ESTADO_FORMATO_NUEVO => {
+                        problemas.push(format!("«{}» pide actualizar MAGI", equipo.nombre));
+                    }
+                    _ => {}
+                }
+            }
+            if problemas.is_empty() {
+                return (Estado::Correcto, resumen, None);
+            }
+            resumen.push_str(" · ");
+            resumen.push_str(&problemas.join(" · "));
+            let arreglo = if hay_ilegible {
+                "introduce la clave nueva desde la vista SINCRONIZACIÓN".to_string()
+            } else {
+                "revisa la sincronización desde la vista SINCRONIZACIÓN".to_string()
+            };
+            (Estado::Aviso, resumen, Some(arreglo))
+        }
+    }
 }
 
 fn plural(cantidad: u32, singular: &str, plural: &str) -> String {

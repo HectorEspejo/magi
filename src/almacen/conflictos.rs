@@ -144,6 +144,26 @@ pub fn crear_si_nuevo(conexion: &Connection, nuevo: &NuevoConflicto) -> Result<O
     if duplicado > 0 {
         return Ok(None);
     }
+    // Si el usuario ya descartó este mismo conflicto para la misma versión
+    // ganadora, no se le vuelve a preguntar. Los borrados aplazados son la
+    // excepción: «descartar» en ellos significa «decidir más adelante».
+    if nuevo.tipo != TIPO_BORRADO {
+        let descartado: i64 = conexion.query_row(
+            "SELECT COUNT(*) FROM CONFLICTOS
+              WHERE resolucion = ?1 AND tipo = ?2 AND uuid = ?3
+                    AND COALESCE(version_ganadora, '') = COALESCE(?4, '')",
+            params![
+                RESOLUCION_DESCARTADO,
+                nuevo.tipo,
+                nuevo.uuid,
+                nuevo.version_ganadora
+            ],
+            |fila| fila.get(0),
+        )?;
+        if descartado > 0 {
+            return Ok(None);
+        }
+    }
     conexion.execute(
         "INSERT INTO CONFLICTOS (
             tipo, elemento_tipo, uuid, nombre, version_perdedora_json,

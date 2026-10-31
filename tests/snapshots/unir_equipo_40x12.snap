@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ UNIR ESTE EQUIPO ──────────────────┐│
+││ /home/usuario/Sync/magi tiene      ││
+││ ficheros de 2 equipos:             ││
+││   omarchy-portatil · mac-mini      ││
+││ clave  [ ••••••••••••••••••••| ]   ││
+││        ⇥ mostrar                   ││
+││ Los hosts con el mismo nombre se   ││
+││                                    ││
+││ ↵ unir   esc cancelar              ││
+└└─────────────────────────────── 1/4 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ CLAVE DE SINCRONIZACIÓN ───────────┐│
+││ Guárdala en tu gestor de           ││
+││ contraseñas: la necesitas para     ││
+││ añadir equipos.                    ││
+││ AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQ ││
+││ QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ ││
+││ QQQQQQ                             ││
+││                                    ││
+││ s la he guardado   esc cancelar    ││
+└└─────────────────────────────── 1/2 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más
