@@ -224,6 +224,12 @@ publicación con el keystore del desarrollador, la corrección del documento de
 formato §11.9 y R85-R87. El emulador valida API 30 x86_64 (AVD `magi-api30`,
 PIN 1234).
 
+Corrección posterior al cierre (2026-11-01): al validar en un Honor MagicOS
+se encontró que el requisito setUnlockedDeviceRequired del Keystore falla al
+desbloquear con la cara (fallo conocido de Android/OEM). Se corrigió y se
+documentó como desviación 15; la migración y el llavero se validaron con
+pruebas instrumentadas. Queda confirmarlo en el móvil real.
+
 ### Verificación final (2026-10-31 23:41)
 
 - **Rust:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
@@ -243,6 +249,13 @@ PIN 1234).
 - **dist:** `plan` sigue publicando solo `magi-ssh` con sus cuatro objetivos
   (validado en local con 0.32.0; la CI fija 0.33.1).
 - **actionlint:** 0 errores en los cinco workflows.
+- **Corrección posterior (2026-11-01, desbloqueo facial).** Tras probar la app
+  en un Honor MagicOS se reprodujo el fallo de setUnlockedDeviceRequired
+  (desviación 15). Con las claves ya migradas, la cadena se repitió: lint 0
+  errores, 126 pruebas JVM y assembleDebug, más connectedDebugAndroidTest con
+  **6/6** pruebas instrumentadas (las 3 de siempre y las 3 de PruebaKeystore:
+  llavero real, firma P-256 y migración del llavero antiguo sin perder el
+  secreto). Queda pendiente confirmarlo en el Honor.
 - **Commit de cierre:** 5495161 (ronda de correcciones de la revisión
   adversarial, cambios de la app Android y checklist marcada). La cadena de
   Gradle se repitió después, sobre ese árbol, con el mismo resultado verde.
@@ -305,6 +318,21 @@ PIN 1234).
     `Nucleo.pegado_entre_corchetes(sesion)` (para el pegado entre corchetes
     del terminal) y `FirmanteMovil.olvidar_clave()` (rotación de la clave
     del móvil), sin cambiar nada de lo existente.
+15. **Sin «setUnlockedDeviceRequired» en las claves del Keystore
+    (corrección tras probar en móvil real).** En un Honor MagicOS se reprodujo
+    el fallo conocido de Android (issue 506989112): con claves marcadas con
+    «setUnlockedDeviceRequired», Android devuelve «UserNotAuthenticatedException»
+    aunque el teléfono esté desbloqueado si se desbloqueó con reconocimiento
+    facial (biometría no fuerte). Impedía unir la sincronización y habría roto
+    la firma de sesiones hasta forzar la parada y desbloquear con PIN. Las
+    claves se crean ahora sin ese requisito (siguen en TEE/StrongBox y no son
+    exportables); la protección equivalente la da el bloqueo propio de MAGI
+    (§4.1 y §7.8) y el mensaje de «teléfono bloqueado» se conserva para los
+    casos reales. Las instalaciones existentes migran una sola vez: el llavero
+    re-cifra sus secretos con una clave nueva («secretos-v2») y la clave del
+    móvil se recrea con otro alias, lo que cambia la identidad y exige
+    reinstalarla en los hosts (la interfaz lo avisa). Requiere actualizar §7.8
+    y D174/D176 del informe y validarlo en el plegable.
 14. **Estado del árbol al cerrar la ronda.** Los commits `419ebe1` y
     `78e2cc2` dejan el núcleo y la app completos; en el momento de esta
     instantánea queda sin commit la ronda de correcciones de la revisión
@@ -658,7 +686,11 @@ están en «Pendientes y bloqueos».
 1. **Validación manual en el plegable real.** Es lo único que el emulador no
    cubre: StrongBox/TEE, biometría, SAF tras reiniciar el móvil, MagicOS
    (batería y cierres), plegado/desplegado, teclado Bluetooth y cámara/QR. Se
-   sigue el guion del informe §11 y el resultado se anotará aquí.
+   sigue el guion del informe §11. Incluye validar la corrección del
+   desbloqueo facial (claves sin «setUnlockedDeviceRequired», desviación 15):
+   en el Honor se comprobó el diagnóstico y el remedio manual; falta confirmar
+   la compilación corregida, la migración de las claves existentes y que
+   unir/conectar funcionan tras desbloquear con la cara.
 2. **CI de GitHub sin ejecutar.** Los cinco workflows no se han ejecutado en
    Actions (solo actionlint y la verificación local). Falta comprobar el KVM del
    runner de humo y que AGP descargue la plataforma 37.0 y las build-tools en el

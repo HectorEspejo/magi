@@ -361,4 +361,5 @@
     <string name="avisos_abrir_guia">ABRIR LA GUÍA</string>
     <string name="avisos_ahora_no">AHORA NO</string>
     <string name="avisos_ver_guia">VER LA GUÍA</string>
+    <string name="aviso_clave_recreada">La clave del móvil se ha recreado para corregir el desbloqueo por cara. Vuelve a instalar mi clave en tus hosts.</string>
 </resources>

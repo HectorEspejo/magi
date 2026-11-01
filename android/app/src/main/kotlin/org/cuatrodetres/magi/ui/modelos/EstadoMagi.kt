@@ -34,6 +34,8 @@ data class EstadoMagi(
     val tamanoLetra: Int = ZOOM_POR_DEFECTO,
     /** Sesiones que quedaron abiertas cuando Android mató MAGI (aviso §4.6). */
     val sesionesPerdidas: Int? = null,
+    /** La clave del móvil se recreó: hay que reinstalarla en los hosts. */
+    val avisoClaveRecreada: Boolean = false,
     val aviso: AvisoVista? = null,
 ) {
     /** Diálogo visible: el último que llegó. */

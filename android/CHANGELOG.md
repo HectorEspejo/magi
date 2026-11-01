@@ -14,6 +14,14 @@ en [`docs/publicar.md`](../docs/publicar.md).
      publicar, pasa esta sección a «## [X.Y.Z] - fecha», actualiza
      android/version.properties y crea la etiqueta android-vX.Y.Z. -->
 
+### Corregido
+
+- Fallo de desbloqueo en algunos teléfonos (p. ej. Honor MagicOS): las claves
+  del Keystore ya no llevan el requisito de «dispositivo desbloqueado» que
+  Android no reconoce al desbloquear con la cara. Las claves antiguas se migran
+  una sola vez; la clave del móvil cambia de identidad, así que hay que
+  reinstalarla en los hosts.
+
 ## [0.1.0] - 2026-10-31
 
 Primera versión de la app Android de MAGI (Fase 11). Es **lectora** de la

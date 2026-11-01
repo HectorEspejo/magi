@@ -52,6 +52,9 @@ class MagiApp : Application() {
                 // A4: restaura la carpeta SAF recordada antes de arrancar, para
                 // que el núcleo la reconozca en la primera pasada.
                 plataforma.iniciar()
+                // Compatibilidad: recrea claves antiguas sin el requisito de
+                // dispositivo desbloqueado que falla al desbloquear con la cara.
+                plataforma.migrarClavesSiHaceFalta()
                 NucleoRepositorio.iniciar(this, plataforma, oyente)
             },
             preferencias = plataforma.preferencias,

@@ -24,22 +24,30 @@ import java.security.spec.ECGenParameterSpec
  * Clave del móvil (informe §7.2 y §9): ECDSA P-256 en el Android Keystore,
  * StrongBox si el teléfono lo tiene y TEE si no. La privada nunca sale del
  * Keystore ni pasa por la memoria del proceso: aquí solo se pide la pública
- * X.509 y la firma DER de `SHA256withECDSA`.
+ * X.509 y la firma DER de SHA256withECDSA.
  *
- * - `setUnlockedDeviceRequired(true)`: con el teléfono bloqueado no se puede
- *   firmar (la pestaña dirá «desbloquea el teléfono para usar la clave del
- *   móvil»).
- * - `setUserAuthenticationRequired(false)` (D174): no se pide biometría en cada
- *   uso; basta con que el teléfono esté desbloqueado, para que una reconexión
- *   funcione aunque la app esté bloqueada.
+ * - Sin setUnlockedDeviceRequired (corrección del fallo de desbloqueo facial):
+ *   en algunos teléfonos —se comprobó en un Honor MagicOS— Android devuelve
+ *   UserNotAuthenticatedException aunque el teléfono esté desbloqueado si se
+ *   desbloqueó con la cara (fallo conocido de Android/OEM; Google issue
+ *   506989112). La clave ya no depende de ese estado; el bloqueo propio de MAGI
+ *   decide cuándo se muestra la app y cuándo se abre el núcleo.
+ * - setUserAuthenticationRequired(false) (D174): no se pide biometría en cada
+ *   uso; la clave se usa después de que el usuario desbloquee la app.
  * - Si Android invalida la clave (se quitó el bloqueo de pantalla), se detecta
  *   y se explica que hay que crear otra y repetir el «instalar mi clave».
+ * - Compatibilidad: al arrancar, si existe la clave antigua se crea la nueva
+ *   (alias -v2) y se borra la antigua. Eso cambia la identidad del móvil, así
+ *   que la interfaz avisa de que hay que reinstalarla en los hosts.
  */
 class ClaveMovil(private val contexto: Context) : FirmanteMovil {
 
     companion object {
-        /** Alias de la clave del móvil en el Android Keystore (informe §9). */
+        /** Alias antiguo de la clave del móvil (versiones anteriores). */
         const val ALIAS = "magi-clave-movil"
+
+        /** Alias actual de la clave del móvil (sin requisito de desbloqueo). */
+        const val ALIAS_ACTUAL = "magi-clave-movil-v2"
 
         private const val PROVEEDOR = "AndroidKeyStore"
         private const val ALGORITMO_FIRMA = "SHA256withECDSA"
@@ -67,8 +75,9 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
     fun estado(): Estado = synchronized(cerrojo) {
         try {
             val almacen = almacenDeClaves()
-            if (!almacen.containsAlias(ALIAS)) return@synchronized Estado.SIN_CREAR
-            val clave = almacen.getKey(ALIAS, null)
+            val alias = aliasActivo(almacen)
+            if (!almacen.containsAlias(alias)) return@synchronized Estado.SIN_CREAR
+            val clave = almacen.getKey(alias, null)
             if (clave == null) Estado.INVALIDADA else Estado.LISTA
         } catch (e: UnrecoverableKeyException) {
             Estado.INVALIDADA
@@ -84,13 +93,14 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
     /** Descripción completa (para Ajustes): estado, ubicación y fecha. */
     fun descripcion(): Descripcion = synchronized(cerrojo) {
         val actual = estado()
-        if (actual != Estado.LISTA) return@synchronized Descripcion(actual, ALIAS)
+        if (actual != Estado.LISTA) return@synchronized Descripcion(actual, ALIAS_ACTUAL)
         val almacen = almacenDeClaves()
-        val certificado = almacen.getCertificate(ALIAS) as? X509Certificate
-        val clave = almacen.getKey(ALIAS, null) as? PrivateKey
+        val alias = aliasActivo(almacen)
+        val certificado = almacen.getCertificate(alias) as? X509Certificate
+        val clave = almacen.getKey(alias, null) as? PrivateKey
         Descripcion(
             estado = Estado.LISTA,
-            alias = ALIAS,
+            alias = alias,
             ubicacion = clave?.let(::ubicacionDe),
             creadaEnMs = certificado?.notBefore?.time,
         )
@@ -115,31 +125,43 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
                     contexto.getString(R.string.plataforma_clave_sin_bloqueo_pantalla)
                 )
             }
-            try {
-                generar(conStrongBox = true)
-            } catch (e: StrongBoxUnavailableException) {
-                // El teléfono no tiene StrongBox: se usa el TEE sin error (AC).
-                try {
-                    generar(conStrongBox = false)
-                } catch (e2: Exception) {
-                    throw errorDeCreacion(e2)
-                }
-            } catch (e: Exception) {
-                try {
-                    generar(conStrongBox = false)
-                } catch (e2: Exception) {
-                    throw errorDeCreacion(e2)
-                }
-            }
+            generarConRespaldo()
         }
         return descripcion()
+    }
+
+    /**
+     * Migración de compatibilidad: si existe la clave antigua y todavía no la
+     * nueva, crea la nueva sin el requisito de desbloqueo y borra la antigua.
+     * Devuelve true si se recreó la identidad (hay que reinstalarla en hosts).
+     */
+    fun migrarSinBloqueo(): Boolean = synchronized(cerrojo) {
+        try {
+            val almacen = almacenDeClaves()
+            if (almacen.containsAlias(ALIAS_ACTUAL)) {
+                if (almacen.containsAlias(ALIAS)) {
+                    runCatching { almacen.deleteEntry(ALIAS) }
+                }
+                return@synchronized false
+            }
+            if (!almacen.containsAlias(ALIAS)) return@synchronized false
+            generarConRespaldo()
+            runCatching { almacen.deleteEntry(ALIAS) }
+            true
+        } catch (e: Exception) {
+            // La clave antigua sigue en su sitio: no se pierde identidad y se
+            // reintenta en el siguiente arranque.
+            false
+        }
     }
 
     /** Borra la clave del móvil del Keystore (solo para «borrar todos los datos»). */
     override fun olvidarClave() {
         synchronized(cerrojo) {
             try {
-                almacenDeClaves().deleteEntry(ALIAS)
+                val almacen = almacenDeClaves()
+                almacen.deleteEntry(ALIAS_ACTUAL)
+                almacen.deleteEntry(ALIAS)
             } catch (e: GeneralSecurityException) {
                 throw ErrorPlataforma.Firmante(
                     contexto.getString(R.string.plataforma_clave_no_borrada),
@@ -165,8 +187,9 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
                 e,
             )
         }
+        val alias = aliasActivo(almacen)
         val certificado = try {
-            almacen.getCertificate(ALIAS) as? X509Certificate
+            almacen.getCertificate(alias) as? X509Certificate
         } catch (e: GeneralSecurityException) {
             throw ErrorPlataforma.Firmante(
                 contexto.getString(R.string.plataforma_clave_invalidada),
@@ -184,7 +207,8 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
     override fun firmar(datos: ByteArray): ByteArray = synchronized(cerrojo) {
         val privada = try {
             val almacen = almacenDeClaves()
-            almacen.getKey(ALIAS, null) as? PrivateKey
+            val alias = aliasActivo(almacen)
+            almacen.getKey(alias, null) as? PrivateKey
         } catch (e: UnrecoverableKeyException) {
             throw ErrorPlataforma.Firmante(
                 contexto.getString(R.string.plataforma_clave_invalidada),
@@ -232,12 +256,37 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
     private fun almacenDeClaves(): KeyStore =
         KeyStore.getInstance(PROVEEDOR).apply { load(null) }
 
+    private fun aliasActivo(almacen: KeyStore): String =
+        if (almacen.containsAlias(ALIAS_ACTUAL)) ALIAS_ACTUAL else ALIAS
+
+    private fun generarConRespaldo(): Descripcion {
+        try {
+            generar(conStrongBox = true)
+        } catch (e: StrongBoxUnavailableException) {
+            // El teléfono no tiene StrongBox: se usa el TEE sin error (AC).
+            try {
+                generar(conStrongBox = false)
+            } catch (e2: Exception) {
+                throw errorDeCreacion(e2)
+            }
+        } catch (e: Exception) {
+            try {
+                generar(conStrongBox = false)
+            } catch (e2: Exception) {
+                throw errorDeCreacion(e2)
+            }
+        }
+        return descripcion()
+    }
+
     private fun generar(conStrongBox: Boolean) {
-        val constructor = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
+        val constructor = KeyGenParameterSpec.Builder(
+            ALIAS_ACTUAL,
+            KeyProperties.PURPOSE_SIGN,
+        )
             .setAlgorithmParameterSpec(ECGenParameterSpec(CURVA))
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(false) // D174
-            .setUnlockedDeviceRequired(true)
         if (conStrongBox) constructor.setIsStrongBoxBacked(true)
         // Una clave EC se genera con KeyPairGenerator: KeyGenerator solo vale
         // para claves simétricas y AndroidKeyStore lanza NoSuchAlgorithm para EC.
@@ -247,7 +296,7 @@ class ClaveMovil(private val contexto: Context) : FirmanteMovil {
     }
 
     /**
-     * StrongBox o TEE. `securityLevel` llega en Android 12 (API 31); en API 30
+     * StrongBox o TEE. securityLevel llega en Android 12 (API 31); en API 30
      * no se puede distinguir, así que se informa TEE (el respaldo del informe).
      */
     private fun ubicacionDe(privada: PrivateKey): Ubicacion = try {

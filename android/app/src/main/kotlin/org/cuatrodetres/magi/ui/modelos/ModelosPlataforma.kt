@@ -21,4 +21,11 @@ interface AvisosPlataforma {
 
     /** Marca la guía como vista: no se vuelve a ofrecer sola. */
     suspend fun marcarGuiaBateriaOfrecida()
+
+    /**
+     * Si la clave del móvil se recreó al actualizar (cambio de identidad):
+     * hay que avisar de que se reinstale en los hosts. Sin implementación,
+     * no se muestra.
+     */
+    suspend fun claveMovilRecreada(): Boolean = false
 }

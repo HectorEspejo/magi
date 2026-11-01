@@ -1,6 +1,8 @@
 package org.cuatrodetres.magi.plataforma
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.cuatrodetres.magi.preferencias.PreferenciasMagi
 
 /**
@@ -37,5 +39,26 @@ class ContenedorPlataforma(contexto: Context) : FachadaPlataforma {
     /** Restaura la carpeta recordada; lo llama el arranque de la app. */
     suspend fun iniciar() {
         carpeta.cargarCarpeta()
+    }
+
+    /**
+     * Migra las claves de versiones anteriores (corrección del fallo de
+     * desbloqueo facial): el llavero pasa a una clave AES sin
+     * setUnlockedDeviceRequired y la clave del móvil se recrea con el alias
+     * nuevo. Si el llavero no se puede descifrar todavía (Android no reconoce
+     * el desbloqueo actual), se reintenta en el siguiente uso.
+     */
+    suspend fun migrarClavesSiHaceFalta() {
+        withContext(Dispatchers.IO) {
+            llavero.migrarSinBloqueo()
+            val recreada = try {
+                firmante.migrarSinBloqueo()
+            } catch (e: Exception) {
+                false
+            }
+            if (recreada) {
+                preferencias.marcarAvisoClaveRecreada()
+            }
+        }
     }
 }

@@ -265,6 +265,17 @@ fun AppMagi(
             }
         }
 
+        // Aviso: la clave del móvil se recreó al corregir el desbloqueo facial.
+        if (estado.avisoClaveRecreada) {
+            Box(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                BarraAviso(
+                    texto = stringResource(R.string.aviso_clave_recreada),
+                    tipo = TipoBarra.AVISO,
+                    alCerrar = vm::descartarAvisoClaveRecreada,
+                )
+            }
+        }
+
         // Asistente de sincronización a pantalla completa.
         val asistente = estado.asistente
         if (asistente != null) {

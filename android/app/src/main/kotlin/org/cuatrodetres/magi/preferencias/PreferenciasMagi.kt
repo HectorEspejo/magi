@@ -66,6 +66,9 @@ object ReglasPreferencias {
     val CLAVE_CLAVE_ANTERIOR_HASTA = longPreferencesKey("clave_anterior_hasta")
     val CLAVE_SESIONES_ABIERTAS = intPreferencesKey("sesiones_abiertas")
     val CLAVE_GUIA_BATERIA_VISTA = booleanPreferencesKey("guia_bateria_vista")
+
+    /** La clave del móvil se recreó al corregir el desbloqueo: hay que avisar. */
+    val CLAVE_AVISO_CLAVE_RECREADA = booleanPreferencesKey("aviso_clave_recreada")
 }
 
 /** Un solo almacén por proceso: DataStore exige una instancia única por fichero. */
@@ -133,5 +136,20 @@ class PreferenciasMagi(private val almacen: DataStore<Preferences>) {
             preferencias[ReglasPreferencias.CLAVE_SESIONES_ABIERTAS] = 0
         }
         return ReglasPreferencias.sanearSesionesAbiertas(anteriores)
+    }
+
+    /** Marca que hay que avisar de que la clave del móvil se recreó. */
+    suspend fun marcarAvisoClaveRecreada() {
+        almacen.edit { it[ReglasPreferencias.CLAVE_AVISO_CLAVE_RECREADA] = true }
+    }
+
+    /** Lee y borra el aviso de clave recreada (se muestra una sola vez). */
+    suspend fun consumirAvisoClaveRecreada(): Boolean {
+        var aviso = false
+        almacen.edit { preferencias ->
+            aviso = preferencias[ReglasPreferencias.CLAVE_AVISO_CLAVE_RECREADA] ?: false
+            preferencias[ReglasPreferencias.CLAVE_AVISO_CLAVE_RECREADA] = false
+        }
+        return aviso
     }
 }

@@ -40,7 +40,7 @@
     <string name="plataforma_llavero_no_borrado">no se pudo borrar el secreto «%1$s» del llavero</string>
     <string name="plataforma_llavero_keystore_no_disponible">no se pudo abrir el Keystore del teléfono</string>
     <string name="plataforma_llavero_clave_invalidada">la clave del llavero ya no es válida en este teléfono: hay que volver a configurar la sincronización y las contraseñas</string>
-    <string name="plataforma_llavero_telefono_bloqueado">el teléfono está bloqueado: desbloquéalo para usar el llavero de MAGI</string>
+    <string name="plataforma_llavero_telefono_bloqueado">Android no reconoce el desbloqueo del teléfono (pasa en algunos teléfonos al desbloquear con la cara). Desbloquea con el PIN una vez y vuelve a intentarlo.</string>
     <string name="plataforma_llavero_no_leido">no se pudo descifrar el secreto con el Keystore del teléfono</string>
     <string name="plataforma_llavero_no_guardado">no se pudo cifrar y guardar el secreto con el Keystore del teléfono</string>
 
@@ -51,7 +51,7 @@
     <string name="plataforma_clave_sin_publica">la clave del móvil no tiene clave pública X.509</string>
     <string name="plataforma_clave_invalidada">Android ha invalidado la clave del móvil (¿se quitó el bloqueo de pantalla?): crea otra y vuelve a instalarla en tus hosts</string>
     <string name="plataforma_clave_sin_bloqueo_pantalla">MAGI necesita un PIN, un patrón o una contraseña en el teléfono para proteger la clave del móvil</string>
-    <string name="plataforma_clave_telefono_bloqueado">desbloquea el teléfono para usar la clave del móvil</string>
+    <string name="plataforma_clave_telefono_bloqueado">Android no reconoce este desbloqueo del teléfono. Desbloquea con el PIN una vez y vuelve a intentarlo.</string>
     <string name="plataforma_clave_no_creada">no se pudo crear la clave del móvil en el Keystore</string>
     <string name="plataforma_clave_strongbox_no_disponible">este teléfono no tiene StrongBox disponible</string>
     <string name="plataforma_clave_no_firmado">no se pudo firmar con la clave del móvil</string>

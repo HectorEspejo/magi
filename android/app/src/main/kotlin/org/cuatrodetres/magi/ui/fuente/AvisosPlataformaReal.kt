@@ -25,4 +25,7 @@ class AvisosPlataformaReal(
     override suspend fun marcarGuiaBateriaOfrecida() {
         guiaBateria.marcarOfrecida()
     }
+
+    override suspend fun claveMovilRecreada(): Boolean =
+        preferencias.consumirAvisoClaveRecreada()
 }

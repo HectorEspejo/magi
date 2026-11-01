@@ -139,7 +139,21 @@ class VistaModeloMagi(
             if (perdidas > 0 && _estado.value.sesiones.isEmpty()) {
                 _estado.update { it.copy(sesionesPerdidas = perdidas) }
             }
+            val recreada = try {
+                avisos.claveMovilRecreada()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                false
+            }
+            if (recreada) {
+                _estado.update { it.copy(avisoClaveRecreada = true) }
+            }
         }
+    }
+
+    /** Cierra el aviso de clave del móvil recreada. */
+    fun descartarAvisoClaveRecreada() {
+        _estado.update { it.copy(avisoClaveRecreada = false) }
     }
 
     private fun quizasOfrecerGuiaBateria() {
