@@ -14,6 +14,13 @@ en [`docs/publicar.md`](../docs/publicar.md).
      publicar, pasa esta sección a «## [X.Y.Z] - fecha», actualiza
      android/version.properties y crea la etiqueta android-vX.Y.Z. -->
 
+### Cambiado
+
+- Al abrir una sesión, el terminal ocupa toda la pantalla: se ocultan la barra
+  inferior, el riel y la lista del plegable, y las barras del sistema se
+  esconden mientras está abierto (un deslizamiento las muestra). Al volver se
+  restaura la navegación.
+
 ### Corregido
 
 - Fallo de desbloqueo en algunos teléfonos (p. ej. Honor MagicOS): las claves

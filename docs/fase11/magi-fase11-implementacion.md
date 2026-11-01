@@ -333,6 +333,13 @@ pruebas instrumentadas. Queda confirmarlo en el móvil real.
     móvil se recrea con otro alias, lo que cambia la identidad y exige
     reinstalarla en los hosts (la interfaz lo avisa). Requiere actualizar §7.8
     y D174/D176 del informe y validarlo en el plegable.
+16. **Terminal a pantalla completa al abrir una sesión.** A petición del
+    desarrollador tras probar en el plegable: mientras el detalle es el
+    terminal se ocultan la barra inferior, el riel y la lista del plegable, y
+    las barras del sistema se esconden (se muestran con un deslizamiento) para
+    que el terminal ocupe todo el ancho y todo el alto. Al volver se restaura
+    la disposición normal, incluida la de dos paneles. Sustituye en ese caso a
+    la disposición de dos paneles que describe el informe §6.4.
 14. **Estado del árbol al cerrar la ronda.** Los commits `419ebe1` y
     `78e2cc2` dejan el núcleo y la app completos; en el momento de esta
     instantánea queda sin commit la ronda de correcciones de la revisión

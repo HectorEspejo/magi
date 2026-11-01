@@ -1,6 +1,8 @@
 package org.cuatrodetres.magi.ui
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -31,9 +33,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -201,6 +207,37 @@ fun AppMagi(
         if (estado.asistente != null) vm.cerrarAsistente() else vm.volver()
     }
 
+    // La sesión ocupa toda la pantalla: se ocultan las barras del sistema
+    // mientras el terminal está abierto (borde a borde, sin lista ni barra
+    // inferior) y se restauran al volver. Con un deslizamiento se muestran.
+    val vista = LocalView.current
+    val enTerminal = estado.detalle is DetalleVista.Terminal
+    DisposableEffect(enTerminal, vista, propietarioCiclo) {
+        val ventana = vista.context.aActividad()?.window
+        val controlador = ventana?.let {
+            WindowCompat.getInsetsController(it, vista)
+        }
+        fun aplicarBarras() {
+            val control = controlador ?: return
+            if (enTerminal) {
+                control.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                control.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                control.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        aplicarBarras()
+        val observador = LifecycleEventObserver { _, evento ->
+            if (evento == Lifecycle.Event.ON_RESUME) aplicarBarras()
+        }
+        propietarioCiclo.lifecycle.addObserver(observador)
+        onDispose {
+            propietarioCiclo.lifecycle.removeObserver(observador)
+            controlador?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     // Suelta las pantallas de sesiones cerradas y asocia la visible.
     LaunchedEffect(estado.sesiones, estado.detalle) {
         val vivas = estado.sesiones.map { it.id }.toSet()
@@ -227,7 +264,9 @@ fun AppMagi(
             .safeDrawingPadding(),
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val ancha = maxWidth >= 600.dp
+            // Con una sesión abierta el terminal manda: ocupa todo el ancho
+            // aunque sea un plegable abierto (sin riel ni lista al lado).
+            val ancha = maxWidth >= 600.dp && estado.detalle !is DetalleVista.Terminal
             if (ancha) {
                 SuperficieAncha(
                     estado = estado,
@@ -599,4 +638,14 @@ private fun ContenidoDetalle(
             )
         }
     }
+}
+
+/** Sube por los contextos envueltos hasta la Activity (para las barras). */
+private fun Context.aActividad(): Activity? {
+    var actual: Context? = this
+    while (actual != null) {
+        if (actual is Activity) return actual
+        actual = (actual as? ContextWrapper)?.baseContext
+    }
+    return null
 }
