@@ -688,6 +688,12 @@ impl Region {
 /// Evento que produce un decodificador para el puente.
 #[derive(Debug)]
 pub enum EventoEscritorio {
+    /// La sesión ya está lista (saludo, seguridad y autenticación terminados y
+    /// etapa activa construida). Se emite UNA vez, antes de los primeros
+    /// píxeles; el servidor pasa la sesión a abierto y emite el enlace. Si un
+    /// cliente no lo emitiera, el servidor acepta como señal el primer
+    /// Imagen/Rect/Video (compatibilidad).
+    Abierto,
     /// Zona cambiada con sus píxeles RGBA (4 bytes por píxel, opacos).
     Rect {
         x: u16,
@@ -839,6 +845,10 @@ pub struct ConfigEscritorio {
     pub tamano_inicial: (u16, u16),
     /// Texto en los dos sentidos.
     pub portapapeles: bool,
+    /// Huella del certificado RDP aceptada para este host (HOSTS.huella_escritorio),
+    /// propia del equipo. La usa el cliente RDP para decidir si el certificado
+    /// es nuevo, el mismo o ha cambiado antes de mandar credenciales.
+    pub huella_escritorio: Option<String>,
 }
 
 impl ConfigEscritorio {
@@ -870,6 +880,10 @@ pub struct Conexion {
     pub dialogo: Dialogo,
     pub eventos: mpsc::Sender<EventoEscritorio>,
     pub ordenes: mpsc::Receiver<OrdenEscritorio>,
+    /// Intento de credenciales (1 en el primero; 2 y 3 tras un rechazo). Lo
+    /// fija la capa de sesión, que reabre el camino en cada intento porque
+    /// RFB y RDP cierran la conexión al rechazar las credenciales.
+    pub intento: u8,
 }
 
 /// Lanza una sesión de escritorio en un hilo propio con un runtime actual: la

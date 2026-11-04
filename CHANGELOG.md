@@ -9,6 +9,21 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **Escritorio remoto (Fase 12).** Hosts de tipo RDP, VNC y voxl en el mismo
+  inventario que los hosts SSH, con «a través de» un host SSH y opciones por
+  tipo. El escritorio se ve en una ventana del navegador servida por
+  `magi --servidor` solo en `127.0.0.1`, con enlaces de un solo uso y clave
+  por sesión. Cliente RDP con IronRDP (TLS con rustls, NLA/NTLM, huella del
+  certificado con la misma política que las huellas SSH, EGFX con el H.264 de
+  Windows pasado tal cual) y cliente VNC propio (RFB 3.3/3.7/3.8, Raw,
+  CopyRect, Hextile, ZRLE, portapapeles y cambio de tamaño). `voxl` se arranca
+  por SSH con el script embebido `escritorio_voxl.sh` y se ve por el túnel de
+  la sesión. Sesiones custodiadas por el servidor con pestaña propia, un minuto
+  de gracia sin visor y un solo visor por sesión. Migración 8 (`tipo`,
+  `escritorio_dominio`, `escritorio_opciones` y `huella_escritorio` en
+  `HOSTS`), `formato` 2 de sincronización cuando hay escritorios, protocolo v7
+  y sección `[escritorio]` en `config.toml`.
+
 - **Sincronización cifrada del inventario (Fase 10).** El mismo inventario en
   todos los equipos del usuario mediante ficheros cifrados con age (X25519) y
   firmados con HMAC-SHA256 en una carpeta que él elige (Syncthing, Nextcloud,
@@ -26,6 +41,9 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   Android.
 
 ### Cambiado
+
+- Versión 1.2.0 (MINOR: funcionalidad nueva, migración de esquema 8,
+  protocolo 7 y `formato` 2 de sincronización).
 
 - **Codificación de teclas del terminal unificada (Fase 11).** La tabla
   de bytes de las teclas vive ahora en el núcleo compartido, como la usará la

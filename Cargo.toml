@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "magi-ssh"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
@@ -29,6 +29,7 @@ path = "src/main.rs"
 magi-nucleo = { path = "crates/magi-nucleo" }
 age = "0.11"
 anyhow = "1"
+async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6", features = ["derive"] }

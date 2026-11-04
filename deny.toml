@@ -44,6 +44,12 @@ ignore = [
   # TOML propio es la crate toml) y no hay versión de age sin este árbol.
   # Revisar al actualizar age.
   { id = "RUSTSEC-2026-0374", reason = "basic-toml sin mantener, transitiva de age/i18n-embed; sin alternativa en el stack" },
+  # 2026-11-04 · rustls-pemfile 2.2.0 (sin mantener) es dependencia SOLO de
+  # desarrollo de ironrdp-server 0.13, que se usa únicamente en las pruebas del
+  # cliente RDP de la Fase 12: no entra en el binario publicado. No hay versión
+  # de ironrdp-server sin ella. Revisar al subir IronRDP (la generación nueva
+  # ya no la usa).
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile sin mantener, solo dev-dependency de ironrdp-server para pruebas RDP" },
 ]
 
 [licenses]

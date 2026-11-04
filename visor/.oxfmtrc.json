@@ -1,0 +1,17 @@
+{
+	"$schema": "./node_modules/oxfmt/configuration_schema.json",
+	"trailingComma": "es5",
+	"tabWidth": 2,
+	"semi": true,
+	"singleQuote": true,
+	"bracketSameLine": true,
+	"bracketSpacing": true,
+	"useTabs": true,
+	"printWidth": 80,
+	"ignorePatterns": [
+		"node_modules/**",
+		"dist/**",
+		"package-lock.json",
+		"LICENSE-voxl"
+	]
+}
