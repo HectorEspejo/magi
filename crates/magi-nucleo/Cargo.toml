@@ -11,7 +11,17 @@ publish = false
 [dependencies]
 age = "0.11"
 anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+des = "0.9"
+flate2 = "1"
+getrandom = "0.4"
+ironrdp = { version = "=0.17.0", default-features = false, features = ["core", "pdu", "connector", "session", "graphics", "cliprdr", "displaycontrol", "input"] }
+ironrdp-tokio = "=0.10.0"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"] }
+x509-parser = "0.16"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 csv = "1"
 globset = "0.4"
@@ -35,5 +45,6 @@ vt100 = "0.16"
 zeroize = "1"
 
 [dev-dependencies]
+ironrdp-server = { version = "=0.13.0", features = ["helper"] }
 signature = "3"
 tempfile = "3"

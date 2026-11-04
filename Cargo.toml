@@ -86,3 +86,13 @@ strip = true
 inherits = "release"
 lto = "thin"
 strip = true
+
+# IronRDP 0.17 fija sspi 0.21 y picky 7.0.0-rc.25, que arrastran el arbol
+# criptografico de RustCrypto en preestreno (ecdsa 0.17.0-rc.22), incompatible con
+# russh 0.63 (ecdsa 0.17 estable). Se vendoriza ironrdp-connector 0.10.0 sin tocar
+# su codigo, solo con sspi 0.23.1 y picky 7.0.0-rc.27, que ya usan las versiones
+# estables que trae russh. Revisar al subir russh o IronRDP: si coinciden, quitar
+# el vendor.
+[patch.crates-io]
+ironrdp-connector = { path = "vendor/ironrdp-connector" }
+ironrdp-acceptor = { path = "vendor/ironrdp-acceptor" }

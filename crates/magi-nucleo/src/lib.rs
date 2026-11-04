@@ -11,6 +11,7 @@ pub mod claves;
 pub mod conexion;
 pub mod configuracion;
 pub mod deliberacion;
+pub mod escritorio;
 pub mod ficheros;
 pub mod instalar_clave;
 pub mod llavero;

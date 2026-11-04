@@ -253,6 +253,7 @@ mod pruebas {
             transferencias,
             tuneles,
             ejecuciones,
+            escritorios: 0,
         }
     }
 

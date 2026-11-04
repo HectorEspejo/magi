@@ -48,7 +48,11 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// de un servidor anterior y decidir si lo sustituye (sin preguntar solo si no
 /// custodia nada) o pregunta al usuario. `VersionIncompatible` gana
 /// `version_app`, `clientes` y `trabajo`; `Bienvenida` gana `version_app`.
-pub const VERSION_PROTOCOLO: u32 = 6;
+pub const VERSION_PROTOCOLO: u32 = 7;
+
+/// Los `peticion_id` de escritorios empiezan en 2^46 (Fase 12); por debajo
+/// están los de archivos, túneles y ejecuciones (CLAUDE.md).
+pub const RANGO_ESCRITORIOS: u64 = 1 << 46;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -112,6 +116,12 @@ impl<'de> Deserialize<'de> for Secreto {
         Ok(Self(Zeroizing::new(String::deserialize(d)?)))
     }
 }
+
+// ---------------------------------------------------------------- escritorios
+
+pub use magi_nucleo::escritorio::{
+    DatosCertificado, InfoEscritorio, PeticionCredenciales, TipoHost,
+};
 
 // ---------------------------------------------------------------- estados
 
@@ -840,6 +850,30 @@ pub enum MensajeCliente {
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
+    // ------------------------------------------------------------ escritorios
+    /// Abre un escritorio. El servidor contesta `EscritorioAbierto` o `Error`
+    /// con el mismo `peticion_id` (rango de escritorios: desde 2^46).
+    AbrirEscritorio { peticion_id: u64, host_id: i64 },
+    /// Enlace de un solo uso nuevo para reabrir el visor o copiarlo.
+    PedirEnlace { peticion_id: u64, escritorio_id: u32 },
+    /// Vuelve a abrir una sesión de escritorio caída.
+    ReconectarEscritorio { peticion_id: u64, escritorio_id: u32 },
+    /// Cierra una sesión de escritorio (la TUI ya pidió confirmación).
+    CerrarEscritorio { escritorio_id: u32 },
+    /// Respuesta a `PideHuellaEscritorio`. El cliente ya guardó (o rechazó) la
+    /// huella en `HOSTS.huella_escritorio` antes de contestar.
+    RespuestaHuellaEscritorio { peticion_id: u64, aceptada: bool },
+    /// Credenciales de un escritorio, del llavero o del diálogo (T25). La
+    /// contraseña viaja en `Zeroizing` y nunca se escribe en el log.
+    Credenciales {
+        peticion_id: u64,
+        usuario: String,
+        #[serde(default)]
+        dominio: Option<String>,
+        contrasena: Secreto,
+        #[serde(default)]
+        recordar: bool,
+    },
     Adios,
 }
 
@@ -863,6 +897,9 @@ pub struct TrabajoServidor {
     pub tuneles: u32,
     #[serde(default = "uno")]
     pub ejecuciones: u32,
+    /// Escritorios remotos abiertos (Fase 12).
+    #[serde(default = "uno")]
+    pub escritorios: u32,
 }
 
 fn uno() -> u32 {
@@ -870,11 +907,21 @@ fn uno() -> u32 {
 }
 
 impl TrabajoServidor {
-    pub const CAMPOS: [&'static str; 4] = ["sesiones", "transferencias", "tuneles", "ejecuciones"];
+    pub const CAMPOS: [&'static str; 5] = [
+        "sesiones",
+        "transferencias",
+        "tuneles",
+        "ejecuciones",
+        "escritorios",
+    ];
 
     /// No custodia nada de lo que hoy conoce MAGI.
     pub fn vacio(&self) -> bool {
-        self.sesiones == 0 && self.transferencias == 0 && self.tuneles == 0 && self.ejecuciones == 0
+        self.sesiones == 0
+            && self.transferencias == 0
+            && self.tuneles == 0
+            && self.ejecuciones == 0
+            && self.escritorios == 0
     }
 
     /// Suma de todo lo que custodia (para decidir y para el resumen).
@@ -883,6 +930,7 @@ impl TrabajoServidor {
             + u64::from(self.transferencias)
             + u64::from(self.tuneles)
             + u64::from(self.ejecuciones)
+            + u64::from(self.escritorios)
     }
 }
 
@@ -1072,6 +1120,38 @@ pub enum MensajeServidor {
     RutaTemporal {
         ruta: String,
         peticion_id: u64,
+    },
+    // ------------------------------------------------------------ escritorios
+    /// Escritorio abierto, con el enlace de un solo uso para el visor.
+    EscritorioAbierto {
+        peticion_id: u64,
+        escritorio_id: u32,
+        enlace: String,
+    },
+    /// Enlace nuevo pedido con `PedirEnlace`.
+    Enlace {
+        peticion_id: u64,
+        escritorio_id: u32,
+        enlace: String,
+    },
+    /// Difusión de la lista completa de escritorios en cada cambio (T27).
+    Escritorios { lista: Vec<InfoEscritorio> },
+    /// Certificado RDP nuevo o cambiado: el cliente decide y, si acepta, guarda
+    /// la huella antes de responder (D218).
+    PideHuellaEscritorio {
+        peticion_id: u64,
+        escritorio_id: u32,
+        host_id: i64,
+        host_nombre: String,
+        datos: DatosCertificado,
+    },
+    /// Credenciales para un escritorio: las saca el cliente del llavero o del
+    /// diálogo (intento 1..=3). El servidor nunca toca el llavero (T25).
+    PideCredenciales {
+        peticion_id: u64,
+        escritorio_id: u32,
+        host_nombre: String,
+        peticion: PeticionCredenciales,
     },
     Error {
         mensaje: String,
@@ -1477,7 +1557,7 @@ mod pruebas {
 
     #[test]
     fn la_version_del_protocolo_es_la_seis() {
-        assert_eq!(VERSION_PROTOCOLO, 6);
+        assert_eq!(VERSION_PROTOCOLO, 7);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
@@ -1707,6 +1787,7 @@ mod pruebas {
                 transferencias: 0,
                 tuneles: 1,
                 ejecuciones: 0,
+                escritorios: 0,
             }),
         });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });

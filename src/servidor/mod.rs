@@ -166,6 +166,8 @@ impl EstadoServidor {
                 .iter()
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count() as u32,
+            // Fase 12: la pista del servidor cuenta aquí los escritorios.
+            escritorios: 0,
         }
     }
 }
@@ -1174,6 +1176,37 @@ async fn manejar_mensaje(
         MensajeCliente::Adios => {
             return false;
         }
+        // Fase 12: la pista del servidor implementa los escritorios remotos.
+        MensajeCliente::AbrirEscritorio { peticion_id, .. } => {
+            responder_error(
+                estado,
+                cliente_id,
+                "los escritorios remotos todavía no están disponibles".to_string(),
+                Some(peticion_id),
+            )
+            .await;
+        }
+        MensajeCliente::PedirEnlace { peticion_id, .. } => {
+            responder_error(
+                estado,
+                cliente_id,
+                "los escritorios remotos todavía no están disponibles".to_string(),
+                Some(peticion_id),
+            )
+            .await;
+        }
+        MensajeCliente::ReconectarEscritorio { peticion_id, .. } => {
+            responder_error(
+                estado,
+                cliente_id,
+                "los escritorios remotos todavía no están disponibles".to_string(),
+                Some(peticion_id),
+            )
+            .await;
+        }
+        MensajeCliente::CerrarEscritorio { .. }
+        | MensajeCliente::RespuestaHuellaEscritorio { .. }
+        | MensajeCliente::Credenciales { .. } => {}
         // El saludo ya se consumió en `tarea_conexion`.
         MensajeCliente::Hola { .. } => {
             let estado_bloqueado = estado.lock().await;
@@ -2585,6 +2618,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                     .iter()
                     .filter(|tunel| tunel.estado.en_marcha())
                     .count() as u32,
+                escritorios: 0,
                 ejecuciones: ejecuciones
                     .iter()
                     .filter(|ejecucion| {

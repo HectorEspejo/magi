@@ -7,7 +7,7 @@ pub mod config;
 pub mod copias;
 pub mod deliberacion;
 pub mod diagnostico;
-pub use magi_nucleo::{ficheros, modelo, registro, rutas};
+pub use magi_nucleo::{escritorio, ficheros, modelo, registro, rutas};
 pub mod flota;
 pub mod identidades;
 pub mod llavero;

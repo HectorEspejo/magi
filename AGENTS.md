@@ -4,9 +4,10 @@
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con una app Android compañera (desde la Fase 11). Cliente: 4d3 (producto propio).
 Desde la Fase 9 es software libre (MIT OR Apache-2.0) en `4d3-org/magi` y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `4d3-org/homebrew-tap` y tarballs de GitHub Releases.
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode, ironrdp (fijado con `=`), axum 0.8, des, flate2; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
+Desde la Fase 12 abre escritorios remotos: RDP con IronRDP, VNC con un cliente RFB propio y voxl arrancado por SSH. Se ven en un visor web servido por `magi --servidor` solo en `127.0.0.1`: el cliente web de voxl adaptado, en `visor/` (TypeScript, generado a `visor/dist/` con esbuild).
 
 ## Documentación del proyecto
 
@@ -22,6 +23,7 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/formato-sincronizacion.md` — formato del fichero de sincronización (lo creas en la Fase 10; referencia del formato: la app Android usa el mismo código del núcleo)
 - `docs/publicar-android.md` — cómo se publica la app Android (lo creas en la Fase 11; lo sigue el desarrollador)
 - `android/CHANGELOG.md` — cambios de la app Android (Keep a Changelog; desde la Fase 11)
+- `visor/README.md` — origen (voxl), cambios y cómo se genera el visor (lo creas en la Fase 12)
 
 El informe de fase manda sobre tu criterio: si algo te parece incorrecto o
 incompleto, no lo cambies por tu cuenta — impleméntalo como está o párate y
@@ -41,7 +43,7 @@ coméntalo con el desarrollador.
   `minusculas_snake_case`. Identificadores de Rust (módulos, funciones,
   variables) en castellano y `snake_case`; tipos en `CamelCase` en castellano.
 - Sin `CHECK` sobre enumeraciones en SQLite: los valores se validan en código.
-- Migraciones en `crates/magi-nucleo/src/almacen/migraciones.rs`, numeradas y aplicadas por
+- Migraciones en `crates/magi-nucleo/src/almacen/migraciones.rs` (desde la Fase 11), numeradas y aplicadas por
   `PRAGMA user_version`; nunca modifiques una migración ya aplicada, añade otra.
 - Nunca guardes claves privadas ni frases en disco ni en el log; en memoria
   usa `zeroize`.
@@ -64,14 +66,15 @@ coméntalo con el desarrollador.
   `desktop-file-validate assets/magi.desktop`. Para pruebas aisladas usa
   `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
-  `magi_config`, `known_hosts`, `config.toml`) pasa por `src/ficheros.rs`:
+  `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
+  `crates/magi-nucleo/src/`; el escritorio lo reexporta):
   atómica, permisos 600 y copia con sufijo de fecha antes de tocar
   `~/.ssh/config` o `known_hosts`. No escribas en `~/.ssh` desde otro sitio.
 - La UI nunca recibe bytes del remoto: el parser `vt100` vive en la tarea de
   conexión y notifica `Pantalla` coalescido a ~30 fps. Los diálogos que esperan
   al usuario (huella, frase) no tienen timeout; el de 10 s solo cubre DNS/TCP.
 - Log: `~/.local/state/magi/logs/magi.log.<fecha>` (un fichero por día).
-- Todo evento que deba quedar en el historial pasa por `registro::anotar` (`crates/magi-nucleo/src/registro.rs`);
+- Todo evento que deba quedar en el historial pasa por `registro::anotar`;
   nadie escribe en `REGISTRO` directamente y sus filas nunca se editan.
 - Las operaciones automáticas (sondeo y las que vengan) nunca abren diálogos:
   reportan error con instrucción. Solo las conexiones interactivas aceptan
@@ -83,10 +86,11 @@ coméntalo con el desarrollador.
   nunca interpolados en el texto del comando.
 - El bucle de UI es el único escritor de SQLite: las tareas de red emiten
   eventos y nunca abren la base de datos.
-- Toda conexión viva está en `conexion::RegistroSesiones` (`crates/magi-nucleo/src/conexion/`); antes de abrir una
+- Toda conexión viva está en `conexion::RegistroSesiones`; antes de abrir una
   conexión efímera, pide la existente ahí.
-- Un secreto que no es una clave (contraseñas) solo vive en el llavero del
-  sistema a través de `src/llavero.rs`; en `magi.db` van referencias, nunca
+- Un secreto que no es una clave (contraseñas) solo vive en el llavero a
+  través de `LlaveroSecreto` (en `magi-nucleo`; en el escritorio, secret-tool o
+  Keychain; en Android, `LlaveroMovil`); en `magi.db` van referencias, nunca
   secretos, tampoco cifrados.
 - Anota en el registro cuando el efecto se ha producido (fichero escrito,
   comando ejecutado), no cuando se decide.
@@ -132,7 +136,8 @@ coméntalo con el desarrollador.
   recursos, esperas sin plazo y estado leído a destiempo; corrige lo que
   encuentres y añade test de regresión a lo que sea pérdida de datos. Anota
   el resultado en el informe de implementación.
-- Túneles (`src/servidor/tuneles.rs` en el escritorio; la mecánica compartida en `crates/magi-nucleo/src/tuneles/`): el CRUD de `TUNELES` lo hace el cliente;
+- Túneles (`src/servidor/tuneles.rs`, con la mecánica en
+  `crates/magi-nucleo/src/tuneles/` desde la Fase 11): el CRUD de `TUNELES` lo hace el cliente;
   el servidor solo lee la tabla y ejecuta. Un túnel activo cuenta como canal
   del pool pero no como pestaña ni SFTP para el ciclo automático. Todo lo que
   escuche en local va en `127.0.0.1` salvo aviso explícito; los canales
@@ -151,7 +156,8 @@ coméntalo con el desarrollador.
   una entrada viva ni en gracia. No abras conexiones por otra vía.
 - `peticion_id` por rangos: Archivos (panel) desde 0, túneles 2^40,
   operaciones de Archivos en la `App` (edición, permisos, sincronización) 2^42,
-  ejecuciones 2^44, peticiones esperables del cliente 2^48. El contador del
+  ejecuciones 2^44, escritorios 2^46 (desde la Fase 12), peticiones esperables
+  del cliente 2^48. El contador del
   panel se reinicia al cambiar de host: lo que deba sobrevivir a eso vive en la
   `App` y usa su propio rango. Un `Hecho` que implica filas de
   `REGISTRO` se envía después de `OrdenBd::Barrera`.
@@ -162,7 +168,7 @@ coméntalo con el desarrollador.
   variables (escapadas con `shell-escape`) y deliberación; el servidor recibe
   el comando ya resuelto, lo ejecuta sin diálogos y nunca lee `SNIPPETS`. La
   salida de comandos remotos jamás va a `REGISTRO` ni al log.
-- Deliberación (`src/deliberacion/` del escritorio; el modelo compartido en `crates/magi-nucleo/src/deliberacion.rs`): comprobaciones en paralelo con plazo duro
+- Deliberación (`src/deliberacion/`): comprobaciones en paralelo con plazo duro
   de 2 s; `Ctrl+K` es la única tecla que ejecuta desde el diálogo MAGI (`↵`
   no). El servidor escribe `DELIBERACIONES.ejecucion_resultado` y las
   anotaciones `deliberacion_*` al terminar la ejecución, por su hilo escritor.
@@ -258,7 +264,9 @@ coméntalo con el desarrollador.
   de sustituirlo (es lo correcto).
 - MAGI no comprueba actualizaciones ni abre conexiones salientes que no sean a
   los hosts del usuario (sin telemetría).
-- Sincronización del inventario (desde la Fase 10, `crates/magi-nucleo/src/sincronizacion/`; la pasada en modo escritor con copia y exportación vive en `src/sincronizacion/` del escritorio):
+- Sincronización del inventario (desde la Fase 10; lo común en
+  `crates/magi-nucleo/src/sincronizacion/` y, en `src/sincronizacion/`, la pasada
+  escritora, los equipos y el QR del escritorio):
   toda tabla que viaja lleva `uuid`, `version` y `vector`. Las escrituras del
   almacén de campos que viajan suben la versión con el reloj híbrido
   (`almacen/versiones.rs`); los campos propios del equipo no. Un `SET NULL`
@@ -321,12 +329,30 @@ coméntalo con el desarrollador.
   `ultima_conexion_en`), huellas en su `known_hosts`, REGISTRO y conflictos de
   huella y de borrado.
 - Secretos en Android solo por `LlaveroMovil` (AES-GCM con una clave del
-  Keystore). La clave del móvil (`magi-clave-movil`) nunca sale del Keystore: el
-  núcleo firma a través de `Firmante`. Nada secreto en logcat, DataStore,
-  `magi.db` ni ficheros en claro.
+  Keystore). La clave del móvil nunca sale del Keystore: el núcleo firma a
+  través de `Firmante`. Nada secreto en logcat, DataStore, `magi.db` ni
+  ficheros en claro.
+- Las claves del Keystore se crean sin `setUnlockedDeviceRequired`: con
+  desbloqueo facial, Android las rechaza aunque el teléfono esté desbloqueado.
+  Lo que impide usarlas sin permiso es el bloqueo de MAGI. Si cambias cómo se
+  crea una clave del Keystore, migra las instalaciones existentes y, si cambia
+  la clave del móvil, avisa en la interfaz de que hay que reinstalarla.
 - En el móvil, los túneles locales y dinámicos escuchan siempre en
   `127.0.0.1` y no se intenta escuchar por debajo del puerto 1024 (se ofrece un
   puerto libre).
+- Un túnel del móvil solo está `activo` si la conexión de su host está viva y
+  su escucha acepta; si no, pasa a `caido` con el motivo. La fila enseña el
+  último error y los contadores de conexiones abiertas y aceptadas. Todo cambio
+  en túneles o conexiones del móvil pasa la prueba de extremo a extremo (Rust y
+  emulador, sin red externa) antes de marcarse en el checklist.
+- Toda conexión del móvil tiene su vigilante en el gestor de `magi-movil`,
+  también cuando solo la usan túneles: si el host la cierra, todo lo que la usa
+  pasa a caído con el motivo. Lo que llegue en adelante (SFTP, ejecuciones) se
+  engancha al mismo vigilante.
+- Los servidores de pruebas (SSH, eco, canales de control) escuchan en
+  `127.0.0.1`, nunca en `0.0.0.0`: el emulador llega al anfitrión por
+  `10.0.2.2`, que es su loopback. Su SSH solo reenvía a los servicios de la
+  prueba.
 - Sin Google Play Services, Firebase, ML Kit ni analítica en la app; el QR se
   lee con ZXing. Dependencias de Gradle fijadas en `gradle/libs.versions.toml` y
   verificadas por SHA-256: al añadir o subir una, ejecuta `./gradlew
@@ -347,9 +373,94 @@ coméntalo con el desarrollador.
   keystore y sus secretos (`ANDROID_KEYSTORE_BASE64`, contraseñas y alias) los
   crea el desarrollador, no tú.
 - Pruebas del móvil: el Keystore, SAF, la cámara y la biometría se sustituyen
-  por dobles en la JVM; en el emulador solo corre la prueba de humo. Lo que solo
-  se puede comprobar en un móvil real va al guion de validación del informe de
+  por dobles en la JVM; en el emulador corren la prueba de humo y, desde la
+  corrección 11b, la de extremo a extremo de los túneles (necesita el servidor
+  de pruebas del anfitrión; en CI se omite). Lo que solo se puede
+  comprobar en un móvil real va al guion de validación del informe de
   implementación.
+- La codificación de teclas es una sola tabla, en
+  `crates/magi-nucleo/src/terminal/teclas.rs`: el escritorio (`src/teclas.rs`)
+  solo traduce a ella los eventos de crossterm y la app Android la usa igual.
+- AGP 9 trae Kotlin integrado: no apliques el plugin
+  `org.jetbrains.kotlin.android` (AGP 9 lo rechaza). Hace falta JDK 17 o más (en
+  CI, 21).
+- Los bindings Kotlin se generan en cada compilación en
+  `app/build/generated/uniffi/…` y no se versionan. La supresión `NewApi` de
+  `java.lang.ref.Cleaner` se limita a ese fichero generado.
+- La release solo se firma si existen las variables `MAGI_KEYSTORE_*`, que pone
+  `android-release.yml` a partir de sus secretos. Una release compilada en local
+  sale sin firmar y nunca se publica.
+- La fixture `.age` de la prueba de humo se regenera con `cargo test -p
+  magi-nucleo --test generar_fixture_android -- --ignored`, y la del túnel, con
+  `cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored`.
+- Prueba de extremo a extremo del túnel: en Rust, `cargo test -p magi-movil
+  --test tunel_local_e2e`; en el emulador, arranca antes `cargo run -p
+  magi-movil --example servidor_pruebas_tunel` y ejecuta `./gradlew
+  connectedDebugAndroidTest` (sin ese servidor, la prueba se omite sola).
+- Antes de usar Gradle o cargo-ndk, exporta `ANDROID_HOME`, `ANDROID_SDK_ROOT`
+  y `ANDROID_NDK_HOME` (NDK r30). Si lo haces con un script de entorno, que viva
+  fuera de `/tmp` (se vacía al reiniciar). En documentos del repositorio, nunca
+  escribas rutas con el usuario del desarrollador: usa `$HOME`.
+- Si `cargo test` falla con errores raros de SQLite o de temporales porque
+  `/tmp` (tmpfs) se ha llenado, usa `TMPDIR="$HOME/.cache/tmp"`; en máquinas muy
+  justas, añade `-- --test-threads=1`. En CI no hace falta ninguna de las dos
+  cosas.
+- `.github/actionlint.yaml` ignora tres avisos de ShellCheck solo en el
+  `release.yml` generado por dist; no añadas exclusiones para los workflows
+  propios. `cargo deny check` va sin `--workspace`: la versión 0.20.2 no lo
+  admite y ya analiza todo el workspace.
+- Escritorios (desde la Fase 12): un host tiene `tipo` (`ssh`, `rdp`, `vnc` o
+  `voxl`), fijo al crearlo. Solo los `ssh` se exportan a `magi_config` y pueden
+  ser destino de terminal, SFTP, túneles, snippets o salto; «a través de»
+  (`salto_host_id`) apunta siempre a un host `ssh`. Lo común (cliente RFB,
+  adaptador de IronRDP, puente, servidor del visor, voxl) vive en
+  `crates/magi-nucleo/src/escritorio/`; la custodia, en
+  `src/servidor/escritorios.rs`.
+- Las sesiones de escritorio las custodia el servidor, como las de terminal:
+  lista completa `Escritorios{lista}`, `TrabajoServidor.escritorios`, gracia
+  `[escritorio] gracia_seg` sin visor y un visor por sesión. El canal va por
+  `conexion_para_canal` (uso `Escritorio`) y `direct-tcpip`, y se suelta por
+  identidad.
+- El servidor del visor escucha solo en `127.0.0.1` y solo mientras hay
+  sesiones de escritorio. Se entra con un enlace de un solo uso (60 s) que se
+  canjea por una clave por sesión; `Host` se comprueba siempre y `Origin` es
+  obligatorio en `/api/*`; CSP estricta y nada cargado de fuera. Nunca
+  `0.0.0.0`, ni cookies, ni tokens fijos en la URL.
+- Sin dependencias GPL ni recompresión de vídeo: nada de x264, FFmpeg ni
+  OpenH264. Los cambios van al visor como rectángulos en bruto y el AVC420 de
+  Windows, tal cual. `cargo deny check` lo vigila.
+- IronRDP está fijado con `=` (TLS con rustls y la cripto de russh, sin
+  OpenSSL): no lo subas sin repetir las pruebas de RDP y el paso 1 del guion de
+  validación de la Fase 12.
+- Lo que llega de un servidor VNC o RDP y lo que llega del visor es entrada no
+  fiable: tamaños acotados (escritorio ≤ 8192×8192, cursor ≤ 256×256, texto
+  ≤ 1 MB, ZRLE acotado) y nunca pánico. La decodificación va en un hilo por
+  sesión, fuera del runtime de red. Ni píxeles, ni teclas, ni portapapeles, ni
+  contraseñas van al log ni a REGISTRO.
+- Certificados RDP: la misma política que las huellas SSH (nuevo, con diálogo;
+  cambiado, en rojo y escribiendo el nombre del host), comprobados antes de
+  mandar credenciales. Los guarda el cliente que los acepta, en
+  `HOSTS.huella_escritorio`, que no viaja. El servidor pide certificado y
+  credenciales al solicitante y nunca toca el llavero.
+- voxl se arranca solo con `crates/magi-nucleo/scripts/escritorio_voxl.sh`
+  (embebido con `include_str!`): argumentos validados en Rust y en el script, contraseña
+  aleatoria por la entrada estándar (nunca en la línea de órdenes) y voxl en
+  `127.0.0.1` del host; el fin de la entrada estándar lo para. MAGI no instala
+  voxl.
+- El navegador lo abre el cliente, nunca el servidor, y sin shell
+  (`[escritorio] navegador`).
+- El visor vive en `visor/` (copiado de voxl 0.3.3, MIT: conserva
+  `visor/LICENSE-voxl` y apunta el origen y los cambios en `visor/README.md`).
+  `visor/dist/` se genera con `scripts/generar-visor.sh` y se versiona: tras
+  tocar `visor/src`, ejecuta `npm --prefix visor ci`, `npm --prefix visor run
+  check` y `scripts/generar-visor.sh`. Compilar MAGI no necesita Node. Las
+  dependencias de npm son solo de desarrollo y van fijadas con integridad.
+- La sincronización escribe `formato` 2 solo si hay hosts que no son `ssh`;
+  viajan `tipo`, `escritorio_dominio` y `escritorio_opciones`. Mantén
+  `docs/formato-sincronizacion.md` al día.
+- Las pruebas de escritorio (`crates/magi-nucleo/tests/escritorio_*.rs` y
+  `tests/escritorio_*.rs`) no usan red externa: servidor RFB de prueba,
+  `ironrdp-server` y el servidor SSH de prueba con un `voxl` falso.
 
 ## Al terminar una fase (o al pausar la sesión)
 

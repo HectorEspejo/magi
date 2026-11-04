@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use unicode_normalization::UnicodeNormalization;
 
+use crate::escritorio::{es_loopback, OpcionesEscritorio, TipoHost};
+
 /// Procedencia de un host en el inventario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origen {
@@ -121,6 +123,15 @@ pub struct Host {
     pub grupo_id: Option<i64>,
     pub direccion: String,
     pub puerto: u16,
+    /// Tipo de host (Fase 12): se fija al crear el host y no cambia.
+    pub tipo: TipoHost,
+    /// Dominio de Windows para RDP (opcional).
+    pub escritorio_dominio: Option<String>,
+    /// Opciones del escritorio según el tipo (JSON ya leído).
+    pub escritorio_opciones: OpcionesEscritorio,
+    /// Huella SHA256: del certificado RDP aceptado. Propia del equipo: no
+    /// viaja ni sube la versión del host.
+    pub huella_escritorio: Option<String>,
     pub usuario: Option<String>,
     pub identidad_ref: IdentidadRef,
     pub salto_host_id: Option<i64>,
@@ -152,6 +163,12 @@ pub struct DatosHost {
     pub grupo_id: Option<i64>,
     pub direccion: String,
     pub puerto: u16,
+    /// Tipo de host (Fase 12). Un host existente conserva el suyo.
+    pub tipo: TipoHost,
+    /// Dominio de Windows para RDP (opcional).
+    pub escritorio_dominio: Option<String>,
+    /// Opciones del escritorio según el tipo.
+    pub escritorio_opciones: OpcionesEscritorio,
     pub usuario: Option<String>,
     pub identidad_ref: IdentidadRef,
     pub salto_host_id: Option<i64>,
@@ -169,6 +186,9 @@ impl Default for DatosHost {
             grupo_id: None,
             direccion: String::new(),
             puerto: 22,
+            tipo: TipoHost::Ssh,
+            escritorio_dominio: None,
+            escritorio_opciones: OpcionesEscritorio::default(),
             usuario: None,
             identidad_ref: IdentidadRef::Auto,
             salto_host_id: None,
@@ -678,12 +698,20 @@ pub fn coincide(host: &Host, consulta: &str) -> bool {
         return true;
     }
     let pajar = normalizar_busqueda(&format!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {}",
         host.nombre,
         host.direccion,
         host.usuario.clone().unwrap_or_default(),
         host.grupo_nombre.clone().unwrap_or_default(),
-        host.etiquetas.join(" ")
+        host.etiquetas.join(" "),
+        host.tipo.como_texto(),
+        host.tipo.etiqueta(),
+        host.escritorio_dominio.clone().unwrap_or_default(),
+        host.escritorio_opciones
+            .pantalla
+            .clone()
+            .or_else(|| host.escritorio_opciones.programa.clone())
+            .unwrap_or_default()
     ));
     tokens.iter().all(|token| pajar.contains(token.as_str()))
 }
@@ -848,6 +876,101 @@ pub fn validar_salto(
     Ok(())
 }
 
+/// Valida y normaliza los datos de un host (§7.1). El tipo se fija al crear el
+/// host: si tipo_guardado no es None, tiene que coincidir. Los campos de
+/// escritorio se normalizan (voxl escucha siempre en 127.0.0.1, el dominio de
+/// RDP se separa del usuario, un host SSH no guarda opciones de escritorio).
+pub fn validar_y_normalizar_host(
+    datos: &mut DatosHost,
+    host_id: Option<i64>,
+    tipo_guardado: Option<TipoHost>,
+    hosts: &HashMap<i64, Host>,
+) -> Result<(), String> {
+    if let Some(guardado) = tipo_guardado {
+        if datos.tipo != guardado {
+            return Err("el tipo del host no se cambia: crea otro host".to_string());
+        }
+    }
+    validar_nombre(&datos.nombre)?;
+    validar_direccion(&datos.direccion)?;
+    validar_usuario(datos.usuario.as_deref())?;
+    if datos.puerto == 0 {
+        return Err("puerto fuera de rango".to_string());
+    }
+    if let Some(salto_id) = datos.salto_host_id {
+        let salto = hosts
+            .get(&salto_id)
+            .ok_or_else(|| "el host «a través de» no existe".to_string())?;
+        if !salto.tipo.es_ssh() {
+            return Err("«a través de» tiene que ser un host SSH".to_string());
+        }
+    }
+    validar_salto(host_id, datos.salto_host_id, hosts)?;
+    datos.escritorio_opciones.validar(datos.tipo)?;
+    match datos.tipo {
+        TipoHost::Ssh => {
+            datos.escritorio_dominio = None;
+            datos.escritorio_opciones = OpcionesEscritorio::default();
+        }
+        TipoHost::Rdp => {
+            if let Some(usuario) = datos.usuario.clone() {
+                if let Some((dominio, resto)) = usuario.split_once('\\') {
+                    if resto.trim().is_empty() {
+                        return Err("falta el usuario después del dominio".to_string());
+                    }
+                    if datos.escritorio_dominio.is_none() {
+                        datos.escritorio_dominio = Some(dominio.to_string());
+                    }
+                    datos.usuario = Some(resto.to_string());
+                }
+            }
+        }
+        TipoHost::Vnc => {
+            datos.usuario = None;
+            datos.escritorio_dominio = None;
+        }
+        TipoHost::Voxl => {
+            if datos.salto_host_id.is_none() {
+                return Err("voxl se arranca en un host SSH: elige «a través de»".to_string());
+            }
+            if datos.puerto < 1024 {
+                return Err(
+                    "voxl escucha como usuario normal: usa un puerto desde 1024".to_string(),
+                );
+            }
+            datos.direccion = "127.0.0.1".to_string();
+            datos.usuario = None;
+            datos.escritorio_dominio = None;
+        }
+    }
+    if datos.tipo.es_escritorio()
+        && !matches!(
+            datos.identidad_ref,
+            IdentidadRef::Auto | IdentidadRef::Contrasena | IdentidadRef::ContrasenaLlavero
+        )
+    {
+        return Err(
+            "en un escritorio la contraseña va en el llavero o se pide siempre".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Aviso que pide confirmación al guardar o abrir un VNC directo fuera de
+/// loopback: la imagen y el teclado viajarían sin cifrar (§6.2).
+pub fn aviso_vnc_directo(
+    tipo: TipoHost,
+    direccion: &str,
+    salto_host_id: Option<i64>,
+    directo: bool,
+) -> Option<String> {
+    if tipo == TipoHost::Vnc && salto_host_id.is_none() && !directo && !es_loopback(direccion) {
+        Some("la imagen y el teclado viajarán sin cifrar; mejor a través de un host SSH".to_string())
+    } else {
+        None
+    }
+}
+
 /// Fecha local en ISO 8601.
 pub fn fecha_ahora() -> String {
     chrono::Local::now()
@@ -875,6 +998,10 @@ pub fn host_de_prueba() -> Host {
         grupo_id: None,
         direccion: "192.0.2.1".to_string(),
         puerto: 22,
+        tipo: TipoHost::Ssh,
+        escritorio_dominio: None,
+        escritorio_opciones: OpcionesEscritorio::default(),
+        huella_escritorio: None,
         usuario: Some("usuario".to_string()),
         identidad_ref: IdentidadRef::Auto,
         salto_host_id: None,

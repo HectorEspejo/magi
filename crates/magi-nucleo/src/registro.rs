@@ -51,6 +51,14 @@ pub const DELIBERACION_CANCELADA: &str = "deliberacion_cancelada";
 pub const SINCRONIZACION: &str = "sincronizacion";
 /// Fase 8: `chmod` remoto (host, rutas, modo, alcance, afectados).
 pub const PERMISOS_CAMBIADOS: &str = "permisos_cambiados";
+// Fase 12: escritorios remotos. Solo metadatos: nunca píxeles, teclas,
+/// portapapeles ni contraseñas (T44).
+pub const ESCRITORIO_ABIERTO: &str = "escritorio_abierto";
+pub const ESCRITORIO_CERRADO: &str = "escritorio_cerrado";
+pub const ESCRITORIO_FALLIDO: &str = "escritorio_fallido";
+/// Certificado RDP aceptado o sustituido (detalle: `aceptada`/`sustituida`
+/// y la huella nueva).
+pub const HUELLA_ESCRITORIO: &str = "huella_escritorio";
 
 // Fase 10: inventario sincronizado entre equipos.
 /// Una huella recibida se añadió a known_hosts (no había ninguna).
@@ -73,7 +81,7 @@ pub const INVENTARIO_SINC_ERROR: &str = "inventario_sinc_error";
 /// Fase 11 (móvil): la clave del móvil se instaló en un host.
 pub const CLAVE_INSTALADA: &str = "clave_instalada";
 
-pub const TIPOS: [&str; 36] = [
+pub const TIPOS: [&str; 40] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -110,6 +118,10 @@ pub const TIPOS: [&str; 36] = [
     INVENTARIO_SINC_DESACTIVADA,
     INVENTARIO_SINC_ERROR,
     CLAVE_INSTALADA,
+    ESCRITORIO_ABIERTO,
+    ESCRITORIO_CERRADO,
+    ESCRITORIO_FALLIDO,
+    HUELLA_ESCRITORIO,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

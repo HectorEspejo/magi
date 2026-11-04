@@ -49,7 +49,7 @@ fn version_incompatible_tiene_una_forma_json_estable() {
             sesiones: 1,
             transferencias: 2,
             tuneles: 3,
-            ejecuciones: 4,
+            escritorios: 0,ejecuciones: 4,
         }),
     };
     assert_eq!(
@@ -100,7 +100,7 @@ async fn el_rechazo_de_un_servidor_v6_se_lee_entero() {
             sesiones: 2,
             transferencias: 0,
             tuneles: 1,
-            ejecuciones: 0,
+            escritorios: 0,ejecuciones: 0,
         })
     );
 }
@@ -118,7 +118,7 @@ async fn un_trabajo_incompleto_vale_como_lleno() {
             sesiones: 0,
             transferencias: 1,
             tuneles: 1,
-            ejecuciones: 1,
+            escritorios: 0,ejecuciones: 1,
         })
     );
 }
@@ -137,7 +137,7 @@ async fn un_trabajo_con_campos_desconocidos_vale_como_lleno() {
             sesiones: 1,
             transferencias: 1,
             tuneles: 1,
-            ejecuciones: 1,
+            escritorios: 0,ejecuciones: 1,
         })
     );
 }

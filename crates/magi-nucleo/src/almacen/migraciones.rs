@@ -21,9 +21,10 @@ pub const MIGRACIONES: &[&str] = &[
     MIGRACION_6_SINCRONIZACIONES,
 ];
 
-/// Versión de esquema que conoce este binario (el número de migraciones más
-/// la migración 7, que necesita Rust para rellenar uuid, versión y vector).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 1;
+/// Versión de esquema que conoce este binario (las migraciones SQL de la lista,
+/// más la 7, que necesita Rust para rellenar uuid, versión y vector, y la 8 de
+/// los escritorios remotos).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 2;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -414,6 +415,17 @@ CREATE INDEX idx_conflictos_pendientes ON CONFLICTOS(resuelto_en);
 CREATE INDEX idx_conflictos_uuid ON CONFLICTOS(uuid);
 "#;
 
+/// Fase 12: escritorios remotos. HOSTS gana el tipo (fijo al crear el host),
+/// el dominio de Windows, las opciones del escritorio en JSON y la huella del
+/// certificado RDP aceptado (propia del equipo: no viaja). Todo lo anterior
+/// queda como tipo ssh; no hay tablas nuevas.
+const MIGRACION_8_ESCRITORIOS: &str = r#"
+ALTER TABLE HOSTS ADD COLUMN tipo TEXT NOT NULL DEFAULT 'ssh';
+ALTER TABLE HOSTS ADD COLUMN escritorio_dominio TEXT;
+ALTER TABLE HOSTS ADD COLUMN escritorio_opciones TEXT;
+ALTER TABLE HOSTS ADD COLUMN huella_escritorio TEXT;
+"#;
+
 /// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
@@ -493,6 +505,12 @@ pub fn aplicar(
         let transaccion = conexion.transaction()?;
         migracion_7(&transaccion, equipo, app_version)?;
         transaccion.pragma_update(None, "user_version", 7)?;
+        transaccion.commit()?;
+    }
+    if version < 8 {
+        let transaccion = conexion.transaction()?;
+        transaccion.execute_batch(MIGRACION_8_ESCRITORIOS)?;
+        transaccion.pragma_update(None, "user_version", 8)?;
         transaccion.commit()?;
     }
     Ok(())

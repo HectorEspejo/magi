@@ -184,6 +184,12 @@ impl Almacen {
         hosts::marcar_estado(&self.conexion, id, estado)
     }
 
+    /// Fija (o borra) la huella del certificado RDP aceptado (Fase 12). Es
+    /// propia del equipo: no sube la versión del host ni viaja.
+    pub fn fijar_huella_escritorio(&self, id: i64, huella: Option<&str>) -> Result<()> {
+        hosts::fijar_huella_escritorio(&self.conexion, id, huella)
+    }
+
     /// Últimos directorios de la vista Archivos de un host (F4).
     pub fn fijar_dirs_sftp(
         &self,

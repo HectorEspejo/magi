@@ -257,6 +257,78 @@ impl Default for SeccionServidor {
     }
 }
 
+/// Sección `[escritorio]` de `config.toml` (Fase 12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionEscritorio {
+    /// `auto` o una orden con `{url}`, por ejemplo `brave --app={url}`.
+    pub navegador: String,
+    /// Segundos sin visor antes de cerrar una sesión de escritorio (10-3600).
+    pub gracia_seg: u64,
+    /// Puerto del servidor del visor (0 = libre, o entre 1024 y 65535).
+    pub puerto_visor: u16,
+    /// Distribución que se anuncia a Windows: `auto` (sale de `LANG`) o una
+    /// distribución como `es-ES`.
+    pub distribucion_teclado: String,
+    /// Ofrecer AVC420 a Windows; `false` fuerza los rectángulos.
+    pub h264: bool,
+}
+
+impl Default for SeccionEscritorio {
+    fn default() -> Self {
+        Self {
+            navegador: "auto".to_string(),
+            gracia_seg: 60,
+            puerto_visor: 0,
+            distribucion_teclado: "auto".to_string(),
+            h264: true,
+        }
+    }
+}
+
+impl SeccionEscritorio {
+    /// Valida la sección y devuelve un aviso legible por cada problema (§5.4).
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        let navegador = self.navegador.trim();
+        if navegador.is_empty() {
+            avisos.push(
+                "[escritorio] navegador está vacío: usa auto o una orden con {url}".to_string(),
+            );
+        } else if navegador != "auto" && !navegador.contains("{url}") {
+            avisos.push(
+                "[escritorio] navegador no lleva {url}: no se sabrá qué abrir".to_string(),
+            );
+        }
+        if !(10..=3600).contains(&self.gracia_seg) {
+            avisos.push(
+                "[escritorio] gracia_seg debe estar entre 10 y 3600 segundos".to_string(),
+            );
+        }
+        if self.puerto_visor != 0 && self.puerto_visor < 1024 {
+            avisos.push(
+                "[escritorio] puerto_visor debe ser 0 (libre) o un puerto desde 1024".to_string(),
+            );
+        }
+        if crate::escritorio::validar_teclado(&self.distribucion_teclado).is_err() {
+            avisos.push(
+                "[escritorio] distribucion_teclado debe ser auto o algo como es-ES".to_string(),
+            );
+        }
+        avisos
+    }
+
+    /// Distribución efectiva: la de la configuración o, si es `auto`, la que
+    /// salga de `LANG`.
+    pub fn distribucion_efectiva(&self) -> String {
+        if self.distribucion_teclado == "auto" {
+            crate::escritorio::distribucion_desde_lang(std::env::var("LANG").ok().as_deref())
+        } else {
+            self.distribucion_teclado.clone()
+        }
+    }
+}
+
 /// Contenido de `~/.config/magi/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -281,6 +353,8 @@ pub struct Config {
     pub deliberacion: SeccionDeliberacion,
     /// Sincronización del inventario: `[sincronizacion]` carpeta y umbrales.
     pub sincronizacion: SeccionSincronizacion,
+    /// Escritorio remoto: `[escritorio]` navegador, gracia y visor.
+    pub escritorio: SeccionEscritorio,
 }
 
 impl Default for Config {
@@ -296,6 +370,7 @@ impl Default for Config {
             archivos: SeccionArchivos::default(),
             deliberacion: SeccionDeliberacion::default(),
             sincronizacion: SeccionSincronizacion::default(),
+            escritorio: SeccionEscritorio::default(),
         }
     }
 }

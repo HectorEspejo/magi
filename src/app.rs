@@ -820,6 +820,10 @@ impl Ficha {
             grupo_id,
             direccion: self.direccion.texto.trim().to_string(),
             puerto,
+            // Fase 12: el formulario por tipo lo implementa la pista TUI.
+            tipo: magi_nucleo::escritorio::TipoHost::Ssh,
+            escritorio_dominio: None,
+            escritorio_opciones: magi_nucleo::escritorio::OpcionesEscritorio::default(),
             usuario: if usuario.is_empty() {
                 None
             } else {
@@ -3701,6 +3705,12 @@ impl App {
                 }
                 self.error_de_archivos(mensaje, peticion_id);
             }
+            // Fase 12: la pista TUI implementa estos avisos y sus diálogos.
+            protocolo::MensajeServidor::EscritorioAbierto { .. }
+            | protocolo::MensajeServidor::Enlace { .. }
+            | protocolo::MensajeServidor::Escritorios { .. }
+            | protocolo::MensajeServidor::PideHuellaEscritorio { .. }
+            | protocolo::MensajeServidor::PideCredenciales { .. } => {}
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
             protocolo::MensajeServidor::PideLlavero {
                 sesion_id,
@@ -4439,6 +4449,9 @@ impl App {
                 grupo_id: host.grupo_id,
                 direccion: host.direccion.clone(),
                 puerto: host.puerto,
+                tipo: host.tipo,
+                escritorio_dominio: host.escritorio_dominio.clone(),
+                escritorio_opciones: host.escritorio_opciones.clone(),
                 usuario: host.usuario.clone(),
                 identidad_ref: host.identidad_ref.clone(),
                 salto_host_id: host.salto_host_id,
@@ -4945,6 +4958,10 @@ impl App {
             grupo_id: datos.grupo_id,
             direccion: datos.direccion.clone(),
             puerto: datos.puerto,
+            tipo: datos.tipo,
+            escritorio_dominio: datos.escritorio_dominio.clone(),
+            escritorio_opciones: datos.escritorio_opciones.clone(),
+            huella_escritorio: None,
             usuario: datos.usuario.clone(),
             identidad_ref: datos.identidad_ref.clone(),
             salto_host_id: datos.salto_host_id,

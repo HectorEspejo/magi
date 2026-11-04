@@ -238,6 +238,7 @@ mod pruebas {
             transferencias: 0,
             tuneles: 1,
             ejecuciones: 0,
+            escritorios: 0,
         });
         rechazo
     }
