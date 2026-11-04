@@ -281,11 +281,14 @@ Pruebas nuevas que cubren el fallo:
   contadores lo reflejan, el puerto libre se marca solo con esa opción y, al
   tirar la conexión del host, el túnel pasa a caído con motivo. Sin el
   vigilante, la prueba de caída se queda esperando un «caído» que nunca llega.
-- **Android, instrumentada** (PruebaTunelE2E.kt): arranca el núcleo nativo,
-  importa una fixture con un host 10.0.2.2:12222 y un túnel 127.0.0.1:9090 →
-  127.0.0.1:19091, activa el túnel y comprueba el eco por un socket local del
-  propio dispositivo y los contadores. Necesita el servidor de pruebas del
-  anfitrión y se omite sola si no está (CI).
+- **Android, instrumentada** (PruebaTunelE2E.kt): dos pruebas con el núcleo
+  nativo. La primera importa la fixture (host 10.0.2.2:12222 y túnel
+  127.0.0.1:9090 → 127.0.0.1:19091), activa el túnel y comprueba el eco por un
+  socket local y los contadores (abiertas y aceptadas). La segunda conecta,
+  tira todas las conexiones SSH desde el canal de control del servidor de
+  pruebas (10.0.2.2:12223, orden «tirar») y comprueba que el túnel pasa a caído
+  con motivo. Necesitan el servidor de pruebas del anfitrión y se omiten solas
+  si no está (CI).
 
 Revisión adversarial (T31) de esta corrección: se repasaron las carreras de
 parada/relanzado y doble activación, la identidad del vigilante (usa Weak y
@@ -293,8 +296,10 @@ comprueba Arc::ptr_eq antes de tocar el mapa), las sesiones y túneles que
 comparten conexión, el refresco de contadores desde la interfaz y el caso de
 CI sin servidor de pruebas. Se corrigieron en el acto los avisos de Clippy que
 aparecieron (paréntesis y complejidad de tipo en el gancho de copia) y se dejó
-la prueba instrumentada con omisión automática si falta el servidor. No se
-encontraron fugas nuevas ni cambios en el escritorio.
+la prueba instrumentada con omisión automática si falta el servidor. Se
+comprobó además que la prueba de caída falla si se desactiva el vigilante y
+vuelve a pasar al restaurarlo, que es la reproducción automatizada del fallo
+que faltaba. No se encontraron fugas nuevas ni cambios en el escritorio.
 
 Queda pendiente repetir la prueba con Chrome y Brave en el plegable.
 
@@ -319,10 +324,11 @@ Queda pendiente repetir la prueba con Chrome y Brave en el plegable.
 - **actionlint:** 0 errores en los cinco workflows.
 - **Corrección 11b (2026-11-04).** Rust: fmt, clippy, cargo test --workspace y
   cargo deny en verde, incluidas las pruebas E2E nuevas del túnel (reenvío
-  real, puerto libre y caída de la conexión del host). Android: lint 0 errores,
-  126 pruebas JVM y assembleDebug; **7/7** pruebas instrumentadas en el AVD API
-  30 (las 4 anteriores y PruebaTunelE2E, que importa la fixture del túnel y
-  comprueba el eco por 127.0.0.1:9090 contra el servidor de pruebas).
+  real, puerto libre, caída de la conexión del host y comprobación de que la
+  prueba de caída falla sin el vigilante). Android: lint 0 errores, **127**
+  pruebas JVM y assembleDebug; **8/8** pruebas instrumentadas en el AVD API 30
+  (las 4 anteriores y las dos de PruebaTunelE2E: reenvío por 127.0.0.1:9090 y
+  caída al tirar la conexión SSH del host).
 - **Corrección posterior (2026-11-01, desbloqueo facial).** Tras probar la app
   en un Honor MagicOS se reprodujo el fallo de setUnlockedDeviceRequired
   (desviación 15). Con las claves ya migradas, la cadena se repitió: lint 0
@@ -502,8 +508,9 @@ CI, publicación y documentación:
 ### Corrección 11b (4 nov 2026)
 
 - NUEVO crates/magi-movil/tests/tunel_local_e2e.rs (E2E Rust del túnel local).
-- NUEVO crates/magi-movil/examples/servidor_pruebas_tunel.rs (servidor SSH y
-  eco de pruebas; puertos 12222 y 19091).
+- NUEVO crates/magi-movil/examples/servidor_pruebas_tunel.rs (servidor SSH,
+  eco y canal de control para tirar las conexiones; puertos 12222, 19091 y
+  12223).
 - NUEVO crates/magi-nucleo/tests/generar_fixture_tunel_android.rs y
   android/app/src/androidTest/assets/tunel/magi-bbbbbbbb-cccc-4ddd-8eee-ffffffffffff.age
   (fixture del E2E con host 10.0.2.2:12222 y túnel 127.0.0.1:9090 → 19091).

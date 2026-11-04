@@ -55,6 +55,20 @@ class PruebaModelosTuneles {
     }
 
     @Test
+    fun losContadoresIncluyenAbiertasYAceptadas() {
+        val fila = tunel().copy(
+            conexiones = 2,
+            aceptadas = 5,
+            bytesSubida = 14_336,
+            bytesBajada = 1_258_291,
+        )
+        assertEquals(
+            "2 abiertas · 5 aceptadas · ↑14 KB ↓1,2 MB",
+            contadoresTunel(fila),
+        )
+    }
+
+    @Test
     fun formateaBytesConComaDecimal() {
         assertEquals("0 B", formatoBytes(0))
         assertEquals("512 B", formatoBytes(512))

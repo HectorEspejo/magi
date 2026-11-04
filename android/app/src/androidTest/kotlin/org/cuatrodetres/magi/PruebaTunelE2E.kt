@@ -95,10 +95,8 @@ class PruebaTunelE2E {
         raiz.deleteRecursively()
     }
 
-    @Test
-    fun elTunelLocalReenviaEnAndroid() = runBlocking {
-        // El E2E necesita el servidor de pruebas en el anfitrión. Sin él (CI
-        // sin cuidadores), se omite en vez de fallar.
+    /** El E2E necesita el servidor de pruebas del anfitrión (sin él, se omite). */
+    private fun comprobarServidorDePruebas() {
         val servidor = try {
             Socket().use {
                 it.connect(java.net.InetSocketAddress("10.0.2.2", 12222), 1_000)
@@ -112,6 +110,11 @@ class PruebaTunelE2E {
                 "cargo run -p magi-movil --example servidor_pruebas_tunel",
             servidor,
         )
+    }
+
+    @Test
+    fun elTunelLocalReenviaEnAndroid() = runBlocking {
+        comprobarServidorDePruebas()
         nucleo = Nucleo.iniciar(
             rutas = rutasPrivadas(),
             equipo = Equipo(nombre = "telefono-prueba", plataforma = "android"),
@@ -176,6 +179,44 @@ class PruebaTunelE2E {
         assertTrue(
             "la fila no cuenta las conexiones aceptadas: " + aceptadas,
             aceptadas.aceptadas.toInt() >= 1,
+        )
+    }
+
+    @Test
+    fun siCaeLaConexionDelHostElTunelQuedaCaido() = runBlocking {
+        comprobarServidorDePruebas()
+        nucleo = Nucleo.iniciar(
+            rutas = rutasPrivadas(),
+            equipo = Equipo(nombre = "telefono-prueba", plataforma = "android"),
+            retrollamadas = Retrollamadas(
+                carpeta = CarpetaDeAssets(),
+                llavero = llavero,
+                firmante = FirmanteClaveBlanda(),
+                oyente = oyente,
+            ),
+        )
+        nucleoParaDialogos = nucleo
+        nucleo!!.elegirCarpeta(CARPETA)
+        nucleo!!.unirConClave(CLAVE)
+        val web = nucleo!!.tuneles(null).first { it.nombre == "web" }
+        nucleo!!.activarTunel(web.uuid)
+        val activo = esperarTunel(web.uuid) { it.estado == EstadoTunel.ACTIVO }
+        val puerto = activo.puertoEfectivo?.toInt() ?: PUERTO_TUNEL
+
+        // Una conexión real abre el canal; el servidor de pruebas guarda el mango.
+        assertEquals("hola", hablar("127.0.0.1", puerto, "hola"))
+
+        // El anfitrión tira todas las conexiones SSH, como un cambio de red.
+        Socket("10.0.2.2", 12223).use { socket ->
+            socket.soTimeout = 5_000
+            socket.getOutputStream().write("tirar".toByteArray())
+            socket.getOutputStream().flush()
+        }
+
+        val caido = esperarTunel(web.uuid) { it.estado == EstadoTunel.CAIDO }
+        assertTrue(
+            "el túnel debe caer con motivo; fila=" + caido,
+            caido.error?.contains("conexión") == true,
         )
     }
 

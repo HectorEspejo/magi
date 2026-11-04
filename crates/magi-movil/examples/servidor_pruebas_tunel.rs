@@ -11,7 +11,7 @@
 //! Los puertos son fijos porque la fixture de sincronización del E2E también
 //! los lleva escritos.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -22,19 +22,27 @@ const PUERTO_SSH: u16 = 12222;
 /// Clave privada Ed25519 fija del servidor de pruebas (solo pruebas).
 const CLAVE_HOST: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDA1IOIcCWN1rhZ0F5j85aNnNvHOyYGids5Mcn/DhhybAAAAJA+mLoOPpi6\nDgAAAAtzc2gtZWQyNTUxOQAAACDA1IOIcCWN1rhZ0F5j85aNnNvHOyYGids5Mcn/DhhybA\nAAAECR3deuBiE8h56e5dn365ybojzbijkQkd3yic83qo/6McDUg4hwJY3WuFnQXmPzlo2c\n28c7JgaJ2zkxyf8OGHJsAAAADG1hZ2ktcHJ1ZWJhcwE=\n-----END OPENSSH PRIVATE KEY-----\n";
 const PUERTO_ECO: u16 = 19091;
+/// Canal de control para tirar las conexiones SSH desde la prueba.
+const PUERTO_CONTROL: u16 = 12223;
 
-struct Servidor;
+struct Servidor {
+    mangos: Arc<Mutex<Vec<russh::server::Handle>>>,
+}
 
 impl russh::server::Server for Servidor {
     type Handler = Manejador;
 
     fn new_client(&mut self, origen: Option<std::net::SocketAddr>) -> Manejador {
         eprintln!("ssh: conexión entrante de {origen:?}");
-        Manejador
+        Manejador {
+            mangos: self.mangos.clone(),
+        }
     }
 }
 
-struct Manejador;
+struct Manejador {
+    mangos: Arc<Mutex<Vec<russh::server::Handle>>>,
+}
 
 impl russh::server::Handler for Manejador {
     type Error = russh::Error;
@@ -56,8 +64,9 @@ impl russh::server::Handler for Manejador {
         _origen: &str,
         _puerto_origen: u32,
         respuesta: russh::server::ChannelOpenHandle,
-        _sesion: &mut russh::server::Session,
+        sesion: &mut russh::server::Session,
     ) -> Result<(), Self::Error> {
+        self.mangos.lock().expect("mangos").push(sesion.handle());
         eprintln!("direct-tcpip pedido: {host}:{puerto}");
         let conexion = tokio::time::timeout(
             Duration::from_secs(5),
@@ -77,6 +86,41 @@ impl russh::server::Handler for Manejador {
         });
         Ok(())
     }
+}
+
+/// Canal de control: al recibir «tirar» corta todas las conexiones SSH.
+async fn servir_control(mangos: Arc<Mutex<Vec<russh::server::Handle>>>) {
+    let escucha = TcpListener::bind(("0.0.0.0", PUERTO_CONTROL))
+        .await
+        .expect("control en 0.0.0.0:12223");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut flujo, _)) = escucha.accept().await else {
+                return;
+            };
+            let mangos = mangos.clone();
+            tokio::spawn(async move {
+                let mut orden = String::new();
+                let _ = flujo.read_to_string(&mut orden).await;
+                if orden.trim() == "tirar" {
+                    let cortados: Vec<russh::server::Handle> = {
+                        let mut guardia = mangos.lock().expect("mangos");
+                        std::mem::take(&mut *guardia)
+                    };
+                    for mango in cortados {
+                        let _ = mango
+                            .disconnect(
+                                russh::Disconnect::ByApplication,
+                                "prueba: se cae la red".to_string(),
+                                "".to_string(),
+                            )
+                            .await;
+                    }
+                    eprintln!("control: conexiones SSH tiradas");
+                }
+            });
+        }
+    });
 }
 
 /// Eco: devuelve tal cual lo recibido.
@@ -122,7 +166,9 @@ async fn main() {
         .await
         .expect("ssh en 0.0.0.0:12222");
     eprintln!("ssh escuchando en 0.0.0.0:{PUERTO_SSH}");
-    eprintln!("listo: SSH {PUERTO_SSH} · ECO {PUERTO_ECO}");
-    let mut servidor = Servidor;
+    eprintln!("listo: SSH {PUERTO_SSH} · ECO {PUERTO_ECO} · CONTROL {PUERTO_CONTROL}");
+    let mangos = Arc::new(Mutex::new(Vec::new()));
+    servir_control(mangos.clone()).await;
+    let mut servidor = Servidor { mangos };
     let _ = russh::server::Server::run_on_socket(&mut servidor, config, &escucha).await;
 }
