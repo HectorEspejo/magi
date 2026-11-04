@@ -16,6 +16,13 @@ en [`docs/publicar.md`](../docs/publicar.md).
 
 ### Cambiado
 
+- En plegable o tableta, al abrir una sesión el terminal ocupa toda la
+  pantalla, y cuando no hay nada seleccionado la lista de Hosts, Sesiones,
+  Túneles o Ajustes ocupa todo el ancho: desaparece el panel vacío con «Elige
+  un host…».
+
+### Cambiado
+
 - La cabecera de Túneles dice «1 activo» en singular; «auto» va en una línea y
   los nombres largos no se parten.
 

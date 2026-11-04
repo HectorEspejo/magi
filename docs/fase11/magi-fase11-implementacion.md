@@ -305,6 +305,12 @@ Validado en el Honor real (4 nov 2026): tras instalar la compilación con la
 corrección, el túnel local reenvía y Chrome y Brave abren http://127.0.0.1:9090
 por el agujero del túnel. Es la confirmación que faltaba del síntoma original.
 
+Ajuste posterior de disposición (4 nov 2026, petición del desarrollador): en
+plegable/tableta el terminal ocupa toda la pantalla al conectarse a un host y,
+en el resto de menús, cuando no hay detalle seleccionado la lista ocupa todo el
+ancho (desaparece el panel «Elige un host…»). Queda anotado como desviación 17
+y verificado con la compilación de Android.
+
 ### Verificación final (2026-10-31 23:41)
 
 - **Rust:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
@@ -416,6 +422,11 @@ por el agujero del túnel. Es la confirmación que faltaba del síntoma original
     móvil se recrea con otro alias, lo que cambia la identidad y exige
     reinstalarla en los hosts (la interfaz lo avisa). Requiere actualizar §7.8
     y D174/D176 del informe y validarlo en el plegable.
+17. **Sin panel vacío en plegable/tableta.** Cuando no hay detalle
+    seleccionado (Hosts, Sesiones, Túneles o Ajustes), la lista ocupa todo el
+    ancho en vez de mostrar el panel derecho con «Elige un host…». Es una
+    petición del desarrollador tras probar en el plegable; el terminal sigue
+    ocupando toda la pantalla al abrir una sesión (desviación 16).
 16. **Terminal a pantalla completa al abrir una sesión.** A petición del
     desarrollador tras probar en el plegable: mientras el detalle es el
     terminal se ocultan la barra inferior, el riel y la lista del plegable, y

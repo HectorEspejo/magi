@@ -277,11 +277,11 @@ fun AppMagi(
             .safeDrawingPadding(),
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            // Con una sesión abierta el terminal manda: ocupa todo el ancho
-            // aunque sea un plegable abierto (sin riel ni lista al lado).
-            val ancha = maxWidth >= 600.dp && estado.detalle !is DetalleVista.Terminal
-            if (ancha) {
-                SuperficieAncha(
+            when {
+                // Con una sesión abierta el terminal manda: ocupa todo el
+                // ancho y todo el alto aunque sea un plegable abierto o una
+                // tableta (sin riel, sin lista y sin barra inferior).
+                estado.detalle is DetalleVista.Terminal -> SuperficieCompacta(
                     estado = estado,
                     inventario = inventario,
                     vm = vm,
@@ -290,8 +290,16 @@ fun AppMagi(
                     alAbrirNavegador = abrirNavegador,
                     alAbrirBateria = abrirBateria,
                 )
-            } else {
-                SuperficieCompacta(
+                maxWidth >= 600.dp -> SuperficieAncha(
+                    estado = estado,
+                    inventario = inventario,
+                    vm = vm,
+                    vmTerminal = vmTerminal,
+                    alElegirCarpeta = elegirCarpeta,
+                    alAbrirNavegador = abrirNavegador,
+                    alAbrirBateria = abrirBateria,
+                )
+                else -> SuperficieCompacta(
                     estado = estado,
                     inventario = inventario,
                     vm = vm,
@@ -460,31 +468,37 @@ private fun SuperficieAncha(
                 .fillMaxHeight()
                 .background(Paleta.GRIS.copy(alpha = 0.4f)),
         )
-        ContenidoDestino(
-            estado = estado,
-            inventario = inventario,
-            destino = estado.destino,
-            vm = vm,
-            alElegirCarpeta = alElegirCarpeta,
-            alAbrirNavegador = alAbrirNavegador,
-            alAbrirBateria = alAbrirBateria,
-            modifier = Modifier.weight(0.42f),
-        )
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(Paleta.GRIS.copy(alpha = 0.4f)),
-        )
         val detalle = estado.detalle
         if (detalle == null) {
-            MensajeVacio(
-                titulo = stringResource(R.string.dos_paneles_titulo),
-                detalle = stringResource(R.string.dos_paneles_detalle),
-                glifo = "▥",
-                modifier = Modifier.weight(0.58f).fillMaxSize(),
+            // Sin nada seleccionado, Hosts/Sesiones/Túneles/Ajustes ocupan
+            // todo el ancho: nada de panel vacío con «Elige un host…».
+            ContenidoDestino(
+                estado = estado,
+                inventario = inventario,
+                destino = estado.destino,
+                vm = vm,
+                alElegirCarpeta = alElegirCarpeta,
+                alAbrirNavegador = alAbrirNavegador,
+                alAbrirBateria = alAbrirBateria,
+                modifier = Modifier.weight(1f),
             )
         } else {
+            ContenidoDestino(
+                estado = estado,
+                inventario = inventario,
+                destino = estado.destino,
+                vm = vm,
+                alElegirCarpeta = alElegirCarpeta,
+                alAbrirNavegador = alAbrirNavegador,
+                alAbrirBateria = alAbrirBateria,
+                modifier = Modifier.weight(0.42f),
+            )
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .background(Paleta.GRIS.copy(alpha = 0.4f)),
+            )
             ContenidoDetalle(
                 estado = estado,
                 detalle = detalle,
