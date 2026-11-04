@@ -3,7 +3,7 @@
 //! remoto y dinámico, automáticos, trabajo vivo e «instalar mi clave».
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use magi_nucleo::almacen::{hosts as hosts_bd, movil as movil_bd};
@@ -62,7 +62,87 @@ pub async fn conexion_para_host(
         .lock()
         .await
         .insert(host_uuid.to_string(), conexion.clone());
+    // Sin sesiones, nadie más mira la conexión: si el host la cierra (cambio
+    // de red, doze, keepalive sin respuesta), el túnel se quedaría «activo»
+    // para siempre y cada conexión del navegador fallaría sin explicación.
+    vigilar_conexion(estado.clone(), host_uuid.to_string(), &conexion);
     Ok(conexion)
+}
+
+/// Vigila que la conexión del host siga viva mientras haya trabajo con ella.
+fn vigilar_conexion(estado: Arc<EstadoNucleo>, host_uuid: String, conexion: &Arc<ConexionHost>) {
+    let debil = Arc::downgrade(conexion);
+    let handle = conexion.handle.clone();
+    let manejador = estado.runtime.handle().clone();
+    manejador.spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if debil.upgrade().is_none() {
+                // La conexión se soltó a propósito.
+                return;
+            }
+            if handle.is_closed() {
+                conexion_perdida(
+                    &estado,
+                    &host_uuid,
+                    &debil,
+                    "la conexión con el host se ha perdido; pulsa Relanzar",
+                )
+                .await;
+                return;
+            }
+        }
+    });
+}
+
+/// La conexión del host se cerró sin que nadie la parara: se suelta, las
+/// sesiones pasan a caídas y los túneles del host también, con su motivo.
+async fn conexion_perdida(
+    estado: &Arc<EstadoNucleo>,
+    host_uuid: &str,
+    debil: &Weak<ConexionHost>,
+    motivo: &str,
+) {
+    {
+        let mut conexiones = estado.conexiones.lock().await;
+        let Some(viva) = debil.upgrade() else {
+            return;
+        };
+        let coincide = conexiones
+            .get(host_uuid)
+            .map(|actual| Arc::ptr_eq(actual, &viva))
+            .unwrap_or(false);
+        if !coincide {
+            return;
+        }
+        conexiones.remove(host_uuid);
+    }
+    if let Ok(sesiones) = estado.sesiones.lock() {
+        for sesion in sesiones.values() {
+            if sesion.host_uuid != host_uuid {
+                continue;
+            }
+            if matches!(
+                sesion.estado(),
+                EstadoSesion::Abierta | EstadoSesion::Abriendo
+            ) {
+                sesion.fijar_estado(EstadoSesion::Caida, Some(motivo.to_string()));
+            }
+        }
+    }
+    estado.emitir_sesiones();
+    marcar_tuneles_caidos(estado, host_uuid, motivo);
+    estado.anotar_error(host_uuid, motivo);
+    let _ = estado.escritor.con_almacen({
+        let host_uuid = host_uuid.to_string();
+        move |almacen| {
+            movil_bd::marcar_estado(
+                almacen.conexion(),
+                &host_uuid,
+                Some(magi_nucleo::modelo::UltimoEstado::Error),
+            )
+        }
+    });
 }
 
 async fn conectar_host(
@@ -930,11 +1010,22 @@ pub fn tuneles(
         .ok()
         .flatten()
         .unwrap_or_default();
-        let vivo = vivos.get(&uuid);
+        let vivo = vivos.get(&uuid).cloned();
         let escucha = escucha_movil(tunel.tipo, &tunel.escucha);
-        let (estado_tunel, error, conexiones, subidos, bajados, puerto_efectivo) = match vivo {
+        let (
+            estado_tunel,
+            error,
+            conexiones,
+            aceptadas,
+            ultimo_error,
+            ultimo_error_en,
+            subidos,
+            bajados,
+            puerto_efectivo,
+        ) = match vivo.as_ref() {
             Some(activo) => {
-                let (conexiones, _aceptadas, subidos, bajados) = activo.contadores.instantanea();
+                let (conexiones, aceptadas, subidos, bajados) = activo.contadores.instantanea();
+                let (ultimo_error, ultimo_error_en) = activo.contadores.error_con_fecha();
                 let estado_vivo = activo.estado();
                 let estado_tunel = match &estado_vivo {
                     EstadoTunelVivo::Inactivo => EstadoTunel::Inactivo,
@@ -955,17 +1046,32 @@ pub fn tuneles(
                     estado_tunel,
                     motivo,
                     conexiones,
+                    aceptadas.min(u64::from(u32::MAX)) as u32,
+                    ultimo_error,
+                    ultimo_error_en,
                     subidos,
                     bajados,
                     puerto.map(u32::from),
                 )
             }
-            None => (EstadoTunel::Inactivo, None, 0, 0, 0, None),
+            None => (EstadoTunel::Inactivo, None, 0, 0, None, None, 0, 0, None),
         };
-        let (escucha_texto, aviso) = match (&escucha, tunel.tipo) {
-            (Ok(_escucha), TipoTunel::Remoto) => (tunel.escucha.clone(), false),
-            (Ok(escucha), _) => (escucha.texto(), escucha.aviso),
-            (Err(_), _) => (tunel.escucha.clone(), false),
+        // Con el túnel vivo se enseña la escucha de verdad (puede ser un
+        // puerto libre); si no, la del inventario normalizada para el móvil.
+        let (escucha_texto, aviso) = match vivo.as_ref() {
+            Some(activo) => {
+                let texto = activo
+                    .escucha_efectiva
+                    .lock()
+                    .map(|texto| texto.clone())
+                    .unwrap_or_else(|_| tunel.escucha.clone());
+                (texto, escucha.as_ref().map(|e| e.aviso).unwrap_or(false))
+            }
+            None => match (&escucha, tunel.tipo) {
+                (Ok(_escucha), TipoTunel::Remoto) => (tunel.escucha.clone(), false),
+                (Ok(escucha), _) => (escucha.texto(), escucha.aviso),
+                (Err(_), _) => (tunel.escucha.clone(), false),
+            },
         };
         lista.push(TunelVivo {
             uuid,
@@ -980,6 +1086,9 @@ pub fn tuneles(
             estado: estado_tunel,
             error,
             conexiones,
+            aceptadas,
+            ultimo_error,
+            ultimo_error_en,
             bytes_subida: subidos,
             bytes_bajada: bajados,
             puerto_efectivo,
@@ -1108,8 +1217,16 @@ pub async fn activar_tunel(
         activos.insert(uuid.to_string(), activo.clone());
     }
     emitir_tuneles(estado);
-    let resultado =
-        levantar_tunel(estado, &activo, &host, &tunel, puerto, receptor_cancelacion).await;
+    let resultado = levantar_tunel(
+        estado,
+        &activo,
+        &host,
+        &tunel,
+        puerto,
+        puerto_libre,
+        receptor_cancelacion,
+    )
+    .await;
     // M3: si se pidió parar mientras el túnel se levantaba, se deshace lo
     // levantado (listener y reenvío) en vez de dejarlo huérfano.
     if *activo.cancelacion.borrow() {
@@ -1198,6 +1315,7 @@ async fn levantar_tunel(
     host: &Host,
     tunel: &magi_nucleo::modelo::Tunel,
     puerto: u16,
+    puerto_libre: bool,
     cancelacion: watch::Receiver<bool>,
 ) -> Result<(), String> {
     let conexion = match conexion_para_host(estado, &activo.host_uuid).await {
@@ -1211,9 +1329,11 @@ async fn levantar_tunel(
             if let Ok(mut escucha) = activo.escucha_efectiva.lock() {
                 *escucha = efectiva.clone();
             }
-            if let Ok((_, puerto)) = partir_escucha(&efectiva) {
-                if let Ok(mut guardado) = activo.puerto_efectivo.lock() {
-                    *guardado = Some(puerto);
+            if puerto_libre {
+                if let Ok((_, puerto)) = partir_escucha(&efectiva) {
+                    if let Ok(mut guardado) = activo.puerto_efectivo.lock() {
+                        *guardado = Some(puerto);
+                    }
                 }
             }
             let parada = if tunel.tipo == TipoTunel::Dinamico {
@@ -1266,9 +1386,11 @@ async fn levantar_tunel(
             if let Ok(mut guardado) = activo.escucha_efectiva.lock() {
                 *guardado = efectiva.clone();
             }
-            if let Ok((_, puerto)) = partir_escucha(&efectiva) {
-                if let Ok(mut guardado) = activo.puerto_efectivo.lock() {
-                    *guardado = Some(puerto);
+            if puerto_libre {
+                if let Ok((_, puerto)) = partir_escucha(&efectiva) {
+                    if let Ok(mut guardado) = activo.puerto_efectivo.lock() {
+                        *guardado = Some(puerto);
+                    }
                 }
             }
             let reenvio = Arc::new(Reenvio {

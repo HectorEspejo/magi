@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import org.cuatrodetres.magi.R
 import org.cuatrodetres.magi.ui.componentes.CabeceraMagi
@@ -35,7 +36,9 @@ fun PantallaTuneles(
         it.estado == EstadoTunelVista.ACTIVO || it.estado == EstadoTunelVista.ACTIVANDO
     }
     Column(modifier = modifier.fillMaxSize()) {
-        CabeceraMagi(titulo = stringResource(R.string.tuneles_titulo, activos))
+        CabeceraMagi(
+            titulo = pluralStringResource(R.plurals.tuneles_activos, activos, activos),
+        )
         if (tuneles.isEmpty()) {
             MensajeVacio(
                 titulo = stringResource(R.string.tuneles_vacio_titulo),

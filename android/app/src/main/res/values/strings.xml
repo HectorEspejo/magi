@@ -206,6 +206,11 @@
     <string name="tunel_automatico">auto</string>
     <string name="tunel_aviso_loopback">Escucha en 127.0.0.1 en el móvil (el inventario pedía otra dirección).</string>
     <string name="tunel_puerto_efectivo">Abierto en 127.0.0.1:%1$d (puerto libre, no se guarda).</string>
+    <string name="tunel_ultimo_error">Último error (%1$s): %2$s</string>
+    <plurals name="tuneles_activos">
+        <item quantity="one">MAGI · TÚNELES (%1$d activo)</item>
+        <item quantity="other">MAGI · TÚNELES (%1$d activos)</item>
+    </plurals>
 
     <!-- Ajustes -->
     <string name="ajustes_titulo">MAGI · AJUSTES</string>

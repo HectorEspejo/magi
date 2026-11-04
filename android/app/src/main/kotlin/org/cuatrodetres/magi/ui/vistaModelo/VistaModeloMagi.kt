@@ -669,7 +669,7 @@ class VistaModeloMagi(
         refrescarTuneles()
     }
 
-    private fun refrescarTuneles() {
+    fun refrescarTuneles() {
         alcance.launch {
             val lista = try {
                 fuente.tuneles(null)

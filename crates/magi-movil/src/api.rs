@@ -391,7 +391,14 @@ pub struct TunelVivo {
     pub estado: EstadoTunel,
     /// Último error legible, si el túnel está caído.
     pub error: Option<String>,
+    /// Conexiones abiertas ahora mismo.
     pub conexiones: u32,
+    /// Conexiones aceptadas desde que se abrió el túnel (acumulado).
+    pub aceptadas: u32,
+    /// Último error de una conexión suelta, aunque el túnel siga activo.
+    pub ultimo_error: Option<String>,
+    /// Instante (epoch en segundos) del último error.
+    pub ultimo_error_en: Option<i64>,
     pub bytes_subida: u64,
     pub bytes_bajada: u64,
     /// Puerto en el que quedó escuchando cuando se abrió en un puerto libre.

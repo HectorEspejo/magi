@@ -16,10 +16,24 @@ en [`docs/publicar.md`](../docs/publicar.md).
 
 ### Cambiado
 
+- La cabecera de Túneles dice «1 activo» en singular; «auto» va en una línea y
+  los nombres largos no se parten.
+
+### Cambiado
+
 - Al abrir una sesión, el terminal ocupa toda la pantalla: se ocultan la barra
   inferior, el riel y la lista del plegable, y las barras del sistema se
   esconden mientras está abierto (un deslizamiento las muestra). Al volver se
   restaura la navegación.
+
+### Corregido
+
+- El túnel local ya no se queda «activo» si cae la conexión del host: pasa a
+  caído con el motivo y se puede relanzar. La fila muestra el último error con
+  su hora y los contadores de conexiones abiertas y aceptadas, que se
+  actualizan cada segundo.
+- La nota de puerto libre solo aparece al abrir en un puerto libre; la fila
+  muestra siempre la escucha real.
 
 ### Corregido
 

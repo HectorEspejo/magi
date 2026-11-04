@@ -49,6 +49,9 @@ pub enum PoliticaBorrados {
 /// Información de la pasada que necesita saber qué trabajo está vivo: el
 /// servidor de sesiones custodia sesiones, túneles, transferencias y
 /// ejecuciones. Recibe (tipo de elemento, uuid) y devuelve si hay trabajo vivo.
+/// Gancho del escritorio para copiar magi.db antes de importar.
+pub type GanchoCopia<'a> = &'a dyn Fn(&Connection) -> anyhow::Result<std::path::PathBuf>;
+
 pub struct OpcionesPasada<'a> {
     pub politica_borrados: PoliticaBorrados,
     pub trabajo_vivo: &'a dyn Fn(&str, &str) -> bool,
@@ -56,7 +59,7 @@ pub struct OpcionesPasada<'a> {
     /// magi_config si toca). El móvil, que es lector, no lo usa.
     pub al_aplicar: Option<&'a dyn Fn(&Connection)>,
     /// Copia previa de magi.db (solo el escritorio; el móvil no la hace).
-    pub copia_previa: Option<&'a dyn Fn(&Connection) -> anyhow::Result<std::path::PathBuf>>,
+    pub copia_previa: Option<GanchoCopia<'a>>,
 }
 
 impl<'a> OpcionesPasada<'a> {
@@ -652,7 +655,7 @@ pub fn pasada(
         equipos: leidos.len(),
         ..ResumenImportacion::default()
     };
-    if (cambia || hay_cambios_huellas) {
+    if cambia || hay_cambios_huellas {
         if let Some(copia_previa) = opciones.copia_previa {
             copia_previa(conexion)?;
         }

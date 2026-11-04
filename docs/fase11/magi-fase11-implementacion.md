@@ -230,6 +230,74 @@ desbloquear con la cara (fallo conocido de Android/OEM). Se corrigió y se
 documentó como desviación 15; la migración y el llavero se validaron con
 pruebas instrumentadas. Queda confirmarlo en el móvil real.
 
+### Corrección 11b: el túnel local del móvil (4 nov 2026)
+
+La validación en el plegable encontró que un túnel local activo
+(127.0.0.1:9090 → 127.0.0.1:9090) no reenviaba: Chrome y Brave daban
+ERR_SOCKET_NOT_CONNECTED, la fila seguía en «0 conex. · ↑0 B ↓0 B» sin error y
+aparecía la nota de puerto libre aunque se había activado con el interruptor.
+El túnel equivalente funcionaba desde otro ordenador.
+
+Con la prueba instrumentada nueva se comprobó que, con la clave del host
+aceptada, el reenvío sí funciona en Android (el eco llega por el agujero y los
+bytes suben y bajan). No se reprodujo el error literal del navegador; el
+síntoma observable encaja con la causa que sí se reprodujo en Rust y se
+corrigió:
+
+- **Causa raíz (conexión del host perdida sin vigilante).** Mientras había una
+  sesión abierta, su bucle vigilaba la conexión SSH; con solo un túnel, no
+  había nadie mirándola. Si la conexión se caía (cambio de red, doze o
+  keepalive sin respuesta), el túnel seguía marcado «activo» con la escucha
+  abierta, pero cada conexión del navegador fallaba al pedir el canal
+  direct-tcpip, se cerraba y no movía ni un byte; el error quedaba solo en los
+  contadores internos, que la fila no enseñaba.
+- **Causa secundaria (nota de puerto libre siempre).** El puerto efectivo se
+  rellenaba en toda activación, así que la nota «(puerto libre, no se guarda)»
+  salía siempre y escondía el puerto real.
+- **Causa secundaria (contadores engañosos).** La fila solo enseñaba
+  conexiones abiertas: al cerrar el navegador volvían a 0 y parecía que no
+  había pasado nada.
+
+Correcciones:
+
+1. **Vigilante por conexión (cada 500 ms).** Si el host cierra la conexión sin
+   que nadie la pare, se suelta la conexión, las sesiones de ese host pasan a
+   caídas y sus túneles a caídos con el motivo, de forma que se puede pulsar
+   «Relanzar»; el último estado del host queda en error.
+2. **TunelVivo gana aceptadas, ultimo_error y ultimo_error_en** (contrato
+   aditivo). La fila enseña «N abiertas · M aceptadas · ↑… ↓…» y el último
+   error con su hora, y se refresca cada segundo mientras se ven túneles o la
+   ficha (antes solo cambiaba al activar o parar).
+3. **Puerto efectivo solo al abrir en un puerto libre**; con el interruptor
+   normal la fila enseña siempre la escucha de verdad (127.0.0.1:9090) y no la
+   nota.
+4. **Cabecera «1 activo»** en singular y «auto» en una línea; los nombres
+   largos no parten (elipsis).
+
+Pruebas nuevas que cubren el fallo:
+
+- **Rust, sin red externa** (crates/magi-movil/tests/tunel_local_e2e.rs):
+  servidor SSH en proceso y servicio de eco; el túnel reenvía de verdad, los
+  contadores lo reflejan, el puerto libre se marca solo con esa opción y, al
+  tirar la conexión del host, el túnel pasa a caído con motivo. Sin el
+  vigilante, la prueba de caída se queda esperando un «caído» que nunca llega.
+- **Android, instrumentada** (PruebaTunelE2E.kt): arranca el núcleo nativo,
+  importa una fixture con un host 10.0.2.2:12222 y un túnel 127.0.0.1:9090 →
+  127.0.0.1:19091, activa el túnel y comprueba el eco por un socket local del
+  propio dispositivo y los contadores. Necesita el servidor de pruebas del
+  anfitrión y se omite sola si no está (CI).
+
+Revisión adversarial (T31) de esta corrección: se repasaron las carreras de
+parada/relanzado y doble activación, la identidad del vigilante (usa Weak y
+comprueba Arc::ptr_eq antes de tocar el mapa), las sesiones y túneles que
+comparten conexión, el refresco de contadores desde la interfaz y el caso de
+CI sin servidor de pruebas. Se corrigieron en el acto los avisos de Clippy que
+aparecieron (paréntesis y complejidad de tipo en el gancho de copia) y se dejó
+la prueba instrumentada con omisión automática si falta el servidor. No se
+encontraron fugas nuevas ni cambios en el escritorio.
+
+Queda pendiente repetir la prueba con Chrome y Brave en el plegable.
+
 ### Verificación final (2026-10-31 23:41)
 
 - **Rust:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
@@ -249,6 +317,12 @@ pruebas instrumentadas. Queda confirmarlo en el móvil real.
 - **dist:** `plan` sigue publicando solo `magi-ssh` con sus cuatro objetivos
   (validado en local con 0.32.0; la CI fija 0.33.1).
 - **actionlint:** 0 errores en los cinco workflows.
+- **Corrección 11b (2026-11-04).** Rust: fmt, clippy, cargo test --workspace y
+  cargo deny en verde, incluidas las pruebas E2E nuevas del túnel (reenvío
+  real, puerto libre y caída de la conexión del host). Android: lint 0 errores,
+  126 pruebas JVM y assembleDebug; **7/7** pruebas instrumentadas en el AVD API
+  30 (las 4 anteriores y PruebaTunelE2E, que importa la fixture del túnel y
+  comprueba el eco por 127.0.0.1:9090 contra el servidor de pruebas).
 - **Corrección posterior (2026-11-01, desbloqueo facial).** Tras probar la app
   en un Honor MagicOS se reprodujo el fallo de setUnlockedDeviceRequired
   (desviación 15). Con las claves ya migradas, la cadena se repitió: lint 0
@@ -425,6 +499,21 @@ CI, publicación y documentación:
   `android/CHANGELOG.md` (nuevo), `README.md` (modificado, sección «App
   Android») y este `docs/fase11/magi-fase11-implementacion.md`.
 
+### Corrección 11b (4 nov 2026)
+
+- NUEVO crates/magi-movil/tests/tunel_local_e2e.rs (E2E Rust del túnel local).
+- NUEVO crates/magi-movil/examples/servidor_pruebas_tunel.rs (servidor SSH y
+  eco de pruebas; puertos 12222 y 19091).
+- NUEVO crates/magi-nucleo/tests/generar_fixture_tunel_android.rs y
+  android/app/src/androidTest/assets/tunel/magi-bbbbbbbb-cccc-4ddd-8eee-ffffffffffff.age
+  (fixture del E2E con host 10.0.2.2:12222 y túnel 127.0.0.1:9090 → 19091).
+- NUEVO android/app/src/androidTest/kotlin/org/cuatrodetres/magi/PruebaTunelE2E.kt.
+- MODIFICADO crates/magi-movil/src/gestor.rs (vigilante de conexión, caída de
+  túneles, puerto efectivo, contadores), crates/magi-movil/src/api.rs
+  (TunelVivo), crates/magi-nucleo/src/conexion/reenvios.rs (hora del último
+  error) y la interfaz de túneles (Conversiones, ModelosTuneles, FilaTunel,
+  PantallaTuneles, AppMagi, VistaModeloMagi, strings.xml).
+
 ## Decisiones técnicas tomadas durante el desarrollo
 
 - **Un crate núcleo único y el paquete raíz intacto.** `magi-ssh` sigue en la
@@ -530,6 +619,15 @@ CI, publicación y documentación:
   real, pinta el inventario por la API y crea la clave del móvil en el Keystore
   real; la fixture se regenera con
   `cargo test -p magi-nucleo --test generar_fixture_android -- --ignored`.
+
+### Corrección 11b (4 nov 2026)
+
+- El vigilante de la conexión del host vive en el gestor del móvil y se apoya
+  en Handle::is_closed del cliente SSH; no cambia nada del escritorio.
+- Se amplía el contrato UniFFI de forma aditiva (aceptadas, ultimo_error y
+  ultimo_error_en en TunelVivo) y se regeneran los bindings.
+- El E2E Android depende de un servidor de pruebas en el anfitrión; si no está,
+  se omite con Assume en vez de fallar, para no romper la CI.
 
 ## Funcionalidades del checklist completadas
 
@@ -716,6 +814,16 @@ están en «Pendientes y bloqueos».
    proyecto en 823/827. Falta actualizar este informe con el resultado de la
    validación manual y las comprobaciones posteriores a la primera publicación.
 
+8. **Túnel del móvil en el plegable (corrección 11b).** Repetir en el Honor
+   la prueba con Chrome y Brave: activar un túnel local y abrir
+   http://127.0.0.1:puerto; comprobar contadores, último error con hora y que,
+   si se cae la red, el túnel pasa a caído con «Relanzar». El E2E automático
+   cubre el reenvío y la caída, pero no el navegador real.
+9. **Checklist de la reanudación.** El prompt de la corrección 11b habla de
+   109/117 funcionalidades; el checklist del repositorio sigue en 110/110
+   (Fase 11 cerrada). Falta que el desarrollador traiga al repositorio la
+   versión actualizada del analista.
+
 ## Ejecución y pruebas (cómo arrancar, migrar y testear)
 
 **Entorno de Android (máquina de desarrollo).** Antes de usar Gradle o
@@ -808,3 +916,15 @@ ensayo de `android-release.yml` con keystore y la corrección documental de §11
 
 *Borrador actualizado el 2026-10-31 (23:36); se actualiza al cerrar cada
 sesión.*
+
+### Corrección 11b
+
+- Rust, sin red externa: cargo test -p magi-movil --test tunel_local_e2e
+  (servidor SSH en proceso y servicio de eco).
+- Android instrumentado: arrancar antes
+  cargo run -p magi-movil --example servidor_pruebas_tunel (SSH 0.0.0.0:12222
+  y eco 127.0.0.1:19091) y ejecutar
+  ./gradlew connectedDebugAndroidTest
+  -Pandroid.testInstrumentationRunnerArguments.class=org.cuatrodetres.magi.PruebaTunelE2E
+  (o la cadena completa; la prueba se omite si el servidor no está).
+- Fixture del túnel: cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored

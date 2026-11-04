@@ -46,7 +46,14 @@ data class TunelVista(
     val automatico: Boolean = false,
     val estado: EstadoTunelVista = EstadoTunelVista.INACTIVO,
     val error: String? = null,
+    /** Conexiones abiertas ahora mismo. */
     val conexiones: Int = 0,
+    /** Conexiones aceptadas desde que se abrió (acumulado). */
+    val aceptadas: Int = 0,
+    /** Último error de una conexión suelta, aunque el túnel siga activo. */
+    val ultimoError: String? = null,
+    /** Instante (epoch en segundos) del último error. */
+    val ultimoErrorEn: Long? = null,
     val bytesSubida: Long = 0,
     val bytesBajada: Long = 0,
     /** Puerto asignado cuando se abrió en un puerto libre (no se guarda). */
@@ -117,7 +124,8 @@ fun urlNavegador(tunel: TunelVista): String? {
 
 /** Contadores de la fila: «2 conex. · ↑14 KB ↓1,2 MB». */
 fun contadoresTunel(tunel: TunelVista): String =
-    tunel.conexiones.toString() + " conex. · ↑" + formatoBytes(tunel.bytesSubida) +
+    tunel.conexiones.toString() + " abiertas · " + tunel.aceptadas.toString() +
+        " aceptadas · ↑" + formatoBytes(tunel.bytesSubida) +
         " ↓" + formatoBytes(tunel.bytesBajada)
 
 /** Formatea bytes en B, KB y MB con coma decimal y sin decimales de relleno. */

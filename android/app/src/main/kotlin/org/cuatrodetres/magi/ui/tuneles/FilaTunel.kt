@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,7 @@ import org.cuatrodetres.magi.ui.modelos.EstadoTunelVista
 import org.cuatrodetres.magi.ui.modelos.TipoTunelVista
 import org.cuatrodetres.magi.ui.modelos.TunelVista
 import org.cuatrodetres.magi.ui.modelos.contadoresTunel
+import org.cuatrodetres.magi.ui.modelos.formatoFecha
 import org.cuatrodetres.magi.ui.modelos.descripcionTunel
 import org.cuatrodetres.magi.ui.modelos.glifoTunel
 import org.cuatrodetres.magi.ui.modelos.urlNavegador
@@ -97,12 +99,17 @@ fun FilaTunel(
                         text = tunel.nombre,
                         style = MaterialTheme.typography.titleSmall,
                         color = Paleta.TEXTO,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (tunel.automatico) {
                         Text(
                             text = stringResource(R.string.tunel_automatico),
                             style = MaterialTheme.typography.labelSmall,
                             color = Paleta.AMBAR,
+                            maxLines = 1,
+                            softWrap = false,
                         )
                     }
                 }
@@ -147,6 +154,19 @@ fun FilaTunel(
                 text = tunel.error,
                 style = MaterialTheme.typography.labelMedium,
                 color = Paleta.ROJO,
+                modifier = Modifier.padding(start = 52.dp),
+            )
+        } else if (tunel.ultimoError != null) {
+            // El túnel sigue activo pero una conexión falló: se enseña con hora.
+            val cuando = formatoFecha(tunel.ultimoErrorEn)
+            Text(
+                text = if (cuando != null) {
+                    stringResource(R.string.tunel_ultimo_error, cuando, tunel.ultimoError)
+                } else {
+                    tunel.ultimoError
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = Paleta.AMBAR,
                 modifier = Modifier.padding(start = 52.dp),
             )
         }

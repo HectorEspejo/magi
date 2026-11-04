@@ -32,6 +32,8 @@ pub struct Contadores {
     aceptadas: AtomicU64,
     /// Último error de una conexión suelta: no tumba el túnel, pero se enseña.
     ultimo_error: Mutex<Option<String>>,
+    /// Instante (epoch en segundos) del último error.
+    ultimo_error_en: Mutex<Option<i64>>,
 }
 
 impl Contadores {
@@ -65,10 +67,20 @@ impl Contadores {
         if let Ok(mut guardado) = self.ultimo_error.lock() {
             *guardado = Some(motivo);
         }
+        if let Ok(mut cuando) = self.ultimo_error_en.lock() {
+            *cuando = Some(chrono::Utc::now().timestamp());
+        }
     }
 
     pub fn error(&self) -> Option<String> {
         self.ultimo_error.lock().ok().and_then(|e| e.clone())
+    }
+
+    /// Último error del túnel y cuándo ocurrió (epoch en segundos).
+    pub fn error_con_fecha(&self) -> (Option<String>, Option<i64>) {
+        let motivo = self.ultimo_error.lock().ok().and_then(|e| e.clone());
+        let cuando = self.ultimo_error_en.lock().ok().and_then(|e| *e);
+        (motivo, cuando)
     }
 
     /// `(abiertas, aceptadas, subidos, bajados)`.

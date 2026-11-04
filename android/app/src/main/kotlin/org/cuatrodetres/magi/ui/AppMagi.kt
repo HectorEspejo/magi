@@ -154,6 +154,19 @@ fun AppMagi(
         if (estado.bloqueo == EstadoBloqueoVista.DESBLOQUEADA) vm.iniciar()
     }
 
+    // Mientras se ven los túneles (o la ficha con su bloque), se refrescan los
+    // contadores cada segundo: abiertas/aceptadas y bytes cambian sin que la
+    // lista de túneles lo haga.
+    LaunchedEffect(estado.destino, estado.detalle) {
+        val mirandoTuneles = estado.destino == Destino.TUNELES ||
+            estado.detalle is DetalleVista.Ficha
+        if (!mirandoTuneles) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            vm.refrescarTuneles()
+        }
+    }
+
     // Selector SAF de la carpeta compartida (solo lectura).
     val launcherCarpeta = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),

@@ -171,6 +171,9 @@ class PruebaConversiones {
             estado = EstadoTunel.ACTIVO,
             error = null,
             conexiones = 2U,
+            aceptadas = 5U,
+            ultimoError = null,
+            ultimoErrorEn = null,
             bytesSubida = 14_000UL,
             bytesBajada = 1_200_000UL,
             puertoEfectivo = 41_873U,
@@ -179,6 +182,7 @@ class PruebaConversiones {
         assertEquals(EstadoTunelVista.ACTIVO, activo.estado)
         assertEquals(41_873, activo.puertoEfectivo)
         assertEquals(2, activo.conexiones)
+        assertEquals(5, activo.aceptadas)
 
         val inactivo = activo.copy(estado = EstadoTunelVista.INACTIVO)
         val caido = activo.copy(estado = EstadoTunelVista.CAIDO)
