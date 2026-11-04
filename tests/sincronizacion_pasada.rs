@@ -42,7 +42,7 @@ impl Entorno {
             runtime: raiz.join("runtime"),
         };
         std::fs::create_dir_all(&rutas.hogar).expect("creando el hogar");
-        let almacen = Almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("creando magi.db");
         let carpeta = rutas.hogar.join("magi-sync");
         let mut config = Config::default();
         if configurada {
@@ -171,7 +171,7 @@ fn documento_ajeno_con_host() -> Documento {
         runtime: raiz.join("runtime"),
     };
     std::fs::create_dir_all(&rutas.hogar).expect("creando el hogar ajeno");
-    let almacen = Almacen::abrir(&rutas.base_datos()).expect("creando la magi.db ajena");
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("creando la magi.db ajena");
     almacen
         .crear_host(
             &DatosHost {
@@ -182,7 +182,7 @@ fn documento_ajeno_con_host() -> Documento {
             Origen::Manual,
         )
         .expect("creando el host ajeno");
-    sincronizacion::documento_propio(almacen.conexion(), &rutas)
+    sincronizacion::documento_propio(almacen.conexion(), &rutas, magi::VERSION_APP)
         .expect("exportando el documento ajeno")
 }
 

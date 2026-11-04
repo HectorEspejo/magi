@@ -1,0 +1,370 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MAGI · app Android (Fase 11). Todos los textos de interfaz, en castellano. -->
+<resources>
+    <string name="nombre_app">MAGI</string>
+
+    <!-- Navegación de primer nivel (barra inferior / riel) -->
+    <string name="destino_hosts">HOSTS</string>
+    <string name="destino_sesiones">SESIONES</string>
+    <string name="destino_tuneles">TÚNELES</string>
+    <string name="destino_ajustes">AJUSTES</string>
+
+    <!-- Acciones comunes -->
+    <string name="accion_abrir_menu">Abrir menú</string>
+    <string name="accion_volver">Volver</string>
+    <string name="accion_cerrar">CERRAR</string>
+    <string name="accion_cerrar_aviso">Cerrar aviso</string>
+    <string name="accion_aceptar">ACEPTAR</string>
+    <string name="accion_cancelar">CANCELAR</string>
+    <string name="accion_confirmar">CONFIRMAR</string>
+    <string name="accion_conectar">CONECTAR</string>
+    <string name="accion_otra_sesion">OTRA SESIÓN</string>
+    <string name="accion_instalar_clave">INSTALAR MI CLAVE</string>
+    <string name="accion_olvidar_contrasena">OLVIDAR CONTRASEÑA</string>
+    <string name="accion_reconectar">RECONECTAR</string>
+    <string name="accion_relanzar">RELANZAR</string>
+    <string name="accion_puerto_libre">PUERTO LIBRE</string>
+    <string name="accion_descartar">DESCARTAR</string>
+    <string name="accion_abrir_navegador">ABRIR</string>
+    <string name="accion_abrir_ficha">Abrir ficha del host</string>
+    <string name="accion_abrir_terminal">Abrir terminal</string>
+    <string name="accion_cerrar_sesion">CERRAR SESIÓN</string>
+    <string name="accion_copiar">COPIAR</string>
+    <string name="accion_pegar">PEGAR</string>
+    <string name="accion_cancelar_seleccion">Cancelar selección</string>
+    <string name="accion_resolver">RESOLVER</string>
+    <string name="accion_ir_a_hosts">IR A HOSTS</string>
+
+    <!-- Estados con glifo y texto (T5) -->
+    <string name="estado_host_sin_sesion">sin sesión</string>
+    <string name="estado_host_conectando">conectando</string>
+    <string name="estado_host_con_sesiones">%1$d sesiones abiertas</string>
+    <string name="estado_host_error">último intento con error</string>
+    <string name="estado_sesion_abriendo">abriendo</string>
+    <string name="estado_sesion_abierta">abierta</string>
+    <string name="estado_sesion_caida">caída</string>
+    <string name="estado_tunel_inactivo">inactivo</string>
+    <string name="estado_tunel_activando">activando</string>
+    <string name="estado_tunel_activo">activo</string>
+    <string name="estado_tunel_caido">caído</string>
+    <string name="estado_equipo_este">este móvil</string>
+    <string name="estado_equipo_al_dia">al día</string>
+    <string name="estado_equipo_ilegible">ilegible</string>
+    <string name="estado_equipo_danado">dañado</string>
+    <string name="estado_equipo_formato_nuevo">formato nuevo</string>
+    <string name="estado_equipo_quitado">quitado</string>
+
+    <!-- Hosts (§6.1) -->
+    <string name="hosts_titulo">MAGI · HOSTS</string>
+    <string name="hosts_buscar">buscar…</string>
+    <string name="hosts_sin_grupo">SIN GRUPO</string>
+    <string name="hosts_pie_recuento">%1$d hosts</string>
+    <string name="hosts_descripcion_host">%1$s, %2$s, %3$s</string>
+    <string name="hosts_conectar_a">Conectar a %1$s</string>
+    <string name="hosts_aviso_conflictos">%1$d conflicto de huella · %2$s</string>
+    <string name="hosts_menu_sincronizar">Sincronizar ahora</string>
+    <string name="hosts_menu_asistente">Asistente de sincronización</string>
+    <string name="hosts_menu_ajustes">Ajustes</string>
+    <string name="hosts_vacio_titulo">Aún no hay inventario</string>
+    <string name="hosts_vacio_detalle">Elige la carpeta que sincroniza tu escritorio para traer los hosts a este móvil. MAGI solo lee esa carpeta.</string>
+    <string name="hosts_vacio_boton">CONFIGURAR SINCRONIZACIÓN</string>
+    <string name="hosts_sin_clave_titulo">Falta la clave de sincronización</string>
+    <string name="hosts_sin_clave_detalle">La carpeta ya está elegida. Escanea el QR de la clave o pégala para leer los ficheros de MAGI.</string>
+    <string name="hosts_vacio_busqueda_titulo">Ningún host coincide</string>
+    <string name="hosts_vacio_busqueda_detalle">Prueba con otra parte del nombre, la dirección o la etiqueta.</string>
+
+    <!-- Sincronización (§3 y §6.5) -->
+    <string name="sync_titulo">SINCRONIZACIÓN</string>
+    <string name="sync_fase_sin_configurar">sin configurar</string>
+    <string name="sync_fase_sin_clave">sin clave</string>
+    <string name="sync_fase_activa">al día</string>
+    <string name="sync_fase_sincronizando">sincronizando</string>
+    <string name="sync_fase_esperando_clave">esperando clave</string>
+    <string name="sync_fase_error_carpeta">error de carpeta</string>
+    <string name="sync_indicador_al_dia">al día</string>
+    <string name="sync_indicador_sincronizando">sincronizando</string>
+    <string name="sync_indicador_clave_nueva">clave nueva</string>
+    <string name="sync_indicador_error">error</string>
+    <string name="sync_indicador_sin_configurar">sin configurar</string>
+    <string name="sync_aviso_sin_configurar">Este móvil aún no tiene carpeta de sincronización.</string>
+    <string name="sync_aviso_sin_clave">Falta la clave de sincronización de la carpeta.</string>
+    <string name="sync_aviso_esperando_clave">Un equipo conocido no abre con la clave actual. El inventario no se ha tocado: vuelve a escanear la clave del escritorio.</string>
+    <string name="sync_aviso_error_carpeta">No se puede leer la carpeta: revisa el permiso de solo lectura o elige otra carpeta.</string>
+    <string name="sync_accion_elegir_carpeta">ELEGIR CARPETA</string>
+    <string name="sync_accion_unir">UNIR CON CLAVE</string>
+    <string name="sync_accion_escanear">VOLVER A ESCANEAR</string>
+    <string name="sync_accion_sincronizar_ahora">SINCRONIZAR AHORA</string>
+    <string name="sync_accion_dejar">DEJAR DE SINCRONIZAR</string>
+    <string name="sync_carpeta">carpeta</string>
+    <string name="sync_clave">clave</string>
+    <string name="sync_sin_carpeta">sin carpeta</string>
+    <string name="sync_sin_clave">sin clave</string>
+    <string name="sync_este_movil">este móvil</string>
+    <string name="sync_este_movil_lector">lector: no escribe en la carpeta</string>
+    <string name="sync_equipos">EQUIPOS</string>
+    <string name="sync_sin_equipos">Aún no hay ficheros de otros equipos en la carpeta.</string>
+    <string name="sync_conflictos">%1$d conflicto de huella (%2$s)</string>
+
+    <!-- Asistente de sincronización (§4.1) -->
+    <string name="asistente_titulo">SINCRONIZACIÓN</string>
+    <string name="asistente_carpeta_titulo">Elige la carpeta compartida</string>
+    <string name="asistente_carpeta_texto">Selecciona la carpeta que sincroniza tu escritorio (por ejemplo con Syncthing o Nextcloud). MAGI la leerá en modo lector y nunca escribirá en ella.</string>
+    <string name="asistente_elegir_carpeta">ELEGIR CARPETA</string>
+    <string name="asistente_comprobando">Comprobando la carpeta…</string>
+    <string name="asistente_clave_titulo">Une este móvil con la clave</string>
+    <string name="asistente_clave_texto">Escanea el QR que muestra MAGI en el escritorio o pega la clave de sincronización (AGE-SECRET-KEY-…).</string>
+    <string name="asistente_carpeta_elegida">Carpeta: %1$s</string>
+    <string name="asistente_escanear">ESCANEAR QR</string>
+    <string name="asistente_pegar_etiqueta">Clave de sincronización</string>
+    <string name="asistente_unir">UNIR CON ESTA CLAVE</string>
+    <string name="asistente_pegado_aviso">La clave se guarda cifrada en el llavero del teléfono y no sale de él.</string>
+    <string name="asistente_unindo">Comprobando la clave…</string>
+
+    <!-- QR -->
+    <string name="qr_instruccion">Apunta al QR de la clave que muestra MAGI en el escritorio.</string>
+    <string name="qr_volver">VOLVER</string>
+    <string name="qr_sin_permiso">MAGI necesita la cámara para leer el QR. También puedes pegar la clave a mano.</string>
+
+    <!-- Ficha de host (§6.2) -->
+    <string name="ficha_direccion">dirección</string>
+    <string name="ficha_usuario">usuario</string>
+    <string name="ficha_grupo">grupo</string>
+    <string name="ficha_sin_grupo">sin grupo</string>
+    <string name="ficha_etiquetas">etiquetas</string>
+    <string name="ficha_ninguna">—</string>
+    <string name="ficha_salto">salto</string>
+    <string name="ficha_directo">directo</string>
+    <string name="ficha_keepalive">keepalive</string>
+    <string name="ficha_keepalive_movil">%1$d s (móvil)</string>
+    <string name="ficha_keepalive_valor">%1$d s</string>
+    <string name="ficha_escritorio">escritorio</string>
+    <string name="ficha_en_el_movil">en el móvil</string>
+    <string name="ficha_autenticacion_guardada">clave del móvil, luego contraseña (guardada)</string>
+    <string name="ficha_autenticacion_sin_guardar">clave del móvil, luego contraseña (no guardada)</string>
+    <string name="ficha_huella">huella</string>
+    <string name="ficha_sin_huellas">sin huellas conocidas en este móvil</string>
+    <string name="ficha_tuneles">TÚNELES</string>
+    <string name="ficha_sin_tuneles">Este host no tiene túneles en el inventario.</string>
+    <string name="ficha_conflicto_huella">Hay un conflicto de huella con %1$s.</string>
+    <string name="ficha_cargando_titulo">Cargando la ficha…</string>
+    <string name="ficha_cargando_detalle">Espera un momento.</string>
+
+    <!-- Sesiones -->
+    <string name="sesiones_titulo">MAGI · SESIONES (%1$d)</string>
+    <string name="sesiones_vacio_titulo">No hay sesiones abiertas</string>
+    <string name="sesiones_vacio_detalle">Abre un host desde HOSTS para tener una terminal y que siga viva en segundo plano.</string>
+    <string name="sesiones_descripcion_fila">%1$s, %2$s</string>
+    <string name="sesiones_cerrar_a">Cerrar %1$s</string>
+
+    <!-- Terminal (§6.3) -->
+    <string name="terminal_titulo">TERMINAL</string>
+    <string name="terminal_sin_sesion_titulo">Ninguna sesión visible</string>
+    <string name="terminal_sin_sesion_detalle">Abre una sesión desde HOSTS o elige una en SESIONES.</string>
+    <string name="terminal_esperando">Conectando con el host…</string>
+    <string name="terminal_abriendo">Abriendo la sesión…</string>
+    <string name="terminal_caida">La sesión se ha caído. Reconecta para continuar.</string>
+    <string name="terminal_descripcion_sesion">Sesión %1$s</string>
+    <string name="terminal_menu_zoom_menos">Tamaño de letra −</string>
+    <string name="terminal_menu_zoom_mas">Tamaño de letra +</string>
+    <string name="terminal_zoom_actual">Tamaño de letra: %1$d sp</string>
+    <string name="terminal_zoom_minimo">8 sp</string>
+    <string name="terminal_zoom_maximo">24 sp</string>
+    <string name="terminal_zoom_ejemplo">usuario@host:~$ echo Hola, MAGI</string>
+    <string name="terminal_zoom_nota">En el terminal también puedes pellizcar con dos dedos para cambiar el tamaño; se recuerda para la próxima vez.</string>
+    <string name="terminal_pegado_titulo">PEGAR VARIAS LÍNEAS</string>
+    <string name="terminal_pegado_texto">El texto tiene %1$d líneas y el remoto no ha activado el pegado entre corchetes: se ejecutarán en el shell. ¿Pegar igualmente?</string>
+
+    <!-- Fila de teclas extra -->
+    <string name="tecla_ctrl">Ctrl</string>
+    <string name="tecla_alt">Alt</string>
+    <string name="tecla_escape">Esc</string>
+    <string name="tecla_tab">Tab</string>
+    <string name="tecla_arriba">↑</string>
+    <string name="tecla_abajo">↓</string>
+    <string name="tecla_izquierda">←</string>
+    <string name="tecla_derecha">→</string>
+    <string name="tecla_inicio">Inicio</string>
+    <string name="tecla_fin">Fin</string>
+    <string name="tecla_repag">RePág</string>
+    <string name="tecla_avpag">AvPág</string>
+    <string name="tecla_barra_vertical">|</string>
+    <string name="tecla_virgulilla">~</string>
+    <string name="tecla_barra">/</string>
+    <string name="tecla_guion">-</string>
+    <string name="tecla_ctrl_apagado">Ctrl: apagado</string>
+    <string name="tecla_ctrl_pendiente">Ctrl: para la próxima tecla</string>
+    <string name="tecla_ctrl_fijo">Ctrl: fijo; toca otra vez para apagarlo</string>
+    <string name="tecla_alt_apagado">Alt: apagado</string>
+    <string name="tecla_alt_pendiente">Alt: para la próxima tecla</string>
+    <string name="tecla_alt_fijo">Alt: fijo; toca otra vez para apagarlo</string>
+
+    <!-- Túneles -->
+    <string name="tuneles_titulo">MAGI · TÚNELES (%1$d activos)</string>
+    <string name="tuneles_vacio_titulo">No hay túneles</string>
+    <string name="tuneles_vacio_detalle">Los túneles se crean en el escritorio, en la ficha de cada host. Aquí se encienden y se apagan.</string>
+    <string name="tuneles_descripcion_fila">%1$s en %2$s, %3$s, %4$s</string>
+    <string name="tunel_automatico">auto</string>
+    <string name="tunel_aviso_loopback">Escucha en 127.0.0.1 en el móvil (el inventario pedía otra dirección).</string>
+    <string name="tunel_puerto_efectivo">Abierto en 127.0.0.1:%1$d (puerto libre, no se guarda).</string>
+    <string name="tunel_ultimo_error">Último error (%1$s): %2$s</string>
+    <plurals name="tuneles_activos">
+        <item quantity="one">MAGI · TÚNELES (%1$d activo)</item>
+        <item quantity="other">MAGI · TÚNELES (%1$d activos)</item>
+    </plurals>
+
+    <!-- Ajustes -->
+    <string name="ajustes_titulo">MAGI · AJUSTES</string>
+    <string name="ajustes_sincronizacion">Sincronización</string>
+    <string name="ajustes_clave_movil">Clave del móvil</string>
+    <string name="ajustes_clave_creando">creando la clave…</string>
+    <string name="ajustes_clave_sin_huella">sin huella</string>
+    <string name="ajustes_terminal">Terminal</string>
+    <string name="ajustes_terminal_detalle">tamaño de letra %1$d sp</string>
+    <string name="ajustes_bateria">Batería</string>
+    <string name="ajustes_bateria_detalle">evita que Android cierre MAGI en segundo plano</string>
+    <string name="ajustes_borrar_datos">Borrar todos los datos</string>
+    <string name="ajustes_borrar_datos_detalle">inventario, clave de sincronización, contraseñas, huellas y clave del móvil</string>
+    <string name="ajustes_acerca_de">Acerca de</string>
+    <string name="ajustes_acerca_de_detalle">versión %1$s</string>
+    <string name="ajustes_acerca_de_detalle_sin_version">versiones y licencias</string>
+
+    <!-- Clave del móvil -->
+    <string name="clave_titulo">CLAVE DEL MÓVIL</string>
+    <string name="clave_creando">Creando la clave en el Keystore…</string>
+    <string name="clave_invalidada">Android invalidó la clave al quitar el bloqueo de pantalla. Crea otra clave y vuelve a instalarla en tus hosts.</string>
+    <string name="clave_ubicacion">dónde vive</string>
+    <string name="clave_strongbox">StrongBox</string>
+    <string name="clave_tee">TEE</string>
+    <string name="clave_ubicacion_desconocida">desconocida</string>
+    <string name="clave_creada">creada</string>
+    <string name="clave_huella">huella SHA256</string>
+    <string name="clave_linea_openssh">LÍNEA PÚBLICA (OpenSSH)</string>
+    <string name="clave_copiar">COPIAR</string>
+    <string name="clave_compartir">COMPARTIR</string>
+    <string name="clave_ver_qr">VER QR</string>
+    <string name="clave_qr_titulo">Clave del móvil · QR</string>
+    <string name="clave_crear_nueva">CREAR CLAVE NUEVA</string>
+    <string name="clave_creando_nueva">Creando la clave nueva en el Keystore…</string>
+    <string name="clave_escanear_sincronizacion">ESCANEAR LA CLAVE DE SINCRONIZACIÓN</string>
+
+    <!-- Batería -->
+    <string name="bateria_explicacion">MagicOS y otros sistemas Android cierran las apps en segundo plano de forma agresiva. Para que tus sesiones y túneles sigan vivos, saca MAGI del ahorro de batería.</string>
+    <string name="bateria_nota">MAGI no hace ningún trabajo en segundo plano si no hay sesiones ni túneles abiertos.</string>
+    <string name="bateria_abrir_ajustes">ABRIR AJUSTES DE BATERÍA</string>
+    <string-array name="bateria_pasos">
+        <item>Pulsa el botón de abajo y, si el sistema lo pide, permite que MAGI no se optimice.</item>
+        <item>Abre Ajustes del teléfono › Batería › Optimización de batería.</item>
+        <item>Busca MAGI en la lista y elige «No optimizar» o «Permitir».</item>
+        <item>En MagicOS, revisa también Ajustes › Aplicaciones › MAGI › Batería y activa el arranque manual y la actividad en segundo plano.</item>
+        <item>Si usas un gestor de terceros, excluye MAGI de la limpieza automática.</item>
+    </string-array>
+
+    <!-- Borrar datos -->
+    <string name="borrar_aviso">Esto borra el inventario, la clave de sincronización, las contraseñas guardadas, las huellas aceptadas y la clave del móvil. No se puede deshacer.</string>
+    <string name="borrar_lista">Lo que se borra: inventario de hosts y grupos, carpeta y clave de sincronización, contraseñas del llavero, known_hosts propio y la clave del móvil del Keystore. Lo que está en la carpeta compartida no se toca.</string>
+    <string name="borrar_confirmacion">Para confirmar, escribe «borrar»:</string>
+    <string name="borrar_etiqueta">borrar</string>
+    <string name="borrar_accion">BORRAR TODOS LOS DATOS</string>
+
+    <!-- Acerca de y licencias -->
+    <string name="acerca_titulo">ACERCA DE MAGI</string>
+    <string name="acerca_version_app">versión de la app</string>
+    <string name="acerca_version_nucleo">versión del núcleo</string>
+    <string name="acerca_formato">formato de sincronización</string>
+    <string name="acerca_user_version">user_version de magi.db</string>
+    <string name="acerca_licencia">licencia</string>
+    <string name="acerca_licencia_valor">MIT OR Apache-2.0</string>
+    <string name="acerca_movil">este móvil</string>
+    <string name="acerca_movil_lector">lector de la sincronización: no escribe</string>
+    <string name="acerca_sin_nucleo">El núcleo de MAGI aún no está conectado en esta compilación.</string>
+    <string name="acerca_licencias">LICENCIAS</string>
+    <string name="licencias_titulo">LICENCIAS</string>
+    <string name="licencias_explicacion">MAGI es software libre (MIT OR Apache-2.0). Estas son las licencias de las dependencias que lleva la app, generadas en la compilación: Kotlin y AndroidX, Jetpack Compose, CameraX, ZXing, JNA, UniFFI, los crates de Rust del núcleo y la fuente JetBrains Mono (OFL 1.1).</string>
+
+    <!-- Diálogos de huella y contraseña -->
+    <string name="huella_nueva_titulo">HUELLA NUEVA · %1$s</string>
+    <string name="huella_nueva_texto">Es la primera vez que este móvil ve la clave de este servidor. Acepta solo si confías en la red.</string>
+    <string name="huella_cambiada_titulo">HUELLA CAMBIADA · %1$s</string>
+    <string name="huella_cambiada_texto">La clave del servidor NO coincide con la que guarda este móvil.</string>
+    <string name="huella_anterior">Anterior  %1$s</string>
+    <string name="huella_nueva">Nueva     %1$s</string>
+    <string name="huella_cambiada_aviso">Puede ser una reinstalación del servidor… o un intermediario. Si no estás seguro, cancela.</string>
+    <string name="huella_cambiada_escribe">Para sustituirla escribe «%1$s»:</string>
+    <string name="huella_cambiada_sustituir">SUSTITUIR</string>
+    <string name="huella_cambiada_cancelar">CANCELAR (recomendado)</string>
+    <string name="contrasena_titulo">CONTRASEÑA · %1$s</string>
+    <string name="contrasena_intentos">Intentos restantes: %1$d</string>
+    <string name="contrasena_etiqueta">contraseña</string>
+    <string name="contrasena_recordar">Recordar en este móvil</string>
+
+    <!-- Confirmaciones destructivas (T6) -->
+    <string name="confirmar_cerrar_sesion_titulo">CERRAR SESIÓN</string>
+    <string name="confirmar_cerrar_sesion_texto">Se cerrará la sesión %1$s. Los procesos que estén corriendo en el host se quedarán como estén.</string>
+    <string name="confirmar_dejar_sync_titulo">DEJAR DE SINCRONIZAR</string>
+    <string name="confirmar_dejar_sync_texto">Se borrarán la clave de sincronización y el inventario de este móvil. La carpeta compartida no se toca. Si hay sesiones o túneles abiertos, no se podrá hasta cerrarlos.</string>
+    <string name="confirmar_olvidar_titulo">OLVIDAR CONTRASEÑA</string>
+    <string name="confirmar_olvidar_texto">Se olvidará la contraseña guardada de %1$s. La próxima vez se pedirá al conectar.</string>
+    <string name="confirmar_instalar_titulo">INSTALAR MI CLAVE</string>
+    <string name="confirmar_instalar_texto">Se añadirá la clave pública del móvil a ~/.ssh/authorized_keys de %1$s. Se usará una conexión con contraseña.</string>
+    <string name="confirmar_aceptar_huella_titulo">ACEPTAR LA HUELLA DEL OTRO EQUIPO</string>
+    <string name="confirmar_aceptar_huella_texto">Se sustituirá la huella guardada en este móvil para %1$s por la del otro equipo. Hazlo solo si confías en ese equipo y en la carpeta compartida.</string>
+
+    <!-- Conflictos de huella -->
+    <string name="conflicto_titulo">CONFLICTO DE HUELLA · %1$s</string>
+    <string name="conflicto_texto">Un equipo de la carpeta compartida propone otra huella para este host. Acepta la del otro equipo solo si lo reconoces; si no, mantén la tuya.</string>
+    <string name="conflicto_mia">Mi huella   %1$s</string>
+    <string name="conflicto_otra">Otra huella %1$s</string>
+    <string name="conflicto_equipo">Equipo: %1$s</string>
+    <string name="conflicto_aceptar">ACEPTAR LA DEL OTRO EQUIPO</string>
+    <string name="conflicto_mantener">MANTENER LA MÍA</string>
+
+    <!-- Avisos efímeros -->
+    <string name="aviso_sesion_cerrada">Sesión cerrada.</string>
+    <string name="aviso_sincronizacion_al_dia">Sincronización al día.</string>
+    <string name="aviso_sincronizacion_dejada">Has dejado de sincronizar este móvil.</string>
+    <string name="aviso_clave_ya_estaba">La clave del móvil ya estaba en el host.</string>
+    <string name="aviso_clave_instalada">Clave instalada: desde ahora entras con la clave del móvil.</string>
+    <string name="aviso_clave_no_aceptada">Clave instalada, pero el host no la acepta (¿AuthorizedKeysFile en otro sitio?).</string>
+    <string name="aviso_contrasena_olvidada">Contraseña olvidada en este móvil.</string>
+    <string name="aviso_conflicto_aceptado">Huella del otro equipo aceptada.</string>
+    <string name="aviso_conflicto_mantenido">Se mantiene tu huella; la del otro equipo se descarta.</string>
+    <string name="aviso_datos_borrados">Datos de MAGI borrados de este móvil.</string>
+    <string name="aviso_tunel_activado">Túnel activado.</string>
+    <string name="aviso_tunel_parado">Túnel parado.</string>
+    <string name="aviso_tunel_descartado">Túnel caído descartado.</string>
+    <string name="aviso_host_desaparecido">Ese host ya no está en el inventario. Sincroniza para actualizarlo.</string>
+    <string name="aviso_error_inesperado">Error inesperado del núcleo. Inténtalo otra vez.</string>
+    <string name="aviso_texto_copiado">Texto copiado al portapapeles.</string>
+    <string name="aviso_portapapeles_vacio">El portapapeles está vacío.</string>
+    <string name="aviso_seleccion_vacia">No hay texto seleccionado.</string>
+    <string name="aviso_clave_movil_creada">Clave del móvil creada. Vuelve a instalarla en tus hosts y escanea de nuevo la clave de sincronización.</string>
+    <string name="aviso_clave_movil_no_creada">No se pudo crear la clave del móvil. Revisa el bloqueo de pantalla del teléfono e inténtalo otra vez.</string>
+
+    <!-- Tiempo relativo -->
+    <string name="tiempo_ahora">ahora mismo</string>
+    <string name="tiempo_desconocido">—</string>
+    <string name="tiempo_hace_segundos">hace %1$d s</string>
+    <string name="tiempo_hace_minutos">hace %1$d min</string>
+    <string name="tiempo_hace_horas">hace %1$d h</string>
+    <string name="tiempo_hace_dias">hace %1$d d</string>
+
+    <!-- Dos paneles y bloqueo -->
+    <string name="dos_paneles_titulo">Elige un host, una sesión o una sección</string>
+    <string name="dos_paneles_detalle">La lista de la izquierda abre el detalle en este panel. Al plegar o desplegar el móvil no se pierde nada.</string>
+    <string name="bloqueo_cabina">CABINA TÉCNICA · ACCESO PROTEGIDO</string>
+    <string name="bloqueo_texto">MAGI está bloqueada. Desbloquea con tu huella o con el PIN del teléfono para ver el inventario y tus sesiones.</string>
+    <string name="bloqueo_desbloquear">DESBLOQUEAR</string>
+    <string name="bloqueo_pidiendo">Esperando el desbloqueo…</string>
+    <string name="bloqueo_nota">Sesiones y túneles no se cortan al bloquear; siguen vivos en segundo plano.</string>
+    <string name="bloqueo_sin_bloqueo">MAGI necesita que el teléfono tenga un PIN, patrón o contraseña. Configúralo en Ajustes de seguridad y vuelve a abrir MAGI.</string>
+    <string name="bloqueo_abrir_seguridad">ABRIR SEGURIDAD DEL TELÉFONO</string>
+
+    <!-- Avisos del segundo plano (informe §4.6) -->
+    <string name="avisos_sesiones_perdidas_texto">Android cerró MAGI con %1$d sesiones abiertas. Las sesiones y túneles se han perdido. Para que no vuelva a pasar, revisa el ahorro de batería.</string>
+    <string name="avisos_guia_bateria_titulo">GUÍA DE BATERÍA</string>
+    <string name="avisos_guia_bateria_texto">Android y MagicOS cierran las apps en segundo plano con agresividad. Sigue la guía para que MAGI conserve tus sesiones y túneles cuando salgas de la app.</string>
+    <string name="avisos_abrir_guia">ABRIR LA GUÍA</string>
+    <string name="avisos_ahora_no">AHORA NO</string>
+    <string name="avisos_ver_guia">VER LA GUÍA</string>
+    <string name="aviso_clave_recreada">La clave del móvil se ha recreado para corregir el desbloqueo por cara. Vuelve a instalar mi clave en tus hosts.</string>
+</resources>

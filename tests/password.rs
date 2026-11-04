@@ -120,6 +120,7 @@ fn contexto_de(
             interactivo,
             fuente_contrasena: FuenteContrasena::Llavero,
             reenvios: None,
+            llavero: std::sync::Arc::new(magi::llavero::LlaveroEnMemoria::nuevo()),
         },
         rx,
     )

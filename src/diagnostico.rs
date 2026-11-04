@@ -1681,7 +1681,7 @@ fn adaptar(texto: &str, ascii: bool) -> String {
 /// código de salida. No toca rutas ni log: se despacha antes que ellos en
 /// `main`.
 pub fn ejecutar() -> anyhow::Result<i32> {
-    let rutas = Rutas::descubrir()?;
+    let rutas = crate::config::descubrir_rutas()?;
     let datos = recoger(rutas);
     let salida = std::io::stdout();
     let es_terminal = salida.is_terminal();

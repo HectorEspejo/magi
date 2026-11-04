@@ -5,7 +5,6 @@
 //! hacen desde la TUI o la CLI; el llavero y la carpeta son las fuentes de la
 //! verdad.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -16,26 +15,10 @@ use crate::llavero::{LlaveroSecreto, CUENTA_SINCRONIZACION, CUENTA_SINCRONIZACIO
 use crate::registro;
 use crate::sincronizacion::carpeta;
 use crate::sincronizacion::cifrado::ClaveSincronizacion;
-use crate::sincronizacion::formato::{self, Documento};
+use crate::sincronizacion::formato;
 
 /// Días que se conserva la clave anterior tras una rotación.
 pub const DIAS_CLAVE_ANTERIOR: i64 = 30;
-
-/// Equipos quitados del universo: uuid → fecha del borrado (la más reciente).
-pub fn equipos_quitados(documentos: &[Documento]) -> BTreeMap<String, String> {
-    let mut quitados: BTreeMap<String, String> = BTreeMap::new();
-    for documento in documentos {
-        for quitado in &documento.equipos_quitados {
-            let entrada = quitados
-                .entry(quitado.uuid.clone())
-                .or_insert_with(|| quitado.quitado_en.clone());
-            if quitado.quitado_en > *entrada {
-                *entrada = quitado.quitado_en.clone();
-            }
-        }
-    }
-    quitados
-}
 
 /// Guarda en el llavero la clave de sincronización.
 pub fn guardar_en_llavero(

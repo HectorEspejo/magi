@@ -1,0 +1,282 @@
+# Integración continua de la app Android de MAGI — Fase 11.
+#
+# Se ejecuta en cada pull request que toca el núcleo compartido o la app, en
+# cada push a main y en las etiquetas android-v*. Compila el núcleo con
+# cargo-ndk para las dos ABI que usa la app (arm64-v8a y x86_64), pasa lint y
+# las pruebas de Kotlin en la JVM, genera el APK de depuración y, en main y en
+# las etiquetas android-v*, corre la prueba de humo en un emulador API 30
+# x86_64 con KVM.
+#
+# La publicación de la app va aparte, en android-release.yml, y solo con una
+# etiqueta android-vX.Y.Z[-rc.N]. Este workflow no recibe secretos, no publica
+# nada y solo pide contents: read.
+
+name: CI Android
+
+on:
+  # Pull requests que tocan el núcleo o la app.
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'android/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/android.yml'
+  # Push a main y etiquetas de la app. En los push de etiquetas los filtros de
+  # rutas no se evalúan: una etiqueta android-v* siempre lanza el workflow.
+  push:
+    branches: [main]
+    tags: ['android-v*']
+    paths:
+      - 'crates/**'
+      - 'android/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/android.yml'
+
+# Una ejecución por rama/PR: al empujar de nuevo se cancela la anterior.
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: '30.0.16248370'
+  CARGO_NDK_VERSION: '4.1.2'
+  # SHA-256 del binario precompilado de cargo-ndk (musl, estático).
+  CARGO_NDK_X86_64_LINUX_MUSL_SHA256: dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
+
+jobs:
+  nucleo-y-apk:
+    name: Núcleo, lint y APK de depuración
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Preparar JDK 21 (AGP y Gradle)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Preparar el SDK de Android
+        # Instala commandline-tools y platform-tools y acepta las licencias,
+        # de modo que AGP pueda descargarse la plataforma de compileSdk y las
+        # build-tools que pida el proyecto.
+        uses: android-actions/setup-android@v4
+
+      - name: Instalar el NDK r30
+        # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);
+        # el de commandline-tools 22 y anteriores usa «;». Se prueban las dos
+        # formas para que el workflow valga con cualquiera de los dos. La
+        # plataforma de compileSdk y las build-tools las descarga AGP si faltan
+        # (las licencias ya están aceptadas); el NDK hace falta antes, para
+        # cargo-ndk.
+        run: |
+          set -euo pipefail
+          instalar() {
+            if ! sdkmanager --install "$1" > /dev/null 2>&1; then
+              sdkmanager --install "$2" > /dev/null
+            fi
+          }
+          instalar "ndk/${NDK_VERSION}" "ndk;${NDK_VERSION}"
+          ndk_home="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          if [ ! -d "$ndk_home" ]; then
+            echo "ERROR: el NDK ${NDK_VERSION} no quedó instalado en $ndk_home" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+
+      - name: Preparar Rust con los objetivos de Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache de Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Instalar cargo-ndk 4.1.2
+        # Se descarga a fichero, se comprueba su SHA-256 y solo entonces se
+        # instala: el binario que compila el núcleo Android no depende de lo
+        # que sirva la red en ese momento.
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tar.gz"
+          echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/cargo-ndk
+          tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
+          install -m 755 "/tmp/cargo-ndk/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}/cargo-ndk" "$HOME/.cargo/bin/cargo-ndk"
+
+      - name: Compilar el núcleo para Android
+        # arm64-v8a en release (la ABI que se publica) y x86_64 en debug (el
+        # emulador de la prueba de humo). Gradle vuelve a compilar lo suyo en
+        # cada assemble; esto comprueba antes que el núcleo compila para
+        # Android con el NDK y que la cripto de russh no necesita la feature
+        # ring (R91).
+        run: |
+          set -euo pipefail
+          cargo ndk -t arm64-v8a -P 30 -o "$RUNNER_TEMP/jniLibs" \
+            build -p magi-movil --release --locked
+          cargo ndk -t x86_64 -P 30 -o "$RUNNER_TEMP/jniLibs" \
+            build -p magi-movil --locked
+
+      - name: Cache de Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: lint, pruebas de JVM y APK de depuración
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon lint testDebugUnitTest assembleDebug
+
+      - name: Guardar el APK de depuración
+        uses: actions/upload-artifact@v7
+        with:
+          name: magi-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Guardar los informes si algo falla
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-informes
+          path: |
+            android/app/build/reports/
+            android/build/reports/
+          if-no-files-found: ignore
+
+  humo:
+    name: Prueba de humo (emulador API 30 x86_64)
+    needs: nucleo-y-apk
+    # En main y en las etiquetas android-v*; en pull requests no, para no
+    # alargar la validación de cada cambio.
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Preparar JDK 21 (AGP y Gradle)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Preparar el SDK de Android
+        uses: android-actions/setup-android@v4
+
+      - name: Instalar el NDK r30
+        # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);
+        # el de commandline-tools 22 y anteriores usa «;». Se prueban las dos
+        # formas para que el workflow valga con cualquiera de los dos. La
+        # plataforma de compileSdk y las build-tools las descarga AGP si faltan
+        # (las licencias ya están aceptadas); el NDK hace falta antes, para
+        # cargo-ndk.
+        run: |
+          set -euo pipefail
+          instalar() {
+            if ! sdkmanager --install "$1" > /dev/null 2>&1; then
+              sdkmanager --install "$2" > /dev/null
+            fi
+          }
+          instalar "ndk/${NDK_VERSION}" "ndk;${NDK_VERSION}"
+          ndk_home="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          if [ ! -d "$ndk_home" ]; then
+            echo "ERROR: el NDK ${NDK_VERSION} no quedó instalado en $ndk_home" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+
+      - name: Preparar Rust con los objetivos de Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache de Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-humo
+
+      - name: Instalar cargo-ndk 4.1.2
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tar.gz"
+          echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/cargo-ndk
+          tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
+          install -m 755 "/tmp/cargo-ndk/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}/cargo-ndk" "$HOME/.cargo/bin/cargo-ndk"
+
+      - name: Cache de Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Habilitar KVM (aceleración del emulador)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Comprobar que KVM está disponible
+        # La prueba de humo se niega a correr sin aceleración (emulator -accel
+        # on más abajo), así que se comprueba antes de arrancar el emulador.
+        run: |
+          set -euo pipefail
+          if [ ! -c /dev/kvm ]; then
+            echo "ERROR: no hay /dev/kvm en el runner; la prueba de humo necesita KVM." >&2
+            exit 1
+          fi
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            echo "ERROR: /dev/kvm no es legible y escribible por el usuario del job." >&2
+            ls -l /dev/kvm >&2
+            exit 1
+          fi
+          if [ ! -x "$ANDROID_SDK_ROOT/emulator/emulator" ]; then
+            sdkmanager --install "emulator" > /dev/null
+          fi
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
+
+      - name: Prueba de humo en el emulador (API 30, x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: x86_64
+          profile: pixel_5
+          emulator-options: '-no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on'
+          disable-animations: true
+          disable-linux-hw-accel: false
+          emulator-boot-timeout: 600
+          working-directory: android
+          script: |
+            set -euo pipefail
+            chmod +x ./gradlew
+            ./gradlew connectedDebugAndroidTest

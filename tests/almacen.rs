@@ -23,7 +23,7 @@ fn datos(nombre: &str) -> DatosHost {
 
 #[test]
 fn migracion_desde_vacio_crea_todas_las_tablas() {
-    let almacen = Almacen::abrir_en_memoria().expect("almacén en memoria");
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
     let mut nombres: Vec<String> = almacen
         .conexion()
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -77,7 +77,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
             )
             .unwrap();
     }
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -100,7 +100,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
 
 #[test]
 fn los_sondeos_se_purgan_a_los_veinte_y_caen_con_el_host() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     for indice in 0..25 {
         let mut sondeo = magi::modelo::Sondeo::vacio(host);
@@ -118,7 +118,7 @@ fn los_sondeos_se_purgan_a_los_veinte_y_caen_con_el_host() {
 
 #[test]
 fn el_registro_conserva_la_fila_con_host_e_identidad_a_null() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let identidad = almacen
         .crear_identidad(
@@ -155,7 +155,7 @@ fn el_registro_conserva_la_fila_con_host_e_identidad_a_null() {
 
 #[test]
 fn las_identidades_sincronizan_por_huella_y_no_resucitan_revocadas() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let claves = vec![
         magi::almacen::identidades::ClaveSincronizada {
             tipo: "ed25519".to_string(),
@@ -199,7 +199,7 @@ fn las_identidades_sincronizan_por_huella_y_no_resucitan_revocadas() {
 
 #[test]
 fn el_registro_se_exporta_a_csv_y_json() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     magi::registro::anotar(
         almacen.conexion(),
@@ -232,7 +232,7 @@ fn el_registro_se_exporta_a_csv_y_json() {
 
 #[test]
 fn crud_de_hosts_conserva_campos_y_etiquetas() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let host = almacen.obtener_host(id).unwrap();
     assert_eq!(host.nombre, "uno");
@@ -266,7 +266,7 @@ fn crud_de_hosts_conserva_campos_y_etiquetas() {
 
 #[test]
 fn la_identidad_de_contrasena_se_guarda_como_marca_sin_secreto() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let mut con_contrasena = datos("pass");
     con_contrasena.identidad_ref = IdentidadRef::Contrasena;
     let id = almacen.crear_host(&con_contrasena, Origen::Manual).unwrap();
@@ -287,7 +287,7 @@ fn la_identidad_de_contrasena_se_guarda_como_marca_sin_secreto() {
 
 #[test]
 fn nombre_de_host_duplicado_da_error_legible() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     almacen.crear_host(&datos("dup"), Origen::Manual).unwrap();
     let error = almacen
         .crear_host(&datos("dup"), Origen::Manual)
@@ -300,7 +300,7 @@ fn nombre_de_host_duplicado_da_error_legible() {
 
 #[test]
 fn borrar_un_grupo_mueve_sus_hosts_a_sin_grupo() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let grupo = almacen.crear_grupo("producción").unwrap();
     let mut datos = datos("uno");
     datos.grupo_id = Some(grupo);
@@ -313,7 +313,7 @@ fn borrar_un_grupo_mueve_sus_hosts_a_sin_grupo() {
 
 #[test]
 fn borrar_un_host_de_salto_limpia_los_dependientes() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let salto = almacen.crear_host(&datos("salto"), Origen::Manual).unwrap();
     let mut dependiente = datos("destino");
     dependiente.salto_host_id = Some(salto);
@@ -325,7 +325,7 @@ fn borrar_un_host_de_salto_limpia_los_dependientes() {
 
 #[test]
 fn una_etiqueta_sin_hosts_se_elimina() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     assert_eq!(almacen.listar_etiquetas().unwrap().len(), 2);
     let mut sin_etiquetas = datos("uno");
@@ -337,7 +337,7 @@ fn una_etiqueta_sin_hosts_se_elimina() {
 
 #[test]
 fn grupos_se_reordenan_y_persiste_el_plegado() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let a = almacen.crear_grupo("a").unwrap();
     let b = almacen.crear_grupo("b").unwrap();
     let grupos = almacen.listar_grupos().unwrap();
@@ -353,7 +353,7 @@ fn grupos_se_reordenan_y_persiste_el_plegado() {
 
 #[test]
 fn ultimo_estado_y_ultima_conexion_se_marcan() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     almacen
         .marcar_estado(id, Some(UltimoEstado::Error))
@@ -369,7 +369,7 @@ fn ultimo_estado_y_ultima_conexion_se_marcan() {
 
 #[test]
 fn fijar_salto_y_opciones_extra_acumulan() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let salto = almacen.crear_host(&datos("salto"), Origen::Manual).unwrap();
     let id = almacen
         .crear_host(&datos("destino"), Origen::Manual)
@@ -416,7 +416,7 @@ fn tunel_de(host_id: i64, nombre: &str, tipo: TipoTunel, escucha: &str) -> Datos
 /// por host.
 #[test]
 fn los_tuneles_caen_con_su_host_y_el_nombre_no_se_repite() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen
         .crear_host(&datos("con-tuneles"), Origen::Manual)
         .unwrap();
@@ -462,7 +462,7 @@ fn los_tuneles_caen_con_su_host_y_el_nombre_no_se_repite() {
 /// en el mismo host (la escucha es del host).
 #[test]
 fn dos_tuneles_no_pueden_escuchar_lo_mismo() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
     almacen
@@ -532,7 +532,7 @@ fn dos_tuneles_no_pueden_escuchar_lo_mismo() {
 /// La validación en código: nombre, tipo, escucha y destino obligatorio.
 #[test]
 fn los_tuneles_se_validan_en_codigo() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("host"), Origen::Manual).unwrap();
 
     let mut malo = tunel_de(host, "con espacio", TipoTunel::Local, "127.0.0.1:5432");
@@ -564,7 +564,7 @@ fn los_tuneles_se_validan_en_codigo() {
 /// mismo puerto con distinto tipo tampoco es un duplicado.
 #[test]
 fn el_puerto_cero_y_los_tipos_distintos_no_chocan() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("host"), Origen::Manual).unwrap();
     let otro = almacen.crear_host(&datos("otro"), Origen::Manual).unwrap();
 
@@ -692,7 +692,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
             )
             .unwrap();
     }
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -731,7 +731,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
 /// hosts a los que apuntaba.
 #[test]
 fn borrar_un_snippet_borra_sus_destinos() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let otro = almacen
         .crear_snippet(&snippet_de("otro", vec![etiqueta("web")]))
@@ -759,7 +759,7 @@ fn borrar_un_snippet_borra_sus_destinos() {
 /// demás) y su fila de `VERIFICACIONES_HOST`.
 #[test]
 fn borrar_un_host_borra_sus_destinos_sueltos_y_sus_verificaciones() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
     let id = almacen
@@ -791,7 +791,7 @@ fn borrar_un_host_borra_sus_destinos_sueltos_y_sus_verificaciones() {
 /// y conserva la deliberación con `snippet_id` a NULL (ON DELETE SET NULL).
 #[test]
 fn borrar_un_snippet_deja_a_null_el_snippet_al_conectar_y_la_deliberacion() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let id = almacen
         .crear_snippet(&snippet_de("tmux", vec![suelto(host, "uno")]))
@@ -834,7 +834,7 @@ fn borrar_un_snippet_deja_a_null_el_snippet_al_conectar_y_la_deliberacion() {
 /// actualizar sustituyendo los destinos.
 #[test]
 fn crud_de_snippets_con_destinos() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
 
@@ -916,7 +916,7 @@ fn crud_de_snippets_con_destinos() {
 
 #[test]
 fn nombre_de_snippet_repetido_da_error_legible() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     almacen
         .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
         .unwrap();
@@ -950,7 +950,7 @@ fn nombre_de_snippet_repetido_da_error_legible() {
 /// inválido llega a `SNIPPETS`.
 #[test]
 fn los_snippets_se_validan_al_guardar() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let bueno = snippet_de("bueno", vec![etiqueta("web")]);
 
     let sin_destinos = DatosSnippet {
@@ -1012,7 +1012,7 @@ fn los_snippets_se_validan_al_guardar() {
 
 #[test]
 fn marcar_uso_cuenta_y_fecha_la_ultima_vez() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen
         .crear_snippet(&snippet_de("uptime", vec![etiqueta("web")]))
         .unwrap();
@@ -1029,7 +1029,7 @@ fn marcar_uso_cuenta_y_fecha_la_ultima_vez() {
 
 #[test]
 fn hosts_con_snippet_al_conectar_por_nombre() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let zeta = almacen.crear_host(&datos("zeta"), Origen::Manual).unwrap();
     let alfa = almacen.crear_host(&datos("alfa"), Origen::Manual).unwrap();
     let libre = almacen.crear_host(&datos("libre"), Origen::Manual).unwrap();
@@ -1064,7 +1064,7 @@ fn hosts_con_snippet_al_conectar_por_nombre() {
 /// de los demás.
 #[test]
 fn las_filas_ilegibles_se_saltan_sin_romper_el_listado() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
     let id = almacen
@@ -1117,7 +1117,7 @@ fn las_filas_ilegibles_se_saltan_sin_romper_el_listado() {
 /// actualizada (UPSERT) después.
 #[test]
 fn las_verificaciones_crean_fila_al_activar_y_despues_actualizan() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
 
     // Sin ninguna activa y sin fila previa: nada que guardar.
@@ -1181,7 +1181,7 @@ fn las_verificaciones_crean_fila_al_activar_y_despues_actualizan() {
 
 #[test]
 fn las_verificaciones_incompletas_se_rechazan() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
 
     let backup_sin_ruta = DatosVerificaciones {
@@ -1266,7 +1266,7 @@ fn deliberacion_de(
 /// los cuatro tipos de veredicto.
 #[test]
 fn las_deliberaciones_guardan_hosts_y_comprobaciones_de_ida_y_vuelta() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let uno = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let dos = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
     let snippet = almacen
@@ -1333,7 +1333,7 @@ fn las_deliberaciones_guardan_hosts_y_comprobaciones_de_ida_y_vuelta() {
 
 #[test]
 fn una_deliberacion_forzada_sin_motivo_no_se_guarda() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let hosts = vec![(1, "uno".to_string())];
     for motivo in [None, Some(""), Some("   ")] {
         let error = almacen
@@ -1353,7 +1353,7 @@ fn una_deliberacion_forzada_sin_motivo_no_se_guarda() {
 /// no pisa la primera.
 #[test]
 fn el_resultado_de_la_ejecucion_solo_se_fija_una_vez() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen
         .crear_deliberacion(&deliberacion_de(
             None,
@@ -1435,7 +1435,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
             )
             .unwrap();
     }
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -1463,7 +1463,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
 /// nombre es único por host, pero se repite entre hosts.
 #[test]
 fn las_sincronizaciones_caen_con_su_host_y_el_nombre_no_se_repite() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = almacen
         .crear_host(&datos("con-sync"), Origen::Manual)
         .unwrap();
@@ -1505,7 +1505,7 @@ fn las_sincronizaciones_caen_con_su_host_y_el_nombre_no_se_repite() {
 /// vacías; una dirección desconocida escrita a mano no se interpreta.
 #[test]
 fn las_sincronizaciones_se_validan_en_codigo() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("h"), Origen::Manual).unwrap();
     let mut mal = sincronizacion_de(host, "con espacios");
     assert!(almacen.crear_sincronizacion(&mal).is_err());
@@ -1536,7 +1536,7 @@ fn las_sincronizaciones_se_validan_en_codigo() {
 /// el servidor al terminar; editar no los toca.
 #[test]
 fn la_ultima_ejecucion_y_su_resultado_se_guardan_aparte() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("h"), Origen::Manual).unwrap();
     let id = almacen
         .crear_sincronizacion(&sincronizacion_de(host, "web-prod"))
@@ -1580,7 +1580,7 @@ fn una_base_de_datos_de_version_futura_no_se_abre_ni_se_toca() {
             .unwrap();
     }
     let antes = std::fs::read(&ruta).unwrap();
-    let error = match Almacen::abrir(&ruta) {
+    let error = match magi::almacen::abrir(&ruta) {
         Ok(_) => panic!("una versión futura no se abre"),
         Err(error) => error,
     };
@@ -1644,7 +1644,7 @@ fn una_base_de_datos_futura_con_wal_pendiente_no_se_toca() {
     assert!(wal.exists(), "el escenario necesita un WAL pendiente");
     let db_antes = std::fs::read(&ruta).unwrap();
     let wal_antes = std::fs::read(&wal).unwrap();
-    let error = match Almacen::abrir(&ruta) {
+    let error = match magi::almacen::abrir(&ruta) {
         Ok(_) => panic!("una versión futura no se abre"),
         Err(error) => error,
     };
@@ -1668,8 +1668,8 @@ fn una_base_de_datos_futura_con_wal_pendiente_no_se_toca() {
 fn la_version_de_esquema_actual_se_abre() {
     let directorio = tempfile::tempdir().unwrap();
     let ruta = directorio.path().join("magi.db");
-    Almacen::abrir(&ruta).unwrap().cerrar().unwrap();
-    let almacen = Almacen::abrir(&ruta).expect("la versión actual se abre");
+    magi::almacen::abrir(&ruta).unwrap().cerrar().unwrap();
+    let almacen = magi::almacen::abrir(&ruta).expect("la versión actual se abre");
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -1852,7 +1852,7 @@ fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
             )
             .unwrap();
     }
-    let almacen = Almacen::abrir(&ruta).unwrap();
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
     let version_esquema: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
@@ -1905,7 +1905,7 @@ fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
 /// identidad es el UUIDv5 de su huella.
 #[test]
 fn crear_deja_version_y_vector_de_este_equipo_en_cada_tabla() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let grupo = almacen.crear_grupo("produccion").unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let identidad = almacen
@@ -1954,7 +1954,7 @@ fn crear_deja_version_y_vector_de_este_equipo_en_cada_tabla() {
 /// propios del equipo: no tocan la versión ni el vector (Fase 10).
 #[test]
 fn conectar_navegar_y_usar_no_cambian_la_version() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let grupo = almacen.crear_grupo("web").unwrap();
     let identidad = almacen
@@ -2019,7 +2019,7 @@ fn conectar_navegar_y_usar_no_cambian_la_version() {
 /// versión; repetir la misma escritura no la sube.
 #[test]
 fn editar_un_campo_que_viaja_del_host_sube_la_version() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let otro = almacen.crear_host(&datos("dos"), Origen::Manual).unwrap();
     let grupo = almacen.crear_grupo("web").unwrap();
@@ -2066,7 +2066,7 @@ fn editar_un_campo_que_viaja_del_host_sube_la_version() {
 /// su versión (checklist de la Fase 10).
 #[test]
 fn cambiar_etiquetas_o_verificaciones_sube_la_version_del_host() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let version = version_de_fila(&almacen, "HOSTS", host).1;
 
@@ -2096,7 +2096,7 @@ fn cambiar_etiquetas_o_verificaciones_sube_la_version_del_host() {
 /// que viaja; repetir la edición no la sube.
 #[test]
 fn editar_grupo_identidad_tunel_snippet_o_sincronizacion_sube_su_version() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let grupo = almacen.crear_grupo("web").unwrap();
     let otro_grupo = almacen.crear_grupo("datos").unwrap();
@@ -2176,7 +2176,7 @@ fn editar_grupo_identidad_tunel_snippet_o_sincronizacion_sube_su_version() {
 /// caen en cascada; cada lápida parte del vector del elemento borrado.
 #[test]
 fn borrar_un_host_deja_lapida_suya_y_de_sus_tuneles_y_sincronizaciones() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let tunel = almacen
         .crear_tunel(&tunel_de(host, "pg", TipoTunel::Local, "127.0.0.1:5432"))
@@ -2225,7 +2225,7 @@ fn borrar_un_host_deja_lapida_suya_y_de_sus_tuneles_y_sincronizaciones() {
 /// `ON DELETE SET NULL` cuenta como edición suya) y deja la lápida del grupo.
 #[test]
 fn borrar_un_grupo_sube_la_version_de_los_hosts_que_se_quedan_sin_el() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let grupo = almacen.crear_grupo("web").unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     almacen.mover_host_a_grupo(host, Some(grupo)).unwrap();
@@ -2247,7 +2247,7 @@ fn borrar_un_grupo_sube_la_version_de_los_hosts_que_se_quedan_sin_el() {
 /// `ON DELETE SET NULL` de `salto_host_id` cuenta como edición.
 #[test]
 fn borrar_un_host_sube_la_version_de_los_que_saltaban_por_el() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let salto = almacen.crear_host(&datos("salto"), Origen::Manual).unwrap();
     let mut ficha = datos("detras");
     ficha.salto_host_id = Some(salto);
@@ -2265,7 +2265,7 @@ fn borrar_un_host_sube_la_version_de_los_que_saltaban_por_el() {
 /// lápida.
 #[test]
 fn borrar_un_snippet_sube_la_version_de_los_hosts_que_lo_usaban_al_conectar() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let snippet = almacen
         .crear_snippet(&snippet_de("reiniciar", vec![etiqueta("web")]))
@@ -2294,7 +2294,7 @@ fn borrar_un_snippet_sube_la_version_de_los_hosts_que_lo_usaban_al_conectar() {
 /// con el nombre y el tipo que le toca.
 #[test]
 fn borrar_deja_lapida_con_su_tipo_y_nombre() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let grupo = almacen.crear_grupo("web").unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let tunel = almacen
@@ -2340,7 +2340,7 @@ fn borrar_deja_lapida_con_su_tipo_y_nombre() {
 /// Borrar algo que ya no existe no deja lápida de nada.
 #[test]
 fn borrar_lo_que_no_existe_no_deja_lapida() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let id = 99_999;
     almacen.borrar_host(id).unwrap();
     almacen.borrar_grupo(id).unwrap();
@@ -2365,7 +2365,7 @@ fn el_uuid_de_las_identidades_es_el_mismo_en_todos_los_equipos() {
     .to_string();
     assert_eq!(magi::almacen::identidades::uuid_de_huella(huella), esperado);
 
-    let primero = Almacen::abrir_en_memoria().unwrap();
+    let primero = magi::almacen::abrir_en_memoria().unwrap();
     let uno = primero
         .crear_identidad(
             "ed25519",
@@ -2375,7 +2375,7 @@ fn el_uuid_de_las_identidades_es_el_mismo_en_todos_los_equipos() {
             Some("4d3"),
         )
         .unwrap();
-    let segundo = Almacen::abrir_en_memoria().unwrap();
+    let segundo = magi::almacen::abrir_en_memoria().unwrap();
     let dos = segundo
         .crear_identidad(
             "ed25519",
@@ -2414,7 +2414,7 @@ fn el_uuid_de_las_identidades_es_el_mismo_en_todos_los_equipos() {
 /// mientras no se importe nada.
 #[test]
 fn la_version_crece_de_forma_monotona_y_el_reloj_la_acompana() {
-    let almacen = Almacen::abrir_en_memoria().unwrap();
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
     let host = almacen.crear_host(&datos("uno"), Origen::Manual).unwrap();
     let equipo = uuid_del_equipo(&almacen);
     let mut version = version_de_fila(&almacen, "HOSTS", host).1;

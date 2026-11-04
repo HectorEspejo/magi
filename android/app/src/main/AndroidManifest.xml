@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MAGI · app Android (Fase 11)
+
+  Permisos exactos del checklist: INTERNET, CAMERA (se pide al escanear el QR),
+  POST_NOTIFICATIONS, FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE,
+  USE_BIOMETRIC y REQUEST_IGNORE_BATTERY_OPTIMIZATIONS. Ninguno de almacenamiento:
+  la carpeta sincronizada se lee por SAF con permiso del usuario.
+  Sin copia de seguridad en la nube: allowBackup=false y reglas de extracción vacías.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- La cámara no es imprescindible: la clave de sincronización también se pega. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <application
+        android:name=".MagiApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/reglas_extraccion"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/nombre_app"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Magi"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Servicio en primer plano specialUse (informe §4.6, checklist «Segundo
+          plano»): vive mientras haya alguna sesión o túnel, con la notificación
+          «MAGI · N sesiones · M túneles» y sin acciones (T6). Lo arranca y lo
+          para ServicioSesiones.actualizar desde la app.
+        -->
+        <service
+            android:name=".plataforma.ServicioSesiones"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="sesiones SSH y túneles activos de MAGI" />
+        </service>
+    </application>
+
+</manifest>

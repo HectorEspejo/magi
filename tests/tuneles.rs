@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio_util::codec::FramedRead;
 
-use magi::almacen::{hosts, tuneles as almacen_tuneles, Almacen};
+use magi::almacen::{hosts, tuneles as almacen_tuneles};
 use magi::modelo::{DatosHost, DatosTunel, IdentidadRef, Origen, TipoTunel};
 use magi::protocolo::{
     EstadoTunelRemoto, InfoTunel, MensajeCliente, MensajeServidor, VERSION_PROTOCOLO,
@@ -287,7 +287,7 @@ async fn montar_con(reenvio: ModoReenvio, multiplexar: bool) -> Montaje {
 
     // 3. Host en la base de datos.
     let host_id = {
-        let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
         let id = hosts::crear(
             almacen.conexion(),
             &DatosHost {
@@ -340,7 +340,7 @@ async fn montar_con(reenvio: ModoReenvio, multiplexar: bool) -> Montaje {
 
 /// Crea un túnel en la tabla (lo que hace el cliente desde su ventana).
 fn crear_tunel(montaje: &Montaje, datos: &DatosTunel) -> i64 {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let id = almacen_tuneles::crear(almacen.conexion(), datos).expect("creando el túnel");
     almacen.cerrar().unwrap();
     id
@@ -365,7 +365,7 @@ fn tunel(
 
 /// Las últimas filas del registro, para comprobar lo que se anotó.
 fn registro(montaje: &Montaje) -> Vec<(String, String)> {
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let filas = {
         let mut sentencia = almacen
             .conexion()

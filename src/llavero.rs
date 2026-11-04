@@ -2,16 +2,12 @@
 //! En macOS el Keychain se usa por API (`security-framework`, sin subproceso
 //! y sin argv visible); en Linux con `secret-tool` por stdin.
 
+pub use magi_nucleo::llavero::{
+    LlaveroEnMemoria, LlaveroHost, LlaveroSecreto, CUENTA_SINCRONIZACION,
+    CUENTA_SINCRONIZACION_ANTERIOR, SERVICIO,
+};
+
 use zeroize::Zeroizing;
-
-/// Servicio con el que MAGI firma sus entradas en el llavero del sistema.
-pub const SERVICIO: &str = "magi";
-
-/// Cuenta donde vive la clave de sincronización del inventario (Fase 10).
-pub const CUENTA_SINCRONIZACION: &str = "sincronizacion";
-
-/// Cuenta de la clave anterior, solo para leer durante una rotación.
-pub const CUENTA_SINCRONIZACION_ANTERIOR: &str = "sincronizacion-anterior";
 
 // ------------------------------------------------------------- macOS: Keychain por API
 
@@ -293,18 +289,6 @@ mod backend {
     }
 }
 
-// ------------------------------------------------------------- secretos inyectables
-
-/// Interfaz de los secretos genéricos del llavero (la clave de sincronización
-/// y su anterior). La implementación real usa el llavero del sistema; las
-/// pruebas usan una en memoria. Así la pasada y los asistentes de
-/// sincronización se prueban sin depender de secret-tool ni del Keychain.
-pub trait LlaveroSecreto: Send + Sync {
-    fn guardar(&self, cuenta: &str, valor: &str) -> Result<(), String>;
-    fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String>;
-    fn olvidar(&self, cuenta: &str) -> Result<bool, String>;
-}
-
 /// El llavero real del sistema.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LlaveroDelSistema;
@@ -323,54 +307,22 @@ impl LlaveroSecreto for LlaveroDelSistema {
     }
 }
 
-/// Llavero en memoria para las pruebas de integración (nunca se usa en
-/// producción). Se documenta como superficie de pruebas, igual que
-/// App::de_prueba.
-#[doc(hidden)]
-#[derive(Default)]
-pub struct LlaveroEnMemoria {
-    secretos: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
-}
-
-impl std::fmt::Debug for LlaveroEnMemoria {
-    /// Nunca imprime los valores: aunque sea solo para pruebas, un Debug no
-    /// debe poder volcar secretos en un log ni en un mensaje de error.
-    fn fmt(&self, formato: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cuentas = self
-            .secretos
-            .lock()
-            .map(|secretos| secretos.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        formato
-            .debug_struct("LlaveroEnMemoria")
-            .field("cuentas", &cuentas)
-            .finish_non_exhaustive()
-    }
-}
-
-impl LlaveroEnMemoria {
-    pub fn nuevo() -> Self {
-        Self::default()
-    }
-}
-
-impl LlaveroSecreto for LlaveroEnMemoria {
-    fn guardar(&self, cuenta: &str, valor: &str) -> Result<(), String> {
-        let mut secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
-        secretos.insert(cuenta.to_string(), valor.to_string());
-        Ok(())
+impl LlaveroHost for LlaveroDelSistema {
+    fn guardar_contrasena(
+        &self,
+        host: &str,
+        usuario: &str,
+        contrasena: &str,
+    ) -> Result<(), String> {
+        guardar(host, usuario, contrasena)
     }
 
-    fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
-        let secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
-        Ok(secretos
-            .get(cuenta)
-            .map(|valor| Zeroizing::new(valor.clone())))
-    }
-
-    fn olvidar(&self, cuenta: &str) -> Result<bool, String> {
-        let mut secretos = self.secretos.lock().map_err(|_| "llavero envenenado")?;
-        Ok(secretos.remove(cuenta).is_some())
+    fn recuperar_contrasena(
+        &self,
+        host: &str,
+        usuario: &str,
+    ) -> Result<Option<Zeroizing<String>>, String> {
+        recuperar(host, usuario)
     }
 }
 

@@ -12,7 +12,7 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use magi::almacen::{snippets, tuneles, Almacen};
+use magi::almacen::{snippets, tuneles};
 use magi::app::Dialogo;
 use magi::modelo::{DatosTunel, ResultadoRegistro, TipoTunel};
 use magi::protocolo::{EstadoTunelRemoto, InfoTunel, MensajeServidor, OrigenTunel};
@@ -367,7 +367,7 @@ fn en_ascii_no_hay_glifos_unicode() {
 
 /// Muchas filas en cada vista, para que haya desplazamiento.
 fn sembrar_mas(prueba: &AppPrueba, sembrado: &Sembrado) {
-    let almacen = Almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
     let conexion = almacen.conexion();
     for indice in 0..40 {
         tuneles::crear(
@@ -659,7 +659,7 @@ fn el_detalle_en_dialogo_no_corta_los_textos_largos() {
 
     // Registro: la entrada nueva se busca con el filtro.
     let (mut prueba, _) = AppPrueba::con_semilla(90, 18);
-    let almacen = Almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
     magi::registro::anotar(
         almacen.conexion(),
         magi::registro::CLAVE_GENERADA,
@@ -725,7 +725,7 @@ fn el_host_se_abrevia_solo_en_modo_estrecho() {
 #[test]
 fn el_pie_de_identidades_no_tapa_el_detalle_plegado() {
     let (mut prueba, _) = AppPrueba::con_semilla(50, 12);
-    let almacen = Almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
+    let almacen = magi::almacen::abrir(&prueba._entorno.rutas.base_datos()).expect("almacén");
     almacen
         .conexion()
         .execute(

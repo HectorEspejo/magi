@@ -1,0 +1,14 @@
+# MAGI · app Android · artefactos locales
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# Núcleo nativo: lo genera cargo-ndk en cada compilación (no se versiona)
+app/src/main/jniLibs/

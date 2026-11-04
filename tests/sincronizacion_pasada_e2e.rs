@@ -38,7 +38,7 @@ fn equipo(carpeta: &Path, texto_clave: &str) -> Equipo {
     // abran el diálogo de confirmación.
     config.sincronizacion.umbral_borrado_hosts = 1000;
     config.sincronizacion.umbral_borrado_pct = 1000;
-    let almacen = Almacen::abrir(&rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).unwrap();
     Equipo {
         _temporal: temporal,
         rutas,

@@ -167,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(codigo) = atender_sin_entorno(&cli)? {
         std::process::exit(codigo);
     }
-    let rutas = Rutas::descubrir()?;
+    let rutas = magi::config::descubrir_rutas()?;
     let log_servidor = cli.servidor;
     let _guardia_log = iniciar_log(
         &rutas,
@@ -201,26 +201,26 @@ fn main() -> anyhow::Result<()> {
     match cli.comando {
         Some(Comando::Importar { ruta }) => {
             let ruta = ruta.unwrap_or_else(|| rutas.fichero_ssh_config());
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             importar(&almacen, &rutas, &ruta)?;
             almacen.cerrar()?;
             Ok(())
         }
         Some(Comando::Exportar) => {
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             exportar(&almacen, &rutas)?;
             almacen.cerrar()?;
             Ok(())
         }
         Some(Comando::Sondear { hosts }) => {
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             sondear(&almacen, &rutas, &config, &hosts)?;
             almacen.cerrar()?;
             Ok(())
         }
         Some(Comando::Registro { comando }) => {
             let ComandoRegistro::Exportar { ruta, json, desde } = comando;
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             exportar_registro(&almacen, &ruta, json, desde.as_deref())?;
             almacen.cerrar()?;
             Ok(())
@@ -256,7 +256,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Comando::Snippets) => {
             // Solo lee el inventario: no hace falta el servidor de sesiones.
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             let snippets = almacen.listar_snippets()?;
             let hosts = almacen.listar_hosts()?;
             let grupos = almacen.listar_grupos()?;
@@ -267,7 +267,7 @@ fn main() -> anyhow::Result<()> {
         Some(Comando::Sincronizaciones) => {
             // Solo lee el inventario: ejecutarlas necesita la TUI (plan y
             // deliberación), así que tampoco hace falta el servidor.
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             let sincronizaciones = almacen.listar_sincronizaciones()?;
             almacen.cerrar()?;
             print!("{}", archivos::listado::listado_cli(&sincronizaciones));
@@ -278,7 +278,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(codigo);
         }
         Some(Comando::Conectar { host }) => {
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             let existente = almacen::hosts::por_nombre(almacen.conexion(), &host)?;
             let Some(host) = existente else {
                 eprintln!("no existe el host «{host}»");
@@ -298,7 +298,7 @@ fn main() -> anyhow::Result<()> {
         }
         None => {
             app::instalar_hook_panico();
-            let almacen = Almacen::abrir(&rutas.base_datos())?;
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
             let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
             let aviso = if avisos.is_empty() {
                 None
@@ -515,7 +515,7 @@ fn sincronizar_cli(
     config: &Config,
     comando: Option<ComandoSincronizar>,
 ) -> anyhow::Result<i32> {
-    let almacen = Almacen::abrir(&rutas.base_datos())?;
+    let almacen = crate::almacen::abrir(&rutas.base_datos())?;
     let codigo = match comando {
         Some(ComandoSincronizar::Estado) => {
             print!(
@@ -1176,7 +1176,7 @@ async fn escribir(stream: &mut UnixStream, mensaje: &MensajeCliente) -> anyhow::
 /// Id de la fila de `TUNELES` que pide la orden; `None` con el motivo ya
 /// impreso si no existe el host o el túnel.
 fn tunel_definido(rutas: &Rutas, host: &str, nombre: &str) -> anyhow::Result<Option<i64>> {
-    let almacen = Almacen::abrir(&rutas.base_datos())?;
+    let almacen = crate::almacen::abrir(&rutas.base_datos())?;
     let id = match almacen::hosts::por_nombre(almacen.conexion(), host)? {
         None => {
             eprintln!("no existe el host «{host}»");
@@ -1196,7 +1196,7 @@ fn tunel_definido(rutas: &Rutas, host: &str, nombre: &str) -> anyhow::Result<Opt
 
 /// Túneles del inventario, de todos los hosts y por nombre de host.
 fn listar_definidos(rutas: &Rutas) -> anyhow::Result<Vec<Tunel>> {
-    let almacen = Almacen::abrir(&rutas.base_datos())?;
+    let almacen = crate::almacen::abrir(&rutas.base_datos())?;
     let tuneles = almacen.listar_tuneles()?;
     almacen.cerrar()?;
     Ok(tuneles)

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Colores XML para la ventana de arranque y los iconos. La paleta completa de la
+  cabina vive en Kotlin (ui/tema/Paleta.kt), que es la fuente de verdad para
+  Compose; aquí solo se duplica el fondo.
+-->
+<resources>
+    <color name="fondo">#0A0A0A</color>
+</resources>

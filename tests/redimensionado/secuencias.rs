@@ -5,7 +5,7 @@
 
 use crossterm::event::KeyCode;
 
-use magi::almacen::{hosts, Almacen};
+use magi::almacen::hosts;
 use magi::app::{Dialogo, PanelFlota};
 use magi::modelo::{DatosHost, Origen};
 use magi::ui::disposicion::Lista;
@@ -36,7 +36,7 @@ fn a_la_vista(prueba: &AppPrueba, lista: Lista, seleccion: usize) {
 fn hosts_con_50_hosts_seleccion_y_filtro() {
     let (prueba, _) = AppPrueba::con_semilla(200, 60);
     {
-        let almacen = Almacen::abrir(&prueba.app.rutas.base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&prueba.app.rutas.base_datos()).unwrap();
         for numero in 0..50 {
             hosts::crear(
                 almacen.conexion(),

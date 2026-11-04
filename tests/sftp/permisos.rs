@@ -262,7 +262,7 @@ async fn cambiar_permisos_sin_alcance_solo_toca_las_rutas_y_lo_anota() {
     assert_eq!(modo(&dentro), 0o644);
 
     // `Hecho` sale tras la barrera: la fila ya está en REGISTRO.
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let entradas = almacen
         .listar_registro(
             &magi::registro::FiltroRegistro {
@@ -455,7 +455,7 @@ async fn una_ruta_inexistente_no_para_las_demas() {
         "{detalle}"
     );
 
-    let almacen = Almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&montaje.entorno.rutas.base_datos()).unwrap();
     let entradas = almacen
         .listar_registro(
             &magi::registro::FiltroRegistro {

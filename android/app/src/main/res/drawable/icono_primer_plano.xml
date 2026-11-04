@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icono de MAGI: indicador de terminal ( > _ ) en ámbar sobre negro. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M38,42 L54,54 L38,66"
+        android:strokeColor="#FFA000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="6" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M60,66 L74,66"
+        android:strokeColor="#FFA000"
+        android:strokeLineCap="round"
+        android:strokeWidth="6" />
+</vector>

@@ -1,0 +1,41 @@
+[package]
+name = "magi-movil"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Puerta UniFFI de MAGI para Android: contrato del núcleo compartido"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/4d3-org/magi"
+publish = false
+
+[lib]
+name = "magi_movil"
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Generador de bindings (bin uniffi-bindgen): solo se compila con esta feature.
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+magi-nucleo = { path = "../magi-nucleo" }
+anyhow = "1"
+thiserror = "2"
+# Runtime propio del núcleo móvil (informe §2). El contrato aún no lo usa; lo
+# usará la lógica que integra el Lead.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+russh = "0.63"
+vt100 = "0.16"
+zeroize = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uniffi = { version = "=0.32.2", features = ["tokio"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dev-dependencies]
+tempfile = "3"
+ssh-key = { version = "=0.7.0-rc.11", features = ["ed25519", "getrandom"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
+tokio = { version = "1", features = ["full"] }

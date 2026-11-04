@@ -150,6 +150,7 @@ async fn intento(
         fuente_contrasena: crate::conexion::FuenteContrasena::Llavero,
         // El sondeo no acepta reenvíos: no es una conexión de túneles.
         reenvios: None,
+        llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
     };
     let transporte = conectar_cadena(&cadena, &contexto).await.map_err(|error| {
         let motivo = error.to_string();

@@ -8,7 +8,7 @@ mod comun;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use magi::almacen::{deliberaciones, Almacen};
+use magi::almacen::deliberaciones;
 use magi::deliberacion::{ComprobacionesHost, NuevaDeliberacion, ResultadoDeliberacion, Veredicto};
 use magi::modelo::IdentidadRef;
 use magi::protocolo::{
@@ -342,7 +342,7 @@ async fn ocho_hosts_como_maximo_a_la_vez() {
 
 /// Inserta una deliberación como la dejaría el cliente al resolverla.
 fn deliberacion(escenario: &Escenario, host_id: i64, forzada: bool) -> i64 {
-    let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
     let id = deliberaciones::crear(
         almacen.conexion(),
         &NuevaDeliberacion {
@@ -382,7 +382,7 @@ fn deliberacion(escenario: &Escenario, host_id: i64, forzada: bool) -> i64 {
 }
 
 fn resultado_deliberacion(escenario: &Escenario, id: i64) -> Option<String> {
-    let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
     let resultado = almacen
         .conexion()
         .query_row(
@@ -774,7 +774,7 @@ async fn un_host_borrado_durante_la_ejecucion_anota_con_host_nulo() {
     })
     .await;
     {
-        let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+        let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
         almacen.borrar_host(hosts[0]).unwrap();
         almacen.cerrar().unwrap();
     }
@@ -784,7 +784,7 @@ async fn un_host_borrado_durante_la_ejecucion_anota_con_host_nulo() {
         e.anotaciones("snippet_ejecutado") == 1
     });
     assert!(fila.await);
-    let almacen = Almacen::abrir(&escenario.rutas().base_datos()).unwrap();
+    let almacen = magi::almacen::abrir(&escenario.rutas().base_datos()).unwrap();
     let (host_id, detalle): (Option<i64>, String) = almacen
         .conexion()
         .query_row(

@@ -10,7 +10,6 @@ pub mod difusion;
 pub mod ejecuciones;
 pub mod sesiones;
 pub mod sftp;
-pub mod socks5;
 pub mod transferencias;
 pub mod tuneles;
 
@@ -225,9 +224,11 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     // La base de datos se abre antes de crear el socket: si es de una versión
     // más nueva de MAGI, el servidor se niega sin dejar un socket huérfano
     // (Fase 9). Con el lock en la mano no hay dos servidores migrando a la vez.
-    let almacen =
-        Almacen::abrir(&rutas.base_datos()).context("abriendo la base de datos del servidor")?;
-    let lectura = Arc::new(std::sync::Mutex::new(Almacen::abrir(&rutas.base_datos())?));
+    let almacen = crate::almacen::abrir(&rutas.base_datos())
+        .context("abriendo la base de datos del servidor")?;
+    let lectura = Arc::new(std::sync::Mutex::new(crate::almacen::abrir(
+        &rutas.base_datos(),
+    )?));
     // Los temporales de una ejecución anterior interrumpida no se heredan (los
     // de edición sí: pueden tener cambios sin subir).
     sftp::preparar_temporales(&rutas);
