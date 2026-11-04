@@ -301,7 +301,9 @@ comprobó además que la prueba de caída falla si se desactiva el vigilante y
 vuelve a pasar al restaurarlo, que es la reproducción automatizada del fallo
 que faltaba. No se encontraron fugas nuevas ni cambios en el escritorio.
 
-Queda pendiente repetir la prueba con Chrome y Brave en el plegable.
+Validado en el Honor real (4 nov 2026): tras instalar la compilación con la
+corrección, el túnel local reenvía y Chrome y Brave abren http://127.0.0.1:9090
+por el agujero del túnel. Es la confirmación que faltaba del síntoma original.
 
 ### Verificación final (2026-10-31 23:41)
 
@@ -328,7 +330,8 @@ Queda pendiente repetir la prueba con Chrome y Brave en el plegable.
   prueba de caída falla sin el vigilante). Android: lint 0 errores, **127**
   pruebas JVM y assembleDebug; **8/8** pruebas instrumentadas en el AVD API 30
   (las 4 anteriores y las dos de PruebaTunelE2E: reenvío por 127.0.0.1:9090 y
-  caída al tirar la conexión SSH del host).
+  caída al tirar la conexión SSH del host). Además, **validado en el Honor
+  real**: Chrome y Brave abren el túnel local tras instalar la corrección.
 - **Corrección posterior (2026-11-01, desbloqueo facial).** Tras probar la app
   en un Honor MagicOS se reprodujo el fallo de setUnlockedDeviceRequired
   (desviación 15). Con las claves ya migradas, la cadena se repitió: lint 0
@@ -821,12 +824,7 @@ están en «Pendientes y bloqueos».
    proyecto en 823/827. Falta actualizar este informe con el resultado de la
    validación manual y las comprobaciones posteriores a la primera publicación.
 
-8. **Túnel del móvil en el plegable (corrección 11b).** Repetir en el Honor
-   la prueba con Chrome y Brave: activar un túnel local y abrir
-   http://127.0.0.1:puerto; comprobar contadores, último error con hora y que,
-   si se cae la red, el túnel pasa a caído con «Relanzar». El E2E automático
-   cubre el reenvío y la caída, pero no el navegador real.
-9. **Checklist de la reanudación.** El prompt de la corrección 11b habla de
+8. **Checklist de la reanudación.** El prompt de la corrección 11b habla de
    109/117 funcionalidades; el checklist del repositorio sigue en 110/110
    (Fase 11 cerrada). Falta que el desarrollador traiga al repositorio la
    versión actualizada del analista.
