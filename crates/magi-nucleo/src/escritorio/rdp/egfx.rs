@@ -6,6 +6,14 @@
 //! así que aquí se implementa el procesador del canal dinámico a mano sobre los
 //! tipos públicos de ironrdp-egfx: se descomprime el payload con ZGFX, se
 //! interpretan los PDUs y se emiten los NAL en Annex-B con sus regiones.
+//!
+//! **Hoy el canal no se anuncia al servidor.** Windows, con EGFX activo, manda
+//! la interfaz con ClearCodec y mapas de bits (no con AVC420) y AVC420 solo para
+//! contenido de vídeo; este procesador solo entiende AVC420, así que anunciarlo
+//! dejaría la pantalla en negro. Para activarlo hay que decodificar además los
+//! demás códecs de EGFX (ClearCodec, RemoteFX, bitmap y planar) y volver a poner
+//! `DYNVC_GFX_PROTOCOL_SUPPORTED` en las capacidades del conector (vendor).
+//! Ver la desviación 15 del informe de la Fase 12.
 
 use ironrdp::core::{decode_cursor, impl_as_any, ReadCursor};
 use ironrdp::dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
@@ -83,6 +91,9 @@ impl DvcProcessor for Egfx {
         // V8.1 con AVC420 es lo que anuncia un cliente que quiere H.264. V8 se
         // anuncia además por si el servidor no entiende V8.1.
         let capacidades = vec![
+            CapabilitySet::V10_7 {
+                flags: ironrdp_egfx::pdu::CapabilitiesV107Flags::SMALL_CACHE,
+            },
             CapabilitySet::V8_1 {
                 flags: CapabilitiesV81Flags::AVC420_ENABLED | CapabilitiesV81Flags::SMALL_CACHE,
             },
@@ -92,6 +103,7 @@ impl DvcProcessor for Egfx {
         ];
 
         let pdu = GfxPdu::CapabilitiesAdvertise(CapabilitiesAdvertisePdu::from_typed(&capacidades));
+        tracing::debug!("EGFX: canal iniciado; se anuncian V8.1 (AVC420) y V8");
         Ok(vec![Box::new(pdu) as DvcMessage])
     }
 
@@ -125,17 +137,14 @@ impl DvcProcessor for Egfx {
 
                 match pdu {
                     GfxPdu::CapabilitiesConfirm(confirmacion) => {
-                        avc420 = confirmacion
-                            .0
-                            .parsed()
-                            .ok()
-                            .flatten()
-                            .is_some_and(|capacidad| match capacidad {
-                                CapabilitySet::V8_1 { flags } => {
-                                    flags.contains(CapabilitiesV81Flags::AVC420_ENABLED)
-                                }
-                                _ => false,
-                            });
+                        let capacidad = confirmacion.0.parsed().ok().flatten();
+                        avc420 = capacidad.as_ref().is_some_and(|capacidad| match capacidad {
+                            CapabilitySet::V8_1 { flags } => {
+                                flags.contains(CapabilitiesV81Flags::AVC420_ENABLED)
+                            }
+                            _ => false,
+                        });
+                        tracing::debug!(?capacidad, avc420, "EGFX: capacidades confirmadas");
 
                         if !imagen_dicha {
                             imagen_dicha = true;
@@ -170,9 +179,11 @@ impl DvcProcessor for Egfx {
                         }
                     }
                     GfxPdu::StartFrame(pdu) => {
+                        tracing::trace!(frame_id = pdu.frame_id, "EGFX: StartFrame");
                         fotograma = Some(pdu.frame_id);
                     }
                     GfxPdu::EndFrame(pdu) => {
+                        tracing::trace!(frame_id = pdu.frame_id, "EGFX: EndFrame");
                         total = total.wrapping_add(1);
 
                         // MS-RDPEGFX 3.3.5.12: sin FrameAcknowledge el servidor
@@ -224,7 +235,15 @@ impl DvcProcessor for Egfx {
                             }
                         }
                     }
-                    _ => {}
+                    GfxPdu::WireToSurface1(pdu) => {
+                        tracing::debug!(
+                            codec = ?pdu.codec_id,
+                            "EGFX: superficie con un código que no es AVC420"
+                        );
+                    }
+                    _ => {
+                        tracing::trace!("EGFX: PDU no manejada");
+                    }
                 }
             }
         }

@@ -270,7 +270,9 @@ pub struct SeccionEscritorio {
     /// Distribución que se anuncia a Windows: `auto` (sale de `LANG`) o una
     /// distribución como `es-ES`.
     pub distribucion_teclado: String,
-    /// Ofrecer AVC420 a Windows; `false` fuerza los rectángulos.
+    /// Ofrecer AVC420 a Windows; `false` fuerza los rectángulos. Hoy MAGI no
+    /// anuncia el canal EGFX (ver la desviación 15 del informe de la Fase 12),
+    /// así que la opción queda preparada y RDP va siempre por rectángulos.
     pub h264: bool,
 }
 

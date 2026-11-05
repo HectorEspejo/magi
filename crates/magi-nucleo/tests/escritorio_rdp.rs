@@ -1443,7 +1443,7 @@ async fn cursor_remoto_se_manda_al_puente() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn con_h264_se_anuncia_video() {
+async fn la_imagen_de_apertura_son_rectangulos() {
     let local = tokio::task::LocalSet::new();
     tokio::time::timeout(
         Duration::from_secs(40),
@@ -1473,9 +1473,13 @@ async fn con_h264_se_anuncia_video() {
                 EventoEscritorio::Abierto => {}
                 otro => panic!("se esperaba Abierto: {otro:?}"),
             }
+            // Aunque el host ofrezca H.264, la sesión no lo anuncia hasta que
+            // EGFX confirme AVC420: con Windows real la confirmación llega (o no)
+            // después de conectar, y anunciarlo antes deja al visor esperando
+            // vídeo que puede no llegar (pantalla negra).
             match cliente.siguiente().await {
-                EventoEscritorio::Imagen(ImagenEscritorio::H264) => {}
-                otro => panic!("se esperaba Imagen(H264): {otro:?}"),
+                EventoEscritorio::Imagen(ImagenEscritorio::Rectangulos) => {}
+                otro => panic!("se esperaba Imagen(Rectangulos): {otro:?}"),
             }
 
             cliente.abortar();

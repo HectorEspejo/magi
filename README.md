@@ -721,6 +721,12 @@ La clave del visor vive en el `sessionStorage` de la pestaña y la URL se
 limpia al canjearla. El servidor comprueba `Host` siempre y `Origin` en
 `/api/*`, y sirve una CSP estricta sin recursos externos.
 
+En RDP, la imagen llega al visor como **rectángulos** (mapas de bits y RemoteFX
+decodificados por IronRDP) y el cursor se pinta aparte. El H.264 de Windows
+(AVC420) todavía no se anuncia: exige decodificar también los demás códecs del
+canal EGFX, que es lo que manda Windows para la interfaz; está anotado como
+pendiente en el informe de la Fase 12.
+
 ### Abrir un escritorio
 
 `↵` sobre un escritorio lo abre; si ya tenía sesión, va a su pestaña y abre el
@@ -766,7 +772,7 @@ gracia_seg = 60
 puerto_visor = 0
 # auto (sale de LANG) o una distribución como es-ES
 distribucion_teclado = "auto"
-# ofrecer el H.264 de Windows (AVC420) al visor
+# reservado para el H.264 de Windows (AVC420); hoy RDP va por rectángulos
 h264 = true
 ```
 

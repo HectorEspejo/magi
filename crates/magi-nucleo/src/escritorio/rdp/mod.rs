@@ -39,7 +39,7 @@ pub async fn abrir(conexion: Conexion) -> Result<(), ErrorEscritorio> {
 
     let resultado =
         match conexion::conectar(flujo, &config, &dialogo, eventos.clone(), intento).await {
-            Ok(conectada) => sesion::ejecutar(conectada, config, eventos.clone(), ordenes).await,
+            Ok(conectada) => sesion::ejecutar(conectada, eventos.clone(), ordenes).await,
             Err(error) => Err(error),
         };
 

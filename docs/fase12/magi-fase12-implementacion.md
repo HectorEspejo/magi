@@ -46,8 +46,9 @@ protocolo **7** y `formato` **2** de sincronización.
   clave por sesión, `Host` siempre y `Origin` en `/api/*`, CSP estricta,
   `nosniff`, `no-referrer`, `no-store`, 429 tras 10 fallos, `hola` en 5 s.
   `puente.rs` agrupa zonas sucias a 60 fps con contrapresión de 8 MB, manda
-  rectángulos RGBA, copias, cursor y el H.264 de Windows tal cual, mantiene el
-  búfer del escritorio y valida toda la entrada del visor.
+  rectángulos RGBA, copias, cursor y, cuando la fuente lo confirma, el H.264 de
+  Windows tal cual (ver desviación 15), mantiene el búfer del escritorio y
+  valida toda la entrada del visor.
 - **Visor web** (`visor/`, adaptado de voxl 0.3.3 MIT): worker con
   `OffscreenCanvas` y WebCodecs, rectángulos/copias/cursor, teclado por keysym
   y código físico, ratón y rueda suave, portapapeles de texto en los dos
@@ -58,7 +59,8 @@ protocolo **7** y `formato` **2** de sincronización.
   (sin OpenSSL), NLA/CredSSP con NTLM, huella `SHA256:` comprobada antes de
   mandar credenciales (política de huellas SSH), mapas de bits y RemoteFX como
   rectángulos, EGFX/AVC420 crudo con un `DvcProcessor` propio (sin decodificar
-  ni recomprimir), teclado por scancodes con respaldo Unicode,
+  ni recomprimir, aunque hoy no se anuncia: ver desviación 15), teclado por
+  scancodes con respaldo Unicode,
   Ctrl+Alt+Supr/Win, CLIPRDR, Display Control y reactivación.
 - **VNC** (`escritorio/rfb/`): RFB 3.3/3.7/3.8, None y VNC Authentication
   (DES con bits invertidos), Raw/CopyRect/Hextile/ZRLE, DesktopSize,
@@ -95,7 +97,9 @@ protocolo **7** y `formato` **2** de sincronización.
    `dvc` 0.8; la 0.5 no compila con 0.17). Para que el AVC420 de Windows llegue
    al visor sin recomprimir se implementa un `DvcProcessor` propio que captura
    los `WireToSurface1` H.264 y sus regiones y los pasa tal cual; la API de alto
-   nivel de IronRDP descarta las regiones y exige decodificar.
+   nivel de IronRDP descarta las regiones y exige decodificar. Hoy el canal no
+   se anuncia al servidor (desviación 15): queda preparado para cuando se
+   decodifiquen los demás códecs de EGFX.
 3. **Mensajes del visor no listados en §5.2** (necesarios para el checklist):
    la orden `rec` (Reconectar desde el aviso de caído), el mensaje de servidor
    `{"t":"latencia","ms":N}` tras `po`, los avisos internos `Visible` y
@@ -121,20 +125,44 @@ protocolo **7** y `formato` **2** de sincronización.
     la apertura, anota `escritorio_fallido` y contesta `Error` con el
     `peticion_id` de la apertura.
 11. **Con `v,0` (pestaña oculta) el puente deja de mandar imagen** y con
-    `v,1`/pantalla completa repinta el escritorio entero. Con H.264 no hay
-    búfer de píxeles: el keyframe al volver lo tendría que pedir la pista RDP;
-    el cliente RDP actual ignora `Visible`, así que queda como limitación
-    conocida (documentada en el puente y en la revisión).
+    `v,1`/pantalla completa repinta el escritorio entero. Con H.264 el puente
+    guarda el último GOP (desde el fotograma clave) y al volver lo reenvía al
+    visor; si no hay GOP reenviable pide a la pista RDP un repintado completo
+    con un Refresh Rect PDU (`OrdenEscritorio::Refrescar`), que es lo que
+    implementa «pantalla completa repinta» en el protocolo.
 12. **AVC420 se prueba a nivel unitario del `DvcProcessor`** (ZGFX +
     `WireToSurface1` + regiones): el `ironrdp-server` de desarrollo no trae la
-    feature `egfx` para generarlo en proceso. La validación con Windows 11 real
-    está en el guion manual.
+    feature `egfx` para generarlo en proceso. Con Windows 11 real se comprobó
+    que, al anunciar EGFX, el servidor confirma V8.1/V10.7 y manda la interfaz
+    con ClearCodec (y mapas de bits), no con AVC420: un cliente que solo
+    entiende AVC420 se queda con la pantalla negra. Por eso MAGI no anuncia
+    `DYNVC_GFX_PROTOCOL_SUPPORTED` y RDP usa el camino de mapas de bits
+    (rectángulos), que IronRDP decodifica. El passthrough AVC420 queda
+    pendiente de decodificar los demás códecs de EGFX (ver «Pendientes»).
 13. **La prueba instrumentada de Android no se pudo ejecutar** (el AVD se queda
     en `FallbackHome`/pantalla de bloqueo); sí pasan `:app:assembleDebug`,
     `:app:lintDebug` y `:app:testDebugUnitTest`, que cubren la lectura del
     formato 2 y la presentación de escritorios.
 14. **Se actualizó `cargo-dist` local a 0.33.1** (el `Cargo.toml` ya fijaba
     esa versión) para poder ejecutar `dist plan --tag v1.2.0`.
+15. **El H.264 de Windows no se anuncia en esta versión** (corrección del 5 nov
+    2026, al validar con Windows 11 real). La primera versión anunciaba
+    `imagen: "h264"` al visor en cuanto el host tenía `[escritorio] h264`, pero
+    el cliente RDP nunca activaba EGFX (faltaba `DYNVC_GFX_PROTOCOL_SUPPORTED`
+    en las capacidades del conector), así que Windows mandaba mapas de bits y el
+    puente los enviaba como `0x05 Rect`; el visor, con `imagen === 'h264'`, los
+    pintaba en el búfer y no los presentaba: **pantalla negra**. Se corrige en
+    dos pasos: (a) el puente ya no anuncia H.264 hasta que la fuente lo confirma
+    (`EventoEscritorio::Imagen`), y la imagen de apertura es siempre
+    «rectángulos», de modo que el visor presenta los rectángulos del búfer; (b)
+    no se anuncia EGFX, porque con EGFX activo Windows manda ClearCodec/bitmap
+    (que este cliente no decodifica) y AVC420 solo para contenido de vídeo: un
+    cliente que solo entiende AVC420 volvería a dejar la pantalla negra. El
+    passthrough de H.264 queda pendiente de decodificar los demás códecs de
+    EGFX; mientras tanto el checklist de la fase deja sin marcar la
+    funcionalidad «Con EGFX y AVC420, el H.264 de Windows llega al visor sin
+    recomprimir». También se añaden el GOP cacheado en el puente y el Refresh
+    Rect, que hacen falta en cuanto se active el H.264.
 
 ## Estructura de archivos creada/modificada
 
@@ -193,7 +221,9 @@ protocolo **7** y `formato` **2** de sincronización.
 - **AVC420 crudo con un `DvcProcessor` propio** sobre `ironrdp-egfx` 0.3:
   `zgfx::Decompressor` + `GfxPdu` + `Avc420BitmapStream`, `FrameAcknowledge`
   en `EndFrame`, topes de 16 MiB por fotograma y 32 MiB descomprimido; MAGI no
-  decodifica ni recomprime vídeo (D211).
+  decodifica ni recomprime vídeo (D211). Mientras no se anuncie EGFX (desviación
+  15) el canal queda registrado pero Windows no lo crea, y RDP usa los mapas de
+  bits de IronRDP.
 - **El servidor no dialoga ni toca el llavero** (T25): reenvía
   `PideHuellaEscritorio` y `PideCredenciales` al cliente solicitante y espera
   su respuesta; la huella la guarda el cliente que la acepta y el REGISTRO
@@ -212,7 +242,8 @@ protocolo **7** y `formato` **2** de sincronización.
 
 ## Funcionalidades del checklist completadas
 
-Texto exacto del checklist `magi-fase12-checklist.md` (128/128 marcadas):
+Texto exacto del checklist `magi-fase12-checklist.md` (127/128 marcadas; queda
+sin marcar la de H.264/EGFX, ver desviación 15):
 
 ### Inventario y modelo
 - Migración 8: HOSTS gana `tipo` (`ssh` por defecto), `escritorio_dominio`, `escritorio_opciones` (JSON) y `huella_escritorio`; `user_version` 8
@@ -306,8 +337,6 @@ Texto exacto del checklist `magi-fase12-checklist.md` (128/128 marcadas):
   - AC: Dado un Windows con el certificado regenerado, cuando se abre, entonces sale el bloqueo en rojo y no se envía ninguna credencial
 - Credenciales del llavero sin diálogo; si fallan o no hay, diálogo con 3 intentos y el motivo «usuario o contraseña incorrectos»
 - Mapas de bits, RemoteFX y lo demás que decodifica IronRDP llegan al visor como rectángulos
-- Con EGFX y AVC420, el H.264 de Windows llega al visor sin recomprimir; si el visor no decodifica H.264, MAGI reconecta sin AVC420
-  - AC: Dado Windows 11 y el visor en Chromium, cuando se abre, entonces la barra dice «H.264» y MAGI no decodifica ni recomprime vídeo
 - Teclado por scancodes con la distribución del host o la de `[escritorio] distribucion_teclado` (`auto` sale de `LANG`) y eventos Unicode de reserva
   - AC: Dado un Windows en español, cuando se escriben ñ, @ y € (AltGr) en el visor, entonces aparecen igual en el remoto
 - Ctrl+Alt+Supr y tecla Windows desde la barra del visor
@@ -390,22 +419,29 @@ en este entorno y debe hacer el desarrollador con el guion de §11 del informe
 funcional:
 
 - **Validación manual real** (guion de §11): Windows 11 Pro por RDP directo y a
-  través de SSH (certificado nuevo/cambiado, NLA, «H.264» en la barra,
+  través de SSH (certificado nuevo/cambiado, NLA, «rectángulos» en la barra,
   redimensionado, pantalla completa, Ctrl+Alt+Supr, portapapeles y ñ/@/€ con
   AltGr), VM QEMU por VNC (imagen, cursor, resolución, teclado español), Windows
   XP/2000 por VNC, xrdp y GNOME Remote Desktop, TigerVNC con contraseña, voxl
   con Xvfb (60 fps y parada con `pgrep`), corte de red con «Reconectar», dos
   ventanas de MAGI, sincronización con el móvil y `magi diagnostico` con y sin
-  navegador.
-- **AVC420 con Windows real**: el passthrough está implementado y probado a
-  nivel de `DvcProcessor`, pero el `ironrdp-server` de desarrollo no puede
-  generarlo; falta verlo con Windows 11.
+  navegador. Validado el 5 nov 2026 en Windows 11 real por RDP (conexión, NLA,
+  huella, rectángulos y visor en Brave con la imagen completa); queda repetir el
+  resto del guion.
+- **H.264/EGFX (desviación 15)**: el passthrough AVC420 está implementado y
+  probado a nivel de `DvcProcessor`, pero no se anuncia porque Windows, con
+  EGFX activo, manda la interfaz con ClearCodec/bitmap (códecs que este cliente
+  no decodifica) y AVC420 solo para vídeo. Para activarlo hay que decodificar
+  los demás códecs de EGFX a RGBA (ClearCodec, RemoteFX, bitmap y planar, con
+  `ironrdp-graphics`), anunciar `DYNVC_GFX_PROTOCOL_SUPPORTED` en el conector
+  vendorizado y repartir `Rect`/`Video` desde el mismo canal. Mientras tanto
+  RDP va por mapas de bits y la barra del visor dice «rectángulos».
 - **`connectedDebugAndroidTest`**: el AVD de este entorno se queda en la
   pantalla de bloqueo; las pruebas JVM, el lint y el APK sí pasan. La prueba de
   humo actualizada queda sin ejecutar en emulador.
-- **Keyframe H.264 al volver de `v,0`**: el puente deja de mandar vídeo y el
-  cliente RDP ignora aún `OrdenEscritorio::Visible`; al volver, el keyframe lo
-  tendría que pedir la pista RDP. Es una limitación conocida y documentada.
+- **Keyframe H.264 al volver de `v,0`**: resuelto en el puente (GOP cacheado +
+  Refresh Rect) y probado con el servidor del visor de prueba; falta verlo con
+  una fuente AVC420 real, que depende de H.264/EGFX.
 - **Mantenimiento del vendor**: al subir russh o IronRDP, revisar si sus
   versiones de `sspi`/`picky`/`ecdsa` ya coinciden y quitar
   `vendor/ironrdp-{connector,acceptor}`.
@@ -433,6 +469,15 @@ Resultados concretos en este árbol (2026-11-05):
   la fecha 2026-11-04 y la versión 1.2.0).
 - La revisión adversarial está en `docs/fase12/magi-fase12-revision-adversarial.md`
   con el estado de cada corrección al final del documento.
+- **Corrección del 5 nov 2026 (desviación 15)**: pruebas nuevas
+  `un_visor_que_entra_tarde_recibe_el_gop_cacheado` y
+  `sin_gop_el_visor_pide_un_repintado` en `escritorio_visor`, más
+  `solo_un_sps_o_un_idr_arranca_el_gop` y
+  `el_gop_cacheado_se_descarta_al_pasarse_de_tamano` en el puente (29 pruebas en
+  `escritorio_visor`). Validación de extremo a extremo con Windows 11 real por
+  RDP (a través del túnel del usuario): sesión abierta, visor en Brave y lienzo
+  de 1920×1080 con la imagen completa (capturado con el protocolo de depuración
+  de Chromium); la barra dice «rectángulos».
 
 
 - **Compilar y arrancar**: `cargo run` (TUI). Servidor en primer plano:

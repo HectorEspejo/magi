@@ -14,9 +14,11 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   tipo. El escritorio se ve en una ventana del navegador servida por
   `magi --servidor` solo en `127.0.0.1`, con enlaces de un solo uso y clave
   por sesión. Cliente RDP con IronRDP (TLS con rustls, NLA/NTLM, huella del
-  certificado con la misma política que las huellas SSH, EGFX con el H.264 de
-  Windows pasado tal cual) y cliente VNC propio (RFB 3.3/3.7/3.8, Raw,
-  CopyRect, Hextile, ZRLE, portapapeles y cambio de tamaño). `voxl` se arranca
+  certificado con la misma política que las huellas SSH, y mapas de bits y
+  RemoteFX como rectángulos; el H.264 de Windows queda pendiente de decodificar
+  los demás códecs de EGFX, ver el informe de la fase) y cliente VNC propio
+  (RFB 3.3/3.7/3.8, Raw, CopyRect, Hextile, ZRLE, portapapeles y cambio de
+  tamaño). `voxl` se arranca
   por SSH con el script embebido `escritorio_voxl.sh` y se ve por el túnel de
   la sesión. Sesiones custodiadas por el servidor con pestaña propia, un minuto
   de gracia sin visor y un solo visor por sesión. Migración 8 (`tipo`,
@@ -54,6 +56,14 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 - Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
 
 ### Corregido
+
+- **Pantalla negra al abrir un escritorio RDP.** El visor recibía
+  `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente
+  RDP mandaba mapas de bits como rectángulos; el visor los pintaba en su búfer
+  y no los presentaba. Ahora la imagen de apertura es siempre «rectángulos» y
+  solo se anuncia H.264 cuando llega el primer fotograma de vídeo; además el
+  puente cachea el último GOP y pide un repintado completo (Refresh Rect) al
+  visor que entra tarde o vuelve a la pestaña.
 
 - Evita el error «database is locked» al escribir el inventario con el
   servidor de sesiones activo: las transacciones del almacén se abren con

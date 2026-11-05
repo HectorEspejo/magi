@@ -1279,6 +1279,9 @@ impl Sesion {
                 }
                 Ok(())
             }
+            // RFB no tiene una petición de repintado: el puente repinta desde
+            // su búfer de píxeles con el Rect de siempre.
+            OrdenEscritorio::Refrescar => Ok(()),
             OrdenEscritorio::CtrlAltSupr => {
                 let secuencia = [
                     ("ControlLeft", 0xFFE3),

@@ -92,7 +92,7 @@
   - AC: Dado un Windows con el certificado regenerado, cuando se abre, entonces sale el bloqueo en rojo y no se envía ninguna credencial
 - [x] Credenciales del llavero sin diálogo; si fallan o no hay, diálogo con 3 intentos y el motivo «usuario o contraseña incorrectos»
 - [x] Mapas de bits, RemoteFX y lo demás que decodifica IronRDP llegan al visor como rectángulos
-- [x] Con EGFX y AVC420, el H.264 de Windows llega al visor sin recomprimir; si el visor no decodifica H.264, MAGI reconecta sin AVC420
+- [ ] Con EGFX y AVC420, el H.264 de Windows llega al visor sin recomprimir; si el visor no decodifica H.264, MAGI reconecta sin AVC420
   - AC: Dado Windows 11 y el visor en Chromium, cuando se abre, entonces la barra dice «H.264» y MAGI no decodifica ni recomprime vídeo
 - [x] Teclado por scancodes con la distribución del host o la de `[escritorio] distribucion_teclado` (`auto` sale de `LANG`) y eventos Unicode de reserva
   - AC: Dado un Windows en español, cuando se escriben ñ, @ y € (AltGr) en el visor, entonces aparecen igual en el remoto
@@ -171,6 +171,6 @@
 
 ---
 
-**Progreso Fase 12:** 128 / 128 funcionalidades
+**Progreso Fase 12:** 127 / 128 funcionalidades
 
-**Total MAGI (Fases 1-12):** 958 / 962 funcionalidades
+**Total MAGI (Fases 1-12):** 957 / 962 funcionalidades

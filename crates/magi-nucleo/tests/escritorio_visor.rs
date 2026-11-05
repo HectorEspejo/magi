@@ -638,6 +638,17 @@ fn drenar_avisos(mut avisos: mpsc::Receiver<AvisoVisor>) -> Arc<std::sync::Mutex
 }
 
 async fn esperar_orden(ordenes: &mut mpsc::Receiver<OrdenEscritorio>) -> OrdenEscritorio {
+    // El puente pide repintados internos con H.264 (Refresh Rect) que no
+    // forman parte de lo que comprueba cada test de órdenes del visor.
+    loop {
+        let orden = esperar_orden_cruda(ordenes).await;
+        if orden != OrdenEscritorio::Refrescar {
+            return orden;
+        }
+    }
+}
+
+async fn esperar_orden_cruda(ordenes: &mut mpsc::Receiver<OrdenEscritorio>) -> OrdenEscritorio {
     tokio::time::timeout(Duration::from_secs(2), ordenes.recv())
         .await
         .expect("la orden llega a la fuente a tiempo")
@@ -1225,10 +1236,13 @@ async fn sin_h264_avisa_y_no_manda_video() {
     }
     assert!(!video_recibido, "sin H.264 no se manda VideoRdp");
 
-    // Con H.264, otro visor sí lo recibe.
+    // Con H.264, otro visor recibe primero el GOP que quedó cacheado y luego
+    // lo que llegue en directo.
     let mut ws_h264 = conectar_ws_correcto(entorno.puerto).await;
     enviar_hola(&mut ws_h264, &clave, true).await;
     let _ = esperar_hello(&mut ws_h264, Duration::from_secs(2)).await;
+    let cacheado = esperar_binario(&mut ws_h264, 0x07, Duration::from_secs(2)).await;
+    assert_eq!(u32_en(&cacheado, 1), 1);
     eventos_tx
         .send(EventoEscritorio::Video {
             marco: 2,
@@ -1239,6 +1253,82 @@ async fn sin_h264_avisa_y_no_manda_video() {
         .expect("vídeo");
     let video = esperar_binario(&mut ws_h264, 0x07, Duration::from_secs(2)).await;
     assert_eq!(u32_en(&video, 1), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn un_visor_que_entra_tarde_recibe_el_gop_cacheado() {
+    let entorno = entorno().await;
+    let addr = entorno.addr();
+    let _avisos = drenar_avisos(entorno.avisos);
+    let mut base = info(33, TipoHost::Rdp);
+    base.imagen = Some(ImagenEscritorio::H264);
+    let (_sesion, eventos_tx, _ordenes) = alta_sesion(&entorno.registro, base, true);
+    let enlace = entorno.registro.enlace(33).expect("enlace");
+    let clave = canjear(addr, &enlace).await.json()["clave"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // La fuente manda el GOP (clave + delta) cuando todavía no hay visor: el
+    // puente lo guarda para el que entre después.
+    let clave_h264 = vec![0u8, 0, 0, 1, 0x65, 0x88];
+    let delta_h264 = vec![0u8, 0, 0, 1, 0x41, 0x9a];
+    eventos_tx
+        .send(EventoEscritorio::Video {
+            marco: 1,
+            regiones: vec![Region::nueva(0, 0, 2, 2)],
+            h264: clave_h264.clone(),
+        })
+        .await
+        .expect("clave");
+    eventos_tx
+        .send(EventoEscritorio::Video {
+            marco: 2,
+            regiones: vec![Region::nueva(0, 0, 2, 2)],
+            h264: delta_h264.clone(),
+        })
+        .await
+        .expect("delta");
+
+    let mut ws = conectar_ws_correcto(entorno.puerto).await;
+    enviar_hola(&mut ws, &clave, true).await;
+    let hello = esperar_hello(&mut ws, Duration::from_secs(2)).await;
+    assert_eq!(hello["imagen"], "h264");
+
+    // El visor que entra tarde ve la imagen sin esperar a que Windows repinte.
+    let primero = esperar_binario(&mut ws, 0x07, Duration::from_secs(2)).await;
+    assert_eq!(u32_en(&primero, 1), 1);
+    assert_eq!(&primero[15..], clave_h264.as_slice());
+    let segundo = esperar_binario(&mut ws, 0x07, Duration::from_secs(2)).await;
+    assert_eq!(u32_en(&segundo, 1), 2);
+    assert_eq!(&segundo[15..], delta_h264.as_slice());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sin_gop_el_visor_pide_un_repintado() {
+    let entorno = entorno().await;
+    let addr = entorno.addr();
+    let _avisos = drenar_avisos(entorno.avisos);
+    let mut base = info(34, TipoHost::Rdp);
+    base.imagen = Some(ImagenEscritorio::H264);
+    let (_sesion, _eventos_tx, mut ordenes_rx) = alta_sesion(&entorno.registro, base, true);
+    let enlace = entorno.registro.enlace(34).expect("enlace");
+    let clave = canjear(addr, &enlace).await.json()["clave"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut ws = conectar_ws_correcto(entorno.puerto).await;
+    enviar_hola(&mut ws, &clave, true).await;
+    let _ = esperar_hello(&mut ws, Duration::from_secs(2)).await;
+
+    // Sin GOP cacheado (aún no llegó ningún clave) no hay nada que reenviar:
+    // el visor pide el repintado y el cliente RDP manda un Refresh Rect.
+    enviar_texto(&mut ws, "kf").await;
+    assert_eq!(
+        esperar_orden_cruda(&mut ordenes_rx).await,
+        OrdenEscritorio::Refrescar
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1680,6 +1770,9 @@ async fn con_la_pestana_oculta_no_se_manda_video() {
         esperar_orden(&mut ordenes_rx).await,
         OrdenEscritorio::Visible(true)
     );
+    // Al volver, el puente reenvía el GOP que se perdió con la pestaña oculta.
+    let reenviado = esperar_binario(&mut ws, 0x07, Duration::from_secs(2)).await;
+    assert_eq!(u32_en(&reenviado, 1), 1);
     eventos_tx
         .send(EventoEscritorio::Video {
             marco: 2,

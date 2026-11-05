@@ -209,6 +209,10 @@ fn construir(
     let mut drdynvc = DrdynvcClient::new()
         .with_dynamic_channel(DisplayControlClient::new(|_capacidades| Ok(Vec::new())));
 
+    // El canal EGFX se registra, pero MAGI todavía no anuncia
+    // DYNVC_GFX_PROTOCOL_SUPPORTED en las capacidades del conector, así que
+    // Windows no lo crea y la sesión va por mapas de bits (ver la desviación 15
+    // del informe de la Fase 12 y el doc de egfx.rs).
     if config.h264 {
         drdynvc = drdynvc.with_dynamic_channel(Egfx::nuevo(eventos));
     }

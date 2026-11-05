@@ -16,10 +16,13 @@
 //!   mensaje individual pasa de la cola (un rectángulo mayor se trocea por
 //!   filas);
 //! - con v,0 deja de mandar imagen (rectángulos, copias, cursor y vídeo) y
-//!   avisa a la fuente y al servidor; al volver con v,1 repinta desde el búfer.
-//!   El cliente RDP actual todavía ignora OrdenEscritorio::Visible, así que
-//!   tras una pausa con H.264 el keyframe lo tiene que mandar Windows por su
-//!   cuenta (limitación anotada en la revisión adversarial, M7);
+//!   avisa a la fuente y al servidor; al volver con v,1 repinta desde el búfer
+//!   y, con H.264, reenvía el último GOP cacheado o pide a Windows un Refresh
+//!   Rect para conseguir un fotograma clave;
+//! - guarda el último GOP H.264 recibido (desde el fotograma clave) para que un
+//!   visor que entra a mitad de sesión vea imagen sin esperar a que Windows
+//!   repinte: el decodificador del navegador necesita un clave que la fuente
+//!   ya no repite;
 //! - valida toda orden del visor (tamaños 200×200..8192×8192, coordenadas
 //!   dentro del escritorio, comandos conocidos y texto de hasta 1 MB) y lo que
 //!   no encaja se descarta sin pánico;
@@ -30,6 +33,7 @@
 //! La decodificación no vive aquí: los eventos llegan ya decodificados desde
 //! el hilo de la fuente, dentro de EventoEscritorio.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -64,6 +68,11 @@ pub const MENSAJES_MAX: usize = 256;
 const MAX_REGION: usize = COLA_MAX / 4;
 /// Lado mínimo que el visor puede pedir con `sz` (§7.13).
 pub const LADO_VISOR_MIN: u16 = 200;
+/// Bytes máximos del último GOP H.264 que se guarda para el visor que entra
+/// tarde. Por debajo de la contrapresión para que el reenvío quepa entero.
+pub const VIDEO_CACHE_MAX: usize = 8 * 1024 * 1024;
+/// Fotogramas máximos del GOP cacheado (a 60 fps, un minuto).
+pub const VIDEO_CACHE_FOTOGRAMAS_MAX: usize = 3600;
 
 const TIPO_CURSOR: u8 = 0x03;
 const TIPO_RECT: u8 = 0x05;
@@ -509,6 +518,115 @@ fn tocan(a: &Region, b: &Region) -> bool {
     u32::from(a.x) <= bx2 && u32::from(b.x) <= ax2 && u32::from(a.y) <= by2 && u32::from(b.y) <= ay2
 }
 
+// ---------------------------------------------------------------- vídeo cacheado
+
+/// Un fotograma H.264 del GOP en curso, con sus regiones.
+struct FotogramaVideo {
+    marco: u32,
+    regiones: Vec<Region>,
+    h264: Vec<u8>,
+}
+
+/// Último GOP H.264 recibido de la fuente, desde su fotograma clave. Sirve
+/// para que un visor que entra a mitad de sesión (o vuelve a la pestaña) tenga
+/// imagen: el decodificador del navegador necesita un clave y la fuente ya no
+/// lo repite.
+#[derive(Default)]
+struct CacheVideo {
+    fotogramas: VecDeque<FotogramaVideo>,
+    bytes: usize,
+    /// Se descartó el GOP por tamaño: hasta el siguiente clave no se puede
+    /// reenviar nada (unos deltas sin su clave no decodifican).
+    invalido: bool,
+}
+
+impl CacheVideo {
+    fn nuevo() -> Self {
+        Self::default()
+    }
+
+    fn limpiar(&mut self) {
+        self.fotogramas.clear();
+        self.bytes = 0;
+    }
+
+    /// ¿Hay un GOP reenviable (empezando por un fotograma clave)?
+    fn hay_gop(&self) -> bool {
+        !self.invalido && !self.fotogramas.is_empty()
+    }
+
+    /// Guarda un fotograma. Un clave empieza un GOP nuevo; si el GOP pasa del
+    /// tope se descarta entero y se espera al siguiente clave.
+    fn guardar(&mut self, marco: u32, regiones: Vec<Region>, h264: Vec<u8>) {
+        if es_fotograma_clave(&h264) {
+            self.limpiar();
+            self.invalido = false;
+        } else if self.fotogramas.is_empty() {
+            // Sin clave de referencia no se guarda nada.
+            self.invalido = true;
+            return;
+        }
+        if h264.len() > VIDEO_CACHE_MAX
+            || self.bytes + h264.len() > VIDEO_CACHE_MAX
+            || self.fotogramas.len() >= VIDEO_CACHE_FOTOGRAMAS_MAX
+        {
+            self.limpiar();
+            self.invalido = true;
+            return;
+        }
+        self.bytes += h264.len();
+        self.fotogramas.push_back(FotogramaVideo {
+            marco,
+            regiones,
+            h264,
+        });
+    }
+}
+
+/// ¿El Annex-B lleva un SPS (7) o un IDR (5)? Es el mismo criterio que usa el
+/// visor para decidir si un fotograma puede arrancar el decodificador.
+fn es_fotograma_clave(h264: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 2 < h264.len() {
+        if h264[i] != 0 || h264[i + 1] != 0 {
+            i += 1;
+            continue;
+        }
+        let cabecera = if h264[i + 2] == 1 {
+            Some(i + 3)
+        } else if i + 3 < h264.len() && h264[i + 2] == 0 && h264[i + 3] == 1 {
+            Some(i + 4)
+        } else {
+            None
+        };
+        let Some(cabecera) = cabecera else {
+            i += 1;
+            continue;
+        };
+        let Some(byte) = h264.get(cabecera) else {
+            return false;
+        };
+        if matches!(byte & 0x1f, 5 | 7) {
+            return true;
+        }
+        i = cabecera + 1;
+    }
+    false
+}
+
+/// Mensaje 0x07 del protocolo del visor con un fotograma de vídeo.
+fn mensaje_video(marco: u32, regiones: &[Region], h264: &[u8]) -> Vec<u8> {
+    let mut mensaje = Vec::with_capacity(7 + regiones.len() * 8 + h264.len());
+    mensaje.push(TIPO_VIDEO);
+    mensaje.extend_from_slice(&marco.to_be_bytes());
+    mensaje.extend_from_slice(&(regiones.len() as u16).to_be_bytes());
+    for region in regiones {
+        escribir_region(&mut mensaje, region);
+    }
+    mensaje.extend_from_slice(h264);
+    mensaje
+}
+
 // ---------------------------------------------------------------- bucle
 
 /// Datos con los que se lanza el bucle del puente de una sesión.
@@ -555,6 +673,7 @@ struct Bucle {
     visor: Option<VisorConectado>,
     visible: bool,
     marcos: u32,
+    cache: CacheVideo,
 }
 
 enum Accion {
@@ -587,6 +706,7 @@ impl Bucle {
             visor: None,
             visible: true,
             marcos: 0,
+            cache: CacheVideo::nuevo(),
         }
     }
 
@@ -660,9 +780,13 @@ impl Bucle {
                     .await;
                 if visible {
                     self.repintar_entero();
+                    self.reenviar_gop().await;
                 }
             }
-            ComandoPuente::Repintar => self.repintar_entero(),
+            ComandoPuente::Repintar => {
+                self.repintar_entero();
+                self.reenviar_gop().await;
+            }
             ComandoPuente::Latencia { s } => self.latencia(s),
             ComandoPuente::Orden(orden) => self.orden(orden).await,
             ComandoPuente::Fuente { eventos, ordenes } => {
@@ -673,6 +797,10 @@ impl Bucle {
                         .salida
                         .texto(json!({"t": "estado", "estado": "conectando"}).to_string());
                 }
+                // Fuente nueva: el GOP del anterior no vale (puede tener otro
+                // tamaño o unos SPS distintos). El nuevo empezará con su clave.
+                self.cache.limpiar();
+                self.cache.invalido = false;
                 self.mandar_hello();
                 self.repintar_entero();
             }
@@ -735,6 +863,8 @@ impl Bucle {
         }
         self.mandar_hello();
         self.repintar_entero();
+        // El visor que entra tarde necesita el GOP que Windows ya mandó.
+        self.reenviar_gop().await;
     }
 
     async fn echar(&mut self, estado: &str, motivo: Option<&str>, cerrar: bool) {
@@ -837,6 +967,11 @@ impl Bucle {
                     .imagen
                     .write()
                     .unwrap_or_else(|roto| roto.into_inner()) = imagen;
+                if imagen == ImagenEscritorio::Rectangulos {
+                    // La fuente no manda H.264: el GOP anterior no sirve.
+                    self.cache.limpiar();
+                    self.cache.invalido = false;
+                }
                 if self.tipo == TipoHost::Rdp && imagen == ImagenEscritorio::H264 {
                     let sin_h264 = self
                         .visor
@@ -889,6 +1024,10 @@ impl Bucle {
         if ancho == 0 || alto == 0 || ancho > LADO_MAX || alto > LADO_MAX {
             return;
         }
+        // Con otro tamaño el GOP cacheado no vale: Windows mandará un clave
+        // nuevo con el ResetGraphics.
+        self.cache.limpiar();
+        self.cache.invalido = false;
         self.bufer.redimensionar(ancho, alto);
         self.compartido.ancho.store(ancho, Ordering::Relaxed);
         self.compartido.alto.store(alto, Ordering::Relaxed);
@@ -909,22 +1048,7 @@ impl Bucle {
             .imagen
             .write()
             .unwrap_or_else(|roto| roto.into_inner()) = ImagenEscritorio::H264;
-        let Some(visor) = &self.visor else {
-            return;
-        };
-        // Con la pestaña oculta (v,0) no se manda vídeo (revisión adversarial,
-        // M7). Al volver (v,1) el decodificador del navegador arranca de cero
-        // y necesita un keyframe: lo tiene que pedir la fuente; el cliente RDP
-        // actual todavía ignora OrdenEscritorio::Visible (ver el doc del
-        // módulo), así que hasta entonces la imagen puede tardar en volver.
-        if !self.visible {
-            return;
-        }
-        // El navegador sin H.264 no decodifica nada: el servidor reconectará
-        // sin AVC420 (D211) y mientras tanto esos marcos no se mandan.
-        if !visor.h264 {
-            return;
-        }
+        // Las zonas fuera del búfer no valen para ningún visor.
         let dentro: Vec<Region> = regiones
             .into_iter()
             .filter(|region| self.bufer.dentro(region))
@@ -933,17 +1057,83 @@ impl Bucle {
         if dentro.is_empty() {
             return;
         }
-        let mut mensaje = Vec::with_capacity(7 + dentro.len() * 8 + h264.len());
-        mensaje.push(TIPO_VIDEO);
-        mensaje.extend_from_slice(&marco.to_be_bytes());
-        mensaje.extend_from_slice(&(dentro.len() as u16).to_be_bytes());
-        for region in &dentro {
-            escribir_region(&mut mensaje, region);
+        // El GOP se guarda siempre, haya visor o no: el que entre después
+        // necesita un fotograma clave que Windows ya no repetirá.
+        if self.visor.is_none() {
+            self.cache.guardar(marco, dentro, h264);
+            return;
         }
-        mensaje.extend_from_slice(&h264);
-        if visor.salida.binario(mensaje) {
+        self.cache.guardar(marco, dentro.clone(), h264.clone());
+        // Con la pestaña oculta (v,0) no se manda vídeo (revisión adversarial,
+        // M7); al volver (v,1) se reenvía el GOP cacheado o se pide repintado.
+        if !self.visible {
+            return;
+        }
+        let Some(visor) = &self.visor else {
+            return;
+        };
+        // El navegador sin H.264 no decodifica nada: el servidor reconectará
+        // sin AVC420 (D211) y mientras tanto esos marcos no se mandan.
+        if !visor.h264 {
+            return;
+        }
+        if visor.salida.binario(mensaje_video(marco, &dentro, &h264)) {
             // Los marcos de vídeo también cuentan para los fps (m8).
             self.marcos = self.marcos.saturating_add(1);
+        }
+    }
+
+    /// Reenvía el GOP cacheado al visor conectado. Si no hay GOP (se descartó
+    /// por tamaño o aún no llegó ningún clave) pide a la fuente un repintado.
+    async fn reenviar_gop(&mut self) {
+        if self.compartido.imagen() != ImagenEscritorio::H264 {
+            return;
+        }
+        let (visor_h264, visible) = match &self.visor {
+            Some(visor) => (visor.h264, self.visible),
+            None => return,
+        };
+        if !visor_h264 || !visible {
+            return;
+        }
+        if !self.cache.hay_gop() {
+            self.pedir_repintado().await;
+            return;
+        }
+        let cache = std::mem::take(&mut self.cache);
+        let mut enviados: u32 = 0;
+        if let Some(visor) = &self.visor {
+            for fotograma in &cache.fotogramas {
+                if visor.salida.pendiente() >= COLA_MAX {
+                    break;
+                }
+                let dentro: Vec<Region> = fotograma
+                    .regiones
+                    .iter()
+                    .copied()
+                    .filter(|region| self.bufer.dentro(region))
+                    .take(ZONAS_MAX)
+                    .collect();
+                if dentro.is_empty() {
+                    continue;
+                }
+                if !visor
+                    .salida
+                    .binario(mensaje_video(fotograma.marco, &dentro, &fotograma.h264))
+                {
+                    break;
+                }
+                enviados += 1;
+            }
+        }
+        self.cache = cache;
+        self.marcos = self.marcos.saturating_add(enviados);
+    }
+
+    /// Pide a la fuente un repintado completo (Refresh Rect en RDP).
+    async fn pedir_repintado(&mut self) {
+        if self.tipo == TipoHost::Rdp {
+            self.orden(OrdenEscritorio::Refrescar).await;
         }
     }
 
@@ -1591,5 +1781,35 @@ mod pruebas {
         assert!(interpretar_orden(&justo, 800, 600).is_some());
         let enorme = "a".repeat(PORTAPAPELES_MAX + 100);
         assert!(interpretar_orden(&enorme, 800, 600).is_none());
+    }
+
+    #[test]
+    fn solo_un_sps_o_un_idr_arranca_el_gop() {
+        // SPS (7) e IDR (5) son claves; un no-IDR (1) no.
+        assert!(es_fotograma_clave(&[0, 0, 0, 1, 0x67, 0x42]));
+        assert!(es_fotograma_clave(&[0, 0, 1, 0x65, 0x88]));
+        assert!(!es_fotograma_clave(&[0, 0, 0, 1, 0x41, 0x9a]));
+        assert!(!es_fotograma_clave(&[]));
+        // Un byte que parece cabecera sin start code no cuenta.
+        assert!(!es_fotograma_clave(&[0x65, 0x88, 0x84]));
+    }
+
+    #[test]
+    fn el_gop_cacheado_se_descarta_al_pasarse_de_tamano() {
+        let mut cache = CacheVideo::nuevo();
+        cache.guardar(1, Vec::new(), vec![0, 0, 0, 1, 0x65]);
+        assert!(cache.hay_gop());
+        cache.guardar(2, Vec::new(), vec![0, 0, 0, 1, 0x41]);
+        assert!(cache.hay_gop());
+        // Un delta sin clave previa no se guarda: el GOP queda inválido.
+        let mut suelto = CacheVideo::nuevo();
+        suelto.guardar(1, Vec::new(), vec![0, 0, 0, 1, 0x41]);
+        assert!(!suelto.hay_gop());
+        // Si el GOP pasa del tope se tira entero.
+        let mut grande = CacheVideo::nuevo();
+        grande.guardar(1, Vec::new(), vec![0, 0, 0, 1, 0x65]);
+        grande.guardar(2, Vec::new(), vec![0; VIDEO_CACHE_MAX]);
+        assert!(!grande.hay_gop());
+        assert!(grande.fotogramas.is_empty());
     }
 }

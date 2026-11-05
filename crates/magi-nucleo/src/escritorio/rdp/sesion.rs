@@ -17,6 +17,8 @@ use ironrdp::core::WriteBuf;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::graphics::pointer::DecodedPointer;
 use ironrdp::pdu::geometry::{InclusiveRectangle, Rectangle as _};
+use ironrdp::pdu::rdp::headers::ShareDataPdu;
+use ironrdp::pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
 use ironrdp::pdu::Action;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{fast_path, ActiveStage, ActiveStageBuilder, ActiveStageOutput};
@@ -28,9 +30,7 @@ use super::cliprdr::{formato_texto, AccionPortapapeles, TEXTO_MAX};
 use super::conexion::{SesionConectada, PLAZO_RED};
 use super::entrada::Entrada;
 use super::transporte::FlujoFramed;
-use crate::escritorio::{
-    ConfigEscritorio, ErrorEscritorio, EventoEscritorio, ImagenEscritorio, OrdenEscritorio,
-};
+use crate::escritorio::{ErrorEscritorio, EventoEscritorio, ImagenEscritorio, OrdenEscritorio};
 
 /// Agrupación de los cambios de tamaño pedidos por el visor.
 const AGRUPAR_TAMANO: Duration = Duration::from_millis(500);
@@ -88,7 +88,6 @@ pub(crate) struct Sesion {
     etapa: ActiveStage,
     imagen: DecodedImage,
     factoria: ConnectionActivationFactory,
-    config: ConfigEscritorio,
     eventos: mpsc::Sender<EventoEscritorio>,
     ordenes: mpsc::Receiver<OrdenEscritorio>,
     entrada: Entrada,
@@ -106,7 +105,6 @@ pub(crate) struct Sesion {
 /// Corre la sesión hasta que el remoto la cierra o se cae.
 pub(crate) async fn ejecutar(
     conectada: SesionConectada,
-    config: ConfigEscritorio,
     eventos: mpsc::Sender<EventoEscritorio>,
     ordenes: mpsc::Receiver<OrdenEscritorio>,
 ) -> Result<(), ErrorEscritorio> {
@@ -137,7 +135,6 @@ pub(crate) async fn ejecutar(
         etapa,
         imagen,
         factoria: resultado.activation_factory,
-        config,
         eventos,
         ordenes,
         entrada: Entrada::nueva(),
@@ -154,13 +151,12 @@ pub(crate) async fn ejecutar(
     // emite el enlace del visor. Va antes de los primeros píxeles.
     sesion.emitir(EventoEscritorio::Abierto).await;
 
-    let imagen_inicial = if sesion.config.h264 {
-        ImagenEscritorio::H264
-    } else {
-        ImagenEscritorio::Rectangulos
-    };
+    // La imagen de apertura son rectángulos: EGFX confirmará H.264 cuando
+    // Windows acepte AVC420 (si no lo acepta, la sesión sigue en mapas de
+    // bits). Anunciar H.264 antes de esa confirmación deja al visor esperando
+    // vídeo que puede no llegar nunca (pantalla negra).
     sesion
-        .emitir(EventoEscritorio::Imagen(imagen_inicial))
+        .emitir(EventoEscritorio::Imagen(ImagenEscritorio::Rectangulos))
         .await;
     sesion
         .emitir(EventoEscritorio::Tamano { ancho, alto })
@@ -529,12 +525,35 @@ impl Sesion {
             }
             OrdenEscritorio::Portapapeles(texto) => self.recibir_texto_local(texto).await?,
             OrdenEscritorio::PedirPortapapeles => self.pedir_texto_remoto().await,
+            OrdenEscritorio::Refrescar => self.pedir_repintado().await?,
             // El puente decide pausar la imagen; la sesión sigue viva. La
             // reconexión la lleva la capa de sesión, no este cliente.
             OrdenEscritorio::Visible(_) | OrdenEscritorio::Reconectar => {}
         }
 
         Ok(())
+    }
+
+    /// Pide al servidor que repinte el escritorio entero con un Refresh Rect
+    /// PDU ([MS-RDPBCGR] 2.2.11.2): es la forma de que Windows mande un
+    /// fotograma clave nuevo cuando el visor entra tarde o vuelve a la pestaña
+    /// y el puente no tiene un GOP que reenviar.
+    async fn pedir_repintado(&mut self) -> Result<(), ErrorEscritorio> {
+        let ancho = self.tamano.0.max(1);
+        let alto = self.tamano.1.max(1);
+        let pdu = ShareDataPdu::RefreshRectangle(RefreshRectanglePdu {
+            areas_to_refresh: vec![InclusiveRectangle {
+                left: 0,
+                top: 0,
+                right: ancho - 1,
+                bottom: alto - 1,
+            }],
+        });
+        let mut bufer = WriteBuf::new();
+        self.etapa
+            .encode_static(&mut bufer, pdu)
+            .map_err(error_de_sesion)?;
+        self.escribir(&bufer.into_inner()).await
     }
 
     fn acotar_raton(&self, x: u16, y: u16) -> (u16, u16) {

@@ -768,6 +768,9 @@ pub enum OrdenEscritorio {
     PedirPortapapeles,
     /// La pestaña se oculta o se vuelve a ver (v,0/v,1).
     Visible(bool),
+    /// El visor pide repintar el escritorio entero (kf o vuelta con v,1): el
+    /// cliente RDP manda un Refresh Rect PDU para conseguir un fotograma clave.
+    Refrescar,
     /// El visor pide reconectar la sesión caída (orden rec, desviación
     /// anotada: el informe no la lista en §5.2).
     Reconectar,
