@@ -123,6 +123,16 @@ pub enum EstadoHost {
     Error,
 }
 
+/// Tipo de host del inventario (Fase 12). Los que no son `ssh` son
+/// escritorios: el móvil los enseña pero no los abre ni les crea túneles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TipoHostMovil {
+    Ssh,
+    Rdp,
+    Vnc,
+    Voxl,
+}
+
 /// Fila de host de la pantalla Hosts.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct HostInventario {
@@ -130,6 +140,8 @@ pub struct HostInventario {
     pub nombre: String,
     pub direccion: String,
     pub puerto: u32,
+    /// Tipo de host: SSH o un escritorio (RDP, VNC o voxl).
+    pub tipo: TipoHostMovil,
     pub usuario: String,
     pub grupo_uuid: Option<String>,
     pub etiquetas: Vec<String>,
@@ -155,6 +167,8 @@ pub struct FichaHost {
     pub nombre: String,
     pub direccion: String,
     pub puerto: u32,
+    /// Tipo de host: SSH o un escritorio (RDP, VNC o voxl).
+    pub tipo: TipoHostMovil,
     pub usuario: String,
     pub grupo_uuid: Option<String>,
     pub grupo_nombre: Option<String>,
@@ -546,7 +560,7 @@ impl Nucleo {
     pub fn version(&self) -> VersionNucleo {
         VersionNucleo {
             nucleo: magi_nucleo::VERSION_NUCLEO.to_string(),
-            formato: magi_nucleo::sincronizacion::formato::FORMATO,
+            formato: magi_nucleo::sincronizacion::formato::FORMATO_MAXIMO,
             user_version: magi_nucleo::almacen::migraciones::VERSION_BD as u32,
         }
     }

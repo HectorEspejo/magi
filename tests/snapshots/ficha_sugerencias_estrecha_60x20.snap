@@ -2,7 +2,7 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · HOST · nuevo · nuevo ─────────────────────────────┐
-│ IDENTIFICACIÓN                                           │
+│ IDENTIFICACIÓN                                          ↑│
 │  Nombre                                                  │
 │  [  ]                                                    │
 │  Dirección                                               │

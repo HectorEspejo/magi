@@ -12,15 +12,31 @@
 
 use std::collections::BTreeMap;
 
+use magi_nucleo::escritorio::TipoHost;
 use magi_nucleo::sincronizacion::cifrado::ClaveSincronizacion;
 use magi_nucleo::sincronizacion::elementos::{DatosGrupo, DatosHost};
-use magi_nucleo::sincronizacion::formato::{self, Documento, ElementoDocumento, EquipoDocumento};
+use magi_nucleo::sincronizacion::formato::{
+    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1,
+};
 
 const CLAVE: &str = "AGE-SECRET-KEY-1TSKT6QRX7APKJPLTTJUKRXVATA8H7DAX3ZZH8D5SEQ94R2G3YRDSZSYMTS";
 const UUID_EQUIPO: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const UUID_GRUPO: &str = "11111111-2222-4333-8444-555555555555";
 const UUID_WEB: &str = "66666666-7777-4888-8999-aaaaaaaaaaaa";
 const UUID_DB: &str = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+
+/// Datos de un host tal como los exporta MAGI 1.1: sin los campos de
+/// escritorio, que no existían en el formato 1. Así la fixture sirve para
+/// comprobar que un MAGI 1.2 lee un fichero antiguo (todos los hosts, SSH).
+fn datos_host_formato_1(datos: DatosHost) -> serde_json::Value {
+    let mut valor = serde_json::to_value(datos).expect("datos del host a JSON");
+    if let Some(objeto) = valor.as_object_mut() {
+        objeto.remove("tipo");
+        objeto.remove("escritorio_dominio");
+        objeto.remove("escritorio_opciones");
+    }
+    valor
+}
 
 fn elemento(tipo: &str, uuid: &str, datos: serde_json::Value) -> ElementoDocumento {
     let mut vector = BTreeMap::new();
@@ -56,6 +72,9 @@ fn generar_fixture_android() {
             nombre: nombre.to_string(),
             direccion: direccion.to_string(),
             puerto: 22,
+            tipo: TipoHost::Ssh,
+            escritorio_dominio: None,
+            escritorio_opciones: serde_json::json!({}),
             usuario: Some("usuario".to_string()),
             identidad_ref: None,
             salto: None,
@@ -69,10 +88,10 @@ fn generar_fixture_android() {
             verificaciones: None,
             snippet_al_conectar: None,
         };
-        elementos.push(elemento("host", uuid, serde_json::to_value(datos).unwrap()));
+        elementos.push(elemento("host", uuid, datos_host_formato_1(datos)));
     }
     let documento = Documento {
-        formato: formato::FORMATO,
+        formato: FORMATO_1,
         app: "1.1.0".to_string(),
         equipo: EquipoDocumento {
             uuid: UUID_EQUIPO.to_string(),
@@ -88,7 +107,7 @@ fn generar_fixture_android() {
     };
     let json = formato::serializar(&documento).expect("JSON del documento");
     let firma = clave.firmar(json.as_bytes()).expect("firma");
-    let plano = formato::componer(&json, &firma);
+    let plano = formato::componer(&json, &firma, FORMATO_1);
     let cifrado = clave.cifrar(&plano).expect("cifrado");
     let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let carpeta = raiz.join("../../android/app/src/androidTest/assets/sincronizacion");

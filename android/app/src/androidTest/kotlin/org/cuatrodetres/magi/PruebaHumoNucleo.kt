@@ -19,6 +19,7 @@ import org.cuatrodetres.magi.nucleo.PeticionDialogo
 import org.cuatrodetres.magi.nucleo.Retrollamadas
 import org.cuatrodetres.magi.nucleo.Rutas
 import org.cuatrodetres.magi.nucleo.Sesion
+import org.cuatrodetres.magi.nucleo.TipoHostMovil
 import org.cuatrodetres.magi.nucleo.TunelVivo
 import org.cuatrodetres.magi.plataforma.ClaveMovil
 import org.cuatrodetres.magi.plataforma.ContenedorPlataforma
@@ -91,9 +92,11 @@ class PruebaHumoNucleo {
         )
 
         // El núcleo nativo está cargado y sabe qué formato y base de datos usa.
+        // El formato es el máximo que entiende este binario (2 desde la F12);
+        // la fixture es del formato 1, que también se lee.
         val version = nucleo!!.version()
-        assertEquals(1, version.formato.toInt())
-        assertEquals(7, version.userVersion.toInt())
+        assertEquals(2, version.formato.toInt())
+        assertEquals(8, version.userVersion.toInt())
         assertTrue(version.nucleo.isNotBlank())
 
         // Elegir la carpeta de prueba (la fixture) y unir con su clave.
@@ -121,6 +124,9 @@ class PruebaHumoNucleo {
         assertEquals(22, web.puerto.toInt())
         assertEquals("usuario", web.usuario)
         assertEquals(produccion.uuid, web.grupoUuid)
+        // Un fichero del formato 1 no trae tipo: todos sus hosts son SSH.
+        assertEquals(TipoHostMovil.SSH, web.tipo)
+        assertEquals(TipoHostMovil.SSH, db.tipo)
 
         // La ficha de un host se puede abrir y trae los datos del documento.
         val ficha = nucleo!!.fichaHost(web.uuid)

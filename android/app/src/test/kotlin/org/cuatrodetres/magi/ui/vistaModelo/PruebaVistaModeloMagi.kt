@@ -27,6 +27,7 @@ import org.cuatrodetres.magi.ui.modelos.RespuestaDialogoVista
 import org.cuatrodetres.magi.ui.modelos.SesionVista
 import org.cuatrodetres.magi.ui.modelos.TipoAviso
 import org.cuatrodetres.magi.ui.modelos.TipoConfirmacion
+import org.cuatrodetres.magi.ui.modelos.TipoHostVista
 import org.cuatrodetres.magi.ui.modelos.TunelVista
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -128,6 +129,52 @@ class PruebaVistaModeloMagi {
         vm.abrirSesion("h1")
         assertEquals(DetalleVista.Terminal(1L), vm.estado.value.detalle)
         assertEquals(1L, vm.estado.value.sesionVisible)
+    }
+
+    @Test
+    fun unEscritorioNoSeAbreDesdeElMovil() {
+        val fuente = FuenteNucleoFalsa().apply {
+            inventarioRespuesta = InventarioVista(
+                grupos = emptyList(),
+                hosts = listOf(
+                    host(uuid = "h1", nombre = "web-01"),
+                    host(uuid = "w1", nombre = "win-01").copy(tipo = TipoHostVista.RDP),
+                ),
+            )
+        }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.abrirSesion("w1")
+        // No se llama al núcleo: el escritorio solo se abre en el ordenador.
+        assertTrue(fuente.llamadas.none { it.startsWith("abrirSesion:") })
+        assertNull(vm.estado.value.detalle)
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is AvisoVista.DeInterfaz)
+        assertEquals(
+            TipoAviso.ESCRITORIO_EN_EL_ORDENADOR,
+            (aviso as AvisoVista.DeInterfaz).tipo,
+        )
+    }
+
+    @Test
+    fun unEscritorioNoInstalaLaClaveDelMovil() {
+        val fuente = FuenteNucleoFalsa().apply {
+            inventarioRespuesta = InventarioVista(
+                hosts = listOf(host(uuid = "v1", nombre = "vm-01").copy(tipo = TipoHostVista.VNC)),
+            )
+        }
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.instalarClave("v1", "vm-01")
+        // Ni diálogo de confirmación ni llamada al núcleo.
+        assertNull(vm.estado.value.dialogoActual)
+        assertTrue(fuente.llamadas.none { it.startsWith("instalarClave") })
+        val aviso = vm.estado.value.aviso
+        assertTrue(aviso is AvisoVista.DeInterfaz)
+        assertEquals(
+            TipoAviso.ESCRITORIO_EN_EL_ORDENADOR,
+            (aviso as AvisoVista.DeInterfaz).tipo,
+        )
     }
 
     @Test

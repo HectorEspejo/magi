@@ -17,7 +17,7 @@ base64 = "0.22"
 des = "0.9"
 flate2 = "1"
 getrandom = "0.4"
-ironrdp = { version = "=0.17.0", default-features = false, features = ["core", "pdu", "connector", "session", "graphics", "cliprdr", "displaycontrol", "input"] }
+ironrdp = { version = "=0.17.0", default-features = false, features = ["core", "pdu", "connector", "session", "graphics", "cliprdr", "displaycontrol", "input", "dvc"] }
 ironrdp-egfx = "=0.3.0"
 ironrdp-tokio = "=0.10.0"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }

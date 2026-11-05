@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · HOST · nuevo · nuevo ─────────────────────────────────────────────────┐
+│  Tipo                                                                        │
+│    [ RDP ]                                                                   │
+│ IDENTIFICACIÓN                                                               │
+│  Nombre                                                                      │
+│  [  ]                                                                        │
+│  Dirección                                                                   │
+│  [  ]                                                                        │
+│  Puerto                                                                      │
+│  [ 3389 ]                                                                    │
+│  Grupo                                                                       │
+│  [ produccion                 ▾ ]                                            │
+│  Etiquetas                                                                   │
+│  [  ]                                                                        │
+│                                                                              │
+│ ESCRITORIO                                                                   │
+│  Destino      (sin dirección):3389                                           │
+│  A través de                                                                 │
+│  [ ninguno                                  ▾ ]                              │
+│  Usuario                                                                     │
+│  [  ]                                                                        │
+│  Dominio                                                                    ↓│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

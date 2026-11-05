@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · HOSTS ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 10 hosts · 3 escritorios ─┐
+│▸ ▼ produccion                                                                  (5)                                                                                                                   │
+│    ○ hetzner-01                 192.0.2.111          root       22                                                                                                                                   │
+│    ○ hetzner-02                 192.0.2.112          deploy     2222                                                                                                                                 │
+│    ○ vps-openclaw               192.0.2.40           admin      22                                                                                                                                   │
+│    ○ ▣ web-01-voxl · voxl       127.0.0.1            -          6901  ⤴ hetzner-01                                                                                                                   │
+│    ○ ▣ win-01 · RDP             192.0.2.30           usuario    3389  ⤴ hetzner-01                                                                                                                   │
+│  ▼ casa                                                                        (3)                                                                                                                   │
+│    ○ dgx-spark                  192.0.2.130          usuario    22                                                                                                                                   │
+│    ○ mac-mini-m1                192.0.2.120          usuario    22                                                                                                                                   │
+│    ✕ ▣ nas · VNC                192.0.2.40           -          5900  ⚠ directo                                                                                                                      │
+│  ▼ sin grupo                                                                   (2)                                                                                                                   │
+│    ○ backup-nas                 192.0.2.140          backup     22                                                                                                                                   │
+│    ○ rincon-dev                 dev.rincon.example   usuario    2200                                                                                                                                 │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda

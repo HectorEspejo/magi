@@ -82,7 +82,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
@@ -697,7 +697,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
 
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
@@ -1440,7 +1440,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].servicios, "nginx");
@@ -1857,7 +1857,7 @@ fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version_esquema, 7);
+    assert_eq!(version_esquema, magi::almacen::migraciones::VERSION_BD);
 
     // Una sola fila de este equipo, con uuid, estado y reloj.
     let equipos = magi::almacen::equipos::listar(almacen.conexion()).unwrap();

@@ -168,6 +168,38 @@ impl AppPrueba {
         )
     }
 
+    /// App con la semilla y, además, los escritorios remotos (Fase 12).
+    pub fn con_semilla_de_escritorios(
+        cols: u16,
+        filas: u16,
+    ) -> (
+        Self,
+        crate::semilla::Sembrado,
+        crate::semilla::EscritoriosSembrados,
+    ) {
+        Self::con_semilla_de_escritorios_y_tema(cols, filas, Tema::respaldo())
+    }
+
+    pub fn con_semilla_de_escritorios_y_tema(
+        cols: u16,
+        filas: u16,
+        tema: Tema,
+    ) -> (
+        Self,
+        crate::semilla::Sembrado,
+        crate::semilla::EscritoriosSembrados,
+    ) {
+        fijar_zona_horaria();
+        let entorno = entorno_fijo();
+        let sembrado = crate::semilla::sembrar(&entorno.rutas);
+        let escritorios = crate::semilla::sembrar_escritorios(&entorno.rutas);
+        (
+            Self::con_entorno_y_tema(entorno, cols, filas, tema),
+            sembrado,
+            escritorios,
+        )
+    }
+
     pub fn con_entorno(entorno: comun::Entorno, cols: u16, filas: u16) -> Self {
         Self::con_entorno_y_tema(entorno, cols, filas, Tema::respaldo())
     }

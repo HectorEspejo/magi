@@ -105,6 +105,19 @@ fn etiqueta(campo: CampoFicha, estrecho: bool) -> &'static str {
         CampoFicha::Servicios => "SERVICIOS",
         CampoFicha::Opciones => "OPCIONES EXTRA",
         CampoFicha::Tuneles => "e editar",
+        // Fase 12: campos de escritorio (no salen en una ficha SSH).
+        CampoFicha::Tipo => "Tipo",
+        CampoFicha::Dominio => "Dominio",
+        CampoFicha::ContrasenaModo => "Contraseña",
+        CampoFicha::Contrasena => "Nueva",
+        CampoFicha::Tamano => "Tamaño",
+        CampoFicha::TamanoFijo => "Tamaño fijo",
+        CampoFicha::Teclado => "Teclado",
+        CampoFicha::Portapapeles => "Portapapeles",
+        CampoFicha::Pantalla => "Pantalla",
+        CampoFicha::Programa => "Programa",
+        CampoFicha::OlvidarHuella => "olvidar la huella del certificado",
+        CampoFicha::OlvidarContrasena => "olvidar la contraseña del llavero",
     }
 }
 
@@ -120,7 +133,12 @@ fn lleva_cursor(ficha: &Ficha) -> bool {
         | CampoFicha::BackupPatron
         | CampoFicha::TestsComando
         | CampoFicha::Servicios
-        | CampoFicha::Opciones => true,
+        | CampoFicha::Opciones
+        | CampoFicha::Dominio
+        | CampoFicha::Contrasena
+        | CampoFicha::TamanoFijo
+        | CampoFicha::Pantalla
+        | CampoFicha::Programa => true,
         CampoFicha::Keepalive => ficha.mantener,
         _ => false,
     }

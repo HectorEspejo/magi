@@ -296,14 +296,10 @@ impl SeccionEscritorio {
                 "[escritorio] navegador está vacío: usa auto o una orden con {url}".to_string(),
             );
         } else if navegador != "auto" && !navegador.contains("{url}") {
-            avisos.push(
-                "[escritorio] navegador no lleva {url}: no se sabrá qué abrir".to_string(),
-            );
+            avisos.push("[escritorio] navegador no lleva {url}: no se sabrá qué abrir".to_string());
         }
         if !(10..=3600).contains(&self.gracia_seg) {
-            avisos.push(
-                "[escritorio] gracia_seg debe estar entre 10 y 3600 segundos".to_string(),
-            );
+            avisos.push("[escritorio] gracia_seg debe estar entre 10 y 3600 segundos".to_string());
         }
         if self.puerto_visor != 0 && self.puerto_visor < 1024 {
             avisos.push(

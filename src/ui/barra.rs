@@ -382,14 +382,20 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             }
             atajos
         }
-        Vista::Ficha => vec![
-            Atajo::new(tab, "campo", 2),
-            Atajo::new(intro, "desplegable", 3),
-            Atajo::new("espacio", "casilla", 3),
-            Atajo::new("^s", "guardar", 1),
-            Atajo::new("^t", "probar conexión", 3),
-            Atajo::new("esc", "descartar", 1),
-        ],
+        Vista::Ficha => {
+            let mut atajos = vec![
+                Atajo::new(tab, "campo", 2),
+                Atajo::new(intro, "desplegable", 3),
+                Atajo::new("espacio", "casilla", 3),
+                Atajo::new("^s", "guardar", 1),
+            ];
+            // Probar la conexión es solo para un host SSH (Fase 12).
+            if app.ficha.as_ref().is_some_and(|ficha| ficha.tipo.es_ssh()) {
+                atajos.push(Atajo::new("^t", "probar conexión", 3));
+            }
+            atajos.push(Atajo::new("esc", "descartar", 1));
+            atajos
+        }
         Vista::Tuneles => vec![
             Atajo::new(mover, "mover", 4),
             Atajo::new("espacio", "activar/parar", 1),

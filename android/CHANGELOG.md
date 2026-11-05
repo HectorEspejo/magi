@@ -14,6 +14,15 @@ en [`docs/publicar.md`](../docs/publicar.md).
      publicar, pasa esta sección a «## [X.Y.Z] - fecha», actualiza
      android/version.properties y crea la etiqueta android-vX.Y.Z. -->
 
+### Añadido
+
+- La app lee el `formato` 2 de la sincronización (Fase 12) y enseña los hosts
+  de escritorio (RDP, VNC y voxl) en Hosts con su tipo y «se abre en el
+  ordenador». No se conecta a ellos ni les crea túneles: esos hosts se abren en
+  el ordenador con MAGI de escritorio, y las acciones de terminal, clave y
+  túneles siguen siendo solo para los hosts SSH. Un fichero del `formato` 1 se
+  sigue leyendo con todos sus hosts como SSH.
+
 ### Cambiado
 
 - En plegable o tableta, al abrir una sesión el terminal ocupa toda la

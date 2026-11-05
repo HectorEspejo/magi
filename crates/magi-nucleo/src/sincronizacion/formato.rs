@@ -1,4 +1,4 @@
-//! Formato del fichero de sincronización, `formato` 1 (Fase 10).
+//! Formato del fichero de sincronización (Fase 10, `formato` 2 desde la Fase 12).
 //!
 //! El fichero es una instantánea completa del inventario de un equipo,
 //! cifrada con age y con una firma HMAC dentro. En claro, antes de cifrar:
@@ -8,6 +8,20 @@
 //! firma: <64 hex>
 //! {"formato":1,...}
 //! \`\`\`
+//!
+//! La cabecera, la firma y el cifrado no cambian entre formatos: solo cambia
+//! el número (en la cabecera y en el campo `formato` del JSON, que siempre
+//! coinciden) y el significado de los datos que viajan.
+//!
+//! - **Formato 1** (Fase 10): todos los hosts son SSH. Lo lee MAGI 1.1.
+//! - **Formato 2** (Fase 12): los hosts pueden ser escritorios (`rdp`, `vnc` o
+//!   `voxl`) y viajan `tipo`, `escritorio_dominio` y `escritorio_opciones`.
+//!   MAGI 1.1 lo rechaza como `formato_nuevo` en vez de malinterpretarlo.
+//!
+//! El formato que se escribe lo decide el inventario al exportar (ver
+//! `elementos::formato_a_escribir`): 2 si hay algún host que no es SSH y 1 si
+//! todos lo son, para que MAGI 1.1 siga leyendo los inventarios sin
+//! escritorios (D220). Al leer se aceptan los dos.
 //!
 //! La firma es HMAC-SHA256 del JSON (los bytes que empiezan en la llave de
 //! apertura y acaban en la de cierre, sin el salto de línea final) con una
@@ -19,8 +33,15 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
-/// Versión del formato que escribe y entiende este binario.
-pub const FORMATO: u32 = 1;
+/// Formato más nuevo que entiende este binario. Un fichero con un formato
+/// mayor se rechaza como `formato_nuevo` (T74): nunca se malinterpreta.
+pub const FORMATO_MAXIMO: u32 = 2;
+
+/// Formato 1: todos los hosts del fichero son SSH. Es el que lee MAGI 1.1.
+pub const FORMATO_1: u32 = 1;
+
+/// Formato 2: los hosts pueden ser escritorios y viajan sus campos.
+pub const FORMATO_2: u32 = 2;
 
 /// Primera línea del contenido en claro, antes del número de formato.
 pub const CABECERA: &str = "MAGI-SINCRONIZACION";
@@ -122,11 +143,13 @@ pub struct EnClaro {
 }
 
 /// Compone el contenido en claro: cabecera, firma y JSON con salto final.
-pub fn componer(json: &str, firma: &str) -> Vec<u8> {
+/// `formato` es el número que va en la cabecera y tiene que coincidir con el
+/// `formato` del propio JSON (lo decide la exportación).
+pub fn componer(json: &str, firma: &str, formato: u32) -> Vec<u8> {
     let mut texto = String::with_capacity(json.len() + 128);
     texto.push_str(CABECERA);
     texto.push(' ');
-    texto.push_str(&FORMATO.to_string());
+    texto.push_str(&formato.to_string());
     texto.push('\n');
     texto.push_str("firma: ");
     texto.push_str(firma);
@@ -184,11 +207,11 @@ pub fn serializar(documento: &Documento) -> Result<String> {
 pub fn parsear(json: &str) -> Result<Documento> {
     let documento: Documento =
         serde_json::from_str(json).map_err(|error| anyhow::anyhow!("JSON no válido: {error}"))?;
-    if documento.formato > FORMATO {
+    if documento.formato > FORMATO_MAXIMO {
         bail!(
-            "el documento usa el formato {} y este MAGI conoce el {}",
+            "el documento usa el formato {} y este MAGI conoce hasta el {}; actualiza MAGI",
             documento.formato,
-            FORMATO
+            FORMATO_MAXIMO
         );
     }
     Ok(documento)

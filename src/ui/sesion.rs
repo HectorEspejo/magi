@@ -57,6 +57,16 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, _disp: &mut Disposicion
     if contenido.height == 0 {
         return;
     }
+    // Fase 12: una pestaña de escritorio no tiene terminal: pinta su tarjeta y
+    // su propia barra de estado.
+    if pestaña.escritorio_id.is_some() {
+        super::escritorios::tarjeta(marco, contenido, app, pestaña);
+        marco.render_widget(
+            Paragraph::new(super::escritorios::barra(area, app, pestaña, indice)),
+            trozos[3],
+        );
+        return;
+    }
     if pestaña.estado == EstadoSesionRemota::Caida {
         // La última pantalla se conserva en gris detrás del aviso, sin cursor
         // (no hay nadie al otro lado).
@@ -212,8 +222,17 @@ fn linea_titulo(pestaña: &PestanaUI, ancho: u16, tema: &Tema) -> Line<'static> 
     // Hueco para el nombre: con un espacio a cada lado y al menos un trazo
     // antes y otro después.
     let hueco = ancho.saturating_sub(fijo + 4);
+    let nombre = match pestaña.tipo {
+        Some(tipo) => format!(
+            "{} {} {}",
+            pestaña.nombre,
+            tema.glifos.punto_medio,
+            tipo.etiqueta()
+        ),
+        None => pestaña.nombre.clone(),
+    };
     let derecha = if hueco >= NOMBRE_MIN {
-        format!(" {} ", recortar_nombre(&pestaña.nombre, hueco, tema.ascii))
+        format!(" {} ", recortar_nombre(&nombre, hueco, tema.ascii))
     } else {
         String::new()
     };
@@ -416,6 +435,10 @@ fn con_pista(app: &App, mut linea: Line<'static>, ancho: usize) -> Line<'static>
 }
 
 fn glifo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> String {
+    // Fase 12: un escritorio se marca con su glifo de tipo (▣ / [D]).
+    if let Some(tipo) = pestaña.tipo {
+        return tipo.glifo(tema.ascii).to_string();
+    }
     let glifo = match pestaña.estado {
         EstadoSesionRemota::Caida | EstadoSesionRemota::Cerrada => tema.glifos.error, // ✕
         EstadoSesionRemota::Abierta => {

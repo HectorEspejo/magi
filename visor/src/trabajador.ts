@@ -37,6 +37,21 @@ let esperandoClave = true;
 let contadorMarcas = 0;
 const regionesPorMarca = new Map<number, Region[]>();
 
+/** Perfiles H.264 que se prueban antes del alta (AVC420 de RDP es 4:2:0). */
+const CODIFICACIONES_AVC = [
+	'avc1.42E01E', // Baseline 3.0
+	'avc1.42E01F', // Baseline 3.1
+	'avc1.4D401E', // Main 3.0
+	'avc1.640028', // High 4.0
+];
+/** Si el navegador tarda en contestar isConfigSupported, se anuncia que no. */
+const ESPERA_SOPORTE_MS = 2000;
+/** El navegador decodifica de verdad H.264 (comprobado antes del hola). */
+let soporteH264 = false;
+let promesaSoporte: Promise<boolean> | null = null;
+/** Ya se ha reconectado una vez pidiendo rectángulos tras fallar el décodec. */
+let reintentoSinH264 = false;
+
 let fotogramas = 0;
 let ultimoInforme = performance.now();
 
@@ -63,6 +78,11 @@ function lado(valor: unknown): number | null {
 /** Prepara el lienzo visible y el búfer de lote al tamaño del escritorio. */
 function prepararLienzo(nuevoAncho: number, nuevoAlto: number): void {
 	if (!lienzo) return;
+	// El escritorio puede cambiar de tamaño: el búfer anterior se libera antes
+	// de reservar el nuevo.
+	soltarLienzo(bufer);
+	bufer = null;
+	contextoBufer = null;
 	ancho = nuevoAncho;
 	alto = nuevoAlto;
 	lienzo.width = nuevoAncho;
@@ -84,6 +104,48 @@ function prepararLienzo(nuevoAncho: number, nuevoAlto: number): void {
 		contextoBufer.fillStyle = '#000000';
 		contextoBufer.fillRect(0, 0, nuevoAncho, nuevoAlto);
 	}
+}
+
+/**
+ * Suelta un OffscreenCanvas. Los navegadores no le dan close() (no está en la
+ * especificación): reducirlo a 0×0 libera el búfer del tamaño del escritorio y
+ * después se sueltan la referencia y su contexto.
+ */
+function soltarLienzo(canvas: OffscreenCanvas | null): void {
+	if (!canvas) return;
+	try {
+		canvas.width = 0;
+		canvas.height = 0;
+	} catch {
+		// Un lienzo ya inutilizable: solo queda soltar las referencias.
+	}
+}
+
+/** Cierra el WebSocket si sigue abierto. */
+function cerrarSocket(): void {
+	try {
+		ws?.close();
+	} catch {
+		// Ya estaba cerrado.
+	}
+	ws = null;
+}
+
+/**
+ * Suelta el lienzo visible y el búfer del lote: son del tamaño del escritorio
+ * (hasta 8192×8192) y no deben quedarse en memoria cuando el visor termina. Se
+ * llama solo en las ramas definitivas (cerrar visor, close del servidor), no en
+ * una caída que todavía puede reconectar.
+ */
+function liberarLienzos(): void {
+	soltarLienzo(bufer);
+	bufer = null;
+	soltarLienzo(lienzo);
+	lienzo = null;
+	contextoBufer = null;
+	contextoVisible = null;
+	ancho = 0;
+	alto = 0;
 }
 
 function reiniciarDecodificador(): void {
@@ -115,7 +177,10 @@ function conectarSocket(): void {
 	sock.binaryType = 'arraybuffer';
 	sock.addEventListener('open', () => {
 		publicar({ t: 'abierto' });
-		const h264 = typeof VideoDecoder !== 'undefined';
+		// Solo se anuncia H.264 si isConfigSupported ha dicho que se puede
+		// decodificar de verdad; si no, el servidor reconecta RDP sin AVC420 y
+		// manda rectángulos (D211).
+		const h264 = soporteH264 && !reintentoSinH264;
 		sock.send(JSON.stringify({ t: 'hola', clave, h264 }));
 		if (!visible) enviar(cmd.visible(false));
 	});
@@ -157,12 +222,8 @@ function onTexto(texto: string): void {
 			cierrePedido = true;
 			reiniciarDecodificador();
 			publicar({ t: 'cerrado' });
-			try {
-				ws?.close();
-			} catch {
-				// Ya estaba cerrado.
-			}
-			ws = null;
+			cerrarSocket();
+			liberarLienzos();
 			return;
 		case 'hello':
 			onHola(mensaje);
@@ -313,6 +374,66 @@ function presentar(): void {
 	fotogramas++;
 }
 
+// ---------------------------------------------------------------- soporte de H.264
+
+/** Comprueba con WebCodecs que el navegador decodifica AVC de verdad. */
+function comprobarSoporteH264(): Promise<boolean> {
+	if (
+		typeof VideoDecoder === 'undefined' ||
+		typeof VideoDecoder.isConfigSupported !== 'function'
+	)
+		return Promise.resolve(false);
+	const comprobacion = Promise.all(
+		CODIFICACIONES_AVC.map(async (codecAvc): Promise<boolean> => {
+			try {
+				const soporte = await VideoDecoder.isConfigSupported({
+					codec: codecAvc,
+					avc: { format: 'annexb' },
+				} as ConfiguracionAvc);
+				return soporte.supported === true;
+			} catch {
+				// Este perfil no.
+				return false;
+			}
+		})
+	).then((resultados) => resultados.some(Boolean));
+	const plazo = new Promise<boolean>((resolver) => {
+		setTimeout(() => resolver(false), ESPERA_SOPORTE_MS);
+	});
+	return Promise.race([comprobacion, plazo]);
+}
+
+/** Espera a saber si hay H.264 real y solo entonces abre el WebSocket. */
+async function prepararYConectar(): Promise<void> {
+	if (promesaSoporte === null) promesaSoporte = comprobarSoporteH264();
+	soporteH264 = await promesaSoporte;
+	conectarSocket();
+}
+
+/**
+ * El decodificador ha fallado después del alta (configure o un fotograma):
+ * se reconecta una sola vez pidiendo rectángulos, que es lo que entiende el
+ * servidor cuando el hola dice h264=false (reconecta RDP sin AVC420). No se
+ * avisa a la página para que no salga el aviso de caído mientras dura.
+ */
+function falloDecodificador(): void {
+	reiniciarDecodificador();
+	if (!soporteH264 || reintentoSinH264) return;
+	reintentoSinH264 = true;
+	cierrePedido = true;
+	try {
+		ws?.close();
+	} catch {
+		// Ya estaba cerrado.
+	}
+	ws = null;
+	// Un respiro para que el servidor vea el cierre antes que el alta nueva.
+	setTimeout(() => {
+		cierrePedido = false;
+		conectarSocket();
+	}, 200);
+}
+
 // ---------------------------------------------------------------- vídeo H.264
 
 interface ConfiguracionAvc extends VideoDecoderConfig {
@@ -385,7 +506,7 @@ function crearDecodificador(nuevoCodec: string): boolean {
 	try {
 		dec = new VideoDecoder({
 			output: pintarFotograma,
-			error: () => reiniciarDecodificador(),
+			error: () => falloDecodificador(),
 		});
 		const configuracion: ConfiguracionAvc = {
 			codec: nuevoCodec,
@@ -395,6 +516,7 @@ function crearDecodificador(nuevoCodec: string): boolean {
 		};
 		dec.configure(configuracion);
 	} catch {
+		falloDecodificador();
 		return false;
 	}
 	decodificador = dec;
@@ -499,7 +621,7 @@ function onVideo(datos: Uint8Array, vista: DataView): void {
 			})
 		);
 	} catch {
-		reiniciarDecodificador();
+		falloDecodificador();
 	}
 }
 
@@ -529,12 +651,8 @@ function onReconectar(): void {
 function onCerrar(): void {
 	cierrePedido = true;
 	reiniciarDecodificador();
-	try {
-		ws?.close();
-	} catch {
-		// Ya estaba cerrado.
-	}
-	ws = null;
+	cerrarSocket();
+	liberarLienzos();
 }
 
 self.addEventListener('message', (evento: MessageEvent<HaciaTrabajador>) => {
@@ -544,7 +662,8 @@ self.addEventListener('message', (evento: MessageEvent<HaciaTrabajador>) => {
 			lienzo = mensaje.lienzo;
 			url = mensaje.url;
 			clave = mensaje.clave;
-			conectarSocket();
+			// Antes del hola hay que saber si H.264 se decodifica de verdad.
+			void prepararYConectar();
 			return;
 		case 'enviar':
 			if (typeof mensaje.d === 'string') enviar(mensaje.d);

@@ -14,6 +14,7 @@ use ratatui::Frame;
 
 use crate::app::{App, CampoFicha, Ficha};
 use crate::config::SeccionDeliberacion;
+use crate::escritorio::TipoHost;
 use crate::modelo::Tunel;
 use crate::protocolo::EstadoTunelRemoto;
 use crate::tema::Tema;
@@ -141,10 +142,18 @@ pub fn formulario(
         lineas: Vec::with_capacity(48),
         posiciones: Vec::with_capacity(crate::app::ORDEN_CAMPOS.len()),
     };
+    // En un host nuevo el tipo se elige lo primero (y después es fijo).
+    if ficha.tipo_guardado.is_none() {
+        constructor.selector_tipo();
+    }
     constructor.identificacion();
-    constructor.acceso(agente_no_disponible);
-    constructor.al_conectar();
-    constructor.verificaciones(deliberacion);
+    if ficha.tipo.es_escritorio() {
+        constructor.escritorio();
+    } else {
+        constructor.acceso(agente_no_disponible);
+        constructor.al_conectar();
+        constructor.verificaciones(deliberacion);
+    }
     constructor.vacia();
     let Constructor {
         lineas, posiciones, ..
@@ -292,7 +301,10 @@ impl Constructor<'_> {
         }
         self.cabecera("IDENTIFICACIÓN");
         self.campo_texto(CampoFicha::Nombre, "Nombre", &ficha.nombre);
-        self.campo_texto(CampoFicha::Direccion, "Dirección", &ficha.direccion);
+        // En voxl la dirección es siempre 127.0.0.1 en el host SSH.
+        if ficha.tipo != crate::escritorio::TipoHost::Voxl {
+            self.campo_texto(CampoFicha::Direccion, "Dirección", &ficha.direccion);
+        }
         if self.estrecho {
             self.campo_texto(CampoFicha::Puerto, "Puerto", &ficha.puerto);
             self.campo_desplegable(CampoFicha::Grupo, "Grupo", &ficha.grupo, ANCHO_GRUPO);
@@ -366,6 +378,373 @@ impl Constructor<'_> {
             ANCHO_DESPLEGABLE_CAMPO,
         );
         self.vacia();
+    }
+
+    /// Bloque «ESCRITORIO» (Fase 12): tipo y destino, a través de, credenciales
+    /// del escritorio, tamaño, teclado, portapapeles y lo que se puede olvidar.
+    fn escritorio(&mut self) {
+        let ficha = self.ficha;
+        self.cabecera("ESCRITORIO");
+        if ficha.tipo_guardado.is_some() {
+            self.selector_tipo();
+        }
+        let puerto = ficha.puerto.texto.trim();
+        let direccion = if ficha.tipo == TipoHost::Voxl {
+            "127.0.0.1".to_string()
+        } else {
+            ficha.direccion.texto.trim().to_string()
+        };
+        self.dato(
+            "Destino",
+            if direccion.is_empty() {
+                format!("(sin dirección):{puerto}")
+            } else {
+                format!("{direccion}:{puerto}")
+            },
+        );
+        self.campo_desplegable(
+            CampoFicha::Salto,
+            "A través de",
+            &ficha.salto,
+            ANCHO_DESPLEGABLE_CAMPO,
+        );
+        if ficha.tipo == TipoHost::Rdp {
+            self.campo_texto(CampoFicha::Usuario, "Usuario", &ficha.usuario);
+            self.campo_texto(CampoFicha::Dominio, "Dominio", &ficha.dominio);
+        }
+        if ficha.tipo != TipoHost::Voxl {
+            self.modo_contrasena();
+            if ficha.contrasena_modo && !ficha.sin_contrasena {
+                self.campo_contrasena();
+            }
+            self.dato(
+                "Guardada",
+                if ficha.contrasena_guardada {
+                    "en el llavero"
+                } else {
+                    "no; se pedirá al abrir"
+                },
+            );
+        }
+        self.modo_tamano();
+        if ficha.tipo == TipoHost::Rdp {
+            self.campo_desplegable(
+                CampoFicha::Teclado,
+                "Teclado",
+                &ficha.teclado,
+                ANCHO_DESPLEGABLE_CAMPO,
+            );
+        }
+        self.portapapeles();
+        if ficha.tipo == TipoHost::Voxl {
+            self.campo_texto(CampoFicha::Pantalla, "Pantalla", &ficha.pantalla);
+            self.campo_texto(CampoFicha::Programa, "Programa", &ficha.programa);
+        }
+        match &ficha.huella {
+            Some(huella) => {
+                self.dato("Certificado", acortar_huella(huella));
+                self.accion(
+                    CampoFicha::OlvidarHuella,
+                    "olvidar la huella del certificado",
+                );
+            }
+            None => self.dato("Certificado", "sin certificado aceptado"),
+        }
+        if ficha.contrasena_guardada {
+            self.accion(
+                CampoFicha::OlvidarContrasena,
+                "olvidar la contraseña del llavero",
+            );
+        }
+        self.dato(
+            "Conexión",
+            ficha
+                .ultima_conexion
+                .clone()
+                .unwrap_or_else(|| "nunca".to_string()),
+        );
+    }
+
+    /// Selector de tipo: fijo al editar; con radios al crear (compacto en
+    /// estrecho).
+    fn selector_tipo(&mut self) {
+        let ficha = self.ficha;
+        let tema = self.tema;
+        let campo = CampoFicha::Tipo;
+        let activo = self.activo(campo);
+        if let Some(guardado) = ficha.tipo_guardado {
+            self.dato("Tipo", format!("{} (no se cambia)", guardado.etiqueta()));
+            return;
+        }
+        if self.estrecho {
+            self.lineas.push(Line::from(vec![
+                Span::raw(" ".repeat(SANGRIA)),
+                Span::styled("Tipo", self.estilo_etiqueta(activo)),
+            ]));
+            let primera = self.siguiente() - 1;
+            let linea = self.siguiente();
+            self.lineas.push(Line::from(vec![
+                Span::raw(" ".repeat(SANGRIA + 2)),
+                Span::styled(format!("[ {} ]", ficha.tipo.etiqueta()), self.estilo(campo)),
+            ]));
+            self.anotar(campo, primera, linea, SANGRIA + 2);
+            return;
+        }
+        let primera = self.siguiente();
+        let mut spans = vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            Span::styled(
+                format!("{:<ANCHO_ETIQUETA$}", "Tipo"),
+                self.estilo_etiqueta(activo),
+            ),
+        ];
+        for (indice, tipo) in TipoHost::TODOS.iter().enumerate() {
+            if indice > 0 {
+                spans.push(Span::raw("  "));
+            }
+            let elegido = *tipo == ficha.tipo;
+            let estilo = if elegido {
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            };
+            spans.push(Span::styled(
+                format!(
+                    "{} {}",
+                    if elegido { "(•)" } else { "( )" },
+                    tipo.etiqueta()
+                ),
+                estilo,
+            ));
+        }
+        let linea = self.siguiente();
+        self.lineas.push(Line::from(spans));
+        self.anotar(campo, primera, linea, SANGRIA + ANCHO_ETIQUETA + 2);
+    }
+
+    /// Modo de la contraseña: guardar en el llavero, pedir siempre o, en VNC,
+    /// sin contraseña.
+    fn modo_contrasena(&mut self) {
+        let ficha = self.ficha;
+        let tema = self.tema;
+        let campo = CampoFicha::ContrasenaModo;
+        let activo = self.activo(campo);
+        let opciones: Vec<(&str, bool)> = if ficha.tipo == TipoHost::Vnc {
+            vec![
+                (
+                    "guardar en el llavero",
+                    ficha.contrasena_modo && !ficha.sin_contrasena,
+                ),
+                (
+                    "pedir siempre",
+                    !ficha.contrasena_modo && !ficha.sin_contrasena,
+                ),
+                ("sin contraseña", ficha.sin_contrasena),
+            ]
+        } else {
+            vec![
+                ("guardar en el llavero", ficha.contrasena_modo),
+                ("pedir siempre", !ficha.contrasena_modo),
+            ]
+        };
+        let estilo_opcion = |elegido: bool| {
+            if elegido {
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            }
+        };
+        if self.estrecho {
+            self.lineas.push(Line::from(vec![
+                Span::raw(" ".repeat(SANGRIA)),
+                Span::styled("Contraseña", self.estilo_etiqueta(activo)),
+            ]));
+            let primera = self.siguiente() - 1;
+            let mut primera_opcion = self.siguiente();
+            for (indice, (texto, elegido)) in opciones.iter().enumerate() {
+                let linea = self.siguiente();
+                if indice == 0 {
+                    primera_opcion = linea;
+                }
+                self.lineas.push(Line::from(vec![
+                    Span::raw(" ".repeat(SANGRIA + 2)),
+                    Span::styled(
+                        format!("{} {texto}", if *elegido { "(•)" } else { "( )" }),
+                        estilo_opcion(*elegido),
+                    ),
+                ]));
+            }
+            self.anotar(campo, primera, primera_opcion, SANGRIA + 2);
+            return;
+        }
+        let primera = self.siguiente();
+        let mut spans = vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            Span::styled(
+                format!("{:<ANCHO_ETIQUETA$}", "Contraseña"),
+                self.estilo_etiqueta(activo),
+            ),
+        ];
+        for (indice, (texto, elegido)) in opciones.iter().enumerate() {
+            if indice > 0 {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                format!("{} {texto}", if *elegido { "(•)" } else { "( )" }),
+                estilo_opcion(*elegido),
+            ));
+        }
+        let linea = self.siguiente();
+        self.lineas.push(Line::from(spans));
+        self.anotar(campo, primera, linea, SANGRIA + ANCHO_ETIQUETA + 2);
+    }
+
+    /// Campo de contraseña (enmascarado).
+    fn campo_contrasena(&mut self) {
+        let campo = CampoFicha::Contrasena;
+        let activo = self.activo(campo);
+        let estilo = self.estilo(campo);
+        let tema = self.tema;
+        let ascii = tema.ascii;
+        let texto = self.ficha.contrasena.clone();
+        self.campo(campo, "Nueva", |hueco| {
+            Span::styled(enmascarado_ficha(&texto, activo, ascii, hueco), estilo)
+        });
+    }
+
+    /// Tamaño: se ajusta a la ventana o fijo (AxH).
+    fn modo_tamano(&mut self) {
+        let ficha = self.ficha;
+        let tema = self.tema;
+        let campo = CampoFicha::Tamano;
+        let activo = self.activo(campo);
+        let opciones = [
+            ("ajustar a la ventana", !ficha.tamano_fijo),
+            ("fijo", ficha.tamano_fijo),
+        ];
+        let estilo_opcion = |elegido: bool| {
+            if elegido {
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            }
+        };
+        if self.estrecho {
+            self.lineas.push(Line::from(vec![
+                Span::raw(" ".repeat(SANGRIA)),
+                Span::styled("Tamaño", self.estilo_etiqueta(activo)),
+            ]));
+            let primera = self.siguiente() - 1;
+            let mut primera_opcion = self.siguiente();
+            for (indice, (texto, elegido)) in opciones.iter().enumerate() {
+                let linea = self.siguiente();
+                if indice == 0 {
+                    primera_opcion = linea;
+                }
+                self.lineas.push(Line::from(vec![
+                    Span::raw(" ".repeat(SANGRIA + 2)),
+                    Span::styled(
+                        format!("{} {texto}", if *elegido { "(•)" } else { "( )" }),
+                        estilo_opcion(*elegido),
+                    ),
+                ]));
+            }
+            self.anotar(campo, primera, primera_opcion, SANGRIA + 2);
+        } else {
+            let primera = self.siguiente();
+            let mut spans = vec![
+                Span::raw(" ".repeat(SANGRIA)),
+                Span::styled(
+                    format!("{:<ANCHO_ETIQUETA$}", "Tamaño"),
+                    self.estilo_etiqueta(activo),
+                ),
+            ];
+            for (indice, (texto, elegido)) in opciones.iter().enumerate() {
+                if indice > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled(
+                    format!("{} {texto}", if *elegido { "(•)" } else { "( )" }),
+                    estilo_opcion(*elegido),
+                ));
+            }
+            let linea = self.siguiente();
+            self.lineas.push(Line::from(spans));
+            self.anotar(campo, primera, linea, SANGRIA + ANCHO_ETIQUETA + 2);
+        }
+        if ficha.tamano_fijo {
+            self.campo_texto(CampoFicha::TamanoFijo, "Tamaño fijo", &ficha.tamano);
+        }
+    }
+
+    /// Casilla del portapapeles.
+    fn portapapeles(&mut self) {
+        let ficha = self.ficha;
+        let campo = CampoFicha::Portapapeles;
+        let activo = self.activo(campo);
+        let primera = self.siguiente();
+        self.lineas.push(Line::from(vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            Span::styled(
+                format!("{:<ANCHO_ETIQUETA$}", "Portapapeles"),
+                self.estilo_etiqueta(activo),
+            ),
+            Span::styled(casilla(ficha.portapapeles).to_string(), self.estilo(campo)),
+            Span::styled(
+                " texto en los dos sentidos",
+                Style::default().fg(self.tema.paleta.texto),
+            ),
+        ]));
+        let linea = self.siguiente() - 1;
+        self.anotar(campo, primera, linea, SANGRIA + ANCHO_ETIQUETA + 2);
+    }
+
+    /// Fila de acción («olvidar…»): se abre con enter.
+    fn accion(&mut self, campo: CampoFicha, texto: &str) {
+        let activo = self.activo(campo);
+        let primera = self.siguiente();
+        let estilo = self.estilo(campo);
+        self.lineas.push(Line::from(vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            Span::styled("[x] ", estilo),
+            Span::styled(
+                texto.to_string(),
+                if activo {
+                    estilo
+                } else {
+                    Style::default().fg(self.tema.paleta.acento)
+                },
+            ),
+            Span::styled("   (enter)", Style::default().fg(self.tema.paleta.inactivo)),
+        ]));
+        self.anotar(campo, primera, primera, SANGRIA);
+    }
+
+    /// Línea informativa (sin foco): etiqueta y valor.
+    fn dato(&mut self, etiqueta: &str, valor: impl Into<String>) {
+        let tema = self.tema;
+        let valor: String = valor.into();
+        let hueco = self
+            .ancho
+            .saturating_sub(SANGRIA + ANCHO_ETIQUETA + 2)
+            .max(1);
+        self.lineas.push(Line::from(vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            Span::styled(
+                format!("{etiqueta:<ANCHO_ETIQUETA$}"),
+                Style::default().fg(tema.paleta.inactivo),
+            ),
+            Span::styled(
+                disposicion::recortar(&valor, hueco, tema.ascii),
+                Style::default().fg(tema.paleta.texto),
+            ),
+        ]));
     }
 
     fn al_conectar(&mut self) {
@@ -776,6 +1155,21 @@ fn span_ajustado(
     )
 }
 
+/// Campo de contraseña enmascarado, con el cursor donde esté y recortado a
+/// `ancho` columnas alrededor de él.
+fn enmascarado_ficha(campo: &CampoTexto, activo: bool, ascii: bool, ancho: usize) -> String {
+    let mascara = |_: char| if ascii { '*' } else { '•' };
+    let texto: String = campo.texto.chars().map(mascara).collect();
+    ajustar(&texto, activo.then_some(campo.cursor), ancho, ascii)
+}
+
+/// Huella recortada como en el resto de MAGI.
+fn acortar_huella(huella: &str) -> String {
+    let sin_prefijo = huella.trim_start_matches("SHA256:");
+    let recorte: String = sin_prefijo.chars().take(12).collect();
+    format!("SHA256:{recorte}…")
+}
+
 /// `texto` con el cursor (si lo lleva) y recortado a `ancho` columnas: la
 /// ventana sigue al cursor y marca por dónde se corta.
 fn ajustar(texto: &str, cursor: Option<usize>, ancho: usize, ascii: bool) -> String {
@@ -812,6 +1206,7 @@ fn desplegable_de(campo: CampoFicha, ficha: &Ficha) -> Option<&Desplegable> {
         CampoFicha::Identidad => Some(&ficha.identidad),
         CampoFicha::Salto => Some(&ficha.salto),
         CampoFicha::Snippet => Some(&ficha.snippet.desplegable),
+        CampoFicha::Teclado => Some(&ficha.teclado),
         _ => None,
     }
 }
@@ -861,23 +1256,30 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         disp.estrecho(),
     );
     let total = formulario.alto();
-    // Si no cabe entero, el formulario cede lo justo para que debajo sigan
-    // viéndose los túneles (con el aviso de reenvíos, si lo hay) y las áreas
-    // de texto, y se desplaza con el foco.
-    let debajo = ALTO_MINIMO_DEBAJO + u16::from(reenvios_en_opciones(ficha) > 0);
-    let alto_formulario = total.min(contenido.height.saturating_sub(debajo));
-    // El bloque de túneles va entre los campos y las áreas de texto; se
-    // recorta a lo que quede libre para no dejar sin sitio a los servicios.
-    let alto_tuneles =
-        alto_bloque_tuneles(app, ficha).min(contenido.height.saturating_sub(alto_formulario + 3));
-    let trozos = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(alto_formulario),
-            Constraint::Length(alto_tuneles),
-            Constraint::Min(3),
-        ])
-        .split(contenido);
+    // Un escritorio no tiene túneles ni áreas de texto: el formulario ocupa
+    // todo el interior (Fase 12).
+    let trozos: Vec<Rect> = if ficha.tipo.es_escritorio() {
+        vec![contenido, Rect::default(), Rect::default()]
+    } else {
+        // Si no cabe entero, el formulario cede lo justo para que debajo sigan
+        // viéndose los túneles (con el aviso de reenvíos, si lo hay) y las
+        // áreas de texto, y se desplaza con el foco.
+        let debajo = ALTO_MINIMO_DEBAJO + u16::from(reenvios_en_opciones(ficha) > 0);
+        let alto_formulario = total.min(contenido.height.saturating_sub(debajo));
+        // El bloque de túneles va entre los campos y las áreas de texto; se
+        // recorta a lo que quede libre para no dejar sin sitio a los servicios.
+        let alto_tuneles = alto_bloque_tuneles(app, ficha)
+            .min(contenido.height.saturating_sub(alto_formulario + 3));
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(alto_formulario),
+                Constraint::Length(alto_tuneles),
+                Constraint::Min(3),
+            ])
+            .split(contenido)
+            .to_vec()
+    };
     let region = trozos[0];
     let desplazamiento = formulario.desplazamiento(ficha.campo, region.height);
     // Dónde queda en pantalla un campo, si su valor está a la vista.
@@ -906,44 +1308,46 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         region,
     );
     dibujar_marcas_desplazamiento(marco, region, arriba, abajo, tema);
-    dibujar_tuneles(marco, trozos[1], app, ficha);
+    if ficha.tipo.es_ssh() {
+        dibujar_tuneles(marco, trozos[1], app, ficha);
 
-    let columnas = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(trozos[2]);
-    let servicios = ("SERVICIOS (systemd, una por línea)", "SERVICIOS");
-    let opciones = (
-        "OPCIONES EXTRA (ssh_config, una por línea)",
-        "OPCIONES EXTRA",
-    );
-    // Los dos títulos largos o los dos cortos: mezclados parecen un error.
-    let largos =
-        cabe_titulo(servicios.0, columnas[0].width) && cabe_titulo(opciones.0, columnas[1].width);
-    let titulo_de = |(largo, corto): (&'static str, &'static str), ancho: u16| {
-        let elegido = if largos { largo } else { corto };
-        if cabe_titulo(elegido, ancho) {
-            format!(" {elegido} ")
-        } else {
-            disposicion::recortar(elegido, usize::from(ancho).saturating_sub(2), tema.ascii)
-        }
-    };
-    dibujar_area_texto(
-        marco,
-        columnas[0],
-        titulo_de(servicios, columnas[0].width),
-        &ficha.servicios,
-        ficha.campo == CampoFicha::Servicios,
-        tema,
-    );
-    dibujar_area_texto(
-        marco,
-        columnas[1],
-        titulo_de(opciones, columnas[1].width),
-        &ficha.opciones,
-        ficha.campo == CampoFicha::Opciones,
-        tema,
-    );
+        let columnas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(trozos[2]);
+        let servicios = ("SERVICIOS (systemd, una por línea)", "SERVICIOS");
+        let opciones = (
+            "OPCIONES EXTRA (ssh_config, una por línea)",
+            "OPCIONES EXTRA",
+        );
+        // Los dos títulos largos o los dos cortos: mezclados parecen un error.
+        let largos = cabe_titulo(servicios.0, columnas[0].width)
+            && cabe_titulo(opciones.0, columnas[1].width);
+        let titulo_de = |(largo, corto): (&'static str, &'static str), ancho: u16| {
+            let elegido = if largos { largo } else { corto };
+            if cabe_titulo(elegido, ancho) {
+                format!(" {elegido} ")
+            } else {
+                disposicion::recortar(elegido, usize::from(ancho).saturating_sub(2), tema.ascii)
+            }
+        };
+        dibujar_area_texto(
+            marco,
+            columnas[0],
+            titulo_de(servicios, columnas[0].width),
+            &ficha.servicios,
+            ficha.campo == CampoFicha::Servicios,
+            tema,
+        );
+        dibujar_area_texto(
+            marco,
+            columnas[1],
+            titulo_de(opciones, columnas[1].width),
+            &ficha.opciones,
+            ficha.campo == CampoFicha::Opciones,
+            tema,
+        );
+    }
 
     // Las listas emergentes van encima, ancladas al valor de su campo y sin
     // salirse nunca del interior de la ficha.

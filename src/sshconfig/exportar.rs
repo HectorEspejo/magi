@@ -24,7 +24,12 @@ pub fn exportar(conexion: &Connection, dir_ssh: &Path) -> Result<Resultado> {
             dir_ssh.display()
         );
     }
-    let hosts = hosts::listar(conexion)?;
+    // Solo los hosts SSH existen en ssh_config: un escritorio (RDP/VNC/voxl)
+    // no se puede conectar con ssh y se quedaría como una entrada rota.
+    let hosts: Vec<_> = hosts::listar(conexion)?
+        .into_iter()
+        .filter(|host| host.tipo.es_ssh())
+        .collect();
     let grupos = grupos::listar(conexion)?;
     let tuneles = tuneles::por_host(conexion)?;
     let texto = generar_texto(&hosts, &grupos, &tuneles);
@@ -44,7 +49,12 @@ pub fn generar_texto(
     tuneles: &HashMap<i64, Vec<Tunel>>,
 ) -> String {
     let orden: HashMap<i64, i64> = grupos.iter().map(|grupo| (grupo.id, grupo.orden)).collect();
-    let mut ordenados = hosts.to_vec();
+    // Defensa: aunque el llamante no filtre, ssh_config solo admite hosts SSH.
+    let mut ordenados: Vec<Host> = hosts
+        .iter()
+        .filter(|host| host.tipo.es_ssh())
+        .cloned()
+        .collect();
     ordenados.sort_by_key(|host| {
         let grupo = host
             .grupo_id

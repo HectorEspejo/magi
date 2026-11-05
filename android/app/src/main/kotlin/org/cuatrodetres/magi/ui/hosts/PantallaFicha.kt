@@ -61,6 +61,7 @@ fun PantallaFicha(
     modifier: Modifier = Modifier,
 ) {
     val estadoTexto = textoEstadoHost(estadoHost, sesionesAbiertas)
+    val escritorio = ficha.tipo.esEscritorio
     Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         CabeceraVolver(
             titulo = ficha.nombre,
@@ -79,6 +80,13 @@ fun PantallaFicha(
             )
         }
 
+        FilaDato(stringResource(R.string.ficha_tipo), ficha.tipo.etiqueta)
+        if (escritorio) {
+            BarraAviso(
+                texto = stringResource(R.string.ficha_escritorio_aviso),
+                tipo = TipoBarra.AVISO,
+            )
+        }
         FilaDato(stringResource(R.string.ficha_direccion), ficha.direccion + ":" + ficha.puerto)
         FilaDato(stringResource(R.string.ficha_usuario), ficha.usuario)
         FilaDato(
@@ -144,56 +152,62 @@ fun PantallaFicha(
             }
         }
 
-        Separador()
-        EncabezadoSeccion(stringResource(R.string.ficha_tuneles))
-        if (tuneles.isEmpty()) {
-            Text(
-                text = stringResource(R.string.ficha_sin_tuneles),
-                style = MaterialTheme.typography.bodyMedium,
-                color = Paleta.GRIS,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            )
-        } else {
-            tuneles.forEach { tunel ->
-                FilaTunel(
-                    tunel = tunel,
-                    alAlternar = alAlternarTunel,
-                    alRelanzar = alRelanzarTunel,
-                    alPuertoLibre = alTunelPuertoLibre,
-                    alAbrirNavegador = alAbrirNavegador,
-                    alDescartar = alDescartarTunel,
+        // Un escritorio no tiene túneles ni acciones de SSH: el móvil solo lo
+        // enseña y dice que se abre en el ordenador.
+        if (!escritorio) {
+            Separador()
+            EncabezadoSeccion(stringResource(R.string.ficha_tuneles))
+            if (tuneles.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.ficha_sin_tuneles),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Paleta.GRIS,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )
+            } else {
+                tuneles.forEach { tunel ->
+                    FilaTunel(
+                        tunel = tunel,
+                        alAlternar = alAlternarTunel,
+                        alRelanzar = alRelanzarTunel,
+                        alPuertoLibre = alTunelPuertoLibre,
+                        alAbrirNavegador = alAbrirNavegador,
+                        alDescartar = alDescartarTunel,
+                    )
+                }
             }
         }
 
-        Separador()
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            BotonCabina(
-                texto = stringResource(R.string.accion_conectar),
-                alPulsar = alConectar,
-                primario = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            BotonCabina(
-                texto = stringResource(R.string.accion_otra_sesion),
-                alPulsar = alOtraSesion,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            BotonCabina(
-                texto = stringResource(R.string.accion_instalar_clave),
-                alPulsar = alInstalarClave,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (ficha.tieneContrasena) {
+        if (!escritorio) {
+            Separador()
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 BotonCabina(
-                    texto = stringResource(R.string.accion_olvidar_contrasena),
-                    alPulsar = alOlvidarContrasena,
-                    destructivo = true,
+                    texto = stringResource(R.string.accion_conectar),
+                    alPulsar = alConectar,
+                    primario = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                BotonCabina(
+                    texto = stringResource(R.string.accion_otra_sesion),
+                    alPulsar = alOtraSesion,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                BotonCabina(
+                    texto = stringResource(R.string.accion_instalar_clave),
+                    alPulsar = alInstalarClave,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (ficha.tieneContrasena) {
+                    BotonCabina(
+                        texto = stringResource(R.string.accion_olvidar_contrasena),
+                        alPulsar = alOlvidarContrasena,
+                        destructivo = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }

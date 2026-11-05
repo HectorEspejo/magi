@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · FLOTA ───────────── 10 hosts ─┐
+│┌ CERTIFICADO CAMBIADO ──────────────┐│
+││ ✕ El certificado de win-01 ha      ││
+││ cambiado.                          ││
+││ Puede ser una reinstalación o      ││
+││ alguien en medio.                  ││
+││                                    ││
+││ [ ┃ ]                              ││
+││ r sustituir y conectar             ││
+││ esc no conectar                    ││
+└└─────────────────────────── ↑↓ 1/10 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

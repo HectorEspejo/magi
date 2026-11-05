@@ -221,7 +221,7 @@ pub fn unir(
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
             continue;
         }
-        if en_claro.formato > formato::FORMATO {
+        if en_claro.formato > formato::FORMATO_MAXIMO {
             continue;
         }
         if let Ok(documento) = formato::parsear(&en_claro.json) {

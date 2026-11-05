@@ -935,7 +935,7 @@ pub fn validar_y_normalizar_host(
             }
             if datos.puerto < 1024 {
                 return Err(
-                    "voxl escucha como usuario normal: usa un puerto desde 1024".to_string(),
+                    "voxl escucha como usuario normal: usa un puerto desde 1024".to_string()
                 );
             }
             datos.direccion = "127.0.0.1".to_string();
@@ -965,7 +965,9 @@ pub fn aviso_vnc_directo(
     directo: bool,
 ) -> Option<String> {
     if tipo == TipoHost::Vnc && salto_host_id.is_none() && !directo && !es_loopback(direccion) {
-        Some("la imagen y el teclado viajarán sin cifrar; mejor a través de un host SSH".to_string())
+        Some(
+            "la imagen y el teclado viajarán sin cifrar; mejor a través de un host SSH".to_string(),
+        )
     } else {
         None
     }

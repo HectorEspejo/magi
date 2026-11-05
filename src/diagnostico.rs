@@ -405,6 +405,11 @@ fn programas_necesarios(config: &Config, variables: &BTreeMap<String, String>) -
             anadir_programa(&mut programas, &programa);
         }
     }
+    // Navegadores del visor de escritorios (Fase 12): el diagnóstico dice
+    // cuál se abrirá y avisa si no hay ninguno.
+    for programa in crate::app::escritorios::candidatos_para_diagnostico() {
+        anadir_programa(&mut programas, programa);
+    }
     programas
 }
 
@@ -892,6 +897,7 @@ pub fn comprobar(datos: &Datos) -> Informe {
         comprobar_agente(datos),
         comprobar_llavero(datos),
         comprobar_portapapeles(datos),
+        comprobar_navegador(datos, &config),
         comprobar_editor(datos, &config),
         comprobar_paginador(datos, &config),
         comprobar_terminal(datos, &config),
@@ -1319,6 +1325,30 @@ fn candidatos_de(
         candidatos.push((valor.to_string(), variable_origen));
     }
     candidatos
+}
+
+/// Navegador con el que se abrirá el visor de un escritorio remoto (Fase 12).
+/// Si el sistema no tiene un Chromium, se avisa: el enlace se abrirá con el
+/// abridor del sistema o no se abrirá.
+fn comprobar_navegador(datos: &Datos, config: &Config) -> Comprobacion {
+    let existe = |programa: &str| datos.disponible(programa);
+    let app = |nombre: &str| crate::app::escritorios::app_instalada(nombre);
+    match crate::app::escritorios::descripcion_para_diagnostico(&config.escritorio, &existe, &app) {
+        Ok((texto, false)) => Comprobacion::correcto("navegador", texto),
+        Ok((texto, true)) => Comprobacion::aviso(
+            "navegador",
+            texto,
+            Some(
+                "instala un navegador Chromium o configura [escritorio] navegador en config.toml"
+                    .to_string(),
+            ),
+        ),
+        Err(error) => Comprobacion::error(
+            "navegador",
+            error,
+            Some("revisa [escritorio] navegador en config.toml".to_string()),
+        ),
+    }
 }
 
 fn comprobar_editor(datos: &Datos, config: &Config) -> Comprobacion {

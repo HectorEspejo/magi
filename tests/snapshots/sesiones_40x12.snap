@@ -2,10 +2,10 @@
 source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIONES · 3 sesiones ─────────
-  ESTADO PESTAÑA            TIEMPO
-▸ ●      hetzner-01         18 m
-  ✕      hetzner-02         caída
-  ●      mac-mini-m1        3 m
+  ESTADO PESTAÑA            TIPO
+▸ ●      hetzner-01         SSH
+  ✕      hetzner-02         SSH
+  ●      mac-mini-m1        SSH
 
 
 

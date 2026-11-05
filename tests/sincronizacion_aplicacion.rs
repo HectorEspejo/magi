@@ -268,6 +268,9 @@ fn host_datos(nombre: &str, direccion: &str) -> DatosHost {
         nombre: nombre.to_string(),
         direccion: direccion.to_string(),
         puerto: 22,
+        tipo: magi_nucleo::escritorio::TipoHost::Ssh,
+        escritorio_dominio: None,
+        escritorio_opciones: serde_json::json!({}),
         usuario: None,
         identidad_ref: None,
         salto: None,
@@ -1171,7 +1174,7 @@ fn documento_con(
     lapidas: Vec<magi::sincronizacion::formato::LapidaDocumento>,
 ) -> Documento {
     Documento {
-        formato: magi::sincronizacion::formato::FORMATO,
+        formato: magi::sincronizacion::formato::FORMATO_MAXIMO,
         app: "1.1.0".to_string(),
         equipo: EquipoDocumento {
             uuid: "equipo-otro".to_string(),

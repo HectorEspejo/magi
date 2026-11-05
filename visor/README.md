@@ -95,6 +95,22 @@ El servidor Rust es la referencia; aquí solo se consume.
   - Se añade el alta del protocolo (`hola` con clave y soporte de H.264),
     la reconexión de socket, la visibilidad (`v,0`/`v,1`) y la latencia que
     manda el servidor.
+  - El soporte de H.264 **no** se deduce de que exista `VideoDecoder`: antes
+    del `hola` se comprueba con `VideoDecoder.isConfigSupported` una lista de
+    perfiles AVC (baseline, main y high) y solo si alguno se puede decodificar
+    se anuncia `h264:true`. Si el navegador no contesta en 2 s, se anuncia
+    `false` (el servidor reconecta RDP sin AVC420 y manda rectángulos).
+  - Si aun así el `configure` o el propio decodificador fallan después del
+    alta, el trabajador cierra el WebSocket y reconecta una sola vez con
+    `h264:false` en el `hola`, sin enseñar el aviso de caído; el servidor
+    reconecta la sesión RDP sin AVC420 (`SinH264`) y manda el escritorio
+    entero en rectángulos.
+  - Al cerrar el visor (o si el servidor manda `close`) se liberan los
+    `OffscreenCanvas`: el navegador no les da `close()`, así que el lienzo
+    visible y el búfer del lote se reducen a 0×0 y se sueltan contextos y
+    referencias, para no dejar en memoria el escritorio cuando la ventana no se
+    llega a cerrar. Al reconectar (o al cambiar el tamaño del escritorio), el
+    búfer anterior se libera antes de reservar el nuevo.
 - Se ha simplificado el cursor: el trabajador valida la cabecera y manda el
   RGBA a la página, que lo pinta con CSS (igual que voxl, pero con la cabecera
   de MAGI y sin el campo de serie).
@@ -162,6 +178,10 @@ El servidor Rust es la referencia; aquí solo se consume.
   (desviación anotada en el informe de implementación).
 - `rec` (reconectar) tampoco está en §5.2; lo usa el botón «Reconectar» y el
   servidor lo trata como orden.
+- La reconexión por H.264 no utilizable tampoco añade mensajes nuevos: se
+  reutiliza el `hola` con `h264:false` en una conexión WebSocket nueva, que es
+  la señal que el servidor ya interpreta como `SinH264` para reconectar RDP
+  sin AVC420.
 - En `sessionStorage` se guardan `magi.visor.clave`, `magi.visor.escritorio`
   y `magi.visor.tipo`; la especificación solo pedía la clave, pero `hello` no
   trae el nombre y la barra lo necesita también tras recargar.
@@ -195,8 +215,9 @@ ejecución y no hace falta para compilar MAGI.
 
 Pensado para el Chromium que MAGI abre en modo aplicación. Necesita
 `OffscreenCanvas` con `transferControlToOffscreen` (obligatorio en todos los
-navegadores modernos); el H.264 se decodifica con WebCodecs si existe y, si no,
-el servidor manda rectángulos (el visor dice `h264:false` en el alta). La
-pantalla completa con captura de teclas usa la Keyboard Lock API, solo
-disponible en Chromium; fuera de ahí el botón sigue funcionando pero el
-navegador puede quedarse algunas combinaciones.
+navegadores modernos); el H.264 se usa solo si WebCodecs confirma con
+`isConfigSupported` que decodifica AVC de verdad y, si no, el visor dice
+`h264:false` en el alta y el servidor manda rectángulos. La pantalla completa
+con captura de teclas usa la Keyboard Lock API, solo disponible en Chromium;
+fuera de ahí el botón sigue funcionando pero el navegador puede quedarse
+algunas combinaciones.

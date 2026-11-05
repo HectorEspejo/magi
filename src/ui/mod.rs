@@ -8,6 +8,7 @@ pub mod dialogos;
 pub mod disposicion;
 pub mod edicion;
 pub mod ejecutar;
+pub mod escritorios;
 pub mod ficha;
 pub mod flota;
 pub mod formulario_snippet;

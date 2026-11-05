@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · FLOTA ────── 10 hosts · 3 escritorios · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ○ dgx-spark    FRÍA                                                         │
+│  ● hetzner-01   NOMINAL                                                      │
+│  ┌ CERTIFICADO NUEVO ─────────────────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  El certificado de win-01 es nuevo.                                    │  │
+│  │  Acéptalo solo si es el equipo al que te vas a conectar.               │  │
+│  │                                                                        │  │
+│  │  Nuevo     SHA256:T2qRAb3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7          │  │
+│  │            CN=WIN-01                                                   │  │
+│  │  Caduca    3 may 2027                                                  │  │
+│  │                                                                        │  │
+│  │  a aceptar y guardar   esc no conectar                                 │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

@@ -202,6 +202,12 @@ pub const ESTRECHO_SINCRONIZACIONES: u16 = 70;
 /// Por debajo de este ancho, el diálogo del servidor anterior parte cada
 /// recuento de custodia en su propio renglón.
 pub const ESTRECHO_SERVIDOR_ANTERIOR: u16 = 60;
+/// Diálogos de escritorio de la Fase 12: certificado (nuevo o cambiado),
+/// credenciales y aviso de VNC directo.
+pub const MINIMO_CERTIFICADO_ESCRITORIO: Tamano = Tamano::new(40, 12);
+pub const MINIMO_CREDENCIALES_ESCRITORIO: Tamano = Tamano::new(40, 12);
+pub const MINIMO_VNC_DIRECTO: Tamano = Tamano::new(40, 12);
+
 /// Anchos por debajo de los cuales las vistas y diálogos de la Fase 10 parten
 /// la cabecera o pierden la huella de la clave.
 pub const ESTRECHO_SINCRONIZACION: u16 = 90;
@@ -234,6 +240,23 @@ pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
             tamano: MINIMO_IMPORTACION_BORRADOS,
             exige: "IMPORTACIÓN CON BORRADOS",
         }),
+        Dialogo::Escritorio(dialogo) => {
+            use crate::app::escritorios::DialogoEscritorio;
+            match dialogo {
+                DialogoEscritorio::Certificado { .. } => Some(Minimo {
+                    tamano: MINIMO_CERTIFICADO_ESCRITORIO,
+                    exige: "diálogo certificado",
+                }),
+                DialogoEscritorio::Credenciales { .. } => Some(Minimo {
+                    tamano: MINIMO_CREDENCIALES_ESCRITORIO,
+                    exige: "diálogo credenciales",
+                }),
+                DialogoEscritorio::VncDirecto { .. } => Some(Minimo {
+                    tamano: MINIMO_VNC_DIRECTO,
+                    exige: "aviso VNC directo",
+                }),
+            }
+        }
         _ => None,
     }
 }

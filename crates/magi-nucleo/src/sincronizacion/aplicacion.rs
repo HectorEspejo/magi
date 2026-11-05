@@ -21,11 +21,12 @@ use crate::almacen::conflictos::{self, Conflicto, NuevoConflicto};
 use crate::almacen::lapidas::{self, Lapida};
 use crate::almacen::versiones::{self, Tabla};
 use crate::deliberacion::validar_verificaciones;
+use crate::escritorio::TipoHost;
 use crate::modelo::Direccion;
 use crate::modelo::{fecha_ahora, IdentidadRef, Origen, OrigenIdentidad, TipoTunel};
 use crate::sincronizacion::elementos::{
-    ruta_desde_home, DatosGrupo, DatosHost, DatosIdentidad, DatosSincronizacion, DatosSnippet,
-    DatosTunel, DatosVerificaciones, DestinoSnippet,
+    opciones_desde_valor, ruta_desde_home, DatosGrupo, DatosHost, DatosIdentidad,
+    DatosSincronizacion, DatosSnippet, DatosTunel, DatosVerificaciones, DestinoSnippet,
 };
 use crate::sincronizacion::fusion::{ConflictoFusion, PlanFusion};
 
@@ -153,6 +154,10 @@ struct PlanLeido {
     lapidas: BTreeMap<String, Lapida>,
     /// uuids que hay que tratar como edición nueva al escribir (renombrados).
     renombrados: HashMap<Tabla, BTreeSet<String>>,
+    /// Hosts cuyo tipo (o cuyas opciones de escritorio) no se puede validar.
+    /// No se aplican: dejan un conflicto de elemento para que el usuario lo
+    /// vea, y la fila local de ese uuid, si la hay, no se borra (T38).
+    invalidos: Vec<ConflictoFusion>,
 }
 
 /// Fila local con lo justo para decidir actualizaciones y borrados.
@@ -184,6 +189,13 @@ pub fn aplicar(
 
     let mut leido = leer_plan(plan)?;
     let vivos_uuids = leido.vivos.uuids_por_tabla();
+    // Hosts que el fichero trae con un tipo o unas opciones que no se pueden
+    // validar: no se aplican y su fila local, si la hay, se conserva.
+    let invalidos: BTreeSet<String> = leido
+        .invalidos
+        .iter()
+        .map(|conflicto| conflicto.uuid.clone())
+        .collect();
 
     // Estado local antes de tocar nada: uuid → fila, y etiquetas por host para
     // no perder las de las filas que se quedan sin reescribir (borrados
@@ -212,7 +224,7 @@ pub fn aplicar(
                         actualizar.insert(uuid.clone());
                     }
                 }
-            } else if !opciones.borrados_aplazados.contains(uuid) {
+            } else if !opciones.borrados_aplazados.contains(uuid) && !invalidos.contains(uuid) {
                 // Una fila que el plan no trae ni en vivos ni en lápidas no
                 // participó en la fusión: es una fila que la exportación omite
                 // (datos ilegibles o sin versión/vector). No se borra, que el
@@ -284,7 +296,7 @@ pub fn aplicar(
         let locales_tabla = locales.get(&tabla).unwrap_or(&vacio);
         let algunas = a_borrar.get(&tabla).cloned().unwrap_or_default();
         for uuid in &algunas {
-            if aplazados.contains(uuid) {
+            if aplazados.contains(uuid) || invalidos.contains(uuid) {
                 continue;
             }
             let Some(fila) = locales_tabla.get(uuid) else {
@@ -411,7 +423,12 @@ pub fn aplicar(
 
     // 8. Conflictos: los que ya estaban pendientes no se duplican ni cuentan.
     //    El modo lector filtra los tipos que no resuelve nunca.
-    for conflicto in plan.conflictos.iter().chain(conflictos_por_nombre.iter()) {
+    for conflicto in plan
+        .conflictos
+        .iter()
+        .chain(leido.invalidos.iter())
+        .chain(conflictos_por_nombre.iter())
+    {
         if let Some(tipos) = &opciones.tipos_conflicto {
             if !tipos.contains(&conflicto.tipo) {
                 continue;
@@ -778,6 +795,7 @@ fn id_local_por_clave_natural(
 /// abortan la transacción entera.
 fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
     let mut vivos = VivosPlan::default();
+    let mut invalidos = Vec::new();
     for candidato in &plan.vivos {
         let Some(tabla) = Tabla::desde_tipo_elemento(&candidato.tipo) else {
             tracing::warn!(
@@ -812,15 +830,24 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
                 );
             }
             Tabla::Hosts => {
-                let datos = leer_datos::<DatosHost>(contenido, uuid, "host")?;
-                vivos.hosts.insert(
-                    uuid.to_string(),
-                    VivoPlan {
-                        version,
-                        vector,
-                        datos,
-                    },
-                );
+                match leer_host_de_plan(contenido, uuid) {
+                    Ok(datos) => {
+                        vivos.hosts.insert(
+                            uuid.to_string(),
+                            VivoPlan {
+                                version,
+                                vector,
+                                datos,
+                            },
+                        );
+                    }
+                    Err(motivo) => {
+                        // Un tipo que no se puede validar no se aplica: se
+                        // guarda como conflicto de elemento (T74, §7.12).
+                        tracing::warn!(uuid, "host del plan con datos no válidos: {motivo}");
+                        invalidos.push(conflicto_de_host_invalido(uuid, contenido));
+                    }
+                }
             }
             Tabla::Identidades => {
                 let datos = leer_datos::<DatosIdentidad>(contenido, uuid, "identidad")?;
@@ -911,7 +938,42 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
         vivos,
         lapidas,
         renombrados,
+        invalidos,
     })
+}
+
+/// Datos de un host del fichero, validados de lo que este MAGI entiende.
+///
+/// El tipo se comprueba antes de deserializar para poder distinguir «el otro
+/// equipo usa un tipo nuevo» de «los datos están corruptos»: el primero deja un
+/// conflicto de elemento y no se aplica; el segundo también, porque un fichero
+/// firmado por un par no debe abortar la importación entera por un host.
+fn leer_host_de_plan(contenido: &serde_json::Value, uuid: &str) -> Result<DatosHost> {
+    let tipo = match contenido.get("tipo") {
+        // Formato 1 (o un MAGI anterior a la Fase 12): todos los hosts eran SSH.
+        None | Some(serde_json::Value::Null) => TipoHost::Ssh,
+        Some(serde_json::Value::String(texto)) => TipoHost::desde_texto(texto)
+            .with_context(|| format!("el tipo de host «{texto}» no se entiende"))?,
+        Some(_) => bail!("el campo «tipo» del host no es texto"),
+    };
+    let datos = leer_datos::<DatosHost>(contenido, uuid, "host")?;
+    opciones_desde_valor(&datos.escritorio_opciones, tipo)
+        .with_context(|| format!("las opciones del host {uuid} del plan no son válidas"))?;
+    Ok(datos)
+}
+
+/// Conflicto de elemento de un host que no se puede aplicar. No guarda versión
+/// perdedora: el contenido recibido no es recuperable.
+fn conflicto_de_host_invalido(uuid: &str, contenido: &serde_json::Value) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_ELEMENTO.to_string(),
+        elemento_tipo: "host".to_string(),
+        uuid: uuid.to_string(),
+        nombre: crate::sincronizacion::fusion::nombre_de_contenido("host", contenido),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
 }
 
 fn leer_datos<T>(contenido: &serde_json::Value, uuid: &str, que: &str) -> Result<T>
@@ -1490,6 +1552,19 @@ fn escribir_host(
     let keepalive = datos.keepalive_seg.map(i64::from);
     let opciones_extra = &datos.opciones_extra;
     let servicios = &datos.servicios;
+    // Desde el formato 2 viajan el tipo y los campos de escritorio. El tipo se
+    // fija al crear el host y un par nunca debería mandar otro, pero la
+    // importación no adivina: escribe el de la fila ganadora. Las opciones se
+    // validan antes de escribir.
+    let tipo = datos.tipo.como_texto();
+    let escritorio_dominio = datos
+        .escritorio_dominio
+        .as_deref()
+        .map(str::trim)
+        .filter(|texto| !texto.is_empty());
+    let escritorio_opciones = opciones_desde_valor(&datos.escritorio_opciones, datos.tipo)
+        .with_context(|| format!("las opciones del host «{nombre}» del plan no son válidas"))?
+        .a_json();
     let vector = versiones::vector_a_json(vector);
     let ahora = fecha_ahora();
     match id_por_uuid(conexion, Tabla::Hosts, uuid)? {
@@ -1502,8 +1577,10 @@ fn escribir_host(
                         nombre = ?1, direccion = ?2, puerto = ?3, usuario = ?4,
                         identidad_ref = ?5, multiplexar = ?6, keepalive_seg = ?7,
                         opciones_extra = ?8, origen = ?9, servicios = ?10,
-                        actualizado_en = ?11, version = ?12, vector = ?13
-                      WHERE id = ?14",
+                        tipo = ?11, escritorio_dominio = ?12,
+                        escritorio_opciones = ?13, actualizado_en = ?14,
+                        version = ?15, vector = ?16
+                      WHERE id = ?17",
                     params![
                         nombre,
                         direccion,
@@ -1515,6 +1592,9 @@ fn escribir_host(
                         opciones_extra,
                         origen,
                         servicios,
+                        tipo,
+                        escritorio_dominio,
+                        escritorio_opciones,
                         ahora,
                         version,
                         vector,
@@ -1529,9 +1609,11 @@ fn escribir_host(
                 .execute(
                     "INSERT INTO HOSTS (
                         nombre, direccion, puerto, usuario, identidad_ref, multiplexar,
-                        keepalive_seg, opciones_extra, origen, servicios, creado_en,
+                        keepalive_seg, opciones_extra, origen, servicios, tipo,
+                        escritorio_dominio, escritorio_opciones, creado_en,
                         actualizado_en, uuid, version, vector
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?14)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                               ?14, ?14, ?15, ?16, ?17)",
                     params![
                         nombre,
                         direccion,
@@ -1543,6 +1625,9 @@ fn escribir_host(
                         opciones_extra,
                         origen,
                         servicios,
+                        tipo,
+                        escritorio_dominio,
+                        escritorio_opciones,
                         ahora,
                         uuid,
                         version,

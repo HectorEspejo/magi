@@ -167,9 +167,19 @@ pub fn validar(datos: &DatosSnippet) -> Result<(), String> {
     Ok(())
 }
 
+/// ¿Este host coincide con los destinos del snippet (etiqueta o host suelto)?
+fn coincide_con_destinos(host: &Host, etiquetas: &BTreeSet<&str>, sueltos: &BTreeSet<i64>) -> bool {
+    sueltos.contains(&host.id)
+        || host
+            .etiquetas
+            .iter()
+            .any(|etiqueta| etiquetas.contains(etiqueta.to_lowercase().as_str()))
+}
+
 /// Hosts a los que apunta un snippet: los que tienen alguna etiqueta destino
 /// más los sueltos, sin duplicados y en el orden de la vista Hosts (por grupo
-/// y nombre, «sin grupo» al final).
+/// y nombre, «sin grupo» al final). Los escritorios remotos (RDP, VNC y voxl)
+/// nunca son destino de un snippet: se omiten.
 pub fn resolver<'a>(destinos: &[Destino], hosts: &'a [Host], grupos: &[Grupo]) -> Vec<&'a Host> {
     let etiquetas: BTreeSet<&str> = destinos
         .iter()
@@ -192,13 +202,7 @@ pub fn resolver<'a>(destinos: &[Destino], hosts: &'a [Host], grupos: &[Grupo]) -
         .collect();
     let mut resueltos: Vec<&Host> = hosts
         .iter()
-        .filter(|host| {
-            sueltos.contains(&host.id)
-                || host
-                    .etiquetas
-                    .iter()
-                    .any(|etiqueta| etiquetas.contains(etiqueta.to_lowercase().as_str()))
-        })
+        .filter(|host| host.tipo.es_ssh() && coincide_con_destinos(host, &etiquetas, &sueltos))
         .collect();
     resueltos.sort_by(|a, b| {
         let grupo = |host: &Host| {
@@ -211,6 +215,29 @@ pub fn resolver<'a>(destinos: &[Destino], hosts: &'a [Host], grupos: &[Grupo]) -
             .then_with(|| a.nombre.cmp(&b.nombre))
     });
     resueltos
+}
+
+/// Escritorios (hosts que no son SSH) a los que apuntaría un snippet: la
+/// interfaz los omite y avisa de que no ejecutan snippets.
+pub fn escritorios_omitidos(destinos: &[Destino], hosts: &[Host]) -> usize {
+    let etiquetas: BTreeSet<&str> = destinos
+        .iter()
+        .filter_map(|destino| match destino {
+            Destino::Etiqueta(etiqueta) => Some(etiqueta.as_str()),
+            Destino::Host { .. } => None,
+        })
+        .collect();
+    let sueltos: BTreeSet<i64> = destinos
+        .iter()
+        .filter_map(|destino| match destino {
+            Destino::Host { id, .. } => Some(*id),
+            Destino::Etiqueta(_) => None,
+        })
+        .collect();
+    hosts
+        .iter()
+        .filter(|host| !host.tipo.es_ssh() && coincide_con_destinos(host, &etiquetas, &sueltos))
+        .count()
 }
 
 /// ¿Apunta el snippet a este host?

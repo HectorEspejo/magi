@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · FLOTA ────── 10 hosts · 3 escritorios · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ┌ CERTIFICADO CAMBIADO ──────────────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  ✕ El certificado de win-01 ha cambiado.                               │  │
+│  │  Puede ser una reinstalación o alguien en medio.                       │  │
+│  │                                                                        │  │
+│  │  Anterior  SHA256:Ab3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9           │  │
+│  │  Nuevo     SHA256:T2qRAb3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7          │  │
+│  │            CN=WIN-01                                                   │  │
+│  │  Caduca    3 may 2027                                                  │  │
+│  │                                                                        │  │
+│  │  Para sustituirlo, escribe el nombre del host (win-01):                │  │
+│  │                                                                        │  │
+│  │  [ ┃ ]                                                                 │  │
+│  │  r sustituir y conectar   esc no conectar                              │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

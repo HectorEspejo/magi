@@ -60,6 +60,7 @@ enum class TipoAviso {
     CLAVE_MOVIL_CREADA,
     CLAVE_MOVIL_NO_CREADA,
     TUNEL_DESCARTADO,
+    ESCRITORIO_EN_EL_ORDENADOR,
 }
 
 /** Estado del bloqueo de la app (diagrama de §3 y regla de §7.8). */

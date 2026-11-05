@@ -381,6 +381,14 @@ class VistaModeloMagi(
     }
 
     fun abrirSesion(hostUuid: String) {
+        // Un escritorio (RDP, VNC o voxl) no se abre desde el móvil (F12): se
+        // enseña en Hosts y se abre en el ordenador. Tampoco crea sesiones ni
+        // túneles.
+        val host = _estado.value.inventario.hosts.firstOrNull { it.uuid == hostUuid }
+        if (host != null && host.tipo.esEscritorio) {
+            avisoInterfaz(TipoAviso.ESCRITORIO_EN_EL_ORDENADOR, host.nombre)
+            return
+        }
         alcance.launch {
             _estado.update { it.copy(cargando = true) }
             val resultado = try {
@@ -599,6 +607,12 @@ class VistaModeloMagi(
     }
 
     fun instalarClave(hostUuid: String, hostNombre: String) {
+        // Instalar la clave SSH no tiene sentido en un escritorio.
+        val host = _estado.value.inventario.hosts.firstOrNull { it.uuid == hostUuid }
+        if (host != null && host.tipo.esEscritorio) {
+            avisoInterfaz(TipoAviso.ESCRITORIO_EN_EL_ORDENADOR, host.nombre)
+            return
+        }
         agregarDialogo(
             DialogoVista.Confirmacion(
                 tipo = TipoConfirmacion.INSTALAR_CLAVE,

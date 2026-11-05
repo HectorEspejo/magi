@@ -444,6 +444,17 @@ pub async fn abrir_sesion(estado: &Arc<EstadoNucleo>, host_uuid: &str) -> Result
     .ok_or_else(|| ErrorNucleo::NoEncontrado {
         detalle: format!("el host {host_uuid}"),
     })?;
+    // Un escritorio no se abre desde el móvil (F12): se ve en el inventario y se
+    // abre en el ordenador con MAGI de escritorio.
+    if !host.tipo.es_ssh() {
+        return Err(ErrorNucleo::EstadoInvalido {
+            detalle: format!(
+                "«{}» es un escritorio {} y se abre en el ordenador, no en el móvil",
+                host.nombre,
+                host.tipo.etiqueta()
+            ),
+        });
+    }
     let id = estado.siguiente_id();
     let pantalla = nueva_pantalla(24, 80);
     let sesion = nueva_sesion(
@@ -971,11 +982,17 @@ pub fn tuneles(
     estado: &EstadoNucleo,
     host_uuid: Option<&str>,
 ) -> Result<Vec<TunelVivo>, ErrorNucleo> {
-    let (tuneles, uuids_hosts) = con_almacen(estado, |almacen| {
+    let (tuneles, uuids_hosts, tipos_hosts) = con_almacen(estado, |almacen| {
         let conexion = almacen.conexion();
         let tuneles = almacen.listar_tuneles()?;
         let uuids = movil_bd::uuid_por_id(conexion, magi_nucleo::almacen::versiones::Tabla::Hosts)?;
-        Ok::<_, anyhow::Error>((tuneles, uuids))
+        // Un túnel solo cuelga de un host SSH; el resto (un escritorio) no
+        // debe salir en la vista ni poder activarse desde el móvil.
+        let tipos = hosts_bd::listar(conexion)?
+            .into_iter()
+            .map(|host| (host.id, host.tipo))
+            .collect::<HashMap<_, _>>();
+        Ok::<_, anyhow::Error>((tuneles, uuids, tipos))
     })
     .map_err(|error| ErrorNucleo::General {
         detalle: error.to_string(),
@@ -990,6 +1007,12 @@ pub fn tuneles(
         .unwrap_or_default();
     let mut lista = Vec::new();
     for tunel in tuneles {
+        if !tipos_hosts
+            .get(&tunel.host_id)
+            .is_some_and(|tipo| tipo.es_ssh())
+        {
+            continue;
+        }
         let uuid_host = uuids_hosts.get(&tunel.host_id).cloned().unwrap_or_default();
         if let Some(filtro) = host_uuid {
             if uuid_host != filtro {
@@ -1614,6 +1637,16 @@ pub async fn instalar_clave_en_host(
             detalle: format!("el host {host_uuid}"),
         });
     };
+    // Instalar una clave SSH no tiene sentido en un escritorio.
+    if !host.tipo.es_ssh() {
+        return Err(ErrorNucleo::EstadoInvalido {
+            detalle: format!(
+                "«{}» es un escritorio {}: la clave del móvil solo se instala en hosts SSH",
+                host.nombre,
+                host.tipo.etiqueta()
+            ),
+        });
+    }
     let linea = estado.clave_publica()?.linea_openssh;
     magi_nucleo::instalar_clave::validar_linea_publica(&linea)
         .map_err(|detalle| ErrorNucleo::Firmante { detalle })?;

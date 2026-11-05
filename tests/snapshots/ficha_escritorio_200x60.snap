@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · HOST · win-01 · editar · #8 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│                                        IDENTIFICACIÓN                                                                                                                                                │
+│                                         Nombre       [ win-01┃ ]                                                                                                                                     │
+│                                         Dirección    [ 192.0.2.30 ]                                                                                                                                  │
+│                                         Puerto       [ 3389 ]     Grupo produccion                 ▾                                                                                                 │
+│                                         Etiquetas    [ oficina windows ]                                                                                                                             │
+│                                                                                                                                                                                                      │
+│                                        ESCRITORIO                                                                                                                                                    │
+│                                         Tipo         RDP (no se cambia)                                                                                                                              │
+│                                         Destino      192.0.2.30:3389                                                                                                                                 │
+│                                         A través de  [ hetzner-01                               ▾ ]                                                                                                  │
+│                                         Usuario      [ usuario ]                                                                                                                                     │
+│                                         Dominio      [ OFICINA ]                                                                                                                                     │
+│                                         Contraseña   ( ) guardar en el llavero  (•) pedir siempre                                                                                                    │
+│                                         Guardada     no; se pedirá al abrir                                                                                                                          │
+│                                         Tamaño       ( ) ajustar a la ventana  (•) fijo                                                                                                              │
+│                                         Tamaño fijo  [ 1920x1080 ]                                                                                                                                   │
+│                                         Teclado      [ auto                                     ▾ ]                                                                                                  │
+│                                         Portapapeles [x] texto en los dos sentidos                                                                                                                   │
+│                                         Certificado  SHA256:T2qRAb3dE5fG…                                                                                                                            │
+│                                         [x] olvidar la huella del certificado   (enter)                                                                                                              │
+│                                         Conexión     2026-11-01T09:12:03+00:00                                                                                                                       │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

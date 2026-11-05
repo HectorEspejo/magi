@@ -60,6 +60,8 @@
     <string name="hosts_sin_grupo">SIN GRUPO</string>
     <string name="hosts_pie_recuento">%1$d hosts</string>
     <string name="hosts_descripcion_host">%1$s, %2$s, %3$s</string>
+    <string name="hosts_descripcion_escritorio">%1$s, %2$s, %3$s, se abre en el ordenador</string>
+    <string name="hosts_escritorio_se_abre">se abre en el ordenador</string>
     <string name="hosts_conectar_a">Conectar a %1$s</string>
     <string name="hosts_aviso_conflictos">%1$d conflicto de huella · %2$s</string>
     <string name="hosts_menu_sincronizar">Sincronizar ahora</string>
@@ -126,6 +128,8 @@
     <string name="qr_sin_permiso">MAGI necesita la cámara para leer el QR. También puedes pegar la clave a mano.</string>
 
     <!-- Ficha de host (§6.2) -->
+    <string name="ficha_tipo">tipo</string>
+    <string name="ficha_escritorio_aviso">Se abre en el ordenador con MAGI de escritorio. El móvil solo lo enseña, no conecta.</string>
     <string name="ficha_direccion">dirección</string>
     <string name="ficha_usuario">usuario</string>
     <string name="ficha_grupo">grupo</string>
@@ -333,6 +337,7 @@
     <string name="aviso_tunel_parado">Túnel parado.</string>
     <string name="aviso_tunel_descartado">Túnel caído descartado.</string>
     <string name="aviso_host_desaparecido">Ese host ya no está en el inventario. Sincroniza para actualizarlo.</string>
+    <string name="aviso_escritorio_en_el_ordenador">%1$s es un escritorio y se abre en el ordenador con MAGI de escritorio; el móvil no conecta a escritorios.</string>
     <string name="aviso_error_inesperado">Error inesperado del núcleo. Inténtalo otra vez.</string>
     <string name="aviso_texto_copiado">Texto copiado al portapapeles.</string>
     <string name="aviso_portapapeles_vacio">El portapapeles está vacío.</string>

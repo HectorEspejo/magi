@@ -51,6 +51,9 @@ fn datos_sanos(rutas: Rutas) -> Datos {
         "alacritty",
         "open",
         "ssh-add",
+        // Fase 12: un Chromium para el visor de escritorios.
+        "chromium",
+        "xdg-open",
     ] {
         binarios.insert(programa.to_string(), true);
     }
@@ -118,6 +121,7 @@ fn un_sistema_sano_no_tiene_avisos_ni_errores() {
             "agente SSH",
             "llavero",
             "portapapeles",
+            "navegador",
             "editor",
             "paginador",
             "terminal",
@@ -318,9 +322,10 @@ fn el_servidor_se_resume_sin_arrancarlo() {
         .expect("falta la comprobación de servidor");
     assert_eq!(servidor.estado, Estado::Correcto, "{}", servidor.detalle);
     assert!(
-        servidor
-            .detalle
-            .contains("en marcha · 1.0.0 · protocolo 6 · 2 sesiones, 1 túnel"),
+        servidor.detalle.contains(&format!(
+            "en marcha · 1.0.0 · protocolo {} · 2 sesiones, 1 túnel",
+            magi::protocolo::VERSION_PROTOCOLO
+        )),
         "{}",
         servidor.detalle
     );

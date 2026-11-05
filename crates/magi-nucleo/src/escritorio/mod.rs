@@ -116,18 +116,13 @@ pub const ALTO_MIN: u16 = 480;
 pub const LADO_MAX: u16 = 8192;
 
 /// Tamaño del escritorio remoto: se ajusta a la ventana del visor o es fijo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TamanoEscritorio {
     /// Se ajusta a la ventana del visor (Display Control o SetDesktopSize).
+    #[default]
     Ventana,
     /// Tamaño fijo, entre 640×480 y 8192×8192.
     Fijo { ancho: u16, alto: u16 },
-}
-
-impl Default for TamanoEscritorio {
-    fn default() -> Self {
-        TamanoEscritorio::Ventana
-    }
 }
 
 impl TamanoEscritorio {
@@ -358,9 +353,7 @@ impl OpcionesEscritorio {
             }
             let programa = self.programa.as_deref().unwrap_or("voxl");
             if !programa_valido(programa) {
-                return Err(
-                    "programa inválido: voxl o una ruta absoluta sin espacios".to_string(),
-                );
+                return Err("programa inválido: voxl o una ruta absoluta sin espacios".to_string());
             }
         } else if self.pantalla.is_some() {
             return Err("«pantalla» solo vale en un host voxl".to_string());
@@ -657,12 +650,7 @@ pub struct Region {
 
 impl Region {
     pub fn nueva(x: u16, y: u16, ancho: u16, alto: u16) -> Self {
-        Self {
-            x,
-            y,
-            ancho,
-            alto,
-        }
+        Self { x, y, ancho, alto }
     }
 
     pub fn vacia(&self) -> bool {
@@ -752,14 +740,26 @@ pub enum OrdenEscritorio {
         keysym: u32,
         abajo: bool,
     },
-    Raton { x: u16, y: u16 },
-    Boton { boton: u8, abajo: bool },
+    Raton {
+        x: u16,
+        y: u16,
+    },
+    Boton {
+        boton: u8,
+        abajo: bool,
+    },
     /// Rueda en píxeles del escritorio (desplazamiento suave).
-    Rueda { dx: f32, dy: f32 },
+    Rueda {
+        dx: f32,
+        dy: f32,
+    },
     /// Suelta todas las teclas (al perder el foco, D222).
     SoltarTodo,
     /// El visor pide un tamaño de escritorio nuevo.
-    Tamano { ancho: u16, alto: u16 },
+    Tamano {
+        ancho: u16,
+        alto: u16,
+    },
     CtrlAltSupr,
     TeclaWindows,
     /// Texto pegado en el visor: va al portapapeles del remoto.
@@ -892,6 +892,21 @@ pub fn lanzar_en_hilo<F>(nombre: String, tarea: F) -> std::io::Result<std::threa
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    lanzar_en_hilo_con(nombre, move || tarea)
+}
+
+/// Igual que lanzar_en_hilo, pero recibe una fábrica y crea el future DENTRO
+/// del hilo. Hace falta cuando el future no es Send: el ActiveStage de IronRDP
+/// guarda canales estáticos (`dyn SvcProcessor`) que no lo son, y construir el
+/// future fuera obligaría a moverlo entre hilos.
+pub fn lanzar_en_hilo_con<F, Fut>(
+    nombre: String,
+    fabrica: F,
+) -> std::io::Result<std::thread::JoinHandle<()>>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
     std::thread::Builder::new().name(nombre).spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -903,7 +918,7 @@ where
                 return;
             }
         };
-        runtime.block_on(tarea);
+        runtime.block_on(fabrica());
     })
 }
 

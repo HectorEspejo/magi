@@ -42,6 +42,10 @@ mod vistas_l;
 // Fase 10: vistas SINCRONIZACIÓN y CONFLICTOS y sus diálogos.
 #[path = "redimensionado/vistas_m.rs"]
 mod vistas_m;
+// Fase 12: Hosts con escritorios, formulario RDP, ficha, pestaña ▣ y
+// diálogos de certificado.
+#[path = "redimensionado/vistas_n.rs"]
+mod vistas_n;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

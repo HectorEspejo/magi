@@ -24,7 +24,15 @@ use crate::ui::hosts::{anchos_tabla, celdas};
 /// Alto del panel inferior (separador, sesión seleccionada, servidor y aire).
 const ALTO_PANEL: u16 = 5;
 /// Cabeceras de las columnas, en orden.
-const CABECERAS: [&str; 6] = ["ESTADO", "PESTAÑA", "HOST", "TIEMPO", "IDENTIDAD", "VENT."];
+const CABECERAS: [&str; 7] = [
+    "ESTADO",
+    "PESTAÑA",
+    "TIPO",
+    "HOST",
+    "TIEMPO",
+    "IDENTIDAD",
+    "VENT.",
+];
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let alto_panel = if disp.bajo { 0 } else { ALTO_PANEL };
@@ -108,7 +116,7 @@ fn titulo(app: &App, ancho: u16) -> String {
 }
 
 /// Columnas de la tabla para su ancho y el de la terminal.
-fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 6] {
+fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 7] {
     // Los umbrales son columnas de terminal: se trasladan al ancho de la tabla.
     let margen = ancho_vista.saturating_sub(ancho_tabla);
     let desde_secundarias = ANCHO_COLUMNAS_MINIMAS.saturating_sub(margen);
@@ -116,6 +124,8 @@ fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 6] {
     [
         Columna::fija(6, 1),
         Columna::fija(18, 1),
+        // El tipo se ve siempre (Fase 12: SSH, RDP, VNC o voxl).
+        Columna::fija(5, 1),
         Columna::fija(16, 2).desde(desde_host),
         // «125 h 30 m»: sesiones de más de cuatro días sin recortar.
         Columna::fija(10, 3),
@@ -176,20 +186,42 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
         } else {
             crate::ui::sesion::formatear_duracion(pestaña.segundos())
         };
-        let identidad = if pestaña.identidad.is_empty() {
+        // El tipo se ve siempre (Fase 12): una terminal es SSH; un escritorio,
+        // el suyo.
+        let tipo = pestaña
+            .tipo
+            .map(|tipo| tipo.etiqueta().to_string())
+            .unwrap_or_else(|| "SSH".to_string());
+        let identidad = if let Some(escritorio_id) = pestaña.escritorio_id {
+            app.escritorios
+                .get(&escritorio_id)
+                .and_then(|info| {
+                    app.hosts
+                        .iter()
+                        .find(|host| host.id == info.host_id)
+                        .and_then(|host| host.usuario.clone())
+                })
+                .unwrap_or_else(|| super::tecla(tema, "—", "-").to_string())
+        } else if pestaña.identidad.is_empty() {
             super::tecla(tema, "—", "-").to_string()
         } else {
             pestaña.identidad.clone()
+        };
+        let ventanas = if pestaña.escritorio_id.is_some() {
+            super::tecla(tema, "—", "-").to_string()
+        } else {
+            pestaña.ventanas.to_string()
         };
         let mut spans = vec![Span::styled(format!("{marca} "), estilo)];
         spans.extend(celdas(
             vec![
                 (glifo.to_string(), estilo.fg(color)),
                 (pestaña.nombre.clone(), texto),
+                (tipo, texto),
                 (pestaña.host_nombre.clone(), texto),
                 (tiempo, texto),
                 (identidad, texto),
-                (pestaña.ventanas.to_string(), texto),
+                (ventanas, texto),
             ],
             &anchos,
             ascii,
@@ -212,6 +244,7 @@ fn panel_inferior(marco: &mut Frame, area: Rect, app: &App) {
     let mut lineas = vec![separador];
     match app.pestanas.get(app.seleccion_sesiones) {
         Some(pestaña) => {
+            let es_escritorio = pestaña.escritorio_id.is_some();
             let detalle = if pestaña.estado == EstadoSesionRemota::Caida {
                 format!(
                     "{} {punto} caída: {}",
@@ -221,6 +254,20 @@ fn panel_inferior(marco: &mut Frame, area: Rect, app: &App) {
                         .clone()
                         .unwrap_or_else(|| "motivo desconocido".to_string())
                 )
+            } else if es_escritorio {
+                let estado = pestaña
+                    .escritorio_id
+                    .and_then(|id| app.escritorios.get(&id))
+                    .map(|info| {
+                        let visor = if info.visor {
+                            "con visor"
+                        } else {
+                            "sin visor (se cierra pronto)"
+                        };
+                        format!("{} {} {visor}", info.tipo.etiqueta(), punto)
+                    })
+                    .unwrap_or_else(|| "escritorio".to_string());
+                format!("{} {punto} {estado}", pestaña.nombre)
             } else {
                 format!("{} {punto} {}", pestaña.nombre, pestaña.identidad)
             };

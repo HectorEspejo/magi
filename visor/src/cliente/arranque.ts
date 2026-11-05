@@ -153,10 +153,15 @@ function main(): void {
 		if (app.estado === 'conectado') app.enviar(cmd.teclaWindows);
 	}
 
+	/** El visor ha terminado: el trabajador cierra el socket y libera el lienzo. */
+	function terminarTrabajador(): void {
+		app.post({ t: 'cerrar' });
+	}
+
 	function cerrarVisor(): void {
 		app.terminal = true;
 		teclado.soltarTodo();
-		app.post({ t: 'cerrar' });
+		terminarTrabajador();
 		borrarSesion();
 		window.close();
 		window.setTimeout(() => {
@@ -199,7 +204,7 @@ function main(): void {
 				colocar();
 				return;
 			case 'estado':
-				onEstado(mensaje, avisos, barra, teclado, app);
+				onEstado(mensaje, avisos, barra, teclado, app, terminarTrabajador);
 				return;
 			case 'clip':
 				portapapeles.recibirTexto(mensaje.texto);
@@ -228,6 +233,7 @@ function main(): void {
 				teclado.soltarTodo();
 				portapapeles.configurar(false);
 				avisos.cerrado();
+				terminarTrabajador();
 				return;
 		}
 	}
@@ -394,7 +400,8 @@ function onEstado(
 	avisos: ReturnType<typeof crearAvisos>,
 	barra: ReturnType<typeof crearBarra>,
 	teclado: ReturnType<typeof crearTeclado>,
-	app: App
+	app: App,
+	terminarTrabajador: () => void
 ): void {
 	switch (mensaje.estado) {
 		case 'conectando':
@@ -416,6 +423,7 @@ function onEstado(
 			barra.estado('cerrado');
 			teclado.soltarTodo();
 			avisos.cerrado(mensaje.motivo);
+			terminarTrabajador();
 			return;
 		case 'otra_ventana':
 			if (app.terminal) return;
@@ -424,6 +432,7 @@ function onEstado(
 			barra.estado('otra_ventana');
 			teclado.soltarTodo();
 			avisos.otraVentana();
+			terminarTrabajador();
 			return;
 	}
 }

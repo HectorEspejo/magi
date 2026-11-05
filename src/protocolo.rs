@@ -50,9 +50,15 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// `version_app`, `clientes` y `trabajo`; `Bienvenida` gana `version_app`.
 pub const VERSION_PROTOCOLO: u32 = 7;
 
-/// Los `peticion_id` de escritorios empiezan en 2^46 (Fase 12); por debajo
-/// están los de archivos, túneles y ejecuciones (CLAUDE.md).
+/// Los `peticion_id` de escritorios que genera el cliente empiezan en 2^46
+/// (Fase 12); por debajo están los de archivos, túneles y ejecuciones
+/// (CLAUDE.md).
 pub const RANGO_ESCRITORIOS: u64 = 1 << 46;
+
+/// Los `peticion_id` de escritorios que genera el SERVIDOR (diálogos de una
+/// reconexión pedida desde el visor) viven en [2^47, 2^48), un tramo libre
+/// entre los del cliente y los esperables del cliente (2^48).
+pub const RANGO_ESCRITORIOS_SERVIDOR: u64 = 1 << 47;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -853,16 +859,30 @@ pub enum MensajeCliente {
     // ------------------------------------------------------------ escritorios
     /// Abre un escritorio. El servidor contesta `EscritorioAbierto` o `Error`
     /// con el mismo `peticion_id` (rango de escritorios: desde 2^46).
-    AbrirEscritorio { peticion_id: u64, host_id: i64 },
+    AbrirEscritorio {
+        peticion_id: u64,
+        host_id: i64,
+    },
     /// Enlace de un solo uso nuevo para reabrir el visor o copiarlo.
-    PedirEnlace { peticion_id: u64, escritorio_id: u32 },
+    PedirEnlace {
+        peticion_id: u64,
+        escritorio_id: u32,
+    },
     /// Vuelve a abrir una sesión de escritorio caída.
-    ReconectarEscritorio { peticion_id: u64, escritorio_id: u32 },
+    ReconectarEscritorio {
+        peticion_id: u64,
+        escritorio_id: u32,
+    },
     /// Cierra una sesión de escritorio (la TUI ya pidió confirmación).
-    CerrarEscritorio { escritorio_id: u32 },
+    CerrarEscritorio {
+        escritorio_id: u32,
+    },
     /// Respuesta a `PideHuellaEscritorio`. El cliente ya guardó (o rechazó) la
     /// huella en `HOSTS.huella_escritorio` antes de contestar.
-    RespuestaHuellaEscritorio { peticion_id: u64, aceptada: bool },
+    RespuestaHuellaEscritorio {
+        peticion_id: u64,
+        aceptada: bool,
+    },
     /// Credenciales de un escritorio, del llavero o del diálogo (T25). La
     /// contraseña viaja en `Zeroizing` y nunca se escribe en el log.
     Credenciales {
@@ -1135,7 +1155,9 @@ pub enum MensajeServidor {
         enlace: String,
     },
     /// Difusión de la lista completa de escritorios en cada cambio (T27).
-    Escritorios { lista: Vec<InfoEscritorio> },
+    Escritorios {
+        lista: Vec<InfoEscritorio>,
+    },
     /// Certificado RDP nuevo o cambiado: el cliente decide y, si acepta, guarda
     /// la huella antes de responder (D218).
     PideHuellaEscritorio {
