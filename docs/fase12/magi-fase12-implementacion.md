@@ -436,6 +436,15 @@ funcional:
   `ironrdp-graphics`), anunciar `DYNVC_GFX_PROTOCOL_SUPPORTED` en el conector
   vendorizado y repartir `Rect`/`Video` desde el mismo canal. Mientras tanto
   RDP va por mapas de bits y la barra del visor dice «rectángulos».
+- **App Android 0.2.0 pendiente de publicar**: la 0.1.0 solo lee el `formato`
+  1; con un escritorio que ya escribe el `formato` 2 (hay hosts RDP/VNC/voxl)
+  la app muestra «el equipo … usa una versión más nueva de MAGI; actualiza» y
+  no importa sus hosts. El código de la Fase 12 ya lee el `formato` 2 y enseña
+  los escritorios; se prepara la **0.2.0** (`android/version.properties` y
+  `android/CHANGELOG.md`) y falta que el desarrollador cree la etiqueta
+  `android-v0.2.0` para que CI firme el APK y Obtainium actualice. Mientras
+  tanto, el APK de depuración compilado en local sirve para un móvil con la app
+  de depuración (misma firma).
 - **`connectedDebugAndroidTest`**: el AVD de este entorno se queda en la
   pantalla de bloqueo; las pruebas JVM, el lint y el APK sí pasan. La prueba de
   humo actualizada queda sin ejecutar en emulador.

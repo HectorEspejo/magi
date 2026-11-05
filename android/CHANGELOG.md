@@ -7,12 +7,7 @@ usuario: la política completa está en
 [`docs/publicar-android.md`](../docs/publicar-android.md) y la del escritorio
 en [`docs/publicar.md`](../docs/publicar.md).
 
-## [Sin publicar]
-
-<!-- Añade aquí las líneas de la próxima versión (Añadido, Cambiado,
-     Corregido, Eliminado y Seguridad) en el mismo PR que haga el cambio. Al
-     publicar, pasa esta sección a «## [X.Y.Z] - fecha», actualiza
-     android/version.properties y crea la etiqueta android-vX.Y.Z. -->
+## [0.2.0] - 2026-11-05
 
 ### Añadido
 
@@ -21,7 +16,10 @@ en [`docs/publicar.md`](../docs/publicar.md).
   ordenador». No se conecta a ellos ni les crea túneles: esos hosts se abren en
   el ordenador con MAGI de escritorio, y las acciones de terminal, clave y
   túneles siguen siendo solo para los hosts SSH. Un fichero del `formato` 1 se
-  sigue leyendo con todos sus hosts como SSH.
+  sigue leyendo con todos sus hosts como SSH. Con esto la app vuelve a
+  sincronizar con escritorios que ya escriben el formato 2: la 0.1.0 mostraba
+  «el equipo … usa una versión más nueva de MAGI; actualiza» y no importaba
+  sus hosts.
 
 ### Cambiado
 
@@ -29,14 +27,8 @@ en [`docs/publicar.md`](../docs/publicar.md).
   pantalla, y cuando no hay nada seleccionado la lista de Hosts, Sesiones,
   Túneles o Ajustes ocupa todo el ancho: desaparece el panel vacío con «Elige
   un host…».
-
-### Cambiado
-
 - La cabecera de Túneles dice «1 activo» en singular; «auto» va en una línea y
   los nombres largos no se parten.
-
-### Cambiado
-
 - Al abrir una sesión, el terminal ocupa toda la pantalla: se ocultan la barra
   inferior, el riel y la lista del plegable, y las barras del sistema se
   esconden mientras está abierto (un deslizamiento las muestra). Al volver se
@@ -50,9 +42,6 @@ en [`docs/publicar.md`](../docs/publicar.md).
   actualizan cada segundo.
 - La nota de puerto libre solo aparece al abrir en un puerto libre; la fila
   muestra siempre la escucha real.
-
-### Corregido
-
 - Fallo de desbloqueo en algunos teléfonos (p. ej. Honor MagicOS): las claves
   del Keystore ya no llevan el requisito de «dispositivo desbloqueado» que
   Android no reconoce al desbloquear con la cara. Las claves antiguas se migran

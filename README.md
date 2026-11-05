@@ -798,9 +798,9 @@ y los APK por `magi-android-`. Las releases de Android **nunca** se marcan como
 Antes de instalar o actualizar, comprueba el APK y su certificado:
 
 ```sh
-sha256sum -c magi-android-v0.1.0.apk.sha256
-apksigner verify --print-certs magi-android-v0.1.0.apk
-gh attestation verify magi-android-v0.1.0.apk --repo 4d3-org/magi
+sha256sum -c magi-android-v0.2.0.apk.sha256
+apksigner verify --print-certs magi-android-v0.2.0.apk
+gh attestation verify magi-android-v0.2.0.apk --repo 4d3-org/magi
 ```
 
 `apksigner` viene con las build-tools del SDK de Android y `gh` es el GitHub
