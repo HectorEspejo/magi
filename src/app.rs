@@ -42,6 +42,7 @@ pub mod guardadas;
 pub mod lanzar;
 pub mod permisos;
 mod resultados;
+pub mod servicios;
 pub mod servidor_anterior;
 pub mod sincronizacion;
 pub mod sincronizar;
@@ -622,6 +623,8 @@ pub enum CampoFicha {
     Opciones,
     /// Bloque de túneles del host (no es un campo de texto).
     Tuneles,
+    /// Bloque de comprobaciones de servicio propias (Fase 13).
+    Comprobaciones,
     // ------------------------------------------------ escritorios (Fase 12)
     /// Selector de tipo de host: solo al crear uno (después es fijo).
     Tipo,
@@ -650,7 +653,7 @@ pub enum CampoFicha {
     OlvidarContrasena,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 21] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 22] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -672,6 +675,7 @@ pub const ORDEN_CAMPOS: [CampoFicha; 21] = [
     CampoFicha::Servicios,
     CampoFicha::Opciones,
     CampoFicha::Tuneles,
+    CampoFicha::Comprobaciones,
 ];
 
 pub enum AccionFicha {
@@ -691,6 +695,10 @@ pub enum AccionFicha {
     OlvidarHuella,
     /// Ficha de un escritorio: olvidar la contraseña del llavero.
     OlvidarContrasena,
+    /// Bloque de comprobaciones de servicio: alta, edición y borrado.
+    ComprobacionNueva,
+    ComprobacionEditar,
+    ComprobacionBorrar,
 }
 
 /// Desplegable «Snippet al conectar» de la ficha: «ninguno» y los snippets
@@ -857,9 +865,38 @@ pub struct Ficha {
     pub ultima_conexion: Option<String>,
     /// Hay una contraseña guardada en el llavero.
     pub contrasena_guardada: bool,
+    // ------------------------------------------------ servicios (Fase 13)
+    /// Comprobaciones de configuración propias del host.
+    pub comprobaciones: Vec<magi_nucleo::modelo::ComprobacionServicio>,
+    /// Comprobación seleccionada en su bloque.
+    pub indice_comprobacion: usize,
 }
 
 impl Ficha {
+    /// ¿El campo con el foco es de escritura? (en la ficha, u abre Servicios
+    /// solo fuera de un campo).
+    pub fn campo_es_texto(&self) -> bool {
+        matches!(
+            self.campo,
+            CampoFicha::Nombre
+                | CampoFicha::Direccion
+                | CampoFicha::Puerto
+                | CampoFicha::Etiquetas
+                | CampoFicha::Usuario
+                | CampoFicha::Keepalive
+                | CampoFicha::BackupRuta
+                | CampoFicha::BackupPatron
+                | CampoFicha::TestsComando
+                | CampoFicha::Dominio
+                | CampoFicha::Contrasena
+                | CampoFicha::TamanoFijo
+                | CampoFicha::Pantalla
+                | CampoFicha::Programa
+                | CampoFicha::Servicios
+                | CampoFicha::Opciones
+        )
+    }
+
     pub fn datos(&self) -> DatosHost {
         let puerto = self.puerto.texto.trim().parse::<u16>().unwrap_or(0);
         let keepalive = if self.mantener {
@@ -1177,6 +1214,28 @@ impl Ficha {
         self.indice_tunel = (self.indice_tunel as i32 + paso).clamp(0, total as i32 - 1) as usize;
     }
 
+    /// Índice de la comprobación seleccionada, dentro de lo que hay.
+    pub fn indice_comprobacion_visible(&self, total: usize) -> usize {
+        self.indice_comprobacion.min(total.saturating_sub(1))
+    }
+
+    /// Mueve la selección del bloque de comprobaciones propias.
+    fn mover_comprobacion(&mut self, paso: i32) {
+        let total = self.comprobaciones.len();
+        if total == 0 {
+            self.indice_comprobacion = 0;
+            return;
+        }
+        self.indice_comprobacion =
+            (self.indice_comprobacion as i32 + paso).clamp(0, total as i32 - 1) as usize;
+    }
+
+    /// Comprobación seleccionada en el bloque, si la hay.
+    pub fn comprobacion_seleccionada(&self) -> Option<&magi_nucleo::modelo::ComprobacionServicio> {
+        self.comprobaciones
+            .get(self.indice_comprobacion_visible(self.comprobaciones.len()))
+    }
+
     fn actualizar_sugerencias(&mut self, disponibles: &[String]) {
         let token = self
             .etiquetas
@@ -1303,6 +1362,29 @@ impl Ficha {
                 self.mover_tunel(1, total_tuneles);
                 AccionFicha::Nada
             }
+            KeyCode::Up if self.campo == CampoFicha::Comprobaciones => {
+                self.mover_comprobacion(-1);
+                AccionFicha::Nada
+            }
+            KeyCode::Down if self.campo == CampoFicha::Comprobaciones => {
+                self.mover_comprobacion(1);
+                AccionFicha::Nada
+            }
+            // En el bloque de comprobaciones las letras son órdenes.
+            KeyCode::Char(caracter) if self.campo == CampoFicha::Comprobaciones => match caracter {
+                'j' => {
+                    self.mover_comprobacion(1);
+                    AccionFicha::Nada
+                }
+                'k' => {
+                    self.mover_comprobacion(-1);
+                    AccionFicha::Nada
+                }
+                'n' => AccionFicha::ComprobacionNueva,
+                'e' => AccionFicha::ComprobacionEditar,
+                'x' => AccionFicha::ComprobacionBorrar,
+                _ => AccionFicha::Nada,
+            },
             // En el bloque de túneles las letras son órdenes, no texto.
             KeyCode::Char(caracter) if self.campo == CampoFicha::Tuneles => match caracter {
                 'j' => {
@@ -2526,6 +2608,12 @@ pub struct App {
     /// guardan en el llavero: solo cuando la sesión llega a abierta, para no
     /// guardar una que no autentica (m5 de la revisión).
     contrasenas_escritorio_pendientes: HashMap<u32, (String, Zeroizing<String>)>,
+    // ------------------------------------------------ servicios (Fase 13)
+    /// Estado de la vista Servicios: listados, selecciones, logs y sudo.
+    pub servicios: servicios::EstadoServicios,
+    /// Peticiones de servicios en vuelo, por peticion_id (desde 2^45).
+    pub peticiones_servicio: HashMap<u64, servicios::PeticionServicio>,
+    siguiente_peticion_servicios: u64,
 }
 
 impl App {
@@ -2572,6 +2660,29 @@ impl App {
         app.cargar_sondeos();
         app.entrar_en_flota();
         Ok((app, enviados))
+    }
+
+    /// App de prueba conectada al servidor de sesiones real que ya está
+    /// corriendo (el del escenario de pruebas): sin hilo de teclas ni tick,
+    /// para la prueba de extremo a extremo de Servicios. No la uses fuera de
+    /// las pruebas.
+    #[doc(hidden)]
+    pub fn de_prueba_conectada(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+    ) -> Result<Self> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, None)?;
+        app.efectos_externos = false;
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        app.conectar_con_servidor();
+        Ok(app)
     }
 
     /// Estado inicial, sin efectos: ni hilos, ni red, ni servidor.
@@ -2699,6 +2810,9 @@ impl App {
             aperturas_escritorio: HashSet::new(),
             enlace_visible: None,
             contrasenas_escritorio_pendientes: HashMap::new(),
+            servicios: servicios::EstadoServicios::default(),
+            peticiones_servicio: HashMap::new(),
+            siguiente_peticion_servicios: protocolo::RANGO_SERVICIOS,
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
@@ -3077,6 +3191,15 @@ impl App {
         if let Some(inicio) = inicio(Lista::Snippets) {
             self.snippets.desplazamiento = inicio;
         }
+        if let Some(inicio) = inicio(Lista::ServiciosHosts) {
+            self.servicios.desplazamiento_hosts = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::ServiciosLista) {
+            self.servicios.desplazamiento_lista = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::ServiciosTodaLaFlota) {
+            self.servicios.desplazamiento_flota = inicio;
+        }
         if let (Some(inicio), Some(paleta)) = (inicio(Lista::Paleta), self.paleta.as_mut()) {
             paleta.desplazamiento = inicio;
         }
@@ -3225,7 +3348,18 @@ impl App {
                         self.servidor = servidor;
                         self.servidor_desde = Some(Instant::now());
                         self.servidor_caido = false;
+                        self.servicios.servidor_caido = false;
                         self.mensaje("servidor relanzado", false);
+                        // Si se reconectó desde Servicios, se reintenta el
+                        // listado del host que estaba «desconectado».
+                        if self.vista == Vista::Servicios {
+                            if let Some(host_id) = self.servicios_host_seleccionado() {
+                                if let Some(listado) = self.servicios.listados.get_mut(&host_id) {
+                                    listado.estado = servicios::EstadoListado::Ok;
+                                }
+                                self.pedir_listado(host_id);
+                            }
+                        }
                     }
                     Err(motivo) => self.mensaje(motivo, true),
                 }
@@ -3283,10 +3417,18 @@ impl App {
                 self.evento_inventario(evento);
             }
         }
+        // Si el evento cambió de vista (una sesión que aparece, un aviso que
+        // lleva a otra vista), se para lo que quedara de Servicios.
+        self.vigilar_salida_de_servicios();
     }
 
     fn tick(&mut self) {
         self.tick_sincronizacion();
+        self.tick_servicios();
+        if self.vista == Vista::Servicios && self.contador_ticks % 4 == 0 {
+            // «hace N s» de la cabecera cambia solo.
+            self.sucio = true;
+        }
         if let Some(estado) = &mut self.archivos {
             estado.muestrear(Instant::now());
         }
@@ -3503,6 +3645,20 @@ impl App {
     // ------------------------------------------------------------- inventario
 
     fn tecla_hosts(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('u') && !self.filtro_activo {
+            match self.host_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_servicios(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no tiene servicios", host.nombre),
+                    true,
+                ),
+                None => self.abrir_servicios(None),
+            }
+            return;
+        }
         if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
             match self.host_seleccionado() {
                 Some(host) if host.tipo.es_ssh() => self.abrir_archivos(Some(host.id)),
@@ -3668,6 +3824,28 @@ impl App {
         host_id: i64,
         comandos_iniciales: Vec<protocolo::ComandoInicial>,
     ) -> bool {
+        self.abrir_sesion_con_opciones(host_id, comandos_iniciales, None, true)
+    }
+
+    /// Igual, con la orden de la Fase 13 (pestañas con orden) y pudiendo
+    /// abrirla en segundo plano (sin pasar a Sesión).
+    fn abrir_sesion_con_orden(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+        orden: Option<magi_nucleo::servicios::OrdenPestana>,
+        activar: bool,
+    ) -> bool {
+        self.abrir_sesion_con_opciones(host_id, comandos_iniciales, orden, activar)
+    }
+
+    fn abrir_sesion_con_opciones(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+        orden: Option<magi_nucleo::servicios::OrdenPestana>,
+        activar: bool,
+    ) -> bool {
         if let Some(motivo) = self.motivo_servidor_incompatible() {
             self.mensaje(motivo, true);
             return false;
@@ -3676,7 +3854,7 @@ impl App {
             self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
             return false;
         }
-        if self.aperturas_pendientes.contains(&host_id) {
+        if activar && self.aperturas_pendientes.contains(&host_id) {
             self.mensaje("ya hay una conexión en curso con ese host", true);
             return false;
         }
@@ -3687,15 +3865,20 @@ impl App {
                 cols,
                 filas,
                 comandos_iniciales,
+                orden,
             });
-        self.aperturas_pendientes.insert(host_id);
-        let nombre = self
-            .hosts
-            .iter()
-            .find(|host| host.id == host_id)
-            .map(|host| host.nombre.clone())
-            .unwrap_or_default();
-        self.mensaje(format!("conectando con «{nombre}»…"), false);
+        if activar {
+            self.aperturas_pendientes.insert(host_id);
+        }
+        if activar {
+            let nombre = self
+                .hosts
+                .iter()
+                .find(|host| host.id == host_id)
+                .map(|host| host.nombre.clone())
+                .unwrap_or_default();
+            self.mensaje(format!("conectando con «{nombre}»…"), false);
+        }
         self.sucio = true;
         true
     }
@@ -4007,6 +4190,9 @@ impl App {
 
     /// Mensajes del servidor de sesiones que no resuelve la tarea de lectura.
     fn evento_servidor(&mut self, mensaje: protocolo::MensajeServidor) {
+        if self.evento_servicios(&mensaje) {
+            return;
+        }
         match mensaje {
             protocolo::MensajeServidor::Sesiones { lista } => {
                 self.reconciliar_sesiones(lista);
@@ -4100,9 +4286,11 @@ impl App {
                 sesiones,
                 tuneles,
                 ejecuciones,
+                acciones_servicio,
                 ..
             } => {
                 self.actualizar_ejecuciones(ejecuciones);
+                self.servicios.acciones = acciones_servicio;
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
@@ -4679,6 +4867,10 @@ impl App {
         self.ediciones_servidor_caido();
         self.sincronizaciones_servidor_caido();
         self.peticiones_archivos.clear();
+        // Servicios: los listados se conservan con su hora y se marcan
+        // «desconectado»; ninguna respuesta de servicios va a llegar.
+        self.servicios_desconectado();
+        self.peticiones_servicio.clear();
         // Las peticiones de escritorio en vuelo y sus enlaces ya no valen.
         self.peticiones_escritorio.clear();
         self.aperturas_escritorio.clear();
@@ -4962,7 +5154,7 @@ impl App {
             .almacen
             .listar_snippets()
             .unwrap_or_else(|_| self.snippets.lista.clone());
-        Self::ficha_de(
+        let mut ficha = Self::ficha_de(
             host,
             grupo_id,
             &self.grupos,
@@ -4970,7 +5162,15 @@ impl App {
             self.opciones_identidad(),
             &snippets,
             verificaciones,
-        )
+        );
+        // Las comprobaciones propias del host se leen al abrir la ficha.
+        if let Some(host) = host.filter(|host| host.tipo.es_ssh()) {
+            ficha.comprobaciones = self
+                .almacen
+                .comprobaciones_de_host(host.id)
+                .unwrap_or_default();
+        }
+        ficha
     }
 
     /// La ficha de `host` (o una nueva en `grupo_id`) a partir de lo que la
@@ -5121,6 +5321,8 @@ impl App {
             huella: host.and_then(|host| host.huella_escritorio.clone()),
             ultima_conexion: host.and_then(|host| host.ultima_conexion_en.clone()),
             contrasena_guardada: false,
+            comprobaciones: Vec::new(),
+            indice_comprobacion: 0,
         }
     }
 
@@ -5181,6 +5383,23 @@ impl App {
     }
 
     fn tecla_ficha(&mut self, tecla: KeyEvent) {
+        // u abre Servicios con el host de la ficha, fuera de un campo de
+        // texto (dentro de un campo, u es una letra más).
+        if tecla.code == KeyCode::Char('u')
+            && !tecla
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self
+                .ficha
+                .as_ref()
+                .is_some_and(|ficha| !ficha.campo_es_texto())
+        {
+            match self.ficha.as_ref().and_then(|ficha| ficha.host_id) {
+                Some(host_id) => self.abrir_servicios(Some(host_id)),
+                None => self.mensaje("guarda el host antes de ver sus servicios", true),
+            }
+            return;
+        }
         let disponibles = self.etiquetas.clone();
         // El bloque de túneles necesita saber cuántos hay: la lista vive aquí.
         let total_tuneles = self
@@ -5223,8 +5442,12 @@ impl App {
                     self.preguntar_olvidar_contrasena_escritorio(host_id);
                 }
             }
+            AccionFicha::ComprobacionNueva => self.ficha_comprobacion_nueva(),
+            AccionFicha::ComprobacionEditar => self.ficha_comprobacion_editar(),
+            AccionFicha::ComprobacionBorrar => self.ficha_comprobacion_borrar(),
         }
         self.ajustar_indice_tunel();
+        self.ajustar_indice_comprobacion();
     }
 
     /// Túnel seleccionado en el bloque «Túneles» de la ficha abierta.
@@ -6435,6 +6658,7 @@ impl App {
             Vista::Resultados => self.ir_a_resultados(),
             Vista::Sincronizacion => self.ir_a_sincronizacion(),
             Vista::Conflictos => self.ir_a_conflictos(),
+            Vista::Servicios => self.abrir_servicios(None),
         }
     }
 
@@ -7622,6 +7846,20 @@ impl App {
     }
 
     fn tecla_flota(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('u') && !self.filtro_activo {
+            match self.host_flota_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_servicios(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no tiene servicios", host.nombre),
+                    true,
+                ),
+                None => {}
+            }
+            return;
+        }
         if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
             if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
                 self.abrir_archivos(Some(host_id));
@@ -8055,6 +8293,14 @@ impl App {
             }
             return;
         }
+        // Los diálogos propios de Servicios son modales sobre la vista (también
+        // cuando se abren desde la ficha) y se atienden antes del aviso de
+        // tamaño (el aviso se pinta debajo).
+        if let Some(dialogo) = self.servicios.dialogo.take() {
+            self.tecla_dialogo_servicio(dialogo, tecla);
+            self.vigilar_salida_de_servicios();
+            return;
+        }
         // Por debajo del mínimo se ve el aviso en lugar de la vista: solo
         // valen `q`, `F1`-`F8` y `Ctrl+P` (en Sesión todo va al remoto). Los
         // diálogos, la paleta y la ayuda se pintan encima y ya se han atendido.
@@ -8149,6 +8395,10 @@ impl App {
                 self.ir_a_vista(Vista::Snippets);
                 return;
             }
+            KeyCode::F(9) => {
+                self.abrir_servicios(None);
+                return;
+            }
             KeyCode::Char('p') if tecla.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.abrir_paleta();
                 return;
@@ -8161,6 +8411,14 @@ impl App {
         if tecla.code == KeyCode::Char('?')
             && match self.vista {
                 Vista::Transferencias | Vista::Sesiones => true,
+                Vista::Servicios => {
+                    !self.servicios.filtro_activo
+                        && self
+                            .servicios
+                            .logs
+                            .as_ref()
+                            .is_none_or(|logs| !logs.filtro_activo)
+                }
                 Vista::Archivos => self.archivos.as_ref().is_some_and(|estado| {
                     estado.aviso.is_none()
                         && !estado.local.filtro_activo
@@ -8187,6 +8445,7 @@ impl App {
             Vista::Resultados => self.tecla_resultados(tecla),
             Vista::Sincronizacion => self.tecla_sincronizacion(tecla),
             Vista::Conflictos => self.tecla_conflictos(tecla),
+            Vista::Servicios => self.tecla_servicios(tecla),
         }
     }
 
@@ -10532,6 +10791,7 @@ impl App {
                     Vista::Tuneles => self.ir_a_tuneles(),
                     Vista::Snippets => self.ir_a_snippets(),
                     Vista::Resultados => self.ir_a_resultados(),
+                    Vista::Servicios => self.abrir_servicios(None),
                     _ => self.vista = vista,
                 }
             }

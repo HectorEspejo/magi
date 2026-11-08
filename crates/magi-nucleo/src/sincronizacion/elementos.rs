@@ -28,7 +28,7 @@ use serde_json::Value;
 
 use crate::almacen::versiones::{vector_desde_json, Tabla};
 use crate::escritorio::{OpcionesEscritorio, TipoHost};
-use crate::sincronizacion::formato::{FORMATO_1, FORMATO_2};
+use crate::sincronizacion::formato::{FORMATO_1, FORMATO_2, FORMATO_3};
 use crate::sincronizacion::fusion::{nombre_de_contenido, Candidato};
 
 /// Datos de un grupo que viajan (sin `plegado`).
@@ -100,10 +100,20 @@ pub fn opciones_desde_valor(valor: &Value, tipo: TipoHost) -> Result<OpcionesEsc
     Ok(opciones)
 }
 
-/// Formato que se escribe en el fichero propio: 2 si el inventario tiene algún
-/// host que no es SSH y 1 si todos lo son (D220). Así MAGI 1.1 sigue leyendo
-/// los inventarios sin escritorios.
+/// Formato que se escribe en el fichero propio.
+///
+/// - 3 si hay alguna comprobación propia (Fase 13, D249): un MAGI 1.2 lo verá
+///   como formato_nuevo en vez de perderla sin saberlo.
+/// - si no, 2 si el inventario tiene algún host que no es SSH (Fase 12, D220).
+/// - si no, 1 para que MAGI 1.1 siga leyendo los inventarios sin escritorios.
 pub fn formato_a_escribir(conexion: &Connection) -> Result<u32> {
+    let comprobaciones: i64 =
+        conexion.query_row("SELECT COUNT(*) FROM COMPROBACIONES_SERVICIO", [], |fila| {
+            fila.get(0)
+        })?;
+    if comprobaciones > 0 {
+        return Ok(FORMATO_3);
+    }
     let mut sentencia = conexion.prepare("SELECT tipo FROM HOSTS")?;
     let filas = sentencia.query_map([], |fila| fila.get::<_, Option<String>>(0))?;
     for fila in filas {
@@ -169,6 +179,20 @@ pub struct DatosSnippet {
     pub destinos: Vec<DestinoSnippet>,
 }
 
+/// Datos de una comprobación propia de servicio o proyecto que viajan
+/// (Fase 13, §7.10). El host va por uuid; el objetivo, por tipo y nombre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatosComprobacionServicio {
+    /// uuid del host ssh al que pertenece.
+    pub host: String,
+    /// «unidad» (servicio de systemd) o «proyecto» (Compose).
+    pub objetivo_tipo: String,
+    /// Nombre de la unidad (nginx.service) o del proyecto Compose (web).
+    pub objetivo: String,
+    /// Orden que se ejecuta antes de recargar o reiniciar el objetivo.
+    pub comando: String,
+}
+
 /// Datos de una sincronización de directorio que viajan (sin último
 /// resultado ni fecha de ejecución).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +249,7 @@ fn valor_de_fila(
         Tabla::Tuneles => a_valor(datos_tunel(conexion, id)?),
         Tabla::Snippets => a_valor(datos_snippet(conexion, id)?),
         Tabla::SincronizacionesDir => a_valor(datos_sincronizacion(conexion, id, hogar)?),
+        Tabla::ComprobacionesServicio => a_valor(datos_comprobacion_servicio(conexion, id)?),
     }
 }
 
@@ -555,6 +580,38 @@ fn datos_sincronizacion(
         direccion,
         borrar,
         exclusiones,
+    }))
+}
+
+fn datos_comprobacion_servicio(
+    conexion: &Connection,
+    id: i64,
+) -> Result<Option<DatosComprobacionServicio>> {
+    let fila = conexion
+        .query_row(
+            "SELECT host_id, objetivo_tipo, objetivo, comando
+               FROM COMPROBACIONES_SERVICIO WHERE id = ?1",
+            params![id],
+            |fila| {
+                Ok((
+                    fila.get::<_, i64>(0)?,
+                    fila.get::<_, String>(1)?,
+                    fila.get::<_, String>(2)?,
+                    fila.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((host_id, objetivo_tipo, objetivo, comando)) = fila else {
+        return Ok(None);
+    };
+    let host = uuid_de(conexion, Tabla::Hosts, Some(host_id))?
+        .ok_or_else(|| anyhow!("la comprobación {id} apunta a un host sin uuid"))?;
+    Ok(Some(DatosComprobacionServicio {
+        host,
+        objetivo_tipo,
+        objetivo,
+        comando,
     }))
 }
 

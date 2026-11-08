@@ -254,6 +254,7 @@ mod pruebas {
             tuneles,
             ejecuciones,
             escritorios: 0,
+            acciones_servicio: 0,
         }
     }
 

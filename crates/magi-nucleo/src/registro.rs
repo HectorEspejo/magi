@@ -129,7 +129,7 @@ pub const TIPOS: [&str; 41] = [
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).
-pub const FILTROS: [(&str, &[&str]); 9] = [
+pub const FILTROS: [(&str, &[&str]); 10] = [
     ("todos", &[]),
     (
         "conexiones",
@@ -186,6 +186,7 @@ pub const FILTROS: [(&str, &[&str]); 9] = [
             DELIBERACION_CANCELADA,
         ],
     ),
+    ("servicios", &[SERVICIO_ACCION]),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -311,6 +312,7 @@ mod pruebas {
             "sondeos",
             "archivos",
             "snippets",
+            "servicios",
             "todos",
         ] {
             filtro.ciclo_tipo();

@@ -92,11 +92,11 @@ class PruebaHumoNucleo {
         )
 
         // El núcleo nativo está cargado y sabe qué formato y base de datos usa.
-        // El formato es el máximo que entiende este binario (2 desde la F12);
-        // la fixture es del formato 1, que también se lee.
+        // El formato es el máximo que entiende este binario (3 desde la F13)
+        // y la migración, la 9; la fixture es del formato 1, que también se lee.
         val version = nucleo!!.version()
-        assertEquals(2, version.formato.toInt())
-        assertEquals(8, version.userVersion.toInt())
+        assertEquals(3, version.formato.toInt())
+        assertEquals(9, version.userVersion.toInt())
         assertTrue(version.nucleo.isNotBlank())
 
         // Elegir la carpeta de prueba (la fixture) y unir con su clave.

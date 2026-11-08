@@ -105,6 +105,7 @@ fn etiqueta(campo: CampoFicha, estrecho: bool) -> &'static str {
         CampoFicha::Servicios => "SERVICIOS",
         CampoFicha::Opciones => "OPCIONES EXTRA",
         CampoFicha::Tuneles => "e editar",
+        CampoFicha::Comprobaciones => "COMPROBACIONES",
         // Fase 12: campos de escritorio (no salen en una ficha SSH).
         CampoFicha::Tipo => "Tipo",
         CampoFicha::Dominio => "Dominio",
@@ -309,12 +310,12 @@ fn ficha_ultimo_campo_80x16() {
     prueba.instantanea("ficha_ultimo_campo_80x16");
 }
 
-/// El último campo en el orden de `Tab` es el bloque de túneles: el
-/// formulario enseña su final, junto a él.
+/// El bloque de túneles se ve a 80×16 cuando tiene el foco (desde la Fase 13
+/// comparte la zona baja con el de comprobaciones propias).
 #[test]
 fn ficha_tuneles_80x16() {
     let mut prueba = ficha_de_host(80, 16);
-    prueba.tecla_con(KeyCode::BackTab, KeyModifiers::SHIFT);
+    ir_a(&mut prueba, CampoFicha::Tuneles);
     assert_eq!(ficha(&prueba).campo, CampoFicha::Tuneles);
     comprobar_foco_a_la_vista(&prueba);
     prueba.instantanea("ficha_tuneles_80x16");
@@ -734,7 +735,7 @@ fn las_marcas_no_senalan_solo_separadores() {
         let lineas: Vec<&str> = texto.lines().collect();
         lineas[..lineas.len() - 1].join("\n")
     };
-    let mut prueba = ficha_de_host(130, 30);
+    let mut prueba = ficha_de_host(130, 40);
     let texto = sin_barra(&prueba);
     assert!(!texto.contains('↓') && !texto.contains('↑'), "{texto}");
     // Con el foco en los tests se esconde solo la línea en blanco de arriba.

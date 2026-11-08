@@ -49,12 +49,48 @@ impl Drop for TareasComprobacion {
     }
 }
 
-/// Lo que se delibera: la ejecución de un snippet (F6) o una sincronización
-/// de directorio (F8). Fijado al abrir la deliberación (T33).
+/// Un plan de acción sobre un servicio, timer, contenedor o proyecto
+/// (Fase 13). El texto de la acción es el contrato con el servidor:
+/// «<acción> <objetivo> → <host>».
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanServicio {
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub objetivo: magi_nucleo::servicios::Objetivo,
+    pub accion: magi_nucleo::servicios::Accion,
+    /// Comprobación de configuración que se aplicará antes, para la línea
+    /// «Antes de reiniciar: nginx -t» del diálogo (§6.5).
+    pub comprobacion: Option<String>,
+}
+
+impl PlanServicio {
+    /// El texto que se guarda en DELIBERACIONES.accion y valida el servidor:
+    /// siempre con la flecha Unicode, aunque la terminal sea ASCII (el texto
+    /// de la fila no depende del modo de pintado).
+    pub fn texto_accion(&self) -> String {
+        format!(
+            "{} {} → {}",
+            self.accion.texto(),
+            self.objetivo.nombre,
+            self.host_nombre
+        )
+    }
+}
+
+/// Lo que se delibera: la ejecución de un snippet (F6), una sincronización de
+/// directorio (F8) o una acción sobre un servicio o contenedor (Fase 13).
+/// Fijado al abrir la deliberación (T33).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanDeliberado {
     Snippet(PlanEjecucion),
     Sincronizacion(Box<PlanSincronizacion>),
+    Servicio(PlanServicio),
+}
+
+impl From<PlanServicio> for PlanDeliberado {
+    fn from(plan: PlanServicio) -> Self {
+        PlanDeliberado::Servicio(plan)
+    }
 }
 
 impl From<PlanEjecucion> for PlanDeliberado {
@@ -77,6 +113,7 @@ impl PlanDeliberado {
         match self {
             PlanDeliberado::Snippet(plan) => plan.accion(),
             PlanDeliberado::Sincronizacion(plan) => plan.accion(false),
+            PlanDeliberado::Servicio(plan) => plan.texto_accion(),
         }
     }
 
@@ -85,6 +122,9 @@ impl PlanDeliberado {
         match self {
             PlanDeliberado::Snippet(plan) => plan.hosts.clone(),
             PlanDeliberado::Sincronizacion(plan) => vec![plan.host()],
+            PlanDeliberado::Servicio(plan) => {
+                vec![(plan.host_id, plan.host_nombre.clone())]
+            }
         }
     }
 
@@ -92,7 +132,7 @@ impl PlanDeliberado {
     pub fn snippet_id(&self) -> Option<i64> {
         match self {
             PlanDeliberado::Snippet(plan) => Some(plan.snippet_id),
-            PlanDeliberado::Sincronizacion(_) => None,
+            PlanDeliberado::Sincronizacion(_) | PlanDeliberado::Servicio(_) => None,
         }
     }
 
@@ -117,6 +157,13 @@ impl PlanDeliberado {
                 )
             }
             PlanDeliberado::Sincronizacion(plan) => plan.accion(ascii),
+            PlanDeliberado::Servicio(plan) => format!(
+                "{} {} {} {}",
+                plan.accion.texto(),
+                plan.objetivo.nombre,
+                if ascii { "->" } else { "→" },
+                plan.host_nombre
+            ),
         }
     }
 
@@ -136,6 +183,21 @@ impl PlanDeliberado {
                 )
             }
             PlanDeliberado::Sincronizacion(plan) => plan.accion_corta(ascii),
+            PlanDeliberado::Servicio(plan) => format!(
+                "{} {} {} {}",
+                plan.accion.texto(),
+                plan.objetivo.nombre,
+                if ascii { "->" } else { "→" },
+                plan.host_nombre
+            ),
+        }
+    }
+
+    /// El objetivo del plan, si es una acción de servicio.
+    pub fn objetivo_servicio(&self) -> Option<&magi_nucleo::servicios::Objetivo> {
+        match self {
+            PlanDeliberado::Servicio(plan) => Some(&plan.objetivo),
+            _ => None,
         }
     }
 }
@@ -156,6 +218,9 @@ pub struct DeliberacionAbierta {
     pub desplazamiento: usize,
     pub backup_horas: u64,
     pub inicio: Instant,
+    /// Aviso de unidad crítica, si el plan es una acción sobre una de ellas
+    /// (Fase 13): se pinta en rojo sobre la deliberación.
+    pub critica: Option<String>,
     _tareas: TareasComprobacion,
 }
 
@@ -252,6 +317,25 @@ impl App {
             self.mensaje("ya hay una deliberación MAGI abierta", true);
             return;
         }
+        // En una acción de servicio, MELCHIOR-1 no cuenta el estado del propio
+        // objetivo (§7.2): ni el sondeo viejo ni el nuevo que se haga ahora.
+        let excluir: Vec<String> = match &plan {
+            PlanDeliberado::Servicio(plan) => {
+                let mut nombres = vec![plan.objetivo.nombre.clone()];
+                if plan.objetivo.tipo == magi_nucleo::servicios::TipoObjetivo::Timer {
+                    if let Some(base) = plan.objetivo.nombre.strip_suffix(".timer") {
+                        nombres.push(format!("{base}.service"));
+                    }
+                }
+                nombres
+            }
+            _ => Vec::new(),
+        };
+        // Aviso de unidad crítica para la línea roja del diálogo (Fase 13).
+        let critica = match &plan {
+            PlanDeliberado::Servicio(plan) => self.servicios_critica(plan.host_id, &plan.objetivo),
+            _ => None,
+        };
         let verificaciones = match self.almacen.verificaciones_por_host() {
             Ok(verificaciones) => verificaciones,
             Err(error) => {
@@ -280,24 +364,39 @@ impl App {
                     Celda::Decidida(Veredicto::NoActiva)
                 } else {
                     match comprobacion {
-                        Comprobacion::Salud => match salud::con_ultimo(
-                            self.sondeos.get(host_id),
-                            limites.salud_max,
-                            &umbrales,
-                        ) {
-                            DecisionSalud::Aprueba(detalle) => {
-                                Celda::Decidida(Veredicto::Aprueba { detalle, ms: 0 })
+                        Comprobacion::Salud => {
+                            let ajustado;
+                            let sondeo = match self.sondeos.get(host_id) {
+                                Some(sondeo) if !excluir.is_empty() => {
+                                    let mut copia = sondeo.clone();
+                                    copia
+                                        .servicios
+                                        .retain(|nombre, _| !excluir.contains(nombre));
+                                    ajustado = copia;
+                                    Some(&ajustado)
+                                }
+                                otro => otro,
+                            };
+                            match salud::con_ultimo(sondeo, limites.salud_max, &umbrales) {
+                                DecisionSalud::Aprueba(detalle) => {
+                                    Celda::Decidida(Veredicto::Aprueba { detalle, ms: 0 })
+                                }
+                                DecisionSalud::Rechaza(detalle) => {
+                                    Celda::Decidida(Veredicto::Rechaza { detalle, ms: 0 })
+                                }
+                                DecisionSalud::Sondear => match todos.get(host_id) {
+                                    Some(host) => {
+                                        let mut peticion =
+                                            self.peticion_de_sondeo(host.clone(), &todos);
+                                        peticion
+                                            .servicios
+                                            .retain(|unidad| !excluir.contains(unidad));
+                                        Celda::Trabajo(Trabajo::Salud(Box::new(peticion)))
+                                    }
+                                    None => rechazo("el host ya no existe"),
+                                },
                             }
-                            DecisionSalud::Rechaza(detalle) => {
-                                Celda::Decidida(Veredicto::Rechaza { detalle, ms: 0 })
-                            }
-                            DecisionSalud::Sondear => match todos.get(host_id) {
-                                Some(host) => Celda::Trabajo(Trabajo::Salud(Box::new(
-                                    self.peticion_de_sondeo(host.clone(), &todos),
-                                ))),
-                                None => rechazo("el host ya no existe"),
-                            },
-                        },
+                        }
                         Comprobacion::Backup => match verificacion.backup_ruta.clone() {
                             Some(ruta) => Celda::Trabajo(Trabajo::Backup {
                                 ruta,
@@ -356,6 +455,7 @@ impl App {
             desplazamiento: 0,
             backup_horas: limites.backup_horas,
             inicio: Instant::now(),
+            critica,
             _tareas: TareasComprobacion(tareas),
         };
         // Sin nada que esperar (todo decidido o nada activo) ya se resuelve.
@@ -459,6 +559,15 @@ impl App {
                     PlanDeliberado::Sincronizacion(plan) => {
                         self.lanzar_sincronizacion(*plan, deliberacion)
                     }
+                    PlanDeliberado::Servicio(plan) => {
+                        let pendiente = crate::app::servicios::AccionPendiente {
+                            host_id: plan.host_id,
+                            host_nombre: plan.host_nombre,
+                            objetivo: plan.objetivo,
+                            accion: plan.accion,
+                        };
+                        self.ejecutar_accion_servicio(pendiente, deliberacion);
+                    }
                 }
             }
             Err(error) => {
@@ -524,9 +633,44 @@ impl DeliberacionAbierta {
             desplazamiento: 0,
             backup_horas: 24,
             inicio: Instant::now(),
+            critica: None,
             _tareas: TareasComprobacion(Vec::new()),
         };
         abierta.resolver();
         abierta
+    }
+}
+
+impl App {
+    /// Abre la deliberación MAGI para una acción de servicio (Fase 13): un
+    /// solo host y la acción en la cabecera; MELCHIOR-1 no cuenta el estado
+    /// del propio objetivo.
+    pub(super) fn abrir_deliberacion_servicio(
+        &mut self,
+        pendiente: crate::app::servicios::AccionPendiente,
+    ) {
+        let comprobacion = if magi_nucleo::servicios::acciones::comprueba_configuracion(
+            &pendiente.objetivo,
+            pendiente.accion,
+        ) {
+            self.servicios_comprobacion_texto(pendiente.host_id, &pendiente.objetivo)
+        } else {
+            None
+        };
+        let plan = PlanServicio {
+            host_id: pendiente.host_id,
+            host_nombre: pendiente.host_nombre.clone(),
+            objetivo: pendiente.objetivo.clone(),
+            accion: pendiente.accion,
+            comprobacion,
+        };
+        let mut motivos = Vec::new();
+        if self
+            .servicios_critica(pendiente.host_id, &pendiente.objetivo)
+            .is_some()
+        {
+            motivos.push(MotivoDeliberacion::Critico);
+        }
+        self.abrir_deliberacion(plan, motivos);
     }
 }

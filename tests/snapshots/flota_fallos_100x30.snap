@@ -1,0 +1,33 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  ◐ backup-nas    CARGA                  │   hetzner-01                                           │
+│  ○ dgx-spark     FRÍA                   │   192.0.2.111:22                                       │
+│▸ ● hetzner-01 ⚠2 NOMINAL                │                                                        │
+│  ● hetzner-02    NOMINAL                │   CARGA ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.5/8      │
+│  ◐ mac-mini-m1   CARGA                  │   MEM   █████████░░░░░░░░░░░░░░░░░░░░░░░░░  25 %       │
+│  ✕ rincon-dev    CAÍDA                  │   DSK   ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %       │
+│  ● vps-openclaw  NOMINAL                │   NET   ↓ —  ↑ —                                       │
+│                                         │   UP    1 d 03 h                                       │
+│                                         │                                                        │
+│                                         │   FALLOS                                               │
+│                                         │   ✕ copia.service (servicio)                           │
+│                                         │   ✕ web-worker-1 (contenedor)                          │
+│                                         │                                                        │
+│                                         │   sondeado hace NN min en 0 ms · NOMINAL                │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+│                                         │                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más

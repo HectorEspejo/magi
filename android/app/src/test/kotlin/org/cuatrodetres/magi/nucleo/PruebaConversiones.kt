@@ -302,6 +302,12 @@ class PruebaConversiones {
             .aVista(app = "0.1.0", codigo = 1009)
         assertEquals("0.1.0", version.nucleo)
         assertEquals(7, version.userVersion)
+        // Fase 13: el núcleo declara el formato 3 y la migración 9; la app los
+        // muestra tal cual porque leer el fichero lo hace el núcleo, no Kotlin.
+        val version13 = VersionNucleo(nucleo = "1.3.0", formato = 3U, userVersion = 9U)
+            .aVista(app = "0.2.0", codigo = 209)
+        assertEquals(3, version13.formato)
+        assertEquals(9, version13.userVersion)
     }
 
     @Test

@@ -271,6 +271,9 @@ pub struct ServidorSesion {
     pub estado: Arc<Reenvios>,
     /// Lo que ve el test de conexiones, shells y `exec`.
     pub observado: Arc<Observado>,
+    /// Directorio con binarios falsos que se antepone al `PATH` de los
+    /// `exec` (Fase 13: systemctl, journalctl, docker, podman, sudo…).
+    pub binarios: Option<PathBuf>,
 }
 
 impl Default for ServidorSesion {
@@ -280,6 +283,7 @@ impl Default for ServidorSesion {
             reenvio: ModoReenvio::Concede,
             estado: Arc::new(Reenvios::default()),
             observado: Arc::new(Observado::default()),
+            binarios: None,
         }
     }
 }
@@ -294,6 +298,7 @@ impl russh::server::Server for ServidorSesion {
             reenvio: self.reenvio,
             estado: self.estado.clone(),
             observado: self.observado.clone(),
+            binarios: self.binarios.clone(),
             entradas: Arc::new(Mutex::new(HashMap::new())),
             procesos: Arc::new(Mutex::new(HashMap::new())),
             shells: HashSet::new(),
@@ -318,6 +323,8 @@ pub struct HandlerSesion {
     /// Usuario autenticado: los `exec` lo reciben en `MAGI_USUARIO`.
     usuario: String,
     mango_guardado: bool,
+    /// Directorio de binarios falsos, si la prueba lo pide.
+    binarios: Option<PathBuf>,
 }
 
 impl Drop for HandlerSesion {
@@ -528,10 +535,20 @@ impl russh::server::Handler for HandlerSesion {
             .lock()
             .expect("comandos")
             .push(comando.clone());
-        let mut hijo = match tokio::process::Command::new("sh")
+        let mut orden = tokio::process::Command::new("sh");
+        orden
             .arg("-c")
             .arg(&comando)
-            .env("MAGI_USUARIO", &self.usuario)
+            .env("MAGI_USUARIO", &self.usuario);
+        if let Some(binarios) = &self.binarios {
+            // Los binarios falsos de la prueba van delante del PATH del host.
+            let actual = std::env::var_os("PATH").unwrap_or_default();
+            let mut path = binarios.clone().into_os_string();
+            path.push(":");
+            path.push(actual);
+            orden.env("PATH", path);
+        }
+        let mut hijo = match orden
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -884,6 +901,9 @@ pub struct OpcionesEscenario {
     pub identidad: Option<magi::modelo::IdentidadRef>,
     /// ¿Se escribe la huella del host en known_hosts?
     pub huella_conocida: bool,
+    /// Directorio con binarios falsos que los `exec` del host de prueba ven
+    /// en el `PATH` (Fase 13).
+    pub binarios: Option<PathBuf>,
 }
 
 impl Default for OpcionesEscenario {
@@ -895,6 +915,7 @@ impl Default for OpcionesEscenario {
             reenvio: ModoReenvio::Concede,
             identidad: None,
             huella_conocida: true,
+            binarios: None,
         }
     }
 }
@@ -993,6 +1014,7 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
         reenvio: opciones.reenvio,
         estado: reenvios.clone(),
         observado: observado.clone(),
+        binarios: opciones.binarios.clone(),
     };
     let tarea_ssh = tokio::spawn(async move {
         let _ = russh::server::Server::run_on_socket(&mut servidor_ssh, config, &escucha).await;
@@ -1216,6 +1238,7 @@ impl Escenario {
             host_id,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
         self.esperar_sesion_nueva(&conocidas).await

@@ -1,0 +1,6 @@
+#!/bin/sh
+# nginx falso para la comprobación conocida.
+echo "nginx $*" >> "$ESTADO/llamadas"
+cat "$ESTADO/nginx_salida" >&2 2>/dev/null
+codigo=$(cat "$ESTADO/nginx_codigo" 2>/dev/null) || codigo=0
+exit "$codigo"

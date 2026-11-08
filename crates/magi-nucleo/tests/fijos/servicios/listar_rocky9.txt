@@ -1,0 +1,54 @@
+MAGI_PRIV=root
+MAGI_SYSTEMD=252
+MAGI_BLOQUE service
+Id=firewalld.service
+Names=firewalld.service
+Description=firewalld - dynamic firewall daemon
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=dbus
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/usr/lib/systemd/system/firewalld.service
+ExecMainPID=902
+MemoryCurrent=41943040
+ActiveEnterTimestampMonotonic=3400000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=podman.service
+Names=podman.service
+Description=Podman API Service
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+Type=simple
+Result=success
+UnitFileState=disabled
+CanReload=no
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=ssh.service
+Names=ssh.service
+Description=OpenSSH server daemon
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/usr/lib/systemd/system/sshd.service
+ExecMainPID=801
+MemoryCurrent=10485760
+ActiveEnterTimestampMonotonic=3390000000
+MAGI_FIN_BLOQUE
+MAGI_DIARIO=todo
+MAGI_RELOJ=1794141520 60121
+MAGI_MOTOR=podman 5.2.3
+MAGI_CONTENEDOR {"Command":"\"postgres\"","CreatedAt":"2026-11-04 18:01:05 +0000 UTC","Exited":0,"ExitedAt":1794100000,"ID":"9a8b7c6d5e4f","Image":"docker.io/library/postgres:16-alpine","IsInfra":false,"Labels":"com.docker.compose.container-number=1,com.docker.compose.project=datos,com.docker.compose.project.config_files=/home/usuario/datos/compose.yaml,com.docker.compose.service=db","Mounts":"","Names":"datos-db-1","Networks":"datos_default","Pid":3120,"Ports":"0.0.0.0:5432->5432/tcp","RunningFor":"4 days ago","Size":"0B","State":"running","Status":"Up 4 days (healthy)"}
+MAGI_CONTENEDOR {"Command":"\"/pause\"","CreatedAt":"2026-11-04 18:01:04 +0000 UTC","Exited":0,"ExitedAt":0,"ID":"8f7e6d5c4b3a","Image":"k8s.gcr.io/pause:3.5","IsInfra":true,"Labels":"io.podman.pod=abc","Mounts":"","Names":"abc-infra","Networks":"podman","Pid":3001,"Ports":"","RunningFor":"4 days ago","Size":"0B","State":"running","Status":"Up 4 days"}
+MAGI_CONTENEDOR {"Command":"\"redis-server\"","CreatedAt":"2026-11-07 20:30:00 +0000 UTC","Exited":137,"ExitedAt":1794139000,"ID":"7e6d5c4b3a2f","Image":"docker.io/library/redis:7.4","IsInfra":false,"Labels":"","Mounts":"","Names":"prueba-redis","Networks":"podman","Pid":0,"Ports":"","RunningFor":"14 hours ago","Size":"0B","State":"exited","Status":"Exited (137) 3 hours ago"}
+MAGI_PROYECTO {"nombre":"datos","ficheros":["/home/usuario/datos/compose.yaml"]}
+MAGI_FIN

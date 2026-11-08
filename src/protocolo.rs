@@ -149,8 +149,9 @@ pub use magi_nucleo::escritorio::{
 // ---------------------------------------------------------------- servicios
 
 pub use magi_nucleo::servicios::{
-    lectura::ComprobacionSudo, Accion, Consumo, Contenedor, InfoAccion, LineaLog, Listado,
-    MotivoFinLog, MotorNombre, Objetivo, OrdenPestana, Privilegio, ResultadoServicio, TipoObjetivo,
+    lectura::ComprobacionSudo, Accion, Consumo, Contenedor, Detalle, FaseAccion, InfoAccion,
+    LineaLog, Listado, MotivoFinLog, MotorNombre, Objetivo, OrdenPestana, Privilegio,
+    ResultadoAccion, ResultadoServicio, TipoObjetivo,
 };
 
 // ---------------------------------------------------------------- estados
@@ -678,6 +679,11 @@ pub enum MensajeCliente {
         /// de «abrir en pestaña»); al reconectar, solo los que `repetir`.
         #[serde(default)]
         comandos_iniciales: Vec<ComandoInicial>,
+        /// Orden con la que se abre la pestaña (Fase 13, D248): el servidor la
+        /// convierte en el comando real y la escribe en la shell. El cliente
+        /// nunca manda texto para ejecutar por esta vía.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orden: Option<OrdenPestana>,
     },
     Adjuntar {
         sesion_id: u32,
@@ -1007,6 +1013,10 @@ pub struct TrabajoServidor {
     /// Escritorios remotos abiertos (Fase 12).
     #[serde(default = "uno")]
     pub escritorios: u32,
+    /// Acciones de servicio en curso (Fase 13): trabajo custodiado que sigue
+    /// aunque se cierre la ventana que lo pidió (T67).
+    #[serde(default = "uno")]
+    pub acciones_servicio: u32,
 }
 
 fn uno() -> u32 {
@@ -1014,12 +1024,13 @@ fn uno() -> u32 {
 }
 
 impl TrabajoServidor {
-    pub const CAMPOS: [&'static str; 5] = [
+    pub const CAMPOS: [&'static str; 6] = [
         "sesiones",
         "transferencias",
         "tuneles",
         "ejecuciones",
         "escritorios",
+        "acciones_servicio",
     ];
 
     /// No custodia nada de lo que hoy conoce MAGI.
@@ -1029,6 +1040,7 @@ impl TrabajoServidor {
             && self.tuneles == 0
             && self.ejecuciones == 0
             && self.escritorios == 0
+            && self.acciones_servicio == 0
     }
 
     /// Suma de todo lo que custodia (para decidir y para el resumen).
@@ -1038,6 +1050,7 @@ impl TrabajoServidor {
             + u64::from(self.tuneles)
             + u64::from(self.ejecuciones)
             + u64::from(self.escritorios)
+            + u64::from(self.acciones_servicio)
     }
 }
 
@@ -1062,6 +1075,10 @@ pub enum MensajeServidor {
         /// Ejecuciones en memoria (en curso y terminadas de la última hora).
         #[serde(default)]
         ejecuciones: Vec<InfoEjecucion>,
+        /// Acciones de servicio en curso (Fase 13), para que una ventana nueva
+        /// las vea al entrar (T27).
+        #[serde(default)]
+        acciones_servicio: Vec<InfoAccion>,
     },
     /// Rechazo del saludo porque el servidor habla otra versión de
     /// protocolo. **Contrato estable** (Fase 9): no se quitan ni renombran
@@ -1359,6 +1376,7 @@ mod pruebas {
                 texto: "tmux attach\n".to_string(),
                 repetir: true,
             }],
+            orden: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::Adjuntar {
             sesion_id: 3,
@@ -1712,8 +1730,8 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_seis() {
-        assert_eq!(VERSION_PROTOCOLO, 7);
+    fn la_version_del_protocolo_es_la_ocho() {
+        assert_eq!(VERSION_PROTOCOLO, 8);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
@@ -1785,6 +1803,7 @@ mod pruebas {
             transferencias: Vec::new(),
             tuneles: vec![tunel],
             ejecuciones: Vec::new(),
+            acciones_servicio: Vec::new(),
         });
     }
 
@@ -1880,14 +1899,222 @@ mod pruebas {
         assert!(codificar(&mensaje).unwrap().len() < LINEA_MAXIMA);
     }
 
-    /// Un `AbrirSesion` de un cliente sin comandos iniciales se lee igual.
+    /// Un `AbrirSesion` de un cliente sin comandos iniciales ni orden se lee
+    /// igual (v8 añade `orden` como opcional en el cable).
     #[test]
     fn abrir_sesion_sin_comandos_iniciales_se_lee() {
         let linea = r#"{"tipo":"AbrirSesion","host_id":1,"cols":80,"filas":24}"#;
         match decodificar::<MensajeCliente>(linea).unwrap() {
             MensajeCliente::AbrirSesion {
-                comandos_iniciales, ..
-            } => assert!(comandos_iniciales.is_empty()),
+                comandos_iniciales,
+                orden,
+                ..
+            } => {
+                assert!(comandos_iniciales.is_empty());
+                assert_eq!(orden, None);
+            }
+            otro => panic!("{otro:?}"),
+        }
+    }
+
+    /// Los mensajes de servicios (v8) hacen ida y vuelta.
+    #[test]
+    fn los_mensajes_de_servicios_hacen_ida_y_vuelta() {
+        let objetivo = Objetivo::unidad("app.service");
+        ida_y_vuelta_cliente(MensajeCliente::ListarServicios {
+            peticion_id: RANGO_SERVICIOS + 1,
+            host_id: 7,
+            sudo: Some(Secreto::nuevo("secreta")),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::PedirConsumo {
+            peticion_id: RANGO_SERVICIOS + 2,
+            host_id: 7,
+            sudo: None,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::DetalleServicio {
+            peticion_id: RANGO_SERVICIOS + 3,
+            host_id: 7,
+            objetivo: objetivo.clone(),
+            sudo: None,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::ComprobarSudo {
+            peticion_id: RANGO_SERVICIOS + 4,
+            host_id: 7,
+            contrasena: Secreto::nuevo("secreta"),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AccionServicio {
+            peticion_id: RANGO_SERVICIOS + 5,
+            host_id: 7,
+            objetivo: objetivo.clone(),
+            accion: Accion::Reiniciar,
+            deliberacion: Some(DeliberacionLanzada {
+                id: 12,
+                forzada: false,
+                motivo: None,
+            }),
+            sudo: Some(Secreto::nuevo("secreta")),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::SeguirLog {
+            peticion_id: RANGO_SERVICIOS + 6,
+            host_id: 7,
+            objetivo: objetivo.clone(),
+            lineas_iniciales: 200,
+            sudo: None,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::PararLog {
+            peticion_id: RANGO_SERVICIOS + 6,
+        });
+        // Pestañas con orden (D248).
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
+            host_id: 7,
+            cols: 120,
+            filas: 38,
+            comandos_iniciales: Vec::new(),
+            orden: Some(OrdenPestana::ShellContenedor {
+                motor: MotorNombre::Docker,
+                id: "web-app-1".to_string(),
+            }),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
+            host_id: 7,
+            cols: 80,
+            filas: 24,
+            comandos_iniciales: Vec::new(),
+            orden: Some(OrdenPestana::SeguirDiario {
+                unidad: "app.service".to_string(),
+            }),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
+            host_id: 7,
+            cols: 80,
+            filas: 24,
+            comandos_iniciales: Vec::new(),
+            orden: Some(OrdenPestana::SeguirContenedor {
+                motor: MotorNombre::Podman,
+                id: "0af5c1e9a1b2".to_string(),
+            }),
+        });
+
+        let listado = Listado::vacio(Privilegio::SudoSinClave);
+        let accion = InfoAccion {
+            id: RANGO_SERVICIOS + 5,
+            host_id: 7,
+            host_nombre: "prueba-1".to_string(),
+            objetivo: objetivo.clone(),
+            accion: Accion::Reiniciar,
+            fase: FaseAccion::Esperando,
+            desde_ms: 1_700_000_000_000,
+            solicitante: 2,
+        };
+        ida_y_vuelta_servidor(MensajeServidor::Servicios {
+            peticion_id: RANGO_SERVICIOS + 1,
+            host_id: 7,
+            listado,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Consumo {
+            peticion_id: RANGO_SERVICIOS + 2,
+            host_id: 7,
+            consumos: vec![Consumo {
+                id: "web-app-1".to_string(),
+                cpu_pct: Some(2.5),
+                memoria_bytes: Some(64 * 1024 * 1024),
+                memoria_limite_bytes: Some(256 * 1024 * 1024),
+            }],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Detalle {
+            peticion_id: RANGO_SERVICIOS + 3,
+            host_id: 7,
+            detalle: Detalle {
+                objetivo: objetivo.clone(),
+                props: std::collections::BTreeMap::new(),
+                necesita: vec!["network.target".to_string()],
+                necesitada: Vec::new(),
+                texto: "[Unit]".to_string(),
+                contenedor: None,
+            },
+        });
+        ida_y_vuelta_servidor(MensajeServidor::SudoComprobado {
+            peticion_id: RANGO_SERVICIOS + 4,
+            resultado: ComprobacionSudo::Ok,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::AccionServicioHecha {
+            peticion_id: RANGO_SERVICIOS + 5,
+            resultado: ResultadoServicio {
+                resultado: ResultadoAccion::Hecho,
+                estado: "active".to_string(),
+                segundos: 2.3,
+                mensaje: String::new(),
+                lineas: vec!["línea del diario".to_string()],
+                comprobacion: None,
+            },
+        });
+        ida_y_vuelta_servidor(MensajeServidor::AccionesServicio {
+            lista: vec![accion],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::LineasLog {
+            peticion_id: RANGO_SERVICIOS + 6,
+            lineas: vec![LineaLog {
+                hora: Some(1_700_000_000),
+                prioridad: 3,
+                stderr: false,
+                texto: "error de prueba".to_string(),
+            }],
+            omitidas: 4,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::FinLog {
+            peticion_id: RANGO_SERVICIOS + 6,
+            motivo: MotivoFinLog::Cerrado,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
+            version: VERSION_PROTOCOLO,
+            version_app: "1.3.0".to_string(),
+            pid: 100,
+            cliente_id: 3,
+            clientes: 1,
+            sesiones: Vec::new(),
+            transferencias: Vec::new(),
+            tuneles: Vec::new(),
+            ejecuciones: Vec::new(),
+            acciones_servicio: Vec::new(),
+        });
+    }
+
+    /// Un `Bienvenida` de una versión anterior (sin `acciones_servicio`) se
+    /// lee como lista vacía.
+    #[test]
+    fn una_bienvenida_sin_acciones_se_lee_vacia() {
+        let linea = r#"{"tipo":"Bienvenida","version":8,"pid":1,"cliente_id":1,"clientes":1,"sesiones":[],"transferencias":[],"tuneles":[],"ejecuciones":[]}"#;
+        match decodificar::<MensajeServidor>(linea).unwrap() {
+            MensajeServidor::Bienvenida {
+                acciones_servicio, ..
+            } => assert!(acciones_servicio.is_empty()),
+            otro => panic!("{otro:?}"),
+        }
+    }
+
+    /// `TrabajoServidor` cuenta las acciones de servicio en curso: un
+    /// servidor con una acción a medias no se sustituye sin preguntar (T67).
+    #[test]
+    fn el_trabajo_cuenta_las_acciones_de_servicio() {
+        let trabajo = TrabajoServidor {
+            sesiones: 0,
+            transferencias: 0,
+            tuneles: 0,
+            ejecuciones: 0,
+            escritorios: 0,
+            acciones_servicio: 1,
+        };
+        assert!(!trabajo.vacio());
+        assert_eq!(trabajo.total(), 1);
+        assert!(TrabajoServidor::CAMPOS.contains(&"acciones_servicio"));
+        assert_eq!(TrabajoServidor::CAMPOS.len(), 6);
+        // Un servidor que no manda el campo vale 1 («puede haber trabajo»).
+        let linea = r#"{"tipo":"VersionIncompatible","version":8,"trabajo":{"sesiones":0,"transferencias":0,"tuneles":0,"ejecuciones":0,"escritorios":0}}"#;
+        match decodificar::<MensajeServidor>(linea).unwrap() {
+            MensajeServidor::VersionIncompatible {
+                trabajo: Some(trabajo),
+                ..
+            } => assert_eq!(trabajo.acciones_servicio, 1),
             otro => panic!("{otro:?}"),
         }
     }
@@ -1932,6 +2159,7 @@ mod pruebas {
             transferencias: Vec::new(),
             tuneles: Vec::new(),
             ejecuciones: Vec::new(),
+            acciones_servicio: Vec::new(),
         });
         ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible {
             version: 99,
@@ -1944,6 +2172,7 @@ mod pruebas {
                 tuneles: 1,
                 ejecuciones: 0,
                 escritorios: 0,
+                acciones_servicio: 0,
             }),
         });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });

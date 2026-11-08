@@ -1,0 +1,7 @@
+MAGI_PRIV=sin_sudo
+MAGI_SYSTEMD=no
+MAGI_DIARIO=propio
+MAGI_RELOJ=1794141540 90061
+MAGI_MOTOR=podman 5.2.3
+MAGI_CONTENEDOR {"Command":"\"nginx\"","CreatedAt":"2026-11-02 08:00:00 +0000 UTC","Exited":0,"ExitedAt":0,"ID":"abcdef012345","Image":"docker.io/library/nginx:1.27","IsInfra":false,"Labels":"","Mounts":"","Names":"web","Networks":"host","Pid":4100,"Ports":"0.0.0.0:80->80/tcp","RunningFor":"6 days ago","Size":"0B","State":"running","Status":"Up 6 days"}
+MAGI_FIN

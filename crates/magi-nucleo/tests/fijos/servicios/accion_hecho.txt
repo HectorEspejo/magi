@@ -1,0 +1,6 @@
+MAGI_FASE=comprobando
+MAGI_COMPROBACION=ok
+MAGI_FASE=ejecutando
+MAGI_FASE=esperando
+MAGI_RESULTADO=hecho active 4
+MAGI_FIN

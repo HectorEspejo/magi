@@ -219,6 +219,30 @@ mod pruebas {
     }
 
     #[test]
+    fn los_fallos_del_sondeo_no_cambian_el_estado_del_host() {
+        use magi_nucleo::servicios::{
+            FallosContenedores, FallosSondeo, FallosUnidades, MotorNombre,
+        };
+        let mut sondeo = sondeo_ok();
+        sondeo.fallos = Some(FallosSondeo {
+            unidades: FallosUnidades {
+                total: 3,
+                nombres: vec!["copia.service".to_string(), "exportar.service".to_string()],
+            },
+            contenedores: Some(FallosContenedores {
+                motor: Some(MotorNombre::Docker),
+                total: 1,
+                nombres: vec!["web-worker-1".to_string()],
+            }),
+        });
+        // Solo los vigilados (HOSTS.servicios) mueven el estado; los fallos del
+        // sondeo ampliado solo alimentan las marcas de Flota y «Toda la flota».
+        let (estado, culpables) = evaluar(Some(&sondeo), &Umbrales::default());
+        assert_eq!(estado, EstadoFlota::Nominal);
+        assert!(culpables.is_empty());
+    }
+
+    #[test]
     fn la_tasa_solo_sale_con_contadores_validos_y_menos_de_una_hora() {
         let mut anterior = sondeo_ok();
         anterior.fecha = "2026-09-15T10:00:00+02:00".to_string();

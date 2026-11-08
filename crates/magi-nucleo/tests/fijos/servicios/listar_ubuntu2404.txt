@@ -1,0 +1,84 @@
+MAGI_PRIV=sudo_sin_clave
+MAGI_SYSTEMD=255
+MAGI_BLOQUE service
+Id=caddy.service
+Names=caddy.service
+Description=Caddy web server
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/caddy.service
+ExecStart={ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile --adapter caddyfile ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+ExecMainPID=2044
+MemoryCurrent=46137344
+ActiveEnterTimestampMonotonic=8560000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=haproxy.service
+Names=haproxy.service
+Description=HAProxy Load Balancer
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/haproxy.service
+ExecStart={ path=/usr/sbin/haproxy ; argv[]=/usr/sbin/haproxy -Ws -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=httpd.service
+Names=httpd.service
+Description=The Apache HTTP Server
+LoadState=not-found
+ActiveState=inactive
+SubState=dead
+Type=notify
+Result=success
+UnitFileState=
+CanReload=no
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=ssh.service
+Names=ssh.service
+Description=OpenBSD Secure Shell server
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/ssh.service
+ExecMainPID=812
+MemoryCurrent=7020544
+ActiveEnterTimestampMonotonic=8550000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=systemd-resolved.service
+Names=systemd-resolved.service
+Description=Network Name Resolution
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/systemd-resolved.service
+ExecMainPID=701
+MemoryCurrent=35651584
+ActiveEnterTimestampMonotonic=8500000000
+MAGI_FIN_BLOQUE
+MAGI_DIARIO=todo
+MAGI_RELOJ=1794141512 615234
+MAGI_MOTOR=docker 27.5.1
+MAGI_CONTENEDOR {"Command":"\"nginx -g 'daemon off;'\"","CreatedAt":"2026-10-28 09:12:44 +0000 UTC","ID":"1f2e3d4c5b6a","Image":"nginx:1.27.3","Labels":"com.docker.compose.container-number=1,com.docker.compose.project=tienda,com.docker.compose.project.config_files=/opt/tienda/compose.yaml,com.docker.compose.service=web","Mounts":"","Names":"tienda-web-1","Networks":"tienda_default","Ports":"0.0.0.0:80->80/tcp, [::]:80->80/tcp","RunningFor":"11 days ago","Size":"0B","State":"running","Status":"Up 11 days (healthy)"}
+MAGI_CONTENEDOR {"Command":"\"/bin/sh -c /app/migrar\"","CreatedAt":"2026-10-28 09:12:44 +0000 UTC","ID":"2a3b4c5d6e7f","Image":"ghcr.io/ejemplo/tienda:2.1","Labels":"com.docker.compose.container-number=2,com.docker.compose.project=tienda,com.docker.compose.project.config_files=/opt/tienda/compose.yaml,com.docker.compose.service=migrador","Mounts":"","Names":"tienda-migrador-1","Networks":"tienda_default","Ports":"","RunningFor":"11 days ago","Size":"0B","State":"exited","Status":"Exited (0) 11 days ago"}
+MAGI_PROYECTO {"nombre":"tienda","ficheros":["/opt/tienda/compose.yaml"]}
+MAGI_FIN

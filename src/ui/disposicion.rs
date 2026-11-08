@@ -132,6 +132,7 @@ pub fn minimo_vista(vista: Vista) -> Tamano {
         | Vista::Snippets => Tamano::new(50, 12),
         Vista::Resultados => Tamano::new(60, 14),
         Vista::Sincronizacion | Vista::Conflictos => Tamano::new(50, 12),
+        Vista::Servicios => MINIMO_GLOBAL,
         Vista::Flota | Vista::Hosts | Vista::Sesiones => MINIMO_GLOBAL,
     }
 }
@@ -152,6 +153,7 @@ pub fn nombre_vista(vista: Vista) -> &'static str {
         Vista::Resultados => "Resultados",
         Vista::Sincronizacion => "Sincronización",
         Vista::Conflictos => "Conflictos",
+        Vista::Servicios => "Servicios",
     }
 }
 
@@ -258,6 +260,23 @@ pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
             }
         }
         _ => None,
+    }
+}
+
+/// El mínimo de la pantalla con un mínimo extra si es mayor (diálogos de la
+/// vista Servicios, que no viven en App.dialogo).
+pub fn con_extra(minimo: Minimo, extra: Option<Minimo>) -> Minimo {
+    match extra {
+        Some(propio)
+            if !(minimo.tamano.cols >= propio.tamano.cols
+                && minimo.tamano.filas >= propio.tamano.filas) =>
+        {
+            Minimo {
+                tamano: minimo.tamano.max(propio.tamano),
+                exige: propio.exige,
+            }
+        }
+        _ => minimo,
     }
 }
 
@@ -591,6 +610,16 @@ pub enum Lista {
     DeliberacionHosts,
     /// Lista del plan en la vista previa de una sincronización (Fase 8).
     VistaPrevia,
+    /// Columna de hosts de la vista Servicios (Fase 13).
+    ServiciosHosts,
+    /// Lista de unidades, timers o contenedores de la vista Servicios.
+    ServiciosLista,
+    /// Fallos de «Toda la flota» (Fase 13).
+    ServiciosTodaLaFlota,
+    /// Texto del detalle de Servicios (Fase 13).
+    ServiciosDetalle,
+    /// Líneas del panel de logs de Servicios (Fase 13).
+    ServiciosLogs,
 }
 
 /// Lo que se ve de una lista en el último pintado.

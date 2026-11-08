@@ -37,33 +37,66 @@ impl Conocida {
             Conocida::Caddy => "caddy validate",
             Conocida::Apache => "apachectl configtest",
             Conocida::Haproxy => "haproxy -c",
-            Conocida::Compose => "compose config -q",
+            Conocida::Compose => "config -q",
+        }
+    }
+
+    /// Nombre del validador para los mensajes («Nginx», «Compose»…).
+    pub fn nombre(self) -> &'static str {
+        match self {
+            Conocida::Nginx => "Nginx",
+            Conocida::Caddy => "Caddy",
+            Conocida::Apache => "Apache",
+            Conocida::Haproxy => "HAProxy",
+            Conocida::Compose => "Compose",
         }
     }
 }
 
 /// Comprobación conocida que corresponde a un objetivo, si la hay.
 pub fn conocida(objetivo: &Objetivo) -> Option<Conocida> {
-    let _ = objetivo;
-    None
+    match objetivo.tipo {
+        TipoObjetivo::Unidad | TipoObjetivo::Timer => servicios_conocidos()
+            .iter()
+            .find(|(nombre, _)| *nombre == objetivo.nombre)
+            .map(|(_, comprobacion)| *comprobacion),
+        TipoObjetivo::Proyecto => Some(Conocida::Compose),
+        TipoObjetivo::Contenedor => None,
+    }
 }
 
 /// Comprobación efectiva de un objetivo: la propia sustituye a la conocida.
 pub fn para_objetivo(objetivo: &Objetivo, propia: Option<&str>) -> Comprobacion {
-    let _ = (objetivo, propia);
-    Comprobacion::Ninguna
+    if !aplica(objetivo.tipo) {
+        return Comprobacion::Ninguna;
+    }
+    if let Some(orden) = propia {
+        if !orden.trim().is_empty() {
+            return Comprobacion::Propia(orden.to_string());
+        }
+    }
+    match conocida(objetivo) {
+        Some(conocida) => Comprobacion::Conocida(conocida),
+        None => Comprobacion::Ninguna,
+    }
 }
 
 /// Texto legible de la comprobación, para la línea de confirmación:
 /// «Antes: nginx -t», «Antes: la comprobación propia».
 pub fn descripcion(comprobacion: &Comprobacion) -> Option<String> {
-    let _ = comprobacion;
-    None
+    match comprobacion {
+        Comprobacion::Ninguna => None,
+        Comprobacion::Conocida(conocida) => Some(conocida.texto().to_string()),
+        Comprobacion::Propia(_) => Some("la comprobación propia".to_string()),
+    }
 }
 
 /// ¿La comprobación se aplica a este tipo de objetivo?
 pub fn aplica(tipo: TipoObjetivo) -> bool {
-    matches!(tipo, TipoObjetivo::Unidad | TipoObjetivo::Proyecto)
+    matches!(
+        tipo,
+        TipoObjetivo::Unidad | TipoObjetivo::Timer | TipoObjetivo::Proyecto
+    )
 }
 
 /// Comandos conocidos que se usan con privilegios (§7.3).

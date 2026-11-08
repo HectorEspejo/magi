@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│┌ RESULTADO · recargar nginx.service ┐│
+││✕ FALLIDO · no volvió a active      ││
+││Comprobación: nginx -t              ││
+││Últimas líneas del diario:          ││
+││  21:52:10 app[4121]: Traceback (…  ││
+││  21:52:10 app[4121]: KeyError: '…  ││
+││  21:52:10 systemd[1]: app.servic…  ││
+││ l logs · ↵ detalle · esc cerrar    ││
+│└────────────────────────────────────┘│
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

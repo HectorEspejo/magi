@@ -478,7 +478,13 @@ impl Config {
     pub fn cargar(ruta: &Path) -> (Self, Option<String>) {
         match fs::read_to_string(ruta) {
             Ok(texto) => match toml::from_str::<Config>(&texto) {
-                Ok(config) => (config, None),
+                Ok(config) => {
+                    // Los valores de [servicios] fuera de rango no impiden
+                    // arrancar: se usan acotados donde se leen y se avisa aquí.
+                    let avisos = config.servicios.validar();
+                    let aviso = (!avisos.is_empty()).then(|| avisos.join(" · "));
+                    (config, aviso)
+                }
                 Err(error) => (
                     Config::default(),
                     Some(format!("config.toml no válido: {error}")),
@@ -593,5 +599,82 @@ editar_max_mb = 3
         assert!(avisos.iter().any(|aviso| aviso.contains("Flota ya usa")));
         assert!(avisos.iter().any(|aviso| aviso.contains("una sola tecla")));
         assert!(avisos.iter().any(|aviso| aviso.contains("no existe")));
+    }
+
+    /// Fase 13: [servicios] se lee con sus valores por defecto y se valida
+    /// con avisos claros; un config.toml anterior no trae la sección.
+    #[test]
+    fn las_claves_de_servicios_de_la_fase_13_se_leen_y_se_validan() {
+        let config: Config = toml::from_str(
+            r#"
+[servicios]
+refresco_seg = 20
+espera_seg = 45
+lineas_log = 20000
+lineas_iniciales = 500
+contenedores = ["podman"]
+criticas = ["sshd.service", "wg-quick@*.service"]
+sudo_memoria_min = 10
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.servicios.refresco_seg, 20);
+        assert_eq!(config.servicios.espera_seg, 45);
+        assert_eq!(config.servicios.lineas_log, 20_000);
+        assert_eq!(config.servicios.lineas_iniciales, 500);
+        assert_eq!(
+            config.servicios.motores(),
+            vec![magi_nucleo::servicios::MotorNombre::Podman]
+        );
+        assert_eq!(config.servicios.sudo_memoria_min, 10);
+        assert!(
+            config.servicios.validar().is_empty(),
+            "los valores son válidos"
+        );
+
+        let anterior: Config = toml::from_str("[archivos]\npager = \"less\"\n").unwrap();
+        let defecto = SeccionServicios::default();
+        assert_eq!(anterior.servicios.refresco_seg, defecto.refresco_seg);
+        assert_eq!(anterior.servicios.espera_seg, 30);
+        assert_eq!(anterior.servicios.lineas_log, 10_000);
+        assert_eq!(anterior.servicios.lineas_iniciales, 200);
+        assert_eq!(anterior.servicios.sudo_memoria_min, 5);
+        assert_eq!(
+            anterior.servicios.contenedores,
+            vec!["docker".to_string(), "podman".to_string()]
+        );
+        assert!(anterior
+            .servicios
+            .criticas
+            .iter()
+            .any(|unidad| unidad == "sshd.service"));
+        assert!(anterior.servicios.validar().is_empty());
+
+        let malo: Config = toml::from_str(
+            r#"
+[servicios]
+refresco_seg = 1
+espera_seg = 1000
+lineas_log = 10
+lineas_iniciales = 9000
+contenedores = ["docker", "docker", "lxc"]
+criticas = ["ssh d.service"]
+sudo_memoria_min = 99
+"#,
+        )
+        .unwrap();
+        let avisos = malo.servicios.validar();
+        assert!(avisos.iter().any(|aviso| aviso.contains("refresco_seg")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("espera_seg")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("lineas_log")));
+        assert!(avisos
+            .iter()
+            .any(|aviso| aviso.contains("lineas_iniciales")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("docker")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("criticas")));
+        assert!(avisos
+            .iter()
+            .any(|aviso| aviso.contains("sudo_memoria_min")));
+        assert_eq!(avisos.len(), 8, "{avisos:?}");
     }
 }

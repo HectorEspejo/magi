@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  HOSTS (7)               │  ▸1 Servicios (8)   2 Timers (2)   3 Contenedores (4)                                                                                                                     │
+│───────────────────────── │   UNIDAD                                                            ESTADO       ARRANQUE     DESDE     DESCRIPCIÓN                                                       │
+│  ▲ Toda la flota         │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│  ◐ backup-nas            │      copia.service                                                   ✕ fallido    desactivado  hace 2 h  copia.service del host de prueba                                 │
+│  ○ dgx-spark             │    ★ app.service                                                     ● activo     activado     hace 2 h  app.service del host de prueba                                   │
+│▸ ● hetzner-01            │ ▸  ★ nginx.service                                                   ● activo     activado     hace 2 h  nginx.service del host de prueba                                 │
+│  ● hetzner-02            │    ★ postgresql.service                                              ● activo     activado     hace 2 h  postgresql.service del host de prueba                            │
+│  ◐ mac-mini-m1           │ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────    │
+│  ✕ rincon-dev            │      cron.service                                                    ● activo     activado     hace 2 h  cron.service del host de prueba                                  │
+│  ● vps-openclaw          │      fail2ban.service                                                ● activo     activado     hace 2 h  fail2ban.service del host de prueba                              │
+│                          │    ⚑ ssh.service                                                     ● activo     activado     hace 2 h  ssh.service del host de prueba                                   │
+│                          │      tareas.service                                                  ○ inactivo   desactivado  hace 2 h  tareas.service del host de prueba                                │
+│                          │  8 servicios · 1 fallido(s) · 3 vigilados                                                                                                                                 │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                      ┌ DELIBERACIÓN MAGI ───────────────────────────────────────────────────────────────────────────────┐                                                 │
+│                          │                      │                                                                                                  │                                                 │
+│                          │                      │  ACCIÓN: reiniciar nginx.service → hetzner-01                                                    │                                                 │
+│                          │                      │  requerida por:                                                                                  │                                                 │
+│                          │                      │  Antes de reiniciar: nginx -t                                                                    │                                                 │
+│                          │                      │  ──────────────────────────────────────────────────────────────────────────────────────────────  │                                                 │
+│                          │                      │                  MELCHIOR-1                BALTHASAR-2               CASPER-3                    │                                                 │
+│                          │                      │                  salud                     backup<24 h               tests                       │                                                 │
+│                          │                      │  hetzner-01      —                         —                         —                           │                                                 │
+│                          │                      │                                                                                                  │                                                 │
+│                          │                      │  ──────────────────────────────────────────────────────────────────────────────────────────────  │                                                 │
+│                          │                      │  CONSENSO  0 / 0     █████████████████████                                                       │                                                 │
+│                          │                      │  sin comprobaciones configuradas                                                                 │                                                 │
+│                          │                      │  ▸ APROBADO — ctrl+k ejecutar · esc cancelar                                                     │                                                 │
+│                          │                      │                                                                                                  │                                                 │
+│                          │                      │  ctrl+k ejecutar    esc cancelar    ? ayuda                                                      │                                                 │
+│                          │                      │                                                                                                  │                                                 │
+│                          │                      └──────────────────────────────────────────────────────────────────────────────────────────────────┘                                                 │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ detalle  l logs  P parar  R reiniciar  G recargar  H desactivar  c comprobación  ↓↑ mover  / filtrar  1 servicios  2 timers  3 contenedores  ! sudo  r refrescar  esc volver  ? ayuda

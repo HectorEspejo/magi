@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── toda la flota · 4 fallo(s) · sondeos de hace NN s a 1 min ─┐
+│  HOSTS (7)               │  FALLOS DE LA FLOTA (del último sondeo de cada host, sin abrir conexiones)                                                                                                │
+│───────────────────────── │   HOST         TIPO        NOMBRE                                                                                                                ESTADO         SONDEO    │
+│▸ ▲ Toda la flota ⚠4      │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│  ◐ backup-nas            │   hetzner-01   servicio    copia.service                                                                                                         ✕ fallido      hace NN s │
+│  ○ dgx-spark             │   hetzner-01   contenedor  web-worker-1                                                                                                          ✕ caído        hace NN s │
+│  ● hetzner-01 ⚠3         │   hetzner-01   contenedor  panel                                                                                                                 ✕ caído        hace NN s │
+│  ● hetzner-02            │   vps-openclaw servicio    exportar.service                                                                                                      ✕ fallido      hace NN min│
+│  ◐ mac-mini-m1           │                                                                                                                                                                           │
+│  ✕ rincon-dev            │   dgx-spark: sin sondeo · r para sondear                                                                                                                                  │
+│  ● vps-openclaw ⚠1       │   rincon-dev: CAÍDA en el último sondeo (hace NN s) · sin datos de servicios                                                                                              │
+│                          │   backup-nas y hetzner-02 y mac-mini-m1: sin fallos                                                                                                                       │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ir al host  l logs  A arrancar  R reiniciar  r sondear todos  ↓↑ mover  esc volver  ? ayuda

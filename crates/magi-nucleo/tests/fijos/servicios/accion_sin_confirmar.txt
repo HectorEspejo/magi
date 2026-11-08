@@ -1,0 +1,4 @@
+MAGI_FASE=ejecutando
+MAGI_FASE=esperando
+MAGI_RESULTADO=sin_confirmar - 30
+MAGI_FIN

@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS · LOGS ─────────────┐
+│ / sin filtro   n todo   5 líneas · 14│
+│───────────────────────────────────── │
+│             · 14 líneas omitidas (el │
+│ 08:53:20 • INFO arrancando app de pru│
+│ 08:53:20 ! WARNING Lentitud: GET /api│
+│ 08:53:20 ✕ ERROR Exception in ASGI ap│
+│ 08:53:20 ✕ Traceback (most recent cal│
+│ 08:53:20 ✕ KeyError: 'DATABASE_URL'  │
+│ / texto  n nivel  espacio pausa  fin │
+│                                      │
+└──────────────────────────────────────┘

@@ -46,6 +46,10 @@ mod vistas_m;
 // diálogos de certificado.
 #[path = "redimensionado/vistas_n.rs"]
 mod vistas_n;
+// Fase 13: vista Servicios, detalle, panel de logs, «Toda la flota» y sus
+// diálogos.
+#[path = "redimensionado/vistas_o.rs"]
+mod vistas_o;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

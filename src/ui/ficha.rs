@@ -1259,22 +1259,30 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
     // Un escritorio no tiene túneles ni áreas de texto: el formulario ocupa
     // todo el interior (Fase 12).
     let trozos: Vec<Rect> = if ficha.tipo.es_escritorio() {
-        vec![contenido, Rect::default(), Rect::default()]
+        vec![contenido, Rect::default(), Rect::default(), Rect::default()]
     } else {
         // Si no cabe entero, el formulario cede lo justo para que debajo sigan
         // viéndose los túneles (con el aviso de reenvíos, si lo hay) y las
         // áreas de texto, y se desplaza con el foco.
-        let debajo = ALTO_MINIMO_DEBAJO + u16::from(reenvios_en_opciones(ficha) > 0);
+        let debajo = ALTO_MINIMO_DEBAJO
+            + u16::from(reenvios_en_opciones(ficha) > 0)
+            + alto_bloque_comprobaciones(app, ficha).min(2);
         let alto_formulario = total.min(contenido.height.saturating_sub(debajo));
         // El bloque de túneles va entre los campos y las áreas de texto; se
         // recorta a lo que quede libre para no dejar sin sitio a los servicios.
         let alto_tuneles = alto_bloque_tuneles(app, ficha)
             .min(contenido.height.saturating_sub(alto_formulario + 3));
+        let alto_comprobaciones = alto_bloque_comprobaciones(app, ficha).min(
+            contenido
+                .height
+                .saturating_sub(alto_formulario + alto_tuneles + 3),
+        );
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(alto_formulario),
                 Constraint::Length(alto_tuneles),
+                Constraint::Length(alto_comprobaciones),
                 Constraint::Min(3),
             ])
             .split(contenido)
@@ -1310,11 +1318,12 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
     dibujar_marcas_desplazamiento(marco, region, arriba, abajo, tema);
     if ficha.tipo.es_ssh() {
         dibujar_tuneles(marco, trozos[1], app, ficha);
+        dibujar_comprobaciones(marco, trozos[2], app, ficha);
 
         let columnas = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(trozos[2]);
+            .split(trozos[3]);
         let servicios = ("SERVICIOS (systemd, una por línea)", "SERVICIOS");
         let opciones = (
             "OPCIONES EXTRA (ssh_config, una por línea)",
@@ -1906,6 +1915,108 @@ fn degradar(mut linea: Line<'static>, ascii: bool) -> Line<'static> {
         }
     }
     linea
+}
+
+// -------------------------------------- comprobaciones de servicio (F13)
+
+/// Filas que necesita el bloque de comprobaciones propias.
+fn alto_bloque_comprobaciones(_app: &App, ficha: &Ficha) -> u16 {
+    let filas = ficha.comprobaciones.len().min(MAX_FILAS_COMPROBACIONES);
+    1 + filas.max(1) as u16
+}
+
+/// Filas que se ven del bloque de comprobaciones.
+const MAX_FILAS_COMPROBACIONES: usize = 3;
+
+fn dibujar_comprobaciones(marco: &mut Frame, area: Rect, _app: &App, ficha: &Ficha) {
+    if area.height == 0 || area.width < 12 {
+        return;
+    }
+    let tema = &_app.tema;
+    let ancho = usize::from(area.width);
+    let enfocado = ficha.campo == CampoFicha::Comprobaciones;
+    let mut lineas = vec![cabecera_comprobaciones(area.width, enfocado, tema)];
+    let apagado = |texto: &str| {
+        Line::from(Span::styled(
+            disposicion::recortar(texto, ancho, tema.ascii),
+            Style::default().fg(tema.paleta.inactivo),
+        ))
+    };
+    if ficha.comprobaciones.is_empty() {
+        lineas.push(apagado(
+            "    aún no hay comprobaciones propias: n para crear una",
+        ));
+    } else {
+        let altura = (area.height.saturating_sub(1) as usize).max(1);
+        let seleccionado = ficha.indice_comprobacion_visible(ficha.comprobaciones.len());
+        let inicio = inicio_ventana(seleccionado, ficha.comprobaciones.len(), altura);
+        for (posicion, comprobacion) in ficha
+            .comprobaciones
+            .iter()
+            .enumerate()
+            .skip(inicio)
+            .take(altura)
+        {
+            let seleccionada = enfocado && posicion == seleccionado;
+            let marca = if seleccionada {
+                tema.glifos.seleccion
+            } else {
+                " "
+            };
+            let tipo = comprobacion.objetivo.tipo.texto();
+            let texto = format!(
+                "{marca} {tipo:<8} {} {} {}",
+                comprobacion.objetivo.nombre, tema.glifos.punto_medio, comprobacion.comando
+            );
+            let texto = disposicion::recortar(&texto, ancho, tema.ascii);
+            let mut linea = Line::from(Span::styled(texto, Style::default().fg(tema.paleta.texto)));
+            if seleccionada {
+                linea = linea.style(
+                    Style::default()
+                        .bg(tema.paleta.acento)
+                        .fg(tema.paleta.fondo)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            lineas.push(linea);
+        }
+    }
+    let lineas: Vec<Line> = lineas
+        .into_iter()
+        .map(|linea| degradar(linea, tema.ascii))
+        .collect();
+    marco.render_widget(Paragraph::new(lineas), area);
+}
+
+/// «COMPROBACIONES» con las teclas a la derecha.
+fn cabecera_comprobaciones(ancho: u16, enfocado: bool, tema: &Tema) -> Line<'static> {
+    let etiqueta = "COMPROBACIONES";
+    let punto = tema.glifos.punto_medio;
+    let pista = if enfocado {
+        format!("n nueva {punto} e editar {punto} x borrar")
+    } else {
+        "n nueva".to_string()
+    };
+    let hueco = (ancho as usize).saturating_sub(2 + etiqueta.chars().count() + 2);
+    let pista = disposicion::recortar(&pista, hueco, tema.ascii);
+    let relleno = 1 + hueco.saturating_sub(pista.chars().count());
+    Line::from(vec![
+        Span::styled(
+            format!("  {etiqueta}"),
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(relleno)),
+        Span::styled(
+            pista,
+            Style::default().fg(if enfocado {
+                tema.paleta.acento
+            } else {
+                tema.paleta.inactivo
+            }),
+        ),
+    ])
 }
 
 #[cfg(test)]

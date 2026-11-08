@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  LISTA                      ⇥ hosts  │
+│────────────────────────────────────  │
+│┌ CONFIRMACIÓN ──────────────────────┐│
+││¿recargar nginx.service en          ││
+││hetzner-01?                         ││
+││Antes: nginx -t                     ││
+│└────────────────────────────────────┘│
+│▸  ★ nginx.service       ● activo     │
+│ 8 servicios · 1 fallido(s) · 3 vigila│
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

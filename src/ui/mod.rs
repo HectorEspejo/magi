@@ -19,6 +19,7 @@ pub mod paleta;
 pub mod permisos;
 pub mod registro;
 pub mod resultados;
+pub mod servicios;
 pub mod servidor_anterior;
 pub mod sesion;
 pub mod sesiones;
@@ -73,6 +74,9 @@ pub enum Vista {
     Sincronizacion,
     /// Vista CONFLICTOS de sincronización (Fase 10).
     Conflictos,
+    /// Vista SERVICIOS (Fase 13): servicios y timers de systemd, contenedores
+    /// y logs en vivo.
+    Servicios,
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
@@ -93,14 +97,23 @@ pub fn restaurar_terminal() {
 /// de las listas), que el bucle guarda para las teclas de página.
 pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
     let area = marco.area();
-    let minimo = disposicion::con_dialogo(
-        disposicion::minimo_de(app.vista, app.deliberacion.is_some()),
-        app.dialogo.as_ref(),
+    let minimo = disposicion::con_extra(
+        disposicion::con_dialogo(
+            disposicion::minimo_de(app.vista, app.deliberacion.is_some()),
+            app.dialogo.as_ref(),
+        ),
+        app.servicios_minimo_dialogo(),
     );
     let mut disp = Disposicion::nueva(area, minimo);
     if disp.aviso {
         // Por debajo del mínimo: el aviso sustituye a la vista y a la barra.
         aviso_tamano::dibujar(marco, area, &app.tema, &minimo);
+    } else if app.vista == Vista::Servicios && app.servicios.logs.is_some() {
+        // El panel de logs ocupa la pantalla entera, con su propio pie.
+        servicios::dibujar_logs(marco, area, app, &mut disp);
+        if let Some(abierta) = &app.deliberacion {
+            deliberacion::dibujar(marco, area, app, abierta, &mut disp);
+        }
     } else {
         let trozos = Layout::default()
             .direction(Direction::Vertical)
@@ -120,9 +133,9 @@ pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
             Vista::Tuneles => tuneles::dibujar(marco, vista, app, &mut disp),
             Vista::Snippets => snippets::dibujar(marco, vista, app, &mut disp),
             Vista::Resultados => resultados::dibujar(marco, vista, app, &mut disp),
-            Vista::Sincronizacion | Vista::Conflictos => {
-                sincronizacion::dibujar(marco, vista, app, &mut disp)
-            }
+            Vista::Sincronizacion => sincronizacion::dibujar(marco, vista, app, &mut disp),
+            Vista::Conflictos => sincronizacion::dibujar(marco, vista, app, &mut disp),
+            Vista::Servicios => servicios::dibujar(marco, vista, app, &mut disp),
         }
         barra::dibujar(marco, trozos[1], app, &mut disp);
         // La deliberación es modal sobre cualquier vista; su mínimo entra en
@@ -130,6 +143,11 @@ pub fn dibujar(marco: &mut Frame, app: &App) -> Disposicion {
         if let Some(abierta) = &app.deliberacion {
             deliberacion::dibujar(marco, area, app, abierta, &mut disp);
         }
+    }
+    // Los diálogos de Servicios se pintan sobre la vista (y bajo una pregunta
+    // del servidor, que se apila encima).
+    if let Some(dialogo) = &app.servicios.dialogo {
+        servicios::dibujar_dialogo(marco, area, app, dialogo, &mut disp);
     }
     // Una pregunta del servidor, la paleta o la ayuda van encima incluso del
     // aviso: encogen con desplazamiento y nunca deben quedar bloqueadas.

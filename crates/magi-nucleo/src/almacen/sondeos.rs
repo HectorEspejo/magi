@@ -4,12 +4,13 @@ use anyhow::Result;
 use rusqlite::{params, Connection, Row};
 
 use crate::modelo::{ResultadoSondeo, Sondeo};
+use crate::servicios::FallosSondeo;
 
 const SELECCION: &str = "
     SELECT id, host_id, fecha, resultado, error, nucleos, carga_1m, carga_5m,
            carga_15m, mem_total_kb, mem_disponible_kb, disco_total_kb,
            disco_usado_kb, red_rx_bytes, red_tx_bytes, uptime_seg,
-           servicios_json, duracion_ms
+           servicios_json, fallos_json, duracion_ms
       FROM SONDEOS";
 
 /// Número de sondeos que se conservan por host.
@@ -21,6 +22,13 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Sondeo> {
         .as_deref()
         .and_then(|texto| serde_json::from_str(texto).ok())
         .unwrap_or_default();
+    // NULL = sondeo anterior a la Fase 13 o host que no respondió: sin datos
+    // de fallos. Un JSON corrupto también cuenta como sin datos, nunca rompe
+    // la lectura del sondeo.
+    let fallos: Option<FallosSondeo> = fila
+        .get::<_, Option<String>>(17)?
+        .as_deref()
+        .and_then(|texto| serde_json::from_str(texto).ok());
     Ok(Sondeo {
         id: fila.get(0)?,
         host_id: fila.get(1)?,
@@ -39,24 +47,39 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Sondeo> {
         red_tx_bytes: fila.get(14)?,
         uptime_seg: fila.get(15)?,
         servicios,
-        duracion_ms: fila.get(17)?,
+        fallos,
+        duracion_ms: fila.get(18)?,
     })
 }
 
 /// Guarda un sondeo y purga los que superan los 20 últimos del host.
+///
+/// `fallos_json` queda a NULL si el host no respondió (resultado `error`):
+/// «sin datos de fallos» no es lo mismo que «sin fallos». En un sondeo que sí
+/// respondió se guarda siempre, con total 0 si no hay ninguno.
 pub fn guardar(conexion: &Connection, sondeo: &Sondeo) -> Result<i64> {
     let servicios_json = if sondeo.servicios.is_empty() {
         None
     } else {
         Some(serde_json::to_string(&sondeo.servicios)?)
     };
+    let fallos_json = match sondeo.resultado {
+        // Un host que no respondió no tiene datos de fallos; tampoco una fila
+        // que este binario creó sin ellos. `None` no es «sin fallos».
+        ResultadoSondeo::Error => None,
+        ResultadoSondeo::Ok | ResultadoSondeo::SinMetricas => sondeo
+            .fallos
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?,
+    };
     conexion.execute(
         "INSERT INTO SONDEOS (
             host_id, fecha, resultado, error, nucleos, carga_1m, carga_5m,
             carga_15m, mem_total_kb, mem_disponible_kb, disco_total_kb,
             disco_usado_kb, red_rx_bytes, red_tx_bytes, uptime_seg,
-            servicios_json, duracion_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            servicios_json, fallos_json, duracion_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             sondeo.host_id,
             sondeo.fecha,
@@ -74,6 +97,7 @@ pub fn guardar(conexion: &Connection, sondeo: &Sondeo) -> Result<i64> {
             sondeo.red_tx_bytes,
             sondeo.uptime_seg,
             servicios_json,
+            fallos_json,
             sondeo.duracion_ms,
         ],
     )?;

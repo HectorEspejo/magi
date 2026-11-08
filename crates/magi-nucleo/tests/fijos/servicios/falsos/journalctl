@@ -1,0 +1,39 @@
+#!/bin/sh
+# journalctl falso para las pruebas de servicios.sh.
+if [ -f "$ESTADO/journal_sin_permiso" ]; then
+  echo "No journal files were opened due to insufficient permissions." >&2
+  exit 1
+fi
+unidad=
+seguir=no
+anterior=
+for argumento in "$@"; do
+  case $argumento in
+    -f) seguir=si ;;
+    *) ;;
+  esac
+  if [ "$anterior" = "-u" ]; then
+    unidad=$argumento
+  fi
+  anterior=$argumento
+done
+if [ "$seguir" = si ]; then
+  echo "$$" > "$ESTADO/pid_journalctl" 2>/dev/null
+  cat "$ESTADO/journal/$unidad" 2>/dev/null
+  if [ -f "$ESTADO/journal_ignora_term" ]; then
+    trap '' TERM
+  else
+    trap 'echo si > "$ESTADO/terminado_journalctl"; exit 0' TERM
+  fi
+  echo si > "$ESTADO/listo_journalctl"
+  while :; do sleep 0.2; done
+fi
+case "$*" in
+  *"-n 20"*)
+    cat "$ESTADO/journal_short/$unidad" 2>/dev/null
+    ;;
+  *)
+    cat "$ESTADO/journal_probe" 2>/dev/null
+    ;;
+esac
+exit 0

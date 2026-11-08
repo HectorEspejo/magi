@@ -7,6 +7,16 @@ usuario: la política completa está en
 [`docs/publicar-android.md`](../docs/publicar-android.md) y la del escritorio
 en [`docs/publicar.md`](../docs/publicar.md).
 
+## [Sin publicar]
+
+### Añadido
+
+- La app lee el `formato` 3 de la sincronización (Fase 13): guarda en su copia
+  las comprobaciones de configuración de servicio que crea el escritorio, sin
+  usarlas todavía (la vista de servicios del móvil llega en la Fase 14). Los
+  ficheros del `formato` 1 y 2 se siguen leyendo igual, y uno con un formato
+  mayor que 3 sigue avisando de que hay que actualizar MAGI.
+
 ## [0.2.0] - 2026-11-05
 
 ### Añadido

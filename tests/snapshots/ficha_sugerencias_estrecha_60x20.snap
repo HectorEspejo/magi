@@ -2,9 +2,7 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · HOST · nuevo · nuevo ─────────────────────────────┐
-│ IDENTIFICACIÓN                                          ↑│
-│  Nombre                                                  │
-│  [  ]                                                    │
+│  [  ]                                                   ↑│
 │  Dirección                                               │
 │  [  ]                                                    │
 │  Puerto                                                  │
@@ -16,6 +14,8 @@ source: tests/redimensionado/arnes.rs
 │    ┌ etiquetas ─────────────────┐                       ↓│
 │  TÚ│ web                        │                n nuevo │
 │    └────────────────────────────┘eles                    │
+│  COMPROBACIONES                                  n nueva │
+│    aún no hay comprobaciones propias: n para crear una   │
 │┌ SERVICIOS ────────────────┐┌ OPCIONES EXTRA ───────────┐│
 ││                           ││                           ││
 │└───────────────────────────┘└───────────────────────────┘│

@@ -389,6 +389,7 @@ pub fn bienvenida(cliente_id: u32, sesiones: Vec<InfoSesion>) -> MensajeServidor
         transferencias: Vec::new(),
         tuneles: Vec::new(),
         ejecuciones: Vec::new(),
+        acciones_servicio: Vec::new(),
     }
 }
 

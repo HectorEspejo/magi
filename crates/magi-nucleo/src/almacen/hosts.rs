@@ -211,10 +211,11 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
 fn hijas_para_lapida(
     conexion: &Connection,
     tabla: versiones::Tabla,
+    columna_nombre: &str,
     host_id: i64,
 ) -> Result<Vec<crate::almacen::FilaParaLapida>> {
     let mut sentencia = conexion.prepare(&format!(
-        "SELECT uuid, nombre, vector FROM {} WHERE host_id = ?1 ORDER BY id",
+        "SELECT uuid, {columna_nombre}, vector FROM {} WHERE host_id = ?1 ORDER BY id",
         tabla.nombre()
     ))?;
     let filas = sentencia.query_map(params![host_id], |fila| {
@@ -234,11 +235,21 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         // No hay fila que borrar: ni lápida ni cambios.
         return Ok(());
     };
-    // Túneles y sincronizaciones del host caen en cascada: también dejan
-    // lápida (Fase 10).
-    let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, id)?;
-    let sincronizaciones =
-        hijas_para_lapida(&transaccion, versiones::Tabla::SincronizacionesDir, id)?;
+    // Túneles, sincronizaciones y comprobaciones de servicio del host caen en
+    // cascada: también dejan lápida (Fase 10 y §3.7 de la Fase 13).
+    let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, "nombre", id)?;
+    let sincronizaciones = hijas_para_lapida(
+        &transaccion,
+        versiones::Tabla::SincronizacionesDir,
+        "nombre",
+        id,
+    )?;
+    let comprobaciones = hijas_para_lapida(
+        &transaccion,
+        versiones::Tabla::ComprobacionesServicio,
+        "objetivo",
+        id,
+    )?;
     // Los hosts que lo usaban como salto se quedan con la referencia a nulo
     // (ON DELETE SET NULL): eso cuenta como edición de cada uno.
     let saltos: Vec<i64> = {
@@ -285,6 +296,15 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         crate::almacen::dejar_lapida(
             &transaccion,
             versiones::Tabla::SincronizacionesDir,
+            &hija.uuid,
+            &hija.nombre,
+            &hija.vector,
+        )?;
+    }
+    for hija in &comprobaciones {
+        crate::almacen::dejar_lapida(
+            &transaccion,
+            versiones::Tabla::ComprobacionesServicio,
             &hija.uuid,
             &hija.nombre,
             &hija.vector,

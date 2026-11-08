@@ -11,11 +11,11 @@ source: tests/redimensionado/arnes.rs
 │  [ 22 ]                                                  │
 │  Grupo                                                   │
 │  [ produccion                 ▾ ]                        │
-│  Etiquetas                                               │
-│  [ web ]                                                 │
-│                                                         ↓│
+│  Etiquetas                                              ↓│
 │  TÚNELES                                         n nuevo │
 │      [a] local    127.0.0.1:5432 → 127.0.0.1:5…  postgres│
+│  COMPROBACIONES                                  n nueva │
+│    aún no hay comprobaciones propias: n para crear una   │
 │┌ SERVICIOS ────────────────┐┌ OPCIONES EXTRA ───────────┐│
 ││                           ││                           ││
 │└───────────────────────────┘└───────────────────────────┘│

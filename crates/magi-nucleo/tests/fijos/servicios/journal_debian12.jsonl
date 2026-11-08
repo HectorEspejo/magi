@@ -1,0 +1,4 @@
+{"__REALTIME_TIMESTAMP":"1794139824180943","PRIORITY":"6","MESSAGE":"Started Aplicación web de pedidos.","_SYSTEMD_UNIT":"app.service","SYSLOG_IDENTIFIER":"systemd"}
+{"__REALTIME_TIMESTAMP":"1794139825100000","PRIORITY":"3","MESSAGE":"Exception in ASGI application","_SYSTEMD_UNIT":"app.service","SYSLOG_IDENTIFIER":"app"}
+{"__REALTIME_TIMESTAMP":"1794139825200000","PRIORITY":"4","MESSAGE":"Lentitud: GET /api/informes tardó 2,4 s","_SYSTEMD_UNIT":"app.service","SYSLOG_IDENTIFIER":"app"}
+{"__REALTIME_TIMESTAMP":"1794139825300000","PRIORITY":"7","MESSAGE":"Reintento 1/3 de la cola de correo","_SYSTEMD_UNIT":"app.service","SYSLOG_IDENTIFIER":"app"}

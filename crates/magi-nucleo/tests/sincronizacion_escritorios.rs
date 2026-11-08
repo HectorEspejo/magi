@@ -18,7 +18,7 @@ use magi_nucleo::modelo::{DatosHost, Origen};
 use magi_nucleo::rutas::{Equipo, Rutas};
 use magi_nucleo::sincronizacion::cifrado::ClaveSincronizacion;
 use magi_nucleo::sincronizacion::formato::{
-    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1, FORMATO_MAXIMO,
+    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1, FORMATO_2, FORMATO_MAXIMO,
 };
 use magi_nucleo::sincronizacion::{
     self, carpeta, EstadoPasada, OpcionesPasada, PoliticaBorrados, ResultadoPasada,
@@ -329,8 +329,10 @@ fn con_escritorios_se_exporta_formato_2() {
     entorno.pasada();
     let claro = contenido_propio(&entorno);
     let documento = formato::parsear(&claro.json).expect("parseando el fichero propio");
-    assert_eq!(claro.formato, FORMATO_MAXIMO);
-    assert_eq!(documento.formato, FORMATO_MAXIMO);
+    // Con escritorios y sin comprobaciones propias, el formato que se escribe
+    // es el 2 (la Fase 13 solo sube a 3 si hay COMPROBACIONES_SERVICIO).
+    assert_eq!(claro.formato, FORMATO_2);
+    assert_eq!(documento.formato, FORMATO_2);
     assert!(
         !claro.json.contains("huella_escritorio") && !claro.json.contains("SHA256:secreta"),
         "la huella_escritorio no viaja: {}",

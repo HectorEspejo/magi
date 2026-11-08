@@ -1,0 +1,134 @@
+#!/bin/sh
+# Docker o Podman falso para las pruebas de servicios.sh: el nombre con el que
+# se copia (docker o podman) decide el motor.
+motor=$(basename "$0")
+echo "$motor $*" >> "$ESTADO/llamadas"
+case $1 in
+  --version)
+    cat "$ESTADO/$motor"_version 2>/dev/null || echo "$motor version 1.0.0"
+    ;;
+  ps)
+    if [ "$2" = "-a" ] && [ "$3" = "-q" ]; then
+      if [ -f "$ESTADO/$motor"_sin_permiso ] && [ "$MAGI_SUDO_FAKE" != si ]; then
+        echo "permission denied while trying to connect to the $motor API" >&2
+        exit 1
+      fi
+      exit 0
+    fi
+    if [ -f "$ESTADO/$motor"_sin_permiso ] && [ "$MAGI_SUDO_FAKE" != si ]; then
+      echo "permission denied while trying to connect to the $motor API" >&2
+      exit 1
+    fi
+    formato=
+    for argumento in "$@"; do
+      case $argumento in
+        *"{{.State}}"*) formato=estado_proyecto ;;
+        *"config_files"*) formato=etiquetas_proyecto ;;
+        *"{{.Label"*) formato=etiquetas ;;
+        *"{{json .}}"*) formato=json ;;
+      esac
+    done
+    case $formato in
+      estado_proyecto) cat "$ESTADO/$motor"_estado_proyecto 2>/dev/null ;;
+      etiquetas_proyecto) cat "$ESTADO/$motor"_etiquetas_proyecto 2>/dev/null ;;
+      etiquetas) cat "$ESTADO/$motor"_etiquetas 2>/dev/null ;;
+      *) cat "$ESTADO/$motor"_ps 2>/dev/null ;;
+    esac
+    ;;
+  inspect)
+    formato=
+    anterior=
+    nombre=
+    for argumento in "$@"; do
+      if [ "$anterior" = "--format" ]; then
+        formato=$argumento
+      fi
+      case $argumento in
+        --format) ;;
+        -*) ;;
+        *) nombre=$argumento ;;
+      esac
+      anterior=$argumento
+    done
+    case $formato in
+      *".Id"*|*".ID"*)
+        if grep -qx "$nombre" "$ESTADO/$motor"_contenedores 2>/dev/null; then
+          echo "abcdef012345"
+          exit 0
+        fi
+        echo "Error: No such object: $nombre" >&2
+        exit 1
+        ;;
+      *"Status"*)
+        cat "$ESTADO/$motor"_estado 2>/dev/null || echo "running|-"
+        ;;
+      "")
+        cat "$ESTADO/$motor"_inspect 2>/dev/null
+        ;;
+      *)
+        echo "formato no soportado" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  stats)
+    if [ "$motor" = podman ]; then
+      cat "$ESTADO/podman_stats" 2>/dev/null
+    else
+      cat "$ESTADO/docker_stats" 2>/dev/null
+    fi
+    ;;
+  logs)
+    seguir=no
+    for argumento in "$@"; do
+      [ "$argumento" = "-f" ] && seguir=si
+    done
+    if [ "$seguir" = si ]; then
+      echo "$$" > "$ESTADO/pid_$motor"_logs 2>/dev/null
+      cat "$ESTADO/$motor"_logs_out 2>/dev/null
+      cat "$ESTADO/$motor"_logs_err >&2 2>/dev/null
+      trap 'echo si > "$ESTADO/terminado_$motor"_logs; exit 0' TERM
+      echo si > "$ESTADO/listo_$motor"_logs
+      while :; do sleep 0.2; done
+    fi
+    cat "$ESTADO/$motor"_logs_corto 2>/dev/null
+    ;;
+  start|stop|restart)
+    estado=$(cat "$ESTADO/$motor"_accion_estado 2>/dev/null) || estado=running
+    echo "$estado" > "$ESTADO/$motor"_estado
+    dormir=$(cat "$ESTADO/$motor"_accion_dormir 2>/dev/null) || dormir=
+    [ -n "$dormir" ] && exec sleep "$dormir"
+    codigo=$(cat "$ESTADO/$motor"_accion_codigo 2>/dev/null) || codigo=0
+    exit "$codigo"
+    ;;
+  compose)
+    sub=
+    for argumento in "$@"; do
+      case $argumento in
+        config|version|start|stop|restart) sub=$argumento; break ;;
+      esac
+    done
+    case $sub in
+      version)
+        codigo=$(cat "$ESTADO/compose_version_codigo" 2>/dev/null) || codigo=0
+        exit "$codigo"
+        ;;
+      config)
+        cat "$ESTADO/compose_config_salida" 2>/dev/null
+        codigo=$(cat "$ESTADO/compose_config_codigo" 2>/dev/null) || codigo=0
+        exit "$codigo"
+        ;;
+      start|stop|restart)
+        estado=$(cat "$ESTADO/compose_accion_estado" 2>/dev/null) || estado=running
+        if [ "$estado" = "running" ]; then
+          printf 'running\nrunning\n' > "$ESTADO/$motor"_estado_proyecto
+        else
+          printf 'exited\nexited\n' > "$ESTADO/$motor"_estado_proyecto
+        fi
+        codigo=$(cat "$ESTADO/compose_accion_codigo" 2>/dev/null) || codigo=0
+        exit "$codigo"
+        ;;
+    esac
+    ;;
+esac
+exit 0

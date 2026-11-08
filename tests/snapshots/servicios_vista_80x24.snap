@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  LISTA                                                              ⇥ hosts  │
+│────────────────────────────────────────────────────────────────────────────  │
+│ ▸1 Servicios (8)   2 Timers (2)   3 Contenedores (4)                         │
+│  UNIDAD                                 ESTADO       ARRANQUE     DESDE      │
+│───────────────────────────────────────────────────────────────────────────── │
+│▸    copia.service                        ✕ fallido    desactivado  hace 2 h  │
+│   ★ app.service                          ● activo     activado     hace 2 h  │
+│   ★ nginx.service                        ● activo     activado     hace 2 h  │
+│   ★ postgresql.service                   ● activo     activado     hace 2 h  │
+│──────────────────────────────────────────────────────────────────────────    │
+│     cron.service                         ● activo     activado     hace 2 h  │
+│     fail2ban.service                     ● activo     activado     hace 2 h  │
+│   ⚑ ssh.service                          ● activo     activado     hace 2 h  │
+│     tareas.service                       ○ inactivo   desactivado  hace 2 h  │
+│ 8 servicios · 1 fallido(s) · 3 vigilados                                     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  A arrancar  R reiniciar  r refrescar  ? más

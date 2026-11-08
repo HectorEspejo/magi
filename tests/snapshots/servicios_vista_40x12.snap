@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  LISTA                      ⇥ hosts  │
+│────────────────────────────────────  │
+│ ▸1 Servicios (8)   2 Timers (2)   3 C│
+│  UNIDAD                ESTADO        │
+│───────────────────────────────────── │
+│▸    copia.service       ✕ fallido    │
+│   ★ app.service         ● activo     │
+│   ★ nginx.service       ● activo     │
+│ 8 servicios · 1 fallido(s) · 3 vigila│
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

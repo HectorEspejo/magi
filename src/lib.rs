@@ -24,7 +24,7 @@ pub mod visor;
 
 // ------------------------------------------------------- versión y metadatos
 
-/// Versión de la aplicación: la del paquete, que desde la Fase 10 es 1.1.0.
+/// Versión de la aplicación: la del paquete (1.3.0 desde la Fase 13).
 pub const VERSION_APP: &str = env!("CARGO_PKG_VERSION");
 
 /// Commit corto con el que se compiló el binario. Lo saca build.rs del
@@ -34,9 +34,9 @@ pub const COMMIT: &str = match option_env!("MAGI_COMMIT") {
     None => "desconocido",
 };
 
-/// Fecha de la versión 1.2.0 (Fase 12). Fija la cabecera de la página man: la
+/// Fecha de la versión 1.3.0 (Fase 13). Fija la cabecera de la página man: la
 /// generación de recursos no puede cambiar en cada compilación.
-pub const FECHA_DE_VERSION: &str = "2026-11-04";
+pub const FECHA_DE_VERSION: &str = "2026-11-08";
 
 /// Versión larga como la imprime magi --version: versión, protocolo y commit.
 /// Se calcula una sola vez y se devuelve como cadena estática porque clap la

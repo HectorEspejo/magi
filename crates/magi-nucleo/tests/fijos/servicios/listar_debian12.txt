@@ -1,0 +1,192 @@
+MAGI_PRIV=sudo_con_clave
+MAGI_SYSTEMD=252
+MAGI_BLOQUE service
+Id=app.service
+Names=app.service
+Description=Aplicación web de pedidos
+LoadState=loaded
+ActiveState=failed
+SubState=failed
+Type=simple
+Result=exit-code
+UnitFileState=enabled
+CanReload=no
+FragmentPath=/etc/systemd/system/app.service
+ExecMainPID=0
+MemoryCurrent=
+ActiveEnterTimestampMonotonic=0
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=app@.service
+Names=app@.service
+Description=Aplicación web (plantilla)
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+Type=simple
+UnitFileState=disabled
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=app@1.service
+Names=app@1.service
+Description=Aplicación web (instancia 1)
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=simple
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/etc/systemd/system/app@.service
+ExecMainPID=4121
+MemoryCurrent=187695104
+ActiveEnterTimestampMonotonic=1234567
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=alsa-restore.service
+Names=alsa-restore.service
+Description=Save/Restore Sound Card State
+LoadState=loaded
+ActiveState=active
+SubState=exited
+Type=oneshot
+Result=success
+UnitFileState=static
+CanReload=no
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=copia.service
+Names=copia.service
+Description=Copia nocturna con restic
+LoadState=loaded
+ActiveState=failed
+SubState=failed
+Type=oneshot
+Result=exit-code
+UnitFileState=enabled
+CanReload=no
+FragmentPath=/etc/systemd/system/copia.service
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=cron.service
+Names=cron.service
+Description=Regular background program processing daemon
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=forking
+Result=success
+UnitFileState=enabled
+CanReload=no
+FragmentPath=/lib/systemd/system/cron.service
+ExecMainPID=778
+MemoryCurrent=2834432
+ActiveEnterTimestampMonotonic=120000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=nginx.service
+Names=nginx.service
+Description=A high performance web server
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=forking
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/nginx.service
+ExecMainPID=1201
+MemoryCurrent=8806400
+ActiveEnterTimestampMonotonic=1197456121
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=postgresql.service
+Names=postgresql.service
+Description=PostgreSQL RDBMS
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=forking
+Result=success
+UnitFileState=enabled
+CanReload=no
+FragmentPath=/lib/systemd/system/postgresql.service
+ExecMainPID=1310
+MemoryCurrent=104857600
+ActiveEnterTimestampMonotonic=1197456220
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=ssh.service
+Names=ssh.service
+Description=OpenBSD Secure Shell server
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/ssh.service
+ExecMainPID=901
+MemoryCurrent=9216000
+ActiveEnterTimestampMonotonic=1197456110
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=tareas.service
+Names=tareas.service
+Description=Tareas puntuales
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+Type=oneshot
+Result=success
+UnitFileState=disabled
+CanReload=no
+FragmentPath=/etc/systemd/system/tareas.service
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=ufw.service
+Names=ufw.service
+Description=Uncomplicated firewall
+LoadState=loaded
+ActiveState=active
+SubState=exited
+Type=oneshot
+Result=success
+UnitFileState=enabled
+CanReload=no
+FragmentPath=/lib/systemd/system/ufw.service
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE timer
+Id=copia.timer
+Names=copia.timer
+Description=Ejecuta la copia cada noche
+LoadState=loaded
+ActiveState=active
+SubState=waiting
+Type=oneshot
+UnitFileState=enabled
+Unit=copia.service
+NextElapseUSecRealtime=1794220800000000
+LastTriggerUSecMonotonic=1600000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE timer
+Id=logrotate.timer
+Names=logrotate.timer
+Description=Daily rotation of log files
+LoadState=loaded
+ActiveState=active
+SubState=waiting
+UnitFileState=static
+NextElapseUSecRealtime=1794148800000000
+LastTriggerUSecMonotonic=86400000000
+MAGI_FIN_BLOQUE
+MAGI_DIARIO=todo
+MAGI_RELOJ=1794141500 86412
+MAGI_MOTOR=docker 27.3.1
+MAGI_CONTENEDOR {"Command":"\"/docker-entrypoint.sh nginx -g 'daemon off;'\"","CreatedAt":"2026-11-01 10:22:13 +0100 CET","ID":"a1b2c3d4e5f6","Image":"nginx:1.27.3","Labels":"com.docker.compose.container-number=1,com.docker.compose.project=web,com.docker.compose.project.config_files=/srv/web/docker-compose.yml,/srv/web/docker-compose.override.yml,com.docker.compose.service=app","LocalVolumes":"1","Mounts":"./datos","Names":"web-app-1","Networks":"web_default","Ports":"0.0.0.0:8080->80/tcp","RunningFor":"7 days ago","Size":"0B","State":"running","Status":"Up 7 days (healthy)"}
+MAGI_CONTENEDOR {"Command":"\"/app/worker\"","CreatedAt":"2026-11-01 10:22:15 +0100 CET","ID":"b2c3d4e5f6a7","Image":"ghcr.io/ejemplo/app:1.4","Labels":"com.docker.compose.container-number=2,com.docker.compose.project=web,com.docker.compose.project.config_files=/srv/web/docker-compose.yml,/srv/web/docker-compose.override.yml,com.docker.compose.service=worker","Mounts":"","Names":"web-worker-1","Networks":"web_default","Ports":"","RunningFor":"2 hours ago","Size":"0B","State":"exited","Status":"Exited (1) 2 hours ago"}
+MAGI_CONTENEDOR {"Command":"\"redis-server\"","CreatedAt":"2026-11-01 10:22:16 +0100 CET","ID":"c3d4e5f6a7b8","Image":"redis:7.4","Labels":"com.docker.compose.container-number=3,com.docker.compose.project=web,com.docker.compose.project.config_files=/srv/web/docker-compose.yml,/srv/web/docker-compose.override.yml,com.docker.compose.service=redis","Mounts":"","Names":"web-redis-1","Networks":"web_default","Ports":"6379/tcp","RunningFor":"7 days ago","Size":"0B","State":"running","Status":"Up 7 days"}
+MAGI_CONTENEDOR {"Command":"\"/app/panel\"","CreatedAt":"2026-10-20 08:00:00 +0200 CEST","ID":"d4e5f6a7b8c9","Image":"metabase/metabase:v0.50","Labels":"","Mounts":"","Names":"panel","Networks":"bridge","Ports":"0.0.0.0:3000->3000/tcp","RunningFor":"14 days ago","Size":"0B","State":"running","Status":"Up 14 days (unhealthy)"}
+MAGI_PROYECTO {"nombre":"web","ficheros":["/srv/web/docker-compose.yml","/srv/web/docker-compose.override.yml"]}
+MAGI_FIN

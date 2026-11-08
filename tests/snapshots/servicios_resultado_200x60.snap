@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  HOSTS (7)               │  ▸1 Servicios (8)   2 Timers (2)   3 Contenedores (4)                                                                                                                     │
+│───────────────────────── │   UNIDAD                                                            ESTADO       ARRANQUE     DESDE     DESCRIPCIÓN                                                       │
+│  ▲ Toda la flota         │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│  ◐ backup-nas            │      copia.service                                                   ✕ fallido    desactivado  hace 2 h  copia.service del host de prueba                                 │
+│  ○ dgx-spark             │    ★ app.service                                                     ● activo     activado     hace 2 h  app.service del host de prueba                                   │
+│▸ ● hetzner-01            │ ▸  ★ nginx.service                                                   ● activo     activado     hace 2 h  nginx.service del host de prueba                                 │
+│  ● hetzner-02            │    ★ postgresql.service                                              ● activo     activado     hace 2 h  postgresql.service del host de prueba                            │
+│  ◐ mac-mini-m1           │ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────    │
+│  ✕ rincon-dev            │      cron.service                                                    ● activo     activado     hace 2 h  cron.service del host de prueba                                  │
+│  ● vps-openclaw          │      fail2ban.service                                                ● activo     activado     hace 2 h  fail2ban.service del host de prueba                              │
+│                          │    ⚑ ssh.service                                                     ● activo     activado     hace 2 h  ssh.service del host de prueba                                   │
+│                          │      tareas.service                                                  ○ inactivo   desactivado  hace 2 h  tareas.service del host de prueba                                │
+│                          │  8 servicios · 1 fallido(s) · 3 vigilados                                                                                                                                 │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                              ┌ RESULTADO · recargar nginx.service · hetzner-01 ─────────────────────────────────┐                                                         │
+│                          │                              │✕ FALLIDO · no volvió a active                                                    │                                                         │
+│                          │                              │Comprobación: nginx -t                                                            │                                                         │
+│                          │                              │Últimas líneas del diario:                                                        │                                                         │
+│                          │                              │  21:52:10 app[4121]: Traceback (most recent call last):                          │                                                         │
+│                          │                              │  21:52:10 app[4121]: KeyError: 'DATABASE_URL'                                    │                                                         │
+│                          │                              │  21:52:10 systemd[1]: app.service: Main process exited, status=1                 │                                                         │
+│                          │                              │ l logs · ↵ detalle · esc cerrar                                                  │                                                         │
+│                          │                              └──────────────────────────────────────────────────────────────────────────────────┘                                                         │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ detalle  l logs  P parar  R reiniciar  G recargar  H desactivar  c comprobación  ↓↑ mover  / filtrar  1 servicios  2 timers  3 contenedores  ! sudo  r refrescar  esc volver  ? ayuda

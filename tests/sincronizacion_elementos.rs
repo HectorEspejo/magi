@@ -799,6 +799,84 @@ fn el_formato_que_se_escribe_depende_de_si_hay_escritorios() {
         formato_a_escribir(almacen.conexion()).expect("formato con escritorios"),
         formato::FORMATO_2
     );
+    // Una comprobación propia sube a la 3 aunque no haya escritorios: un MAGI
+    // 1.2 la verá como formato_nuevo en vez de perderla (D249).
+    let web = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "web-2".to_string(),
+                direccion: "192.0.2.6".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("host ssh");
+    almacen
+        .guardar_comprobacion(
+            web,
+            magi_nucleo::servicios::TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t",
+        )
+        .expect("comprobación propia");
+    assert_eq!(
+        formato_a_escribir(almacen.conexion()).expect("formato con comprobaciones"),
+        formato::FORMATO_3
+    );
+}
+
+#[test]
+fn la_comprobacion_de_servicio_se_exporta_como_elemento_propio() {
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
+    let host = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "web-3".to_string(),
+                direccion: "192.0.2.7".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("host ssh");
+    let (host_uuid, _, _) = {
+        let (uuid, version, vector): (String, String, String) = almacen
+            .conexion()
+            .query_row(
+                "SELECT uuid, version, vector FROM HOSTS WHERE id = ?1",
+                rusqlite::params![host],
+                |fila| Ok((fila.get(0)?, fila.get(1)?, fila.get(2)?)),
+            )
+            .expect("leyendo el host");
+        (uuid, version, vector)
+    };
+    let id = almacen
+        .guardar_comprobacion(
+            host,
+            magi_nucleo::servicios::TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t",
+        )
+        .expect("comprobación propia");
+
+    let (texto, valor) = exportado(&almacen, Tabla::ComprobacionesServicio, id);
+    assert_eq!(valor["host"], host_uuid);
+    assert_eq!(valor["objetivo_tipo"], "unidad");
+    assert_eq!(valor["objetivo"], "nginx.service");
+    assert_eq!(valor["comando"], "nginx -t");
+    assert!(
+        !texto.contains("version"),
+        "la versión va en el elemento, no en los datos: {texto}"
+    );
+
+    // En el estado local viaja con su versión, su vector y el objetivo como
+    // nombre natural (el de la lápida).
+    let candidatos = estado_local(almacen.conexion(), Path::new(HOGAR)).expect("estado local");
+    let candidato = candidatos
+        .iter()
+        .find(|candidato| candidato.tipo == "comprobacion_servicio")
+        .expect("la comprobación viaja");
+    assert_eq!(candidato.nombre, "nginx.service");
+    assert!(!candidato.uuid.is_empty());
 }
 
 #[test]

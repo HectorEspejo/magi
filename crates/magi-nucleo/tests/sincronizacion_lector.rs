@@ -17,6 +17,7 @@ use magi_nucleo::escritorio::{OpcionesEscritorio, TamanoEscritorio, TipoHost};
 use magi_nucleo::llavero::{LlaveroEnMemoria, LlaveroSecreto, CUENTA_SINCRONIZACION};
 use magi_nucleo::modelo::{DatosHost, DatosTunel, Host, Origen, TipoTunel, Tunel};
 use magi_nucleo::rutas::{Equipo, Rutas};
+use magi_nucleo::servicios::{Objetivo, TipoObjetivo};
 use magi_nucleo::sincronizacion::carpeta::{
     self, CarpetaDisco, CarpetaSincronizacion, EntradaCarpeta,
 };
@@ -1004,7 +1005,7 @@ fn el_lector_lee_el_formato_2_y_guarda_los_escritorios() {
         .descifrar(&bytes)
         .expect("descifrando el fichero del escritorio");
     let en_claro = formato::separar(&plano).expect("separando el fichero del escritorio");
-    assert_eq!(en_claro.formato, formato::FORMATO_MAXIMO);
+    assert_eq!(en_claro.formato, formato::FORMATO_2);
 
     let resultado = movil.pasada(&SinTrabajo);
     assert_eq!(resultado.estado, EstadoLectura::AlDia);
@@ -1035,6 +1036,68 @@ fn el_lector_lee_el_formato_2_y_guarda_los_escritorios() {
     assert_eq!(por_nombre("vm-01").tipo, TipoHost::Vnc);
     // El móvil no resuelve conflictos de elemento, así que tampoco guarda
     // ninguno: para él, los escritorios son inventario de solo lectura.
+    assert_eq!(resultado.conflictos_pendientes, 0);
+    assert!(movil.conflictos().is_empty());
+}
+
+#[test]
+fn el_lector_lee_el_formato_3_y_guarda_las_comprobaciones() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let escritorio = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+
+    escritorio.crear_host("web", "192.0.2.10");
+    let web = escritorio.host_por_nombre("web").expect("host web").id;
+    escritorio
+        .almacen
+        .guardar_comprobacion(web, TipoObjetivo::Unidad, "nginx.service", "nginx -t")
+        .expect("comprobación propia del escritorio");
+    escritorio.exportar();
+
+    // El fichero del equipo con comprobaciones propias ha subido a formato 3.
+    let ruta = carpeta.join(carpeta::nombre_fichero(&escritorio.uuid_este()));
+    let bytes = std::fs::read(&ruta).expect("leyendo el fichero del escritorio");
+    let plano = escritorio
+        .clave()
+        .descifrar(&bytes)
+        .expect("descifrando el fichero del escritorio");
+    let en_claro = formato::separar(&plano).expect("separando el fichero del escritorio");
+    assert_eq!(en_claro.formato, formato::FORMATO_3);
+
+    // El móvil es lector: copia el host y su comprobación, sin usarla.
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_eq!(
+        resultado.resumen.as_ref().expect("hay resumen").creados,
+        2,
+        "el móvil importa el host y su comprobación"
+    );
+    let host = movil
+        .host_por_nombre("web")
+        .expect("el móvil copia el host");
+    let comprobaciones = movil
+        .almacen
+        .comprobaciones_de_host(host.id)
+        .expect("comprobaciones del móvil");
+    assert_eq!(comprobaciones.len(), 1);
+    assert_eq!(
+        comprobaciones[0].objetivo,
+        Objetivo::unidad("nginx.service")
+    );
+    assert_eq!(comprobaciones[0].comando, "nginx -t");
+    // Conserva el uuid del escritorio: es el mismo elemento en los dos equipos.
+    let uuid_escritorio: String = escritorio
+        .conexion()
+        .query_row("SELECT uuid FROM COMPROBACIONES_SERVICIO", [], |fila| {
+            fila.get(0)
+        })
+        .expect("uuid de la comprobación del escritorio");
+    assert_eq!(
+        comprobaciones[0].uuid.as_deref(),
+        Some(uuid_escritorio.as_str())
+    );
+    // El móvil no resuelve conflictos: tampoco guarda ninguno.
     assert_eq!(resultado.conflictos_pendientes, 0);
     assert!(movil.conflictos().is_empty());
 }

@@ -1,0 +1,70 @@
+MAGI_TEXTO
+[
+    {
+        "Id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+        "Created": "2026-11-01T09:22:13.512345678Z",
+        "Path": "/docker-entrypoint.sh",
+        "Args": [
+            "nginx",
+            "-g",
+            "daemon off;"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 4121,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-11-01T09:22:14.123456789Z",
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "Health": {
+                "Status": "healthy",
+                "FailingStreak": 0,
+                "Log": []
+            }
+        },
+        "Image": "sha256:9f2c1d0e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
+        "Name": "/web-app-1",
+        "RestartCount": 2,
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/srv/web/datos",
+                "Destination": "/usr/share/nginx/html",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            }
+        ],
+        "Config": {
+            "Hostname": "a1b2c3d4e5f6",
+            "Image": "nginx:1.27.3",
+            "Labels": {
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.project": "web",
+                "com.docker.compose.project.config_files": "/srv/web/docker-compose.yml,/srv/web/docker-compose.override.yml",
+                "com.docker.compose.service": "app"
+            }
+        },
+        "NetworkSettings": {
+            "Ports": {
+                "80/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "8080"
+                    }
+                ]
+            },
+            "Networks": {
+                "web_default": {
+                    "IPAddress": "172.18.0.2"
+                }
+            }
+        }
+    }
+]
+MAGI_FIN

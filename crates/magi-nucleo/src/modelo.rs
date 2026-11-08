@@ -516,6 +516,11 @@ pub struct Sondeo {
     pub red_tx_bytes: Option<i64>,
     pub uptime_seg: Option<i64>,
     pub servicios: BTreeMap<String, String>,
+    /// Fallos del sondeo ampliado de la Fase 13 (unidades fallidas y
+    /// contenedores caídos). `None` = sondeo anterior a la Fase 13 o host que
+    /// no respondió; `Some` puede tener total 0. No cuenta para el estado del
+    /// host: solo los servicios vigilados lo cambian (D240).
+    pub fallos: Option<crate::servicios::FallosSondeo>,
     pub duracion_ms: i64,
 }
 
@@ -547,6 +552,31 @@ impl Sondeo {
         }
         Some((usado / total * 100.0).clamp(0.0, 100.0))
     }
+}
+
+// -------------------------------------- comprobaciones de servicio (Fase 13)
+
+/// Comprobación propia de configuración de un servicio o de un proyecto
+/// Compose (`COMPROBACIONES_SERVICIO`, §3.1 del informe de la Fase 13).
+///
+/// Viaja con el inventario como elemento propio `comprobacion_servicio`, con
+/// su `uuid`, `version` y `vector`; borrarla deja lápida. Solo existe en
+/// hosts de tipo `ssh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComprobacionServicio {
+    pub id: i64,
+    pub host_id: i64,
+    /// Tipo (unidad de systemd o proyecto Compose) y nombre del objetivo.
+    pub objetivo: crate::servicios::Objetivo,
+    /// Orden que se ejecuta en el host, con `sh -c`, antes de recargar o
+    /// reiniciar el objetivo. Sustituye a la comprobación conocida.
+    pub comando: String,
+    pub actualizado_en: String,
+    /// Identidad del elemento en la sincronización (Fase 10). Nula solo en una
+    /// fila corrupta: toda fila creada por el almacén las rellena.
+    pub uuid: Option<String>,
+    pub version: Option<String>,
+    pub vector: Option<String>,
 }
 
 /// Origen de una identidad registrada en MAGI.

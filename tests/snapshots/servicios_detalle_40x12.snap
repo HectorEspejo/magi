@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  DETALLE             ⇥ dependencias  │
+│────────────────────────────────────  │
+│ app.service · hetzner-01             │
+│ 1 Estado  ·  2 Dependencias  ·  3 Uni│
+│───────────────────────────────────── │
+│ app de prueba                        │
+│ estado      active (running)         │
+│ desde       hace 2 h                 │
+│ PID         4121                     │
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

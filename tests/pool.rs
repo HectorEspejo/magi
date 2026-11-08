@@ -208,6 +208,7 @@ async fn pestana_sftp_y_tunel_a_la_vez_comparten_una_conexion() {
             host_id: host,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
     escenario
@@ -543,6 +544,7 @@ async fn cerrar_una_pestana_que_espera_la_huella_se_anota_una_vez() {
             host_id: host,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
     let sesion_id = match escenario

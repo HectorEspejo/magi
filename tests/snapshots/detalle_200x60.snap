@@ -60,4 +60,4 @@ source: tests/redimensionado/vistas_g.rs
 │                                                              │                                                                        │                                                              │
 │                                                              │  ↵ / esc cerrar                                                        │                                                              │
 └──────────────────────────────────────────────────────────────└────────────────────────────────────────────────────────────── ↑↓ 11/11 ┘──────────────────────────────────────────────────────────────┘
- ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda

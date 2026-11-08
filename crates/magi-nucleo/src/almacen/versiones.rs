@@ -24,6 +24,8 @@ pub enum Tabla {
     Tuneles,
     Snippets,
     SincronizacionesDir,
+    /// Comprobaciones propias de servicio o proyecto (Fase 13).
+    ComprobacionesServicio,
 }
 
 impl Tabla {
@@ -36,6 +38,7 @@ impl Tabla {
             Tabla::Tuneles => "TUNELES",
             Tabla::Snippets => "SNIPPETS",
             Tabla::SincronizacionesDir => "SINCRONIZACIONES_DIR",
+            Tabla::ComprobacionesServicio => "COMPROBACIONES_SERVICIO",
         }
     }
 
@@ -48,6 +51,7 @@ impl Tabla {
             Tabla::Tuneles => "tunel",
             Tabla::Snippets => "snippet",
             Tabla::SincronizacionesDir => "sincronizacion_dir",
+            Tabla::ComprobacionesServicio => "comprobacion_servicio",
         }
     }
 
@@ -59,11 +63,12 @@ impl Tabla {
             "tunel" => Some(Tabla::Tuneles),
             "snippet" => Some(Tabla::Snippets),
             "sincronizacion_dir" => Some(Tabla::SincronizacionesDir),
+            "comprobacion_servicio" => Some(Tabla::ComprobacionesServicio),
             _ => None,
         }
     }
 
-    pub fn todas() -> [Tabla; 6] {
+    pub fn todas() -> [Tabla; 7] {
         [
             Tabla::Grupos,
             Tabla::Hosts,
@@ -71,6 +76,7 @@ impl Tabla {
             Tabla::Tuneles,
             Tabla::Snippets,
             Tabla::SincronizacionesDir,
+            Tabla::ComprobacionesServicio,
         ]
     }
 }
