@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
-            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tar.gz"
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tgz"
           echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
           mkdir -p /tmp/cargo-ndk
           tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
@@ -223,7 +223,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
-            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tar.gz"
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tgz"
           echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
           mkdir -p /tmp/cargo-ndk
           tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
