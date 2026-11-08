@@ -802,7 +802,7 @@ impl App {
                         if escritorio.escritorio_id().is_some_and(|id| caidos.contains(&id))
                 )
             };
-            let tenia = self.dialogo.as_ref().is_some_and(&caido);
+            let tenia = self.dialogo.as_ref().is_some_and(caido);
             self.pila_dialogos.retain(|dialogo| !caido(dialogo));
             if tenia {
                 self.dialogo = self.pila_dialogos.pop();
