@@ -1682,11 +1682,23 @@ mod pruebas {
         assert!(aviso, "{texto}");
         assert!(texto.contains("xdg-open") || texto.contains("open"));
 
-        let (texto, aviso) =
-            descripcion_para_diagnostico(&config("auto"), &|p| p == "chromium", &|_| false)
-                .unwrap();
+        // Los nombres de navegador dependen de la plataforma: en macOS se
+        // buscan aplicaciones y en Linux, binarios del PATH.
+        let (texto, aviso) = if cfg!(target_os = "macos") {
+            descripcion_para_diagnostico(&config("auto"), &|_| false, &|p| p == "Google Chrome")
+                .unwrap()
+        } else {
+            descripcion_para_diagnostico(&config("auto"), &|p| p == "chromium", &|_| false).unwrap()
+        };
         assert!(!aviso);
-        assert!(texto.contains("chromium"), "{texto}");
+        assert!(
+            texto.contains(if cfg!(target_os = "macos") {
+                "Google Chrome"
+            } else {
+                "chromium"
+            }),
+            "{texto}"
+        );
     }
 
     #[test]
