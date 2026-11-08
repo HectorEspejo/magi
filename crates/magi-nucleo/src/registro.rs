@@ -80,8 +80,11 @@ pub const INVENTARIO_SINC_DESACTIVADA: &str = "inventario_sinc_desactivada";
 pub const INVENTARIO_SINC_ERROR: &str = "inventario_sinc_error";
 /// Fase 11 (móvil): la clave del móvil se instaló en un host.
 pub const CLAVE_INSTALADA: &str = "clave_instalada";
+/// Fase 13: una acción de servicio terminó (objetivo, acción, resultado,
+/// duración y deliberación; nunca la salida de las órdenes, T44).
+pub const SERVICIO_ACCION: &str = "servicio_accion";
 
-pub const TIPOS: [&str; 40] = [
+pub const TIPOS: [&str; 41] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -122,6 +125,7 @@ pub const TIPOS: [&str; 40] = [
     ESCRITORIO_CERRADO,
     ESCRITORIO_FALLIDO,
     HUELLA_ESCRITORIO,
+    SERVICIO_ACCION,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

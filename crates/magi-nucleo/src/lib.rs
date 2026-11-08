@@ -18,6 +18,7 @@ pub mod llavero;
 pub mod modelo;
 pub mod registro;
 pub mod rutas;
+pub mod servicios;
 pub mod sincronizacion;
 pub mod snippets;
 pub mod terminal;

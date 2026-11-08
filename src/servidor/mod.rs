@@ -1269,6 +1269,24 @@ async fn manejar_mensaje(
                 credenciales,
             );
         }
+        // ------------------------------------------------------- servicios (v8)
+        // La pista del servidor de servicios sustituye estos brazos por el
+        // despacho real en `servicios::manejar`.
+        MensajeCliente::ListarServicios { peticion_id, .. }
+        | MensajeCliente::PedirConsumo { peticion_id, .. }
+        | MensajeCliente::DetalleServicio { peticion_id, .. }
+        | MensajeCliente::ComprobarSudo { peticion_id, .. }
+        | MensajeCliente::AccionServicio { peticion_id, .. }
+        | MensajeCliente::SeguirLog { peticion_id, .. } => {
+            responder_error(
+                estado,
+                cliente_id,
+                "la vista Servicios todavía no está en este servidor".to_string(),
+                Some(peticion_id),
+            )
+            .await;
+        }
+        MensajeCliente::PararLog { .. } => {}
         // El saludo ya se consumió en `tarea_conexion`.
         MensajeCliente::Hola { .. } => {
             let estado_bloqueado = estado.lock().await;

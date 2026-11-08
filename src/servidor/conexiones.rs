@@ -213,6 +213,9 @@ pub enum UsoCanal {
     /// túnel, usa siempre el pool y mantiene viva la conexión mientras el
     /// canal esté abierto.
     Escritorio,
+    /// Canales `exec` de la vista Servicios (Fase 13): listados, consumo,
+    /// detalle, acciones y logs. Siempre sobre el pool.
+    Servicios,
 }
 
 /// La regla de quién comparte la conexión del host, en un solo sitio: todo lo

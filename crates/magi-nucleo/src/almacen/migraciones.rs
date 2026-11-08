@@ -22,9 +22,9 @@ pub const MIGRACIONES: &[&str] = &[
 ];
 
 /// Versión de esquema que conoce este binario (las migraciones SQL de la lista,
-/// más la 7, que necesita Rust para rellenar uuid, versión y vector, y la 8 de
-/// los escritorios remotos).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 2;
+/// más la 7, que necesita Rust para rellenar uuid, versión y vector, la 8 de
+/// los escritorios remotos y la 9 de los servicios de la Fase 13).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 3;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -426,6 +426,28 @@ ALTER TABLE HOSTS ADD COLUMN escritorio_opciones TEXT;
 ALTER TABLE HOSTS ADD COLUMN huella_escritorio TEXT;
 "#;
 
+/// Fase 13: servicios, contenedores y logs. Tabla COMPROBACIONES_SERVICIO
+/// (comprobaciones propias, que viajan con el inventario) y columna
+/// `SONDEOS.fallos_json` (fallos del sondeo ampliado; no viaja).
+const MIGRACION_9_SERVICIOS: &str = r#"
+CREATE TABLE COMPROBACIONES_SERVICIO (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id        INTEGER NOT NULL REFERENCES HOSTS(id) ON DELETE CASCADE,
+    objetivo_tipo  TEXT    NOT NULL,
+    objetivo       TEXT    NOT NULL,
+    comando        TEXT    NOT NULL,
+    actualizado_en TEXT    NOT NULL,
+    uuid           TEXT,
+    version        TEXT,
+    vector         TEXT,
+    UNIQUE(host_id, objetivo_tipo, objetivo)
+);
+
+CREATE INDEX idx_comprobaciones_servicio_host ON COMPROBACIONES_SERVICIO(host_id);
+
+ALTER TABLE SONDEOS ADD COLUMN fallos_json TEXT;
+"#;
+
 /// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
@@ -511,6 +533,12 @@ pub fn aplicar(
         let transaccion = conexion.transaction()?;
         transaccion.execute_batch(MIGRACION_8_ESCRITORIOS)?;
         transaccion.pragma_update(None, "user_version", 8)?;
+        transaccion.commit()?;
+    }
+    if version < 9 {
+        let transaccion = conexion.transaction()?;
+        transaccion.execute_batch(MIGRACION_9_SERVICIOS)?;
+        transaccion.pragma_update(None, "user_version", 9)?;
         transaccion.commit()?;
     }
     Ok(())

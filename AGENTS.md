@@ -8,6 +8,7 @@ Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::ke
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
 Desde la Fase 12 abre escritorios remotos: RDP con IronRDP, VNC con un cliente RFB propio y voxl arrancado por SSH. Se ven en un visor web servido por `magi --servidor` solo en `127.0.0.1`: el cliente web de voxl adaptado, en `visor/` (TypeScript, generado a `visor/dist/` con esbuild).
+Desde la Fase 13 maneja los servicios y timers de systemd, sus logs y los contenedores de Docker o Podman (con Compose) en la vista Servicios (`F9`): todo lo remoto va por el servidor con el script embebido `servicios.sh`.
 
 ## Documentación del proyecto
 
@@ -18,6 +19,7 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/faseN/magi-faseN-checklist.md` — alcance verificable de la fase
 - `docs/faseN/magi-faseN-prompt.md` — prompt de arranque de la fase
 - `docs/faseN/magi-faseN-prompt-continuacion.md` — prompt de reanudación (si la fase queda a medias)
+- `docs/faseN/magi-faseN-revision-adversarial.md` — informe de la revisión adversarial de cierre, si la fase lo tiene (desde la Fase 12; lo escribes tú)
 - `docs/faseN/magi-faseN-implementacion.md` — informe de implementación (lo escribes tú)
 - `docs/publicar.md` — cómo se publica una versión (lo creas en la Fase 9; lo sigue el desarrollador)
 - `docs/formato-sincronizacion.md` — formato del fichero de sincronización (lo creas en la Fase 10; referencia del formato: la app Android usa el mismo código del núcleo)
@@ -63,7 +65,8 @@ coméntalo con el desarrollador.
   Antes de cada commit: `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `cargo fmt --all --check` y `cargo deny check`. Si tocas workflows o
   empaquetado: `actionlint`, `dist plan --tag vX.Y.Z` y
-  `desktop-file-validate assets/magi.desktop`. Para pruebas aisladas usa
+  `desktop-file-validate assets/magi.desktop`. Si tocas scripts: `shellcheck
+  scripts/*.sh crates/magi-nucleo/scripts/*.sh src/flota/sondeo.sh`. Para pruebas aisladas usa
   `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
   `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
@@ -156,8 +159,8 @@ coméntalo con el desarrollador.
   una entrada viva ni en gracia. No abras conexiones por otra vía.
 - `peticion_id` por rangos: Archivos (panel) desde 0, túneles 2^40,
   operaciones de Archivos en la `App` (edición, permisos, sincronización) 2^42,
-  ejecuciones 2^44, escritorios 2^46 (desde la Fase 12), peticiones esperables
-  del cliente 2^48. El contador del
+  ejecuciones 2^44, servicios 2^45 (desde la Fase 13), escritorios 2^46 y
+  diálogos que el servidor inicia desde el visor 2^47 (desde la Fase 12), peticiones esperables del cliente 2^48. El contador del
   panel se reinicia al cambiar de host: lo que deba sobrevivir a eso vive en la
   `App` y usa su propio rango. Un `Hecho` que implica filas de
   `REGISTRO` se envía después de `OrdenBd::Barrera`.
@@ -429,9 +432,19 @@ coméntalo con el desarrollador.
 - Sin dependencias GPL ni recompresión de vídeo: nada de x264, FFmpeg ni
   OpenH264. Los cambios van al visor como rectángulos en bruto y el AVC420 de
   Windows, tal cual. `cargo deny check` lo vigila.
-- IronRDP está fijado con `=` (TLS con rustls y la cripto de russh, sin
-  OpenSSL): no lo subas sin repetir las pruebas de RDP y el paso 1 del guion de
-  validación de la Fase 12.
+- IronRDP 0.17 e `ironrdp-egfx` `=0.3.0` están fijados con `=` (TLS con rustls
+  y la cripto de russh, sin OpenSSL). `ironrdp-connector` e `ironrdp-acceptor`
+  van vendorizados en `vendor/` con `sspi` 0.23.1 y `picky` 7.0.0-rc.27 para
+  compartir `ecdsa` con russh 0.63: no toques su código salvo las dos líneas de
+  adaptación anotadas. Al subir russh o IronRDP, mira si sus versiones de
+  `sspi`, `picky` y `ecdsa` ya coinciden y quita el vendor; mientras exista,
+  revisa a mano las correcciones de seguridad de IronRDP, `sspi` y `picky`
+  (RustSec no avisa de una copia local). No subas nada de esto sin repetir las
+  pruebas de RDP y el paso 1 del guion de validación de la Fase 12.
+- El `ActiveStage` de IronRDP no es `Send`: cada sesión de escritorio corre en
+  un hilo con runtime propio (`lanzar_en_hilo_con`) y el resto del servidor
+  solo ve canales. El AVC420 sale por el `DvcProcessor` propio de
+  `escritorio/rdp/egfx.rs`, sin decodificar.
 - Lo que llega de un servidor VNC o RDP y lo que llega del visor es entrada no
   fiable: tamaños acotados (escritorio ≤ 8192×8192, cursor ≤ 256×256, texto
   ≤ 1 MB, ZRLE acotado) y nunca pánico. La decodificación va en un hilo por
@@ -456,11 +469,61 @@ coméntalo con el desarrollador.
   check` y `scripts/generar-visor.sh`. Compilar MAGI no necesita Node. Las
   dependencias de npm son solo de desarrollo y van fijadas con integridad.
 - La sincronización escribe `formato` 2 solo si hay hosts que no son `ssh`;
-  viajan `tipo`, `escritorio_dominio` y `escritorio_opciones`. Mantén
-  `docs/formato-sincronizacion.md` al día.
-- Las pruebas de escritorio (`crates/magi-nucleo/tests/escritorio_*.rs` y
-  `tests/escritorio_*.rs`) no usan red externa: servidor RFB de prueba,
-  `ironrdp-server` y el servidor SSH de prueba con un `voxl` falso.
+  viajan `tipo`, `escritorio_dominio` y `escritorio_opciones`. Desde la Fase 13
+  escribe `formato` 3 solo si hay alguna comprobación de servicio propia
+  (elemento `comprobacion_servicio`). Mantén `docs/formato-sincronizacion.md` al
+  día.
+- Las pruebas de escritorio no usan red externa (servidor RFB de prueba,
+  `ironrdp-server` y el servidor SSH de prueba con un `voxl` falso):
+  `cargo test -p magi-nucleo --test escritorio_rfb --test escritorio_visor
+  --test escritorio_rdp --test escritorio_voxl --test escritorio_e2e
+  --test sincronizacion_escritorios` y `TZ=UTC cargo test -p magi-ssh --test
+  escritorio_servidor --test escritorio_ui --test redimensionado`.
+- Servicios (desde la Fase 13): lo común (tipos, órdenes, lectura de salidas,
+  acciones permitidas, validadores y límites) vive en
+  `crates/magi-nucleo/src/servicios/`; la custodia, en `src/servidor/servicios.rs`,
+  y la vista (`F9`), en `src/ui/servicios.rs`. Solo los hosts `ssh` tienen
+  servicios.
+- Todo lo remoto de servicios va con `crates/magi-nucleo/scripts/servicios.sh`
+  (`include_str!`), con argumentos validados en Rust y en el script, por un canal
+  del pool (`UsoCanal::Servicios`). Las propiedades se leen con `systemctl show`
+  (clave=valor) y los JSON de Docker, Podman y `journalctl`; de `list-units` solo
+  se toma el nombre (primera columna, con `--plain --no-legend`).
+- sudo orden a orden, nunca `sudo sh`, con `timeout` por fuera de sudo y
+  `LC_ALL=C` para leer sus mensajes. Con Podman nunca se usa sudo. La contraseña
+  la pide el cliente, la comprueba con `ComprobarSudo` antes de confirmar o
+  deliberar y la guarda solo en memoria (`Zeroizing`, `[servicios]
+  sudo_memoria_min`); viaja dentro de cada petición y llega al host por la
+  primera línea de la entrada estándar. Nunca va a disco, al llavero, al log ni a
+  REGISTRO.
+- Lo que deja algo parado (parar, reiniciar, desactivar, y parar o reiniciar un
+  contenedor o un proyecto) pasa por la deliberación (`PlanDeliberado::Servicio`)
+  y el servidor lo recomprueba; MELCHIOR-1 no cuenta el estado del propio
+  objetivo. Lo demás pide confirmación: ninguna acción con una tecla sola, y las
+  teclas que cambian algo en el host van en mayúsculas.
+- La comprobación de configuración (Nginx, Caddy, Apache, HAProxy, Compose o la
+  propia de COMPROBACIONES_SERVICIO) va dentro de la acción, en el mismo canal y
+  justo antes; si falla, da 127 o pasa su plazo (20 s), no se ejecuta nada.
+- Logs: el servidor manda lotes cada 100 ms (hasta 500 líneas), descarta las más
+  viejas con recuento si la cola de una suscripción pasa de 4 MiB y corta el
+  seguimiento al cerrarse el panel (fin de la entrada estándar del script). El
+  cliente los guarda solo en un anillo en memoria. Ni logs, ni unidades, ni
+  `inspect`, ni la salida de las comprobaciones van al log o a REGISTRO.
+- Lo que llega del host es entrada no fiable, con los límites del informe de la
+  Fase 13 (§8); nunca pánico.
+- Las pestañas con orden (shell de un contenedor, seguimiento de logs) las arma el
+  servidor desde `OrdenPestana`; el cliente nunca manda texto para ejecutar.
+- Las acciones de servicio en curso son trabajo del servidor
+  (`TrabajoServidor.acciones_servicio`, `AccionesServicio{lista}`); los logs no.
+  Una sola acción a la vez por objetivo.
+- El sondeo sigue sin sudo y sin diálogos; sus fallos (`SONDEOS.fallos_json`) no
+  cambian el estado del host: solo los vigilados lo hacen.
+- Las pruebas de servicios no usan red externa (servidor SSH de prueba con
+  `systemctl`, `journalctl`, `docker`, `podman`, `sudo` y `nginx` falsos, y
+  salidas grabadas en `tests/fijos/servicios/`): `cargo test -p magi-nucleo
+  --test servicios_lectura --test servicios_script --test
+  sincronizacion_comprobaciones` y `TZ=UTC cargo test -p magi-ssh --test
+  servicios_servidor --test servicios_ui --test redimensionado`.
 
 ## Al terminar una fase (o al pausar la sesión)
 

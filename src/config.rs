@@ -327,6 +327,102 @@ impl SeccionEscritorio {
     }
 }
 
+/// Sección `[servicios]` de `config.toml` (Fase 13, §5.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionServicios {
+    /// Segundos entre refrescos de la vista abierta (5-300; `0` = solo al
+    /// entrar y con `r`).
+    pub refresco_seg: u64,
+    /// Espera máxima al estado final de una acción (5-300).
+    pub espera_seg: u64,
+    /// Tamaño del anillo del panel de logs (1 000-100 000).
+    pub lineas_log: usize,
+    /// Líneas anteriores al abrir los logs (0-5 000).
+    pub lineas_iniciales: u32,
+    /// Motores de contenedores, por orden de preferencia (§7.12: con los dos,
+    /// se usa el primero). Vacío = sin contenedores.
+    pub contenedores: Vec<String>,
+    /// Unidades críticas: las que pueden cortar la conexión con el host
+    /// (§7.9). Admiten patrones con `*`.
+    pub criticas: Vec<String>,
+    /// Minutos sin uso tras los que se olvida la contraseña de sudo
+    /// (0-15; `0` = pedirla siempre).
+    pub sudo_memoria_min: u64,
+}
+
+impl Default for SeccionServicios {
+    fn default() -> Self {
+        Self {
+            refresco_seg: magi_nucleo::servicios::limites::REFRESCO_POR_DEFECTO_SEG,
+            espera_seg: magi_nucleo::servicios::limites::ESPERA_POR_DEFECTO_SEG,
+            lineas_log: magi_nucleo::servicios::limites::LINEAS_LOG_POR_DEFECTO,
+            lineas_iniciales: magi_nucleo::servicios::limites::LINEAS_INICIALES_POR_DEFECTO,
+            contenedores: magi_nucleo::servicios::limites::MOTORES_POR_DEFECTO
+                .iter()
+                .map(|motor| motor.to_string())
+                .collect(),
+            criticas: magi_nucleo::servicios::limites::CRITICAS_POR_DEFECTO
+                .iter()
+                .map(|unidad| unidad.to_string())
+                .collect(),
+            sudo_memoria_min: magi_nucleo::servicios::limites::SUDO_MEMORIA_MIN_POR_DEFECTO,
+        }
+    }
+}
+
+impl SeccionServicios {
+    /// Valida la sección y devuelve un aviso legible por cada problema (§5.3).
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        if !(5..=300).contains(&self.refresco_seg) && self.refresco_seg != 0 {
+            avisos.push(
+                "[servicios] refresco_seg debe estar entre 5 y 300 segundos (0 = sin refresco)"
+                    .to_string(),
+            );
+        }
+        if !(5..=300).contains(&self.espera_seg) {
+            avisos.push("[servicios] espera_seg debe estar entre 5 y 300 segundos".to_string());
+        }
+        if !(1_000..=100_000).contains(&self.lineas_log) {
+            avisos.push("[servicios] lineas_log debe estar entre 1000 y 100000".to_string());
+        }
+        if self.lineas_iniciales > 5_000 {
+            avisos.push("[servicios] lineas_iniciales no puede pasar de 5000".to_string());
+        }
+        let mut vistos = std::collections::BTreeSet::new();
+        for motor in &self.contenedores {
+            if !matches!(motor.as_str(), "docker" | "podman") {
+                avisos.push(format!(
+                    "[servicios] contenedores solo admite docker o podman, no «{motor}»"
+                ));
+            } else if !vistos.insert(motor.clone()) {
+                avisos.push(format!("[servicios] contenedores repite «{motor}»"));
+            }
+        }
+        avisos.extend(magi_nucleo::servicios::orden::validar_criticas(
+            &self.criticas,
+        ));
+        if self.sudo_memoria_min > 15 {
+            avisos.push("[servicios] sudo_memoria_min debe estar entre 0 y 15 minutos".to_string());
+        }
+        avisos
+    }
+
+    /// Motores efectivos, en el orden de preferencia configurado.
+    pub fn motores(&self) -> Vec<magi_nucleo::servicios::MotorNombre> {
+        self.contenedores
+            .iter()
+            .filter_map(|motor| magi_nucleo::servicios::MotorNombre::desde_texto(motor))
+            .collect()
+    }
+
+    /// Segundos de refresco efectivos (0 = sin refresco).
+    pub fn refresco_efectivo(&self) -> u64 {
+        self.refresco_seg
+    }
+}
+
 /// Contenido de `~/.config/magi/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -353,6 +449,8 @@ pub struct Config {
     pub sincronizacion: SeccionSincronizacion,
     /// Escritorio remoto: `[escritorio]` navegador, gracia y visor.
     pub escritorio: SeccionEscritorio,
+    /// Servicios, contenedores y logs: `[servicios]` (Fase 13).
+    pub servicios: SeccionServicios,
 }
 
 impl Default for Config {
@@ -369,6 +467,7 @@ impl Default for Config {
             deliberacion: SeccionDeliberacion::default(),
             sincronizacion: SeccionSincronizacion::default(),
             escritorio: SeccionEscritorio::default(),
+            servicios: SeccionServicios::default(),
         }
     }
 }

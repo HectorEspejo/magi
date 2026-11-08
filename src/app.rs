@@ -4312,6 +4312,17 @@ impl App {
             } => {
                 self.salida_recibida(ejecucion_id, host_id, stdout.0, stderr.0, truncada);
             }
+            // ------------------------------------------------ servicios (F13)
+            // La pista de la vista implementa estos mensajes en
+            // `evento_servicios`; de momento se descartan.
+            protocolo::MensajeServidor::Servicios { .. }
+            | protocolo::MensajeServidor::Consumo { .. }
+            | protocolo::MensajeServidor::Detalle { .. }
+            | protocolo::MensajeServidor::SudoComprobado { .. }
+            | protocolo::MensajeServidor::AccionServicioHecha { .. }
+            | protocolo::MensajeServidor::AccionesServicio { .. }
+            | protocolo::MensajeServidor::LineasLog { .. }
+            | protocolo::MensajeServidor::FinLog { .. } => {}
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }

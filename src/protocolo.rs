@@ -48,7 +48,20 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// de un servidor anterior y decidir si lo sustituye (sin preguntar solo si no
 /// custodia nada) o pregunta al usuario. `VersionIncompatible` gana
 /// `version_app`, `clientes` y `trabajo`; `Bienvenida` gana `version_app`.
-pub const VERSION_PROTOCOLO: u32 = 7;
+///
+/// v7 (Fase 12): escritorios remotos. `AbrirEscritorio`, `PedirEnlace`,
+/// `ReconectarEscritorio`, `CerrarEscritorio`, `RespuestaHuellaEscritorio` y
+/// `Credenciales`; `EscritorioAbierto`, `Enlace`, `Escritorios{lista}`,
+/// `PideHuellaEscritorio` y `PideCredenciales`.
+///
+/// v8 (Fase 13): servicios, contenedores y logs. `ListarServicios`,
+/// `PedirConsumo`, `DetalleServicio`, `ComprobarSudo`, `AccionServicio`,
+/// `SeguirLog` y `PararLog`; `Servicios`, `Consumo`, `Detalle`,
+/// `SudoComprobado`, `AccionServicioHecha`, `AccionesServicio{lista}`,
+/// `LineasLog` y `FinLog`; `AbrirSesion` gana `orden` (pestañas con orden) y
+/// `TrabajoServidor.acciones_servicio`. Los `peticion_id` de servicios van
+/// desde 2^45.
+pub const VERSION_PROTOCOLO: u32 = 8;
 
 /// Los `peticion_id` de escritorios que genera el cliente empiezan en 2^46
 /// (Fase 12); por debajo están los de archivos, túneles y ejecuciones
@@ -59,6 +72,10 @@ pub const RANGO_ESCRITORIOS: u64 = 1 << 46;
 /// reconexión pedida desde el visor) viven en [2^47, 2^48), un tramo libre
 /// entre los del cliente y los esperables del cliente (2^48).
 pub const RANGO_ESCRITORIOS_SERVIDOR: u64 = 1 << 47;
+
+/// Los `peticion_id` de la vista Servicios (Fase 13) empiezan en 2^45, entre
+/// los de ejecuciones (2^44) y los de escritorios (2^46).
+pub const RANGO_SERVICIOS: u64 = 1 << 45;
 
 /// Línea máxima de un mensaje (las pantallas completas son lo más grande).
 pub const LINEA_MAXIMA: usize = 4 * 1024 * 1024;
@@ -127,6 +144,13 @@ impl<'de> Deserialize<'de> for Secreto {
 
 pub use magi_nucleo::escritorio::{
     DatosCertificado, InfoEscritorio, PeticionCredenciales, TipoHost,
+};
+
+// ---------------------------------------------------------------- servicios
+
+pub use magi_nucleo::servicios::{
+    lectura::ComprobacionSudo, Accion, Consumo, Contenedor, InfoAccion, LineaLog, Listado,
+    MotivoFinLog, MotorNombre, Objetivo, OrdenPestana, Privilegio, ResultadoServicio, TipoObjetivo,
 };
 
 // ---------------------------------------------------------------- estados
@@ -853,6 +877,69 @@ pub enum MensajeCliente {
         ejecucion_id: u32,
         host_id: i64,
     },
+    // ------------------------------------------------------- servicios (v8)
+    /// Listado de servicios, timers y contenedores de un host. Contesta
+    /// `Servicios` o `Error` con el mismo `peticion_id`.
+    ListarServicios {
+        peticion_id: u64,
+        host_id: i64,
+        /// Contraseña de sudo para lo que la exige (diario o Docker): solo si
+        /// el cliente la tiene en memoria o el usuario la acaba de dar.
+        #[serde(default)]
+        sudo: Option<Secreto>,
+    },
+    /// Consumo de los contenedores en marcha. Contesta `Consumo`.
+    PedirConsumo {
+        peticion_id: u64,
+        host_id: i64,
+        #[serde(default)]
+        sudo: Option<Secreto>,
+    },
+    /// Detalle de un servicio, un timer o un contenedor. Contesta `Detalle`.
+    DetalleServicio {
+        peticion_id: u64,
+        host_id: i64,
+        objetivo: Objetivo,
+        #[serde(default)]
+        sudo: Option<Secreto>,
+    },
+    /// Comprueba una contraseña de sudo en el host antes de confirmar o
+    /// deliberar (§7.3). No la guarda.
+    ComprobarSudo {
+        peticion_id: u64,
+        host_id: i64,
+        contrasena: Secreto,
+    },
+    /// Ejecuta una acción sobre un servicio, un timer, un contenedor o un
+    /// proyecto. Contesta `AccionServicioHecha` con el mismo `peticion_id`.
+    AccionServicio {
+        peticion_id: u64,
+        host_id: i64,
+        objetivo: Objetivo,
+        accion: Accion,
+        /// La deliberación que la autoriza, si la acción lo exige (T62).
+        #[serde(default)]
+        deliberacion: Option<DeliberacionLanzada>,
+        #[serde(default)]
+        sudo: Option<Secreto>,
+    },
+    /// Abre una suscripción de logs. El servidor manda `LineasLog` hasta
+    /// `PararLog` o hasta que el proceso remoto termina (`FinLog`).
+    SeguirLog {
+        peticion_id: u64,
+        host_id: i64,
+        objetivo: Objetivo,
+        /// Líneas anteriores que se mandan al abrir (0 = ninguna).
+        #[serde(default)]
+        lineas_iniciales: u32,
+        #[serde(default)]
+        sudo: Option<Secreto>,
+    },
+    /// Cierra una suscripción de logs: el servidor cierra el canal y el script
+    /// corta el seguimiento en el host.
+    PararLog {
+        peticion_id: u64,
+    },
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
@@ -1174,6 +1261,53 @@ pub enum MensajeServidor {
         escritorio_id: u32,
         host_nombre: String,
         peticion: PeticionCredenciales,
+    },
+    // ------------------------------------------------------- servicios (v8)
+    /// Listado de servicios, timers y contenedores de un host.
+    Servicios {
+        peticion_id: u64,
+        host_id: i64,
+        listado: Listado,
+    },
+    /// Consumo de los contenedores en marcha de un host.
+    Consumo {
+        peticion_id: u64,
+        host_id: i64,
+        consumos: Vec<Consumo>,
+    },
+    /// Detalle de un servicio, un timer o un contenedor.
+    Detalle {
+        peticion_id: u64,
+        host_id: i64,
+        detalle: magi_nucleo::servicios::Detalle,
+    },
+    /// Resultado de `ComprobarSudo`.
+    SudoComprobado {
+        peticion_id: u64,
+        resultado: ComprobacionSudo,
+    },
+    /// Resultado de una acción de servicio, cuando termina (o falla al
+    /// empezar). Solo al solicitante.
+    AccionServicioHecha {
+        peticion_id: u64,
+        resultado: ResultadoServicio,
+    },
+    /// Difusión de las acciones de servicio en curso en cada cambio (T27).
+    AccionesServicio {
+        lista: Vec<InfoAccion>,
+    },
+    /// Lote de líneas de una suscripción de logs (solo al solicitante).
+    LineasLog {
+        peticion_id: u64,
+        lineas: Vec<LineaLog>,
+        /// Líneas descartadas por contrapresión desde el lote anterior.
+        #[serde(default)]
+        omitidas: u32,
+    },
+    /// Fin de una suscripción de logs, con su motivo.
+    FinLog {
+        peticion_id: u64,
+        motivo: MotivoFinLog,
     },
     Error {
         mensaje: String,
