@@ -761,6 +761,7 @@ async fn el_ciclo_automatico_respeta_los_manuales() {
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
     let auto = montaje
@@ -923,6 +924,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
     montaje
@@ -947,6 +949,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
             host_id: montaje.host_id,
             cols: 80,
             filas: 24,
+            orden: None,
         })
         .await;
     montaje.esperar_sesion_abierta().await;

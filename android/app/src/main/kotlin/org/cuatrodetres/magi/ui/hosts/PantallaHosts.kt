@@ -349,7 +349,12 @@ private fun FilaGrupo(
     }
 }
 
-/** Fila de host del mockup §6.1, con glifo de estado y botón ▶ de conectar. */
+/**
+ * Fila de host del mockup §6.1, con glifo de estado y botón ▶ de conectar.
+ *
+ * Un escritorio (RDP, VNC o voxl) no se abre desde el móvil (Fase 12): la fila
+ * enseña su tipo y «se abre en el ordenador», y no lleva botón de conectar.
+ */
 @Composable
 private fun FilaHost(
     host: HostVista,
@@ -358,12 +363,22 @@ private fun FilaHost(
     alConectar: (String) -> Unit,
 ) {
     val estadoTexto = textoEstadoHost(host.estado, host.sesionesAbiertas)
-    val descripcion = stringResource(
-        R.string.hosts_descripcion_host,
-        host.nombre,
-        estadoTexto,
-        textoDireccion(host),
-    )
+    val escritorio = host.tipo.esEscritorio
+    val descripcion = if (escritorio) {
+        stringResource(
+            R.string.hosts_descripcion_escritorio,
+            host.nombre,
+            host.tipo.etiqueta,
+            textoDireccion(host),
+        )
+    } else {
+        stringResource(
+            R.string.hosts_descripcion_host,
+            host.nombre,
+            estadoTexto,
+            textoDireccion(host),
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -391,6 +406,23 @@ private fun FilaHost(
                 style = MaterialTheme.typography.bodyMedium,
                 color = Paleta.GRIS,
             )
+            if (escritorio) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = host.tipo.etiqueta,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Paleta.AMBAR,
+                    )
+                    Text(
+                        text = stringResource(R.string.hosts_escritorio_se_abre),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Paleta.GRIS,
+                    )
+                }
+            }
             if (host.etiquetas.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     host.etiquetas.take(4).forEach { etiqueta ->
@@ -402,12 +434,15 @@ private fun FilaHost(
                 }
             }
         }
-        BotonGlifo(
-            glifo = "▶",
-            descripcion = stringResource(R.string.hosts_conectar_a, host.nombre),
-            alPulsar = { alConectar(host.uuid) },
-            color = Paleta.VERDE,
-        )
+        // Un escritorio solo se abre en el ordenador: aquí no hay ▶.
+        if (!escritorio) {
+            BotonGlifo(
+                glifo = "▶",
+                descripcion = stringResource(R.string.hosts_conectar_a, host.nombre),
+                alPulsar = { alConectar(host.uuid) },
+                color = Paleta.VERDE,
+            )
+        }
     }
 }
 

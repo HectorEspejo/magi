@@ -1,0 +1,2 @@
+MAGI_CONSUMO [{"id":"9a8b7c6d5e4f","name":"datos-db-1","cpu":"0.45%","mem_usage":"120.5MB / 2GB","mem_perc":"6.03%","net_input":"1.1kB","net_output":"2.2kB","pids":"9","block_input":"0B","block_output":"0B"}]
+MAGI_FIN

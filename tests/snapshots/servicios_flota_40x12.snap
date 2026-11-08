@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  TODA LA FLOTA              ⇥ hosts  │
+│────────────────────────────────────  │
+│ FALLOS DE LA FLOTA (del último sondeo│
+│  HOST         NOMBRE                 │
+│───────────────────────────────────── │
+│  hetzner-01   copia.service          │
+│  hetzner-01   web-worker-1           │
+│  hetzner-01   panel                  │
+│                                      │
+└──────────────────────────────────────┘
+ ⇥ lista  ↵ ir al host  l logs  ? más

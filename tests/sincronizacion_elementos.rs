@@ -11,16 +11,19 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use magi::almacen::lapidas::{self, Lapida};
-use magi::almacen::versiones::{formatear_version, Tabla};
+use magi::almacen::versiones::{self, formatear_version, ms_de_version, Tabla};
 use magi::almacen::Almacen;
 use magi::deliberacion::DatosVerificaciones;
+use magi::escritorio::{OpcionesEscritorio, TamanoEscritorio, TipoHost};
 use magi::modelo::{
     DatosHost, DatosSincronizacion, DatosTunel, IdentidadRef, Origen, OrigenIdentidad, TipoTunel,
 };
 use magi::protocolo::Direccion;
 use magi::sincronizacion::elementos::{
-    datos_de_fila, datos_de_fila_con_hogar, estado_local, ruta_a_home, ruta_desde_home,
+    datos_de_fila, datos_de_fila_con_hogar, estado_local, formato_a_escribir, ruta_a_home,
+    ruta_desde_home,
 };
+use magi::sincronizacion::formato;
 use magi::sincronizacion::fusion::Candidato;
 use magi::snippets::{DatosSnippet, Destino};
 
@@ -105,6 +108,9 @@ fn semilla() -> Semilla {
                 grupo_id: Some(grupo_id),
                 direccion: "192.0.2.10".to_string(),
                 puerto: 2222,
+                tipo: magi_nucleo::escritorio::TipoHost::Ssh,
+                escritorio_dominio: None,
+                escritorio_opciones: magi_nucleo::escritorio::OpcionesEscritorio::default(),
                 usuario: Some("operador".to_string()),
                 identidad_ref: IdentidadRef::Fichero(format!("{HOGAR}/.ssh/id_ed25519")),
                 salto_host_id: Some(salto_id),
@@ -318,6 +324,9 @@ fn host_exporta_etiquetas_verificaciones_y_referencias() {
             "nombre": "web-1",
             "direccion": "192.0.2.10",
             "puerto": 2222,
+            "tipo": "ssh",
+            "escritorio_dominio": null,
+            "escritorio_opciones": {"tamano": "ventana", "portapapeles": true},
             "usuario": "operador",
             "identidad_ref": "fichero:~/.ssh/id_ed25519",
             "salto": UUID_SALTO,
@@ -351,6 +360,9 @@ fn host_sin_datos_opcionales_exporta_nulos() {
             "nombre": "salto",
             "direccion": "192.0.2.1",
             "puerto": 22,
+            "tipo": "ssh",
+            "escritorio_dominio": null,
+            "escritorio_opciones": {"tamano": "ventana", "portapapeles": true},
             "usuario": null,
             "identidad_ref": null,
             "salto": null,
@@ -688,4 +700,249 @@ fn rutas_del_hogar_se_exportan_y_expanden() {
         ruta_desde_home(&ruta_a_home(original, hogar), hogar),
         original
     );
+}
+
+// ------------------------------------------------- escritorios (formato 2)
+
+/// Crea un host de escritorio en el almacén y le pone una huella de certificado
+/// RDP (que no debe viajar).
+fn host_de_escritorio(
+    almacen: &Almacen,
+    nombre: &str,
+    tipo: TipoHost,
+    opciones: OpcionesEscritorio,
+) -> i64 {
+    let id = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: nombre.to_string(),
+                direccion: "192.0.2.30".to_string(),
+                puerto: 3389,
+                tipo,
+                escritorio_dominio: Some("EJEMPLO".to_string()),
+                escritorio_opciones: opciones,
+                usuario: Some("operador".to_string()),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("creando el host de escritorio");
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE HOSTS SET huella_escritorio = 'SHA256:huella-del-certificado' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .expect("fijando la huella del escritorio");
+    id
+}
+
+#[test]
+fn host_de_escritorio_exporta_tipo_dominio_y_opciones_y_no_la_huella() {
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
+    let opciones = OpcionesEscritorio {
+        tamano: TamanoEscritorio::Fijo {
+            ancho: 1920,
+            alto: 1080,
+        },
+        teclado: Some("es-ES".to_string()),
+        ..OpcionesEscritorio::default()
+    };
+    let id = host_de_escritorio(&almacen, "win-01", TipoHost::Rdp, opciones);
+
+    let (texto, valor) = exportado(&almacen, Tabla::Hosts, id);
+    assert_eq!(valor["tipo"], "rdp");
+    assert_eq!(valor["escritorio_dominio"], "EJEMPLO");
+    assert_eq!(valor["escritorio_opciones"]["tamano"], "1920x1080");
+    assert_eq!(valor["escritorio_opciones"]["teclado"], "es-ES");
+    // La huella del certificado es propia del equipo: no viaja aunque esté en
+    // la fila.
+    assert!(
+        valor.get("huella_escritorio").is_none(),
+        "huella_escritorio no debe viajar: {texto}"
+    );
+    assert!(
+        !texto.contains("huella-del-certificado"),
+        "la huella no debe aparecer en el JSON: {texto}"
+    );
+}
+
+#[test]
+fn el_formato_que_se_escribe_depende_de_si_hay_escritorios() {
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
+    // Un inventario vacío no tiene escritorios: se escribe en formato 1.
+    assert_eq!(
+        formato_a_escribir(almacen.conexion()).expect("formato del inventario"),
+        formato::FORMATO_1
+    );
+    almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "web".to_string(),
+                direccion: "192.0.2.5".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("host ssh");
+    assert_eq!(
+        formato_a_escribir(almacen.conexion()).expect("formato con solo SSH"),
+        formato::FORMATO_1
+    );
+    host_de_escritorio(
+        &almacen,
+        "win-01",
+        TipoHost::Rdp,
+        OpcionesEscritorio::default(),
+    );
+    assert_eq!(
+        formato_a_escribir(almacen.conexion()).expect("formato con escritorios"),
+        formato::FORMATO_2
+    );
+    // Una comprobación propia sube a la 3 aunque no haya escritorios: un MAGI
+    // 1.2 la verá como formato_nuevo en vez de perderla (D249).
+    let web = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "web-2".to_string(),
+                direccion: "192.0.2.6".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("host ssh");
+    almacen
+        .guardar_comprobacion(
+            web,
+            magi_nucleo::servicios::TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t",
+        )
+        .expect("comprobación propia");
+    assert_eq!(
+        formato_a_escribir(almacen.conexion()).expect("formato con comprobaciones"),
+        formato::FORMATO_3
+    );
+}
+
+#[test]
+fn la_comprobacion_de_servicio_se_exporta_como_elemento_propio() {
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
+    let host = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "web-3".to_string(),
+                direccion: "192.0.2.7".to_string(),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("host ssh");
+    let (host_uuid, _, _) = {
+        let (uuid, version, vector): (String, String, String) = almacen
+            .conexion()
+            .query_row(
+                "SELECT uuid, version, vector FROM HOSTS WHERE id = ?1",
+                rusqlite::params![host],
+                |fila| Ok((fila.get(0)?, fila.get(1)?, fila.get(2)?)),
+            )
+            .expect("leyendo el host");
+        (uuid, version, vector)
+    };
+    let id = almacen
+        .guardar_comprobacion(
+            host,
+            magi_nucleo::servicios::TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t",
+        )
+        .expect("comprobación propia");
+
+    let (texto, valor) = exportado(&almacen, Tabla::ComprobacionesServicio, id);
+    assert_eq!(valor["host"], host_uuid);
+    assert_eq!(valor["objetivo_tipo"], "unidad");
+    assert_eq!(valor["objetivo"], "nginx.service");
+    assert_eq!(valor["comando"], "nginx -t");
+    assert!(
+        !texto.contains("version"),
+        "la versión va en el elemento, no en los datos: {texto}"
+    );
+
+    // En el estado local viaja con su versión, su vector y el objetivo como
+    // nombre natural (el de la lápida).
+    let candidatos = estado_local(almacen.conexion(), Path::new(HOGAR)).expect("estado local");
+    let candidato = candidatos
+        .iter()
+        .find(|candidato| candidato.tipo == "comprobacion_servicio")
+        .expect("la comprobación viaja");
+    assert_eq!(candidato.nombre, "nginx.service");
+    assert!(!candidato.uuid.is_empty());
+}
+
+#[test]
+fn editar_las_opciones_o_el_tipo_de_un_host_sube_su_version() {
+    let almacen = magi::almacen::abrir_en_memoria().expect("almacén en memoria");
+    let opciones = OpcionesEscritorio {
+        portapapeles: false,
+        ..OpcionesEscritorio::default()
+    };
+    let mut datos = DatosHost {
+        nombre: "vnc-01".to_string(),
+        direccion: "192.0.2.40".to_string(),
+        puerto: 5900,
+        tipo: TipoHost::Vnc,
+        escritorio_dominio: None,
+        escritorio_opciones: opciones,
+        ..DatosHost::default()
+    };
+    let id = almacen
+        .crear_host(&datos, Origen::Manual)
+        .expect("host vnc");
+    let version_antes = version_de_fila(&almacen, id);
+
+    // Por el camino normal del almacén, cambiar las opciones es una edición que
+    // viaja: sube la versión con el reloj híbrido.
+    datos.escritorio_opciones.portapapeles = true;
+    almacen
+        .actualizar_host(id, &datos)
+        .expect("editando las opciones");
+    let version_despues = version_de_fila(&almacen, id);
+    assert_ne!(version_despues, version_antes);
+    assert!(
+        ms_de_version(&version_despues) > ms_de_version(&version_antes),
+        "la versión nueva debe ser posterior: {version_antes} → {version_despues}"
+    );
+    let (_, valor) = exportado(&almacen, Tabla::Hosts, id);
+    assert_eq!(valor["escritorio_opciones"]["portapapeles"], true);
+
+    // El tipo se fija al crear y no se cambia desde la ficha, pero
+    // datos_de_fila lo incluye: si un proceso externo lo cambia, la comparación
+    // lo detecta y la versión sube igual.
+    let antes =
+        versiones::datos_de(almacen.conexion(), Tabla::Hosts, id).expect("datos antes del cambio");
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE HOSTS SET tipo = 'rdp' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .expect("cambiando el tipo desde fuera");
+    assert!(
+        versiones::subir_si_cambio(almacen.conexion(), Tabla::Hosts, id, antes.as_deref())
+            .expect("subiendo la versión"),
+        "un cambio de tipo tiene que contar como edición"
+    );
+    assert_ne!(version_de_fila(&almacen, id), version_despues);
+}
+
+/// Versión guardada de una fila de HOSTS.
+fn version_de_fila(almacen: &Almacen, id: i64) -> String {
+    almacen
+        .conexion()
+        .query_row(
+            "SELECT version FROM HOSTS WHERE id = ?1",
+            rusqlite::params![id],
+            |fila| fila.get(0),
+        )
+        .expect("leyendo la versión del host")
 }

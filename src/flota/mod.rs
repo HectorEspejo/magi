@@ -16,7 +16,9 @@ use crate::conexion::RegistroSesiones;
 use crate::modelo::{Host, ResultadoSondeo, Sondeo};
 
 /// Script ejecutado en el host remoto. Solo depende de `sh` y coreutils;
-/// sin `systemctl` los servicios quedan como `unknown`.
+/// sin `systemctl` los servicios quedan como `unknown`. Desde la Fase 13
+/// incluye el bloque de fallos del sondeo ampliado (unidades fallidas y
+/// contenedores caídos), siempre sin sudo.
 pub const SCRIPT: &str = include_str!("sondeo.sh");
 
 /// Sondeos simultáneos y tiempo máximo por host (DNS, TCP, autenticación y
@@ -113,6 +115,7 @@ fn rellenar(sondeo: &mut Sondeo, metricas: parser::Metricas) {
     sondeo.uptime_seg = metricas.uptime_seg;
     let tiene_metricas = metricas.tiene_metricas();
     sondeo.servicios = metricas.servicios;
+    sondeo.fallos = metricas.fallos;
     sondeo.resultado = if tiene_metricas {
         ResultadoSondeo::Ok
     } else {

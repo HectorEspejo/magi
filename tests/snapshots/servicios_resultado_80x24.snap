@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  LISTA                                                              ⇥ hosts  │
+│────────────────────────────────────────────────────────────────────────────  │
+│ ▸1 Servicios (8)   2 Timers (2)   3 Contenedores (4)                         │
+│  UNIDAD                                 ESTADO       ARRANQUE     DESDE      │
+│───────────────────────────────────────────────────────────────────────────── │
+│     copia.service                        ✕ fallido    desactivado  hace 2 h  │
+│┌ RESULTADO · recargar nginx.service · hetzner-01 ───────────────────────────┐│
+││✕ FALLIDO · no volvió a active                                              ││
+││Comprobación: nginx -t                                                      ││
+││Últimas líneas del diario:                                                  ││
+││  21:52:10 app[4121]: Traceback (most recent call last):                    ││
+││  21:52:10 app[4121]: KeyError: 'DATABASE_URL'                              ││
+││  21:52:10 systemd[1]: app.service: Main process exited, status=1           ││
+││ l logs · ↵ detalle · esc cerrar                                            ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  P parar  R reiniciar  2 timers  r refrescar  ? más

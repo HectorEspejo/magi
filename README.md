@@ -130,7 +130,7 @@ cargo fmt --check
 4. Conecta con `↵` (siempre abre una sesión nueva) y vuelve a la TUI con el
    prefijo `Ctrl+]` y `q` (o `Esc`). Cerrar la ventana no cierra las sesiones.
 5. Explora con `Ctrl+P` (paleta) y `?` (ayuda): `F4` Archivos, `F5`
-   Identidades, `F6` Túneles, `F7` Registro y `F8` Snippets.
+   Identidades, `F6` Túneles, `F7` Registro, `F8` Snippets y `F9` Servicios.
 6. Si quieres que `ssh <nombre>` vea los hosts de MAGI, exporta con `E` en
    Hosts (o `magi exportar`) y acepta el `Include` en `~/.ssh/config`.
 
@@ -261,7 +261,7 @@ sale de la pestaña o se cierra, el remoto vuelve a crecer.
 
 **Modo estrecho** (menos de 100 columnas):
 
-- Flota y Archivos enseñan un solo panel y `Tab` alterna. La cabecera dice cuál
+- Flota, Archivos y Servicios enseñan un solo panel y `Tab` alterna. La cabecera dice cuál
   se ve: `⇥ detalle` / `⇥ lista`, `[local]` / `[remoto]`.
 - Las tablas ocultan columnas por prioridad: Hosts, la dirección por debajo de
   80 columnas y usuario·puerto por debajo de 60. El nombre y el glifo de estado
@@ -282,7 +282,7 @@ En ventanas muy grandes (200×60 o más) los paneles de detalle y los diálogos
 tienen ancho máximo y van centrados.
 
 **Tamaños mínimos.** Por debajo del mínimo se ve un aviso con el tamaño actual,
-el mínimo y la vista que lo exige. Con el aviso siguen activas `q`, `F1`-`F8` y
+el mínimo y la vista que lo exige. Con el aviso siguen activas `q`, `F1`-`F9` y
 `Ctrl+P`; en Sesión las teclas siguen yendo al remoto y este recibe su tamaño
 real. Con menos de 20×3 solo se pinta `MAGI cols×filas`.
 
@@ -703,6 +703,221 @@ La cabecera, la firma y el JSON están documentados en
 [`docs/formato-sincronizacion.md`](docs/formato-sincronizacion.md) para la app
 Android.
 
+## Escritorio remoto
+
+Además de hosts SSH, el inventario admite **hosts de escritorio**: `RDP`
+(Windows, xrdp, GNOME Remote Desktop y KDE), `VNC` (QEMU/libvirt/Proxmox,
+TigerVNC y x11vnc) y `voxl` (un host Linux con X11 que tenga `voxl-server`
+instalado). Se crean como cualquier host, con grupo y etiquetas; el **tipo se
+elige al crearlo y no se cambia** después. Los escritorios no salen en
+`magi_config`, ni en el terminal, ni en SFTP, túneles, snippets o saltos: solo
+los hosts SSH hacen esas cosas.
+
+El escritorio se ve en una **ventana del navegador** (Chromium, Brave, Chrome o
+Edge en modo aplicación), porque una TUI no pinta imágenes. La página la sirve
+el propio `magi --servidor` **solo en `127.0.0.1`**, en un puerto libre, y se
+entra con un enlace de un solo uso que caduca a los 60 s y se gasta al usarlo.
+La clave del visor vive en el `sessionStorage` de la pestaña y la URL se
+limpia al canjearla. El servidor comprueba `Host` siempre y `Origin` en
+`/api/*`, y sirve una CSP estricta sin recursos externos.
+
+En RDP, la imagen llega al visor como **rectángulos** (mapas de bits y RemoteFX
+decodificados por IronRDP) y el cursor se pinta aparte. El H.264 de Windows
+(AVC420) todavía no se anuncia: exige decodificar también los demás códecs del
+canal EGFX, que es lo que manda Windows para la interfaz; está anotado como
+pendiente en el informe de la Fase 12.
+
+### Abrir un escritorio
+
+`↵` sobre un escritorio lo abre; si ya tenía sesión, va a su pestaña y abre el
+visor con un enlace nuevo. La sesión la custodia `magi --servidor`: sobrevive a
+cerrar la TUI y se ve desde todas las ventanas. Mientras no haya ningún visor,
+la sesión se cierra sola al cabo de `[escritorio] gracia_seg` (60 s por
+defecto); se puede volver a abrir el visor desde la pestaña antes de que expire.
+Un segundo visor sustituye al primero.
+
+Siempre que se puede, la conexión va **por SSH**: se toma la conexión del host
+«a través de» y se abre un canal `direct-tcpip` hasta el servidor de
+escritorio, sin abrir puertos en tu equipo. Un VNC que vaya directo a una
+dirección que no es de loopback avisa de que la imagen y el teclado viajarán sin
+cifrar. RDP directo va cifrado con TLS.
+
+### Certificado y credenciales
+
+En RDP, antes de mandar ninguna credencial se comprueba el certificado del
+servidor con la misma política que las huellas SSH: si es la primera vez, se
+pide aceptarlo (y se guarda en `HOSTS.huella_escritorio`, propia de ese
+equipo); si cambia, el aviso es rojo y hay que escribir el nombre del host para
+sustituirlo. Las contraseñas de RDP y VNC viven solo en el llavero del sistema;
+el servidor de sesiones nunca lo toca: se las pide al cliente que abrió el
+escritorio.
+
+### voxl
+
+`voxl` se arranca **en el host SSH** con un script embebido y una contraseña
+aleatoria por sesión que viaja por la entrada estándar, nunca en la línea de
+órdenes. Escucha solo en `127.0.0.1` del host y se llega por un túnel de la
+sesión. Al cerrar la sesión (o si se cae la conexión SSH) el script para voxl y
+lo mata si no termina. MAGI no instala voxl: si falta, lo dice.
+
+### Configuración
+
+```toml
+[escritorio]
+# auto o una orden con {url}, por ejemplo "brave --app={url}"
+navegador = "auto"
+# segundos sin visor antes de cerrar la sesión (10-3600)
+gracia_seg = 60
+# puerto del servidor del visor; 0 = uno libre
+puerto_visor = 0
+# auto (sale de LANG) o una distribución como es-ES
+distribucion_teclado = "auto"
+# reservado para el H.264 de Windows (AVC420); hoy RDP va por rectángulos
+h264 = true
+```
+
+`magi diagnostico` dice qué navegador abrirá el visor y avisa si no encuentra
+ninguno. El portapapeles es solo de texto y no se guarda: ni la imagen, ni las
+teclas, ni el portapapeles pasan por el log ni por el registro.
+
+## Servicios, contenedores y logs
+
+Desde la Fase 13 MAGI maneja lo que corre en cada host desde la vista
+**Servicios** (`F9`; también `u` desde Flota, Hosts y la ficha, con ese host
+elegido). A la izquierda, los hosts SSH con el estado de su último sondeo y
+`⚠N` de fallos; a la derecha, tres secciones que se cambian con `1`
+**Servicios**, `2` **Timers** y `3` **Contenedores**, con su recuento. Arriba
+salen los servicios vigilados (`★`) y los fallidos, separados del resto por una
+línea; `/` filtra por nombre y `Tab` alterna hosts y lista en modo estrecho.
+En «Toda la flota» se juntan los fallos del último sondeo de todos los hosts,
+sin abrir ninguna conexión: `↵` va a ese host con el elemento elegido y `r`
+sondea todos. Flota marca `⚠N` en la fila del host y su detalle enseña el
+bloque FALLOS.
+
+`↵` abre el detalle: estado y subestado desde cuándo, arranque, PID principal,
+memoria, fichero de la unidad, si admite recargar, qué comprobación de
+configuración se aplicará y sus dependencias («necesita» y «la necesitan»), o
+el texto de `systemctl cat`; en un contenedor, id, imagen, creado, estado y
+código de salida, reinicios, salud, puertos, montajes, redes, proyecto Compose
+y el texto de `inspect`; en un timer, su próxima y última ejecución y el
+servicio que activa. `l` abre los logs en vivo, con filtro por texto (`/`) y
+por nivel (`n`), pausa (`Espacio`) sin cortar la llegada de líneas, un anillo
+de 10 000 líneas y `t` para el seguimiento completo en una pestaña. Al cerrar
+el panel se corta el `journalctl` de MAGI en el host.
+
+Por ejemplo, en `web-01` (`192.0.2.10`, que sirve `web.ejemplo.org` con
+Nginx delante de una aplicación systemd): `F9`, el host arriba con su `⚠N`,
+`R` sobre `app.service`, deliberación, contraseña de sudo si hace falta y el
+resultado con las últimas líneas del diario si no vuelve; `l` para ver los
+logs y `3` para los contenedores de su proyecto Compose.
+
+**Acciones.** `A` arrancar (en un timer, lanzar ahora su servicio, con
+confirmación), `P` parar, `R` reiniciar, `G` recargar y `H` activar o
+desactivar el arranque, ofrecidas solo cuando valen en el estado de la unidad:
+`G` en un servicio sin `CanReload` avisa «nginx.service no admite recargar».
+En un contenedor, `A` `P` `R` según su estado y `S` abre una shell en una
+pestaña nueva; sobre la cabecera de un proyecto Compose, `A` `P` y `R`
+actúan sobre el proyecto entero con `-p` y los ficheros de sus etiquetas, y
+sin ficheros conocidos no se ofrecen y se dice por qué. Tras una acción, MAGI
+espera al estado final hasta `espera_seg` (30 s por defecto) y vuelve a mirar a
+los 2 s; si la unidad no vuelve a `active`, el resultado es «fallido» con sus
+últimas 20 líneas del diario, y si se agota el plazo, «sin confirmar» con la
+orden todavía en el host. Una sola acción a la vez por objetivo: otra sobre el
+mismo objetivo se rechaza con «hay otra acción en curso».
+
+**Deliberación y confirmación.** Lo que deja algo parado —parar, reiniciar o
+desactivar un servicio, y parar o reiniciar un contenedor o un proyecto— pasa
+por la deliberación MAGI (F6) con las comprobaciones del host y
+`PlanDeliberado::Servicio`; MELCHIOR-1 no cuenta el estado del propio objetivo,
+porque reiniciar lo que falla es justo lo que se quiere hacer. Arrancar,
+recargar, activar el arranque y lanzar un timer piden una confirmación simple.
+Ninguna acción se hace con una pulsación: las teclas que cambian algo en el host
+van en mayúsculas. Las unidades críticas (`[servicios] criticas`: sshd, la red,
+el cortafuegos, Tailscale, Docker…) avisan en rojo de que la acción «puede
+cortar tu conexión» con el host y con los hosts que van a través de él.
+
+**sudo.** Las órdenes privilegiadas van una a una con `sudo`, nunca con
+`sudo sh`, y con `timeout` por fuera de sudo: así basta un sudoers limitado y
+el registro del host (`journalctl _COMM=sudo` o `auth.log`) enseña la orden
+real. Si el usuario es root o `sudo -n` vale, MAGI no pregunta nada; si hace
+falta contraseña, la pide en un diálogo, la comprueba con `ComprobarSudo` antes
+de confirmar o deliberar y la recuerda solo en memoria (`Zeroizing`) hasta
+`sudo_memoria_min` minutos sin uso. Viaja al host por la primera línea de la
+entrada estándar, nunca en la línea de órdenes, y no va a disco, al llavero, al
+log ni a REGISTRO. `!` pide la contraseña de sudo para el host elegido, para
+ver lo que exige permisos; un usuario sin sudo ve «usuario no puede usar sudo
+en <host>» y no se le ofrecen las acciones que lo necesitan. Con Podman nunca se
+usa sudo: se ven los contenedores del usuario SSH.
+
+**Comprobación de configuración.** Antes de recargar o reiniciar Nginx
+(`nginx -t`), Caddy (`caddy validate`), Apache (`apachectl configtest`),
+HAProxy (`haproxy -c`) o un proyecto Compose (`compose config -q`), y antes
+de aplicar la comprobación propia de un servicio o de un proyecto
+(COMPROBACIONES_SERVICIO), MAGI valida la configuración dentro de la propia
+acción, en el mismo canal y justo antes: si falla, devuelve 127 (no encontrada)
+o pasa de 20 s, no se ejecuta nada y el resultado dice «rechazada por la
+configuración» con la salida del validador. Las comprobaciones propias se crean,
+editan y borran en la ficha del host y con `c` sobre el servicio o el proyecto;
+borrar pide confirmación.
+
+**Permisos que hacen falta en el host.** MAGI usa lo que el host ya tiene y no
+instala nada:
+
+- systemd 230 o posterior, con `systemctl` y `journalctl`. Para leer el diario
+  del sistema, el usuario SSH debe estar en `systemd-journal`, `adm` o
+  `wheel`, o usar sudo. Un host sin systemd se ve como «sin systemd», con solo
+  sus contenedores, y uno con systemd anterior a 230, como «systemd demasiado
+  antiguo».
+- Docker 20.10 o posterior con Compose v2 (`docker compose`): el socket exige
+  el grupo `docker` o sudo. Sin permiso, la sección lo dice («añade el usuario
+  al grupo docker o pulsa `!`»).
+- Podman 4 o posterior, sin root: se ven los contenedores del usuario SSH y con
+  Podman nunca se usa sudo. Compose v2 también con `podman compose`.
+- `sudo` 1.8 o posterior, `timeout` (coreutils), `awk` y, para los logs de
+  contenedor, `mktemp` y `mkfifo` (coreutils/util-linux). Un sudoers limitado
+  a las órdenes que MAGI ejecuta basta, por ejemplo:
+
+```sudoers
+# /etc/sudoers.d/magi — sudo orden a orden, nunca «sudo sh»
+Cmnd_Alias MAGI_SERVICIOS = /usr/bin/systemctl, /usr/bin/journalctl, \
+    /usr/bin/docker, /usr/bin/nginx, /usr/bin/apachectl
+usuario ALL=(root) NOPASSWD: MAGI_SERVICIOS
+```
+
+Con `NOPASSWD`, MAGI detecta `sudo_sin_clave` y no pide contraseña; sin él, la
+pide y la comprueba con `ComprobarSudo`. Los hosts sin Docker ni Podman lo
+dicen en la sección Contenedores; con los dos, se usa el primero de
+`[servicios] contenedores` y la cabecera dice cuál.
+
+```toml
+[servicios]
+# refresco de la vista abierta en segundos (5-300; 0 = solo al entrar y con r)
+refresco_seg = 10
+# espera máxima al estado final de una acción en segundos (5-300)
+espera_seg = 30
+# líneas del anillo del panel de logs (1 000-100 000)
+lineas_log = 10000
+# líneas anteriores al abrir los logs (0-5 000)
+lineas_iniciales = 200
+# motores de contenedores por orden de preferencia ([] desactiva)
+contenedores = ["docker", "podman"]
+# unidades que pueden cortar la conexión con el host (admite * como patrón)
+criticas = ["sshd.service", "ssh.service", "networking.service",
+  "NetworkManager.service", "systemd-networkd.service",
+  "systemd-resolved.service", "firewalld.service", "ufw.service",
+  "nftables.service", "iptables.service", "tailscaled.service",
+  "wg-quick@*.service", "docker.service", "containerd.service",
+  "podman.service"]
+# minutos sin uso tras los que se olvida la contraseña de sudo (0-15; 0 = pedirla siempre)
+sudo_memoria_min = 5
+```
+
+El fichero de sincronización sube a `formato` 3 en cuanto hay alguna
+comprobación de servicio propia: los equipos con MAGI 1.2 lo verán como
+«formato nuevo» hasta que se actualicen. La app Android ya lee el formato 3 y
+guarda las comprobaciones en su copia sin usarlas; la vista de servicios del
+móvil llega en la Fase 14.
+
 ## App Android
 
 La app compañera para Android 11 o superior vive en [`android/`](android/) y se
@@ -721,9 +936,9 @@ y los APK por `magi-android-`. Las releases de Android **nunca** se marcan como
 Antes de instalar o actualizar, comprueba el APK y su certificado:
 
 ```sh
-sha256sum -c magi-android-v0.1.0.apk.sha256
-apksigner verify --print-certs magi-android-v0.1.0.apk
-gh attestation verify magi-android-v0.1.0.apk --repo 4d3-org/magi
+sha256sum -c magi-android-v0.2.0.apk.sha256
+apksigner verify --print-certs magi-android-v0.2.0.apk
+gh attestation verify magi-android-v0.2.0.apk --repo 4d3-org/magi
 ```
 
 `apksigner` viene con las build-tools del SDK de Android y `gh` es el GitHub
@@ -750,8 +965,8 @@ la sincronización y reaceptar las huellas.
 
 Globales: `F1` Flota · `F2` Hosts · `F3` pestaña activa o lista de sesiones ·
 `F4` Archivos · `F5` Identidades · `F6` Túneles · `F7` Registro · `F8`
-Snippets · `Ctrl+P` paleta · `?` ayuda · `Esc` cierra diálogos y filtros ·
-`q` vuelve o sale.
+Snippets · `F9` Servicios · `Ctrl+P` paleta · `?` ayuda · `Esc` cierra
+diálogos y filtros · `q` vuelve o sale.
 
 Flota: `↑` `↓` / `j` `k` mover · `↵` conectar · `r` sondear el host · `R`
 sondear todos los visibles · `e` editar la ficha · `/` filtro · `a`
@@ -810,6 +1025,14 @@ Snippets: `↑` `↓` / `j` `k` mover · `↵` ejecutar (diálogo) · `a` en tod
 destinos · `p` en pestañas · `n` nuevo · `e` editar · `x` borrar · `/`
 filtro · `t` Resultados · `i` detalle (con la vista baja) · `q` volver. En el
 formulario, `Ctrl+S` guarda.
+
+Servicios: `↑` `↓` / `j` `k` mover · `Tab` hosts ⇄ lista (en el detalle,
+Estado · Dependencias · Unidad) · `1` `2` `3` sección · `/` filtro · `↵`
+detalle · `l` logs · `A` `P` `R` `G` `H` acciones · `S` shell del
+contenedor · `c` comprobación propia · `!` contraseña de sudo · `r` refrescar
+· `Esc` volver. En el panel de logs: `/` texto · `n` nivel · `Espacio` pausa ·
+`Fin` al final · `t` pestaña. En «Toda la flota», `↵` va al host y `r`
+sondea todos.
 
 Resultados: `↑` `↓` / `j` `k` mover · `Tab` panel · `↵` ver la salida (`Tab`
 alterna stdout/stderr; con menos de 24 filas es la única forma de verla) ·
@@ -940,6 +1163,14 @@ borrado al terminar solo con éxito y las anotaciones de sincronización y
 deliberación. Si el sistema no trae `sftp-server`, esas pruebas se saltan con
 un aviso en lugar de fallar. El resto (marcas, avisos de sensibles,
 paneles, orden y fechas) son pruebas unitarias puras.
+
+Las pruebas de servicios no usan red externa: el servidor SSH de prueba con
+`systemctl`, `journalctl`, `docker`, `podman`, `sudo` y `nginx` falsos, y
+salidas grabadas de Debian 12, Ubuntu 24.04, Rocky 9 y Arch con Docker 27 y
+Podman 5. Cubren el núcleo y el script (`servicios_lectura`,
+`servicios_script`), la sincronización de las comprobaciones
+(`sincronizacion_comprobaciones`), el servidor (`servicios_servidor`) y la
+interfaz con sus instantáneas (`servicios_ui`, `redimensionado`).
 
 ## Autocompletado y man en macOS
 

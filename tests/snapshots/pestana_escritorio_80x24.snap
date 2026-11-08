@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+ MAGI · SESIÓN ────────────────────────────────────────────────── win-01 · RDP ─
+▸▣ 1 win-01 │ +
+
+  ▣ ESCRITORIO · win-01 · RDP
+
+    Estado      ● abierto · sin visor · se cierra en NN s
+    Destino     192.0.2.30:3389 ⤴ hetzner-01
+    Usuario     OFICINA\usuario
+    Tamaño      1920×1080 · fijo
+    Imagen      H.264 de Windows · 58 fps
+    Certificado SHA256:T2qRAb3dE5fG… (aceptado)
+    Desde       hace NN m
+
+  ↵ abrir el visor   y copiar enlace   Ctrl+] x cerrar
+  visor del navegador · 127.0.0.1 · la UI nunca recibe píxeles
+
+
+
+
+
+
+
+ ▣ 1/1 · abierto · sin visor · 58 fps · Ctrl+] ? ayuda
+ escritorio «win-01» abriéndose

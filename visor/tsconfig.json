@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"lib": ["ES2022", "DOM", "DOM.Iterable"]
+	},
+	"include": [
+		"src/cliente",
+		"src/protocolo.ts",
+		"src/teclas.ts",
+		"src/tipos/dom-extra.d.ts"
+	]
+}

@@ -618,6 +618,9 @@ pub(crate) const YA_USADA: &str = "esa deliberación ya autorizó otra ejecució
 pub(crate) fn deliberacion_usada(estado: &EstadoServidor, deliberacion_id: i64) -> bool {
     estado.ejecuciones.deliberacion_usada(deliberacion_id)
         || estado.transferencias.deliberacion_usada(deliberacion_id)
+        // Las acciones de servicio en curso también la consumen (Fase 13,
+        // T62: «ya usada» vale en los dos sentidos).
+        || super::servicios::deliberacion_usada(estado, deliberacion_id)
 }
 
 /// Lee y valida la fila de la deliberación: la escribió otro proceso y lo que

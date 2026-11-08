@@ -295,6 +295,9 @@ pub fn dibujar(
         | Dialogo::ImportacionBorrados { .. } => {
             crate::ui::sincronizacion::dibujar_dialogo(marco, area, app, dialogo, disp);
         }
+        Dialogo::Escritorio(dialogo) => {
+            crate::ui::escritorios::dibujar_dialogo(marco, area, app, dialogo, disp);
+        }
         Dialogo::Confirmar {
             titulo,
             lineas,

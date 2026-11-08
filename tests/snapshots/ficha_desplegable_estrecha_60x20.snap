@@ -2,9 +2,7 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────┐
-│  [ 22 ]                                                 ↑│
-│  Grupo                                                   │
-│  [ produccion                 ▾ ]                        │
+│  [ produccion                 ▾ ]                       ↑│
 │  Etiquetas                                               │
 │  [ web ]                                                 │
 │                                                          │
@@ -16,8 +14,10 @@ source: tests/redimensionado/arnes.rs
 │  Sa┌─────────────────────────────────┐                  ↓│
 │  TÚ│ auto                            │           n nuevo │
 │    │ contraseña · se pide al conectar│.0.0.1:5…  postgres│
-│┌ SE│ contraseña · llavero del sistema│ EXTRA ───────────┐│
-││   └─────────────────────────────────┘                  ││
+│  CO│ contraseña · llavero del sistema│           n nueva │
+│    └─────────────────────────────────┘n para crear una   │
+│┌ SERVICIOS ────────────────┐┌ OPCIONES EXTRA ───────────┐│
+││                           ││                           ││
 │└───────────────────────────┘└───────────────────────────┘│
 └──────────────────────────────────────────────────────────┘
  ⇥ campo  ↵ desplegable  ^s guardar  esc descartar

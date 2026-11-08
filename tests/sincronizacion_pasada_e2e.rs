@@ -96,6 +96,9 @@ impl Equipo {
                     grupo_id: host.grupo_id,
                     direccion: direccion.to_string(),
                     puerto: host.puerto,
+                    tipo: host.tipo,
+                    escritorio_dominio: host.escritorio_dominio.clone(),
+                    escritorio_opciones: host.escritorio_opciones.clone(),
                     usuario: host.usuario.clone(),
                     identidad_ref: host.identidad_ref.clone(),
                     salto_host_id: host.salto_host_id,
@@ -282,13 +285,17 @@ fn un_fichero_de_formato_nuevo_o_danado_no_se_aplica() {
     let a = equipo(&carpeta, &clave);
     let clave_obj = a.clave();
 
-    // Equipo conocido con formato 2: se marca formato_nuevo y no se importa.
+    // Equipo conocido con un formato que este MAGI no conoce (el 3): se marca
+    // formato_nuevo y no se importa.
     let uuid_nuevo = uuid::Uuid::new_v4().to_string();
     magi::almacen::equipos::crear(a.almacen.conexion(), &uuid_nuevo, "futuro", "linux").unwrap();
     // Un fichero de una versión futura también va firmado con la clave actual.
     let json = "{}";
     let firma = clave_obj.firmar(json.as_bytes()).unwrap();
-    let plano = format!("MAGI-SINCRONIZACION 2\nfirma: {firma}\n{json}\n");
+    let plano = format!(
+        "MAGI-SINCRONIZACION {}\nfirma: {firma}\n{json}\n",
+        formato::FORMATO_MAXIMO + 1
+    );
     let cifrado = clave_obj.cifrar(plano.as_bytes()).unwrap();
     sincronizacion::carpeta::escribir(&carpeta, &uuid_nuevo, &cifrado).unwrap();
     let resultado = a.pasada(PoliticaBorrados::Preguntar);
@@ -316,7 +323,7 @@ fn un_fichero_de_formato_nuevo_o_danado_no_se_aplica() {
         "{{\"formato\":1,\"app\":\"1.1.0\",\"equipo\":{{\"uuid\":\"{uuid_danado}\",\"nombre\":\"roto\",\"plataforma\":\"linux\"}},\"generado_en\":\"2026-11-05T00:00:00+01:00\",\"reloj_ms\":1,\"elementos\":[],\"lapidas\":[],\"huellas\":[],\"equipos_quitados\":[]}}"
     );
     let firma_mala = "0".repeat(64);
-    let plano = formato::componer(&documento, &firma_mala);
+    let plano = formato::componer(&documento, &firma_mala, formato::FORMATO_1);
     let cifrado = clave_obj.cifrar(&plano).unwrap();
     sincronizacion::carpeta::escribir(&carpeta, &uuid_danado, &cifrado).unwrap();
     let resultado = a.pasada(PoliticaBorrados::Preguntar);

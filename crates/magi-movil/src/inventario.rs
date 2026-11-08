@@ -7,8 +7,22 @@ use magi_nucleo::conexion::huellas::entradas_de_host;
 use magi_nucleo::modelo::{normalizar_busqueda, UltimoEstado};
 
 use crate::api::EstadoSesion;
-use crate::api::{ErrorNucleo, EstadoHost, FichaHost, GrupoInventario, HostInventario, HuellaHost};
+use crate::api::{
+    ErrorNucleo, EstadoHost, FichaHost, GrupoInventario, HostInventario, HuellaHost, TipoHostMovil,
+};
 use crate::estado::{con_almacen, EstadoNucleo};
+
+/// Traduce el tipo de host del núcleo al DTO de UniFFI (la app no ve el tipo
+/// del núcleo directamente).
+fn tipo_a_vista(tipo: magi_nucleo::escritorio::TipoHost) -> TipoHostMovil {
+    use magi_nucleo::escritorio::TipoHost;
+    match tipo {
+        TipoHost::Ssh => TipoHostMovil::Ssh,
+        TipoHost::Rdp => TipoHostMovil::Rdp,
+        TipoHost::Vnc => TipoHostMovil::Vnc,
+        TipoHost::Voxl => TipoHostMovil::Voxl,
+    }
+}
 
 /// Grupos del inventario con su plegado y el número de hosts.
 pub fn grupos(estado: &EstadoNucleo) -> Result<Vec<GrupoInventario>, ErrorNucleo> {
@@ -80,6 +94,7 @@ pub fn hosts(
             }
         }
         let uuid_host = fila.uuid.clone();
+        let tipo = tipo_a_vista(host.tipo);
         let (abiertas, abriendo, _caidas) = estado.recuento_sesiones(&uuid_host);
         let estado_host = if abriendas(&estado.sesiones, &fila.uuid) {
             EstadoHost::Conectando
@@ -96,6 +111,7 @@ pub fn hosts(
             nombre: host.nombre,
             direccion: host.direccion,
             puerto: u32::from(host.puerto),
+            tipo,
             usuario: host.usuario.unwrap_or_default(),
             grupo_uuid: host.grupo_id.and_then(|id| grupos.get(&id).cloned()),
             etiquetas: host.etiquetas,
@@ -151,6 +167,7 @@ pub fn ficha(estado: &EstadoNucleo, host_uuid: &str) -> Result<FichaHost, ErrorN
         nombre: host.nombre.clone(),
         direccion: host.direccion,
         puerto: u32::from(host.puerto),
+        tipo: tipo_a_vista(host.tipo),
         usuario: host.usuario.unwrap_or_default(),
         grupo_uuid,
         grupo_nombre: host.grupo_nombre.clone(),

@@ -1,0 +1,38 @@
+MAGI_PROP Id=nginx.service
+MAGI_PROP Names=nginx.service
+MAGI_PROP Description=A high performance web server
+MAGI_PROP LoadState=loaded
+MAGI_PROP ActiveState=active
+MAGI_PROP SubState=running
+MAGI_PROP Type=forking
+MAGI_PROP Result=success
+MAGI_PROP UnitFileState=enabled
+MAGI_PROP CanReload=yes
+MAGI_PROP FragmentPath=/lib/systemd/system/nginx.service
+MAGI_PROP ExecMainPID=1201
+MAGI_PROP MemoryCurrent=8806400
+MAGI_PROP ActiveEnterTimestampMonotonic=1197456121
+MAGI_DEP necesita system.slice
+MAGI_DEP necesita network.target
+MAGI_DEP necesita nginx.pid
+MAGI_DEP necesitada multi-user.target
+MAGI_TEXTO
+# /lib/systemd/system/nginx.service
+[Unit]
+Description=A high performance web server
+Documentation=man:nginx(8)
+After=network.target nss-lookup.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -q -g 'daemon on; master_process on;'
+ExecStart=/usr/sbin/nginx -g 'daemon on; master_process on;'
+ExecReload=/usr/sbin/nginx -g 'daemon on; master_process on;' -s reload
+ExecStop=-/sbin/start-stop-daemon --quiet --stop --retry QUIT/5 --pidfile /run/nginx.pid
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+MAGI_FIN

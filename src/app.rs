@@ -28,18 +28,21 @@ use crate::tema::Tema;
 use crate::ui::componentes::{AreaTexto, CampoTexto, Desplegable, Opcion, ValorOpcion};
 use crate::ui::disposicion::{Disposicion, Lista};
 use crate::ui::Vista;
+use magi_nucleo::escritorio::{InfoEscritorio, OpcionesEscritorio, TamanoEscritorio, TipoHost};
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 pub mod dialogo_magi;
 pub mod edicion;
+pub mod escritorios;
 pub mod formulario_snippet;
 pub mod geometria;
 pub mod guardadas;
 pub mod lanzar;
 pub mod permisos;
 mod resultados;
+pub mod servicios;
 pub mod servidor_anterior;
 pub mod sincronizacion;
 pub mod sincronizar;
@@ -501,11 +504,13 @@ impl FormularioTunel {
     }
 }
 
-/// Desplegable de hosts del diálogo de túnel.
+/// Desplegable de hosts del diálogo de túnel. Solo hosts SSH (Fase 12: un
+/// escritorio no tiene terminal, SFTP ni túneles).
 fn desplegable_hosts(hosts: &[Host]) -> Desplegable {
     Desplegable::nuevo(
         hosts
             .iter()
+            .filter(|host| host.tipo.es_ssh())
             .map(|host| Opcion {
                 etiqueta: host.nombre.clone(),
                 valor: ValorOpcion::Salto(host.id),
@@ -618,9 +623,37 @@ pub enum CampoFicha {
     Opciones,
     /// Bloque de túneles del host (no es un campo de texto).
     Tuneles,
+    /// Bloque de comprobaciones de servicio propias (Fase 13).
+    Comprobaciones,
+    // ------------------------------------------------ escritorios (Fase 12)
+    /// Selector de tipo de host: solo al crear uno (después es fijo).
+    Tipo,
+    /// Dominio de Windows (RDP).
+    Dominio,
+    /// Modo de la contraseña: guardar en el llavero, pedir siempre o, en VNC,
+    /// sin contraseña.
+    ContrasenaModo,
+    /// Contraseña que se guardará en el llavero al guardar la ficha.
+    Contrasena,
+    /// Tamaño del escritorio: ventana o fijo.
+    Tamano,
+    /// Tamaño fijo (AxH), cuando toca.
+    TamanoFijo,
+    /// Distribución de teclado que se anuncia a Windows (RDP).
+    Teclado,
+    /// Texto en los dos sentidos.
+    Portapapeles,
+    /// Pantalla X11 de voxl.
+    Pantalla,
+    /// Programa de voxl.
+    Programa,
+    /// Olvidar la huella del certificado (con confirmación).
+    OlvidarHuella,
+    /// Olvidar la contraseña del llavero (con confirmación).
+    OlvidarContrasena,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 21] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 22] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -642,6 +675,7 @@ pub const ORDEN_CAMPOS: [CampoFicha; 21] = [
     CampoFicha::Servicios,
     CampoFicha::Opciones,
     CampoFicha::Tuneles,
+    CampoFicha::Comprobaciones,
 ];
 
 pub enum AccionFicha {
@@ -657,6 +691,14 @@ pub enum AccionFicha {
     TunelBorrar,
     TunelAutomatico,
     TunelImportar,
+    /// Ficha de un escritorio: olvidar la huella del certificado.
+    OlvidarHuella,
+    /// Ficha de un escritorio: olvidar la contraseña del llavero.
+    OlvidarContrasena,
+    /// Bloque de comprobaciones de servicio: alta, edición y borrado.
+    ComprobacionNueva,
+    ComprobacionEditar,
+    ComprobacionBorrar,
 }
 
 /// Desplegable «Snippet al conectar» de la ficha: «ninguno» y los snippets
@@ -792,9 +834,69 @@ pub struct Ficha {
     pub indice_sugerencia: usize,
     /// Túnel seleccionado dentro del bloque «Túneles» de esta ficha.
     pub indice_tunel: usize,
+    // ------------------------------------------------ escritorios (Fase 12)
+    /// Tipo del formulario. Un host existente conserva el suyo.
+    pub tipo: magi_nucleo::escritorio::TipoHost,
+    /// Tipo con el que se creó (None si la ficha es nueva): no se cambia.
+    pub tipo_guardado: Option<magi_nucleo::escritorio::TipoHost>,
+    pub dominio: CampoTexto,
+    /// Contraseña que se escribió en la ficha (nunca se pinta en claro).
+    pub contrasena: CampoTexto,
+    /// true: guardar la contraseña en el llavero; false: pedirla siempre.
+    pub contrasena_modo: bool,
+    /// VNC sin contraseña (no se pide ninguna).
+    pub sin_contrasena: bool,
+    /// Tamaño: true = fijo (lo que haya en tamano), false = a la ventana.
+    pub tamano_fijo: bool,
+    pub tamano: CampoTexto,
+    /// Distribución de teclado que se anuncia a Windows (RDP).
+    pub teclado: Desplegable,
+    pub portapapeles: bool,
+    /// Pantalla X11 de voxl (:N o :N.M).
+    pub pantalla: CampoTexto,
+    /// Programa de voxl (voxl o una ruta absoluta).
+    pub programa: CampoTexto,
+    /// VNC directo ya confirmado en esta edición.
+    pub directo_confirmado: bool,
+    /// Huella del certificado aceptada (solo lectura; se olvida con una
+    /// acción aparte).
+    pub huella: Option<String>,
+    /// Última conexión del host (solo lectura).
+    pub ultima_conexion: Option<String>,
+    /// Hay una contraseña guardada en el llavero.
+    pub contrasena_guardada: bool,
+    // ------------------------------------------------ servicios (Fase 13)
+    /// Comprobaciones de configuración propias del host.
+    pub comprobaciones: Vec<magi_nucleo::modelo::ComprobacionServicio>,
+    /// Comprobación seleccionada en su bloque.
+    pub indice_comprobacion: usize,
 }
 
 impl Ficha {
+    /// ¿El campo con el foco es de escritura? (en la ficha, u abre Servicios
+    /// solo fuera de un campo).
+    pub fn campo_es_texto(&self) -> bool {
+        matches!(
+            self.campo,
+            CampoFicha::Nombre
+                | CampoFicha::Direccion
+                | CampoFicha::Puerto
+                | CampoFicha::Etiquetas
+                | CampoFicha::Usuario
+                | CampoFicha::Keepalive
+                | CampoFicha::BackupRuta
+                | CampoFicha::BackupPatron
+                | CampoFicha::TestsComando
+                | CampoFicha::Dominio
+                | CampoFicha::Contrasena
+                | CampoFicha::TamanoFijo
+                | CampoFicha::Pantalla
+                | CampoFicha::Programa
+                | CampoFicha::Servicios
+                | CampoFicha::Opciones
+        )
+    }
+
     pub fn datos(&self) -> DatosHost {
         let puerto = self.puerto.texto.trim().parse::<u16>().unwrap_or(0);
         let keepalive = if self.mantener {
@@ -815,29 +917,134 @@ impl Ficha {
             ValorOpcion::Identidad(identidad) => identidad,
             _ => IdentidadRef::Auto,
         };
+        let etiquetas: Vec<String> = self
+            .etiquetas
+            .texto
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        if !self.tipo.es_escritorio() {
+            return DatosHost {
+                nombre: self.nombre.texto.trim().to_string(),
+                grupo_id,
+                direccion: self.direccion.texto.trim().to_string(),
+                puerto,
+                tipo: self.tipo,
+                escritorio_dominio: None,
+                escritorio_opciones: OpcionesEscritorio::default(),
+                usuario: if usuario.is_empty() {
+                    None
+                } else {
+                    Some(usuario.to_string())
+                },
+                identidad_ref,
+                salto_host_id,
+                multiplexar: self.multiplexar,
+                keepalive_seg: keepalive,
+                opciones_extra: self.opciones.texto(),
+                servicios: self.servicios.texto(),
+                etiquetas,
+            };
+        }
+        // Escritorio: el tipo manda qué campos valen y los campos SSH se
+        // quedan vacíos (se guardan sin uso, §3.1).
+        let direccion = if self.tipo == TipoHost::Voxl {
+            "127.0.0.1".to_string()
+        } else {
+            self.direccion.texto.trim().to_string()
+        };
+        // Llavero solo si de verdad hay (o habrá) contraseña guardada: se
+        // escribe ahora, ya estaba, o el host venía así.
+        let guarda_llavero = self.contrasena_modo
+            && (!self.contrasena.texto.is_empty()
+                || self.contrasena_guardada
+                || self.original.identidad_ref.usa_llavero());
+        let estado_contrasena = if self.sin_contrasena {
+            IdentidadRef::Auto
+        } else if guarda_llavero {
+            IdentidadRef::ContrasenaLlavero
+        } else {
+            IdentidadRef::Contrasena
+        };
+        let (usuario, escritorio_dominio, identidad_ref) = match self.tipo {
+            TipoHost::Voxl => (None, None, IdentidadRef::Auto),
+            TipoHost::Vnc => (None, None, estado_contrasena),
+            _ => {
+                let dominio = self.dominio.texto.trim();
+                (
+                    if usuario.is_empty() {
+                        None
+                    } else {
+                        Some(usuario.to_string())
+                    },
+                    if dominio.is_empty() {
+                        None
+                    } else {
+                        Some(dominio.to_string())
+                    },
+                    estado_contrasena,
+                )
+            }
+        };
         DatosHost {
             nombre: self.nombre.texto.trim().to_string(),
             grupo_id,
-            direccion: self.direccion.texto.trim().to_string(),
+            direccion,
             puerto,
-            usuario: if usuario.is_empty() {
-                None
-            } else {
-                Some(usuario.to_string())
-            },
+            tipo: self.tipo,
+            escritorio_dominio,
+            escritorio_opciones: self.opciones_de_escritorio(),
+            usuario,
             identidad_ref,
             salto_host_id,
-            multiplexar: self.multiplexar,
-            keepalive_seg: keepalive,
-            opciones_extra: self.opciones.texto(),
-            servicios: self.servicios.texto(),
-            etiquetas: self
-                .etiquetas
-                .texto
-                .split_whitespace()
-                .map(str::to_string)
-                .collect(),
+            multiplexar: false,
+            keepalive_seg: None,
+            opciones_extra: String::new(),
+            servicios: String::new(),
+            etiquetas,
         }
+    }
+
+    /// Opciones del escritorio tal como están en la ficha (se validan al
+    /// guardar; las claves desconocidas del host se conservan).
+    pub fn opciones_de_escritorio(&self) -> OpcionesEscritorio {
+        let tamano = if self.tamano_fijo {
+            // Guardar falla antes si el texto no es válido; aquí se usa lo que
+            // se pueda leer para que la ficha siga siendo comparable.
+            TamanoEscritorio::desde_texto(&self.tamano.texto).unwrap_or(TamanoEscritorio::Ventana)
+        } else {
+            TamanoEscritorio::Ventana
+        };
+        let mut opciones = OpcionesEscritorio {
+            tamano,
+            portapapeles: self.portapapeles,
+            teclado: None,
+            pantalla: None,
+            programa: None,
+            directo: self.directo_confirmado || self.original.escritorio_opciones.directo,
+            extra: self.original.escritorio_opciones.extra.clone(),
+        };
+        if self.tipo == TipoHost::Rdp {
+            // «auto» se guarda como ausencia de clave (el servidor resuelve la
+            // distribución de [escritorio] distribucion_teclado).
+            let teclado = self.teclado.etiqueta_seleccionada();
+            opciones.teclado = (teclado != "auto").then(|| teclado.to_string());
+        }
+        if self.tipo == TipoHost::Voxl {
+            let pantalla = self.pantalla.texto.trim();
+            let programa = self.programa.texto.trim();
+            opciones.pantalla = Some(if pantalla.is_empty() {
+                ":0".to_string()
+            } else {
+                pantalla.to_string()
+            });
+            opciones.programa = Some(if programa.is_empty() {
+                "voxl".to_string()
+            } else {
+                programa.to_string()
+            });
+        }
+        opciones
     }
 
     /// Snippet al conectar elegido en la ficha.
@@ -877,6 +1084,12 @@ impl Ficha {
             CampoFicha::BackupRuta => Some(&mut self.backup_ruta),
             CampoFicha::BackupPatron => Some(&mut self.backup_patron),
             CampoFicha::TestsComando => Some(&mut self.tests_comando),
+            // Escritorios (Fase 12).
+            CampoFicha::Dominio => Some(&mut self.dominio),
+            CampoFicha::Contrasena => Some(&mut self.contrasena),
+            CampoFicha::TamanoFijo => Some(&mut self.tamano),
+            CampoFicha::Pantalla => Some(&mut self.pantalla),
+            CampoFicha::Programa => Some(&mut self.programa),
             _ => None,
         }
     }
@@ -887,6 +1100,7 @@ impl Ficha {
             CampoFicha::Identidad => Some(&mut self.identidad),
             CampoFicha::Salto => Some(&mut self.salto),
             CampoFicha::Snippet => Some(&mut self.snippet.desplegable),
+            CampoFicha::Teclado => Some(&mut self.teclado),
             _ => None,
         }
     }
@@ -899,24 +1113,88 @@ impl Ficha {
                 | CampoFicha::Salud
                 | CampoFicha::Backup
                 | CampoFicha::Tests
+                | CampoFicha::Portapapeles
         )
     }
 
     fn es_desplegable(campo: CampoFicha) -> bool {
         matches!(
             campo,
-            CampoFicha::Grupo | CampoFicha::Identidad | CampoFicha::Salto | CampoFicha::Snippet
+            CampoFicha::Grupo
+                | CampoFicha::Identidad
+                | CampoFicha::Salto
+                | CampoFicha::Snippet
+                | CampoFicha::Teclado
         )
     }
 
+    /// Campos que recorre el tabulador según el tipo de host y lo que
+    /// aplique (un escritorio no tiene campos SSH y al revés).
+    pub fn orden_campos(&self) -> Vec<CampoFicha> {
+        use CampoFicha::*;
+        if !self.tipo.es_escritorio() {
+            let mut campos = ORDEN_CAMPOS.to_vec();
+            // En un host nuevo el tipo se elige antes que nada y solo entonces
+            // aparece el formulario de su tipo (Fase 12).
+            if self.tipo_guardado.is_none() {
+                campos.insert(0, Tipo);
+            }
+            return campos;
+        }
+        let mut campos: Vec<CampoFicha> = Vec::new();
+        if self.tipo_guardado.is_none() {
+            campos.push(Tipo);
+        }
+        campos.push(Nombre);
+        if self.tipo != TipoHost::Voxl {
+            campos.push(Direccion);
+        }
+        campos.extend([Puerto, Grupo, Etiquetas, Salto]);
+        match self.tipo {
+            TipoHost::Rdp => {
+                campos.extend([Usuario, Dominio, ContrasenaModo]);
+                if self.contrasena_modo {
+                    campos.push(Contrasena);
+                }
+            }
+            TipoHost::Vnc => {
+                campos.push(ContrasenaModo);
+                if !self.sin_contrasena && self.contrasena_modo {
+                    campos.push(Contrasena);
+                }
+            }
+            TipoHost::Voxl => {}
+            TipoHost::Ssh => {}
+        }
+        campos.extend([Tamano]);
+        if self.tamano_fijo {
+            campos.push(TamanoFijo);
+        }
+        if self.tipo == TipoHost::Rdp {
+            campos.push(Teclado);
+        }
+        campos.push(Portapapeles);
+        if self.tipo == TipoHost::Voxl {
+            campos.extend([Pantalla, Programa]);
+        }
+        if self.contrasena_guardada {
+            campos.push(OlvidarContrasena);
+        }
+        if self.huella.is_some() {
+            campos.push(OlvidarHuella);
+        }
+        campos
+    }
+
     fn avanzar(&mut self, paso: i32) {
-        let posicion = ORDEN_CAMPOS
+        let campos = self.orden_campos();
+        let posicion = campos
             .iter()
             .position(|campo| *campo == self.campo)
             .unwrap_or(0) as i32;
-        let total = ORDEN_CAMPOS.len() as i32;
-        let nueva = (posicion + paso).rem_euclid(total) as usize;
-        self.campo = ORDEN_CAMPOS[nueva];
+        let total = campos.len() as i32;
+        let nueva = (posicion + paso).rem_euclid(total.max(1)) as usize;
+        self.campo = campos[nueva];
         self.sugerencias.clear();
         self.indice_sugerencia = 0;
     }
@@ -934,6 +1212,28 @@ impl Ficha {
             return;
         }
         self.indice_tunel = (self.indice_tunel as i32 + paso).clamp(0, total as i32 - 1) as usize;
+    }
+
+    /// Índice de la comprobación seleccionada, dentro de lo que hay.
+    pub fn indice_comprobacion_visible(&self, total: usize) -> usize {
+        self.indice_comprobacion.min(total.saturating_sub(1))
+    }
+
+    /// Mueve la selección del bloque de comprobaciones propias.
+    fn mover_comprobacion(&mut self, paso: i32) {
+        let total = self.comprobaciones.len();
+        if total == 0 {
+            self.indice_comprobacion = 0;
+            return;
+        }
+        self.indice_comprobacion =
+            (self.indice_comprobacion as i32 + paso).clamp(0, total as i32 - 1) as usize;
+    }
+
+    /// Comprobación seleccionada en el bloque, si la hay.
+    pub fn comprobacion_seleccionada(&self) -> Option<&magi_nucleo::modelo::ComprobacionServicio> {
+        self.comprobaciones
+            .get(self.indice_comprobacion_visible(self.comprobaciones.len()))
     }
 
     fn actualizar_sugerencias(&mut self, disponibles: &[String]) {
@@ -1030,6 +1330,9 @@ impl Ficha {
                 if self.campo == CampoFicha::Etiquetas && self.aceptar_sugerencia() {
                     return AccionFicha::Nada;
                 }
+                if let Some(accion) = self.enter_de_escritorio() {
+                    return accion;
+                }
                 if Self::es_desplegable(self.campo) {
                     if let Some(desplegable) = self.desplegable_mut(self.campo) {
                         desplegable.abrir();
@@ -1059,6 +1362,29 @@ impl Ficha {
                 self.mover_tunel(1, total_tuneles);
                 AccionFicha::Nada
             }
+            KeyCode::Up if self.campo == CampoFicha::Comprobaciones => {
+                self.mover_comprobacion(-1);
+                AccionFicha::Nada
+            }
+            KeyCode::Down if self.campo == CampoFicha::Comprobaciones => {
+                self.mover_comprobacion(1);
+                AccionFicha::Nada
+            }
+            // En el bloque de comprobaciones las letras son órdenes.
+            KeyCode::Char(caracter) if self.campo == CampoFicha::Comprobaciones => match caracter {
+                'j' => {
+                    self.mover_comprobacion(1);
+                    AccionFicha::Nada
+                }
+                'k' => {
+                    self.mover_comprobacion(-1);
+                    AccionFicha::Nada
+                }
+                'n' => AccionFicha::ComprobacionNueva,
+                'e' => AccionFicha::ComprobacionEditar,
+                'x' => AccionFicha::ComprobacionBorrar,
+                _ => AccionFicha::Nada,
+            },
             // En el bloque de túneles las letras son órdenes, no texto.
             KeyCode::Char(caracter) if self.campo == CampoFicha::Tuneles => match caracter {
                 'j' => {
@@ -1089,11 +1415,134 @@ impl Ficha {
                     CampoFicha::Salud => self.salud = !self.salud,
                     CampoFicha::Backup => self.backup = !self.backup,
                     CampoFicha::Tests => self.tests = !self.tests,
+                    CampoFicha::Portapapeles => self.portapapeles = !self.portapapeles,
                     _ => {}
                 }
                 AccionFicha::Nada
             }
+            // Escritorios (Fase 12): el tipo se elige al crear y después es
+            // fijo; los demás van en ciclo con espacio, ← y →.
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+                if self.campo == CampoFicha::Tipo =>
+            {
+                self.cambiar_tipo(tecla.code);
+                AccionFicha::Nada
+            }
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+                if self.campo == CampoFicha::ContrasenaModo =>
+            {
+                self.cambiar_modo_contrasena(tecla.code);
+                AccionFicha::Nada
+            }
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+                if self.campo == CampoFicha::Tamano =>
+            {
+                self.tamano_fijo = !self.tamano_fijo;
+                if self.tamano_fijo && self.tamano.texto.trim().is_empty() {
+                    self.tamano = CampoTexto::nuevo("1920x1080");
+                }
+                AccionFicha::Nada
+            }
+            KeyCode::Char('x') if self.campo == CampoFicha::OlvidarHuella => {
+                AccionFicha::OlvidarHuella
+            }
+            KeyCode::Char('x') if self.campo == CampoFicha::OlvidarContrasena => {
+                AccionFicha::OlvidarContrasena
+            }
             _ => self.editar(tecla, disponibles),
+        }
+    }
+
+    /// Enter en los campos de escritorio que no son de texto: selector de
+    /// tipo, modo de contraseña, tamaño y las dos acciones de olvidar.
+    fn enter_de_escritorio(&mut self) -> Option<AccionFicha> {
+        match self.campo {
+            CampoFicha::Tipo => {
+                self.cambiar_tipo(KeyCode::Right);
+                Some(AccionFicha::Nada)
+            }
+            CampoFicha::ContrasenaModo => {
+                self.cambiar_modo_contrasena(KeyCode::Right);
+                Some(AccionFicha::Nada)
+            }
+            CampoFicha::Tamano => {
+                self.tamano_fijo = !self.tamano_fijo;
+                if self.tamano_fijo && self.tamano.texto.trim().is_empty() {
+                    self.tamano = CampoTexto::nuevo("1920x1080");
+                }
+                Some(AccionFicha::Nada)
+            }
+            CampoFicha::OlvidarHuella => Some(AccionFicha::OlvidarHuella),
+            CampoFicha::OlvidarContrasena => Some(AccionFicha::OlvidarContrasena),
+            _ => None,
+        }
+    }
+
+    /// Tipo del host nuevo: cicla por los cuatro (después de crear es fijo).
+    fn cambiar_tipo(&mut self, code: KeyCode) {
+        if self.tipo_guardado.is_some() {
+            return;
+        }
+        let total = TipoHost::TODOS.len();
+        let actual = TipoHost::TODOS
+            .iter()
+            .position(|tipo| *tipo == self.tipo)
+            .unwrap_or(0);
+        let nuevo = if code == KeyCode::Left {
+            (actual + total - 1) % total
+        } else {
+            (actual + 1) % total
+        };
+        self.tipo = TipoHost::TODOS[nuevo];
+        // Puerto y opciones por defecto del tipo nuevo, sin pisar lo que el
+        // usuario ya haya escrito en los campos comunes.
+        let defectos: Vec<String> = TipoHost::TODOS
+            .iter()
+            .map(|tipo| tipo.puerto_por_defecto().to_string())
+            .collect();
+        let puerto = self.puerto.texto.trim();
+        if puerto.is_empty() || defectos.iter().any(|defecto| defecto == puerto) {
+            self.puerto = CampoTexto::nuevo(self.tipo.puerto_por_defecto().to_string());
+        }
+        let opciones = OpcionesEscritorio::por_defecto(self.tipo);
+        self.tamano_fijo = false;
+        self.portapapeles = opciones.portapapeles;
+        self.sin_contrasena = false;
+        self.contrasena_modo = true;
+        self.teclado.seleccionar_etiqueta("auto");
+        self.pantalla = CampoTexto::nuevo(
+            opciones
+                .pantalla
+                .clone()
+                .unwrap_or_else(|| ":0".to_string()),
+        );
+        self.programa = CampoTexto::nuevo(
+            opciones
+                .programa
+                .clone()
+                .unwrap_or_else(|| "voxl".to_string()),
+        );
+    }
+
+    /// Contraseña del escritorio: guardar en el llavero, pedir siempre o, en
+    /// VNC, sin contraseña.
+    fn cambiar_modo_contrasena(&mut self, code: KeyCode) {
+        if self.tipo == TipoHost::Vnc {
+            let actual = match (self.contrasena_modo, self.sin_contrasena) {
+                (true, _) => 0,
+                (false, false) => 1,
+                (false, true) => 2,
+            };
+            let nuevo = if code == KeyCode::Left {
+                (actual + 2) % 3
+            } else {
+                (actual + 1) % 3
+            };
+            self.contrasena_modo = nuevo == 0;
+            self.sin_contrasena = nuevo == 2;
+        } else {
+            self.contrasena_modo = !self.contrasena_modo;
+            self.sin_contrasena = false;
         }
     }
 
@@ -1607,6 +2056,18 @@ pub enum AccionDialogo {
     Guardadas(guardadas::AccionGuardadas),
     /// Acciones confirmadas de la sincronización del inventario (Fase 10).
     Inventario(AccionInventario),
+    /// Fase 12: cerrar un escritorio (ya confirmado).
+    CerrarEscritorio(u32),
+    /// Fase 12: olvidar la huella del certificado de un host (ya confirmado).
+    OlvidarHuellaEscritorio(i64),
+    /// Fase 12: olvidar la contraseña del llavero (ya confirmado).
+    OlvidarContrasenaEscritorio {
+        host_id: i64,
+        usuario: String,
+    },
+    /// Fase 12: el usuario aceptó guardar un VNC directo sin cifrar: se fija
+    /// directo y se guarda la ficha.
+    GuardarEscritorioDirecto,
 }
 
 /// Acciones de la Fase 10 que sobreviven al cierre del diálogo (se ejecutan en
@@ -1814,6 +2275,9 @@ pub enum Dialogo {
     ImportacionBorrados {
         pendientes: crate::sincronizacion::BorradosPendientes,
     },
+    /// Escritorios remotos (Fase 12): certificado RDP, credenciales que pide
+    /// el servidor y aviso de VNC directo sin cifrar.
+    Escritorio(escritorios::DialogoEscritorio),
 }
 
 pub struct ImportacionPendiente {
@@ -1825,7 +2289,12 @@ pub struct ImportacionPendiente {
 
 /// Una pestaña de la vista Sesión: espejo local de una sesión del servidor.
 pub struct PestanaUI {
+    /// Id de la sesión de terminal (Fase 12: 0 en una pestaña de escritorio).
     pub sesion_id: u32,
+    /// Id de la sesión de escritorio del servidor; None en una terminal.
+    pub escritorio_id: Option<u32>,
+    /// Tipo de host del escritorio (Fase 12); None en una terminal.
+    pub tipo: Option<TipoHost>,
     pub nombre: String,
     pub host_id: i64,
     pub host_nombre: String,
@@ -1886,6 +2355,12 @@ pub enum AccionPaleta {
     SondearTodos,
     IrAFlota,
     OlvidarContrasena(i64),
+    /// Fase 12: olvidar la huella del certificado de un escritorio.
+    OlvidarHuella(i64),
+    /// Fase 12: cerrar la pestaña de un escritorio (con confirmación).
+    CerrarEscritorio(u32),
+    /// Fase 12: reconectar la sesión caída de un escritorio.
+    ReconectarEscritorio(u32),
     NuevaVentana,
     CerrarPestana(u32),
     ReconectarPestana(u32),
@@ -2117,6 +2592,28 @@ pub struct App {
     siguiente_peticion_archivos: u64,
     /// Sincronización del inventario (Fase 10): vista, conflictos e indicador.
     pub sincronizacion: sincronizacion::EstadoSincronizacion,
+    // ------------------------------------------------ escritorios (Fase 12)
+    /// Sesiones de escritorio que difunde el servidor, por id.
+    pub escritorios: HashMap<u32, InfoEscritorio>,
+    /// Peticiones de escritorio en vuelo, por peticion_id (desde 2^46).
+    pub peticiones_escritorio: HashMap<u64, escritorios::PeticionEscritorio>,
+    siguiente_peticion_escritorio: u64,
+    /// Hosts cuya apertura de escritorio está en vuelo (se activa la pestaña
+    /// cuando aparece en la difusión).
+    pub aperturas_escritorio: HashSet<i64>,
+    /// Enlace del visor que no se pudo abrir en el navegador: id del
+    /// escritorio, url y momento (vale 60 s y se copia con y).
+    pub enlace_visible: Option<(u32, String, Instant)>,
+    /// Contraseñas de escritorio que el usuario pidió recordar y aún no se
+    /// guardan en el llavero: solo cuando la sesión llega a abierta, para no
+    /// guardar una que no autentica (m5 de la revisión).
+    contrasenas_escritorio_pendientes: HashMap<u32, (String, Zeroizing<String>)>,
+    // ------------------------------------------------ servicios (Fase 13)
+    /// Estado de la vista Servicios: listados, selecciones, logs y sudo.
+    pub servicios: servicios::EstadoServicios,
+    /// Peticiones de servicios en vuelo, por peticion_id (desde 2^45).
+    pub peticiones_servicio: HashMap<u64, servicios::PeticionServicio>,
+    siguiente_peticion_servicios: u64,
 }
 
 impl App {
@@ -2163,6 +2660,29 @@ impl App {
         app.cargar_sondeos();
         app.entrar_en_flota();
         Ok((app, enviados))
+    }
+
+    /// App de prueba conectada al servidor de sesiones real que ya está
+    /// corriendo (el del escenario de pruebas): sin hilo de teclas ni tick,
+    /// para la prueba de extremo a extremo de Servicios. No la uses fuera de
+    /// las pruebas.
+    #[doc(hidden)]
+    pub fn de_prueba_conectada(
+        rutas: Rutas,
+        config: Config,
+        tema: Tema,
+        almacen: Almacen,
+    ) -> Result<Self> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let mut app = Self::construir(rutas, config, tema, almacen, runtime, None)?;
+        app.efectos_externos = false;
+        app.cargar_sondeos();
+        app.entrar_en_flota();
+        app.conectar_con_servidor();
+        Ok(app)
     }
 
     /// Estado inicial, sin efectos: ni hilos, ni red, ni servidor.
@@ -2284,6 +2804,15 @@ impl App {
             peticiones_archivos: HashMap::new(),
             siguiente_peticion_archivos: RANGO_ARCHIVOS_APP,
             sincronizacion: sincronizacion::EstadoSincronizacion::default(),
+            escritorios: HashMap::new(),
+            peticiones_escritorio: HashMap::new(),
+            siguiente_peticion_escritorio: protocolo::RANGO_ESCRITORIOS,
+            aperturas_escritorio: HashSet::new(),
+            enlace_visible: None,
+            contrasenas_escritorio_pendientes: HashMap::new(),
+            servicios: servicios::EstadoServicios::default(),
+            peticiones_servicio: HashMap::new(),
+            siguiente_peticion_servicios: protocolo::RANGO_SERVICIOS,
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
@@ -2662,6 +3191,15 @@ impl App {
         if let Some(inicio) = inicio(Lista::Snippets) {
             self.snippets.desplazamiento = inicio;
         }
+        if let Some(inicio) = inicio(Lista::ServiciosHosts) {
+            self.servicios.desplazamiento_hosts = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::ServiciosLista) {
+            self.servicios.desplazamiento_lista = inicio;
+        }
+        if let Some(inicio) = inicio(Lista::ServiciosTodaLaFlota) {
+            self.servicios.desplazamiento_flota = inicio;
+        }
         if let (Some(inicio), Some(paleta)) = (inicio(Lista::Paleta), self.paleta.as_mut()) {
             paleta.desplazamiento = inicio;
         }
@@ -2810,7 +3348,18 @@ impl App {
                         self.servidor = servidor;
                         self.servidor_desde = Some(Instant::now());
                         self.servidor_caido = false;
+                        self.servicios.servidor_caido = false;
                         self.mensaje("servidor relanzado", false);
+                        // Si se reconectó desde Servicios, se reintenta el
+                        // listado del host que estaba «desconectado».
+                        if self.vista == Vista::Servicios {
+                            if let Some(host_id) = self.servicios_host_seleccionado() {
+                                if let Some(listado) = self.servicios.listados.get_mut(&host_id) {
+                                    listado.estado = servicios::EstadoListado::Ok;
+                                }
+                                self.pedir_listado(host_id);
+                            }
+                        }
                     }
                     Err(motivo) => self.mensaje(motivo, true),
                 }
@@ -2868,10 +3417,18 @@ impl App {
                 self.evento_inventario(evento);
             }
         }
+        // Si el evento cambió de vista (una sesión que aparece, un aviso que
+        // lleva a otra vista), se para lo que quedara de Servicios.
+        self.vigilar_salida_de_servicios();
     }
 
     fn tick(&mut self) {
         self.tick_sincronizacion();
+        self.tick_servicios();
+        if self.vista == Vista::Servicios && self.contador_ticks % 4 == 0 {
+            // «hace N s» de la cabecera cambia solo.
+            self.sucio = true;
+        }
         if let Some(estado) = &mut self.archivos {
             estado.muestrear(Instant::now());
         }
@@ -3088,15 +3645,39 @@ impl App {
     // ------------------------------------------------------------- inventario
 
     fn tecla_hosts(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('u') && !self.filtro_activo {
+            match self.host_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_servicios(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no tiene servicios", host.nombre),
+                    true,
+                ),
+                None => self.abrir_servicios(None),
+            }
+            return;
+        }
         if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
-            if let Some(host_id) = self.host_seleccionado().map(|host| host.id) {
-                self.abrir_archivos(Some(host_id));
+            match self.host_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => self.abrir_archivos(Some(host.id)),
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no tiene SFTP", host.nombre),
+                    true,
+                ),
+                None => self.abrir_archivos(None),
             }
             return;
         }
         if tecla.code == KeyCode::Char('!') && !self.filtro_activo {
-            if let Some(host_id) = self.host_seleccionado().map(|host| host.id) {
-                self.paleta_snippets_de_host(host_id);
+            match self.host_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => self.paleta_snippets_de_host(host.id),
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no ejecuta snippets", host.nombre),
+                    true,
+                ),
+                None => {}
             }
             return;
         }
@@ -3218,10 +3799,22 @@ impl App {
     // ------------------------------------------------------------------ conexión
 
     /// Pide al servidor una sesión nueva al host (↵ en Hosts y Flota,
-    /// paleta, `magi conectar`); siempre abre una nueva.
+    /// paleta, magi conectar); siempre abre una nueva. En un escritorio abre
+    /// su pestaña y el visor (Fase 12).
     fn conectar(&mut self, host_id: i64) {
-        let comandos = self.comandos_al_conectar(host_id);
-        self.abrir_sesion_con(host_id, comandos);
+        let tipo = self
+            .hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .map(|host| host.tipo);
+        match tipo {
+            Some(tipo) if tipo.es_escritorio() => self.abrir_escritorio(host_id),
+            Some(_) => {
+                let comandos = self.comandos_al_conectar(host_id);
+                self.abrir_sesion_con(host_id, comandos);
+            }
+            None => self.mensaje("no hay host seleccionado", true),
+        }
     }
 
     /// Pide una pestaña al host con sus comandos iniciales (snippet al
@@ -3231,6 +3824,28 @@ impl App {
         host_id: i64,
         comandos_iniciales: Vec<protocolo::ComandoInicial>,
     ) -> bool {
+        self.abrir_sesion_con_opciones(host_id, comandos_iniciales, None, true)
+    }
+
+    /// Igual, con la orden de la Fase 13 (pestañas con orden) y pudiendo
+    /// abrirla en segundo plano (sin pasar a Sesión).
+    fn abrir_sesion_con_orden(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+        orden: Option<magi_nucleo::servicios::OrdenPestana>,
+        activar: bool,
+    ) -> bool {
+        self.abrir_sesion_con_opciones(host_id, comandos_iniciales, orden, activar)
+    }
+
+    fn abrir_sesion_con_opciones(
+        &mut self,
+        host_id: i64,
+        comandos_iniciales: Vec<protocolo::ComandoInicial>,
+        orden: Option<magi_nucleo::servicios::OrdenPestana>,
+        activar: bool,
+    ) -> bool {
         if let Some(motivo) = self.motivo_servidor_incompatible() {
             self.mensaje(motivo, true);
             return false;
@@ -3239,7 +3854,7 @@ impl App {
             self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
             return false;
         }
-        if self.aperturas_pendientes.contains(&host_id) {
+        if activar && self.aperturas_pendientes.contains(&host_id) {
             self.mensaje("ya hay una conexión en curso con ese host", true);
             return false;
         }
@@ -3250,15 +3865,20 @@ impl App {
                 cols,
                 filas,
                 comandos_iniciales,
+                orden,
             });
-        self.aperturas_pendientes.insert(host_id);
-        let nombre = self
-            .hosts
-            .iter()
-            .find(|host| host.id == host_id)
-            .map(|host| host.nombre.clone())
-            .unwrap_or_default();
-        self.mensaje(format!("conectando con «{nombre}»…"), false);
+        if activar {
+            self.aperturas_pendientes.insert(host_id);
+        }
+        if activar {
+            let nombre = self
+                .hosts
+                .iter()
+                .find(|host| host.id == host_id)
+                .map(|host| host.nombre.clone())
+                .unwrap_or_default();
+            self.mensaje(format!("conectando con «{nombre}»…"), false);
+        }
         self.sucio = true;
         true
     }
@@ -3461,10 +4081,12 @@ impl App {
         }
     }
 
-    /// Id de la sesión de la pestaña activa, si la hay.
+    /// Id de la sesión de terminal de la pestaña activa, si la hay (None en
+    /// una pestaña de escritorio: su canal lo custodia el servidor).
     pub fn pestana_activa_id(&self) -> Option<u32> {
         self.pestana_activa
             .and_then(|indice| self.pestanas.get(indice))
+            .filter(|pestaña| pestaña.escritorio_id.is_none())
             .map(|pestaña| pestaña.sesion_id)
     }
 
@@ -3568,6 +4190,9 @@ impl App {
 
     /// Mensajes del servidor de sesiones que no resuelve la tarea de lectura.
     fn evento_servidor(&mut self, mensaje: protocolo::MensajeServidor) {
+        if self.evento_servicios(&mensaje) {
+            return;
+        }
         match mensaje {
             protocolo::MensajeServidor::Sesiones { lista } => {
                 self.reconciliar_sesiones(lista);
@@ -3661,9 +4286,11 @@ impl App {
                 sesiones,
                 tuneles,
                 ejecuciones,
+                acciones_servicio,
                 ..
             } => {
                 self.actualizar_ejecuciones(ejecuciones);
+                self.servicios.acciones = acciones_servicio;
                 self.servidor_pid = Some(pid);
                 self.cliente_id = Some(cliente_id);
                 self.servidor_desde = Some(Instant::now());
@@ -3694,12 +4321,68 @@ impl App {
                         self.mensaje(format!("{}: {mensaje}", peticion.etiqueta()), true);
                         return;
                     }
+                    // Las de escritorios llevan su propio rango (Fase 12).
+                    if self.resolver_error_escritorio(peticion_id, &mensaje) {
+                        return;
+                    }
+                    if peticion_id >= protocolo::RANGO_ESCRITORIOS {
+                        // Petición de escritorio que já no está en vuelo (por
+                        // ejemplo, una apertura cancelada): solo el aviso.
+                        self.mensaje(format!("escritorio: {mensaje}"), true);
+                        return;
+                    }
                     // Tampoco lo es una ejecución de snippets (su rango).
                     if self.error_de_ejecucion(peticion_id, &mensaje) {
                         return;
                     }
                 }
                 self.error_de_archivos(mensaje, peticion_id);
+            }
+            // ------------------------------------------------ escritorios (F12)
+            protocolo::MensajeServidor::Escritorios { lista } => {
+                self.evento_escritorios(lista);
+            }
+            protocolo::MensajeServidor::EscritorioAbierto {
+                peticion_id,
+                escritorio_id,
+                enlace,
+            } => {
+                self.escritorio_abierto(peticion_id, escritorio_id, enlace);
+            }
+            protocolo::MensajeServidor::Enlace {
+                peticion_id,
+                escritorio_id,
+                enlace,
+            } => {
+                self.enlace_escritorio(peticion_id, escritorio_id, enlace);
+            }
+            protocolo::MensajeServidor::PideHuellaEscritorio {
+                peticion_id,
+                escritorio_id,
+                host_id,
+                host_nombre,
+                datos,
+            } => {
+                self.pedir_huella_escritorio(
+                    peticion_id,
+                    escritorio_id,
+                    host_id,
+                    host_nombre,
+                    datos,
+                );
+            }
+            protocolo::MensajeServidor::PideCredenciales {
+                peticion_id,
+                escritorio_id,
+                host_nombre,
+                peticion,
+            } => {
+                self.pedir_credenciales_escritorio(
+                    peticion_id,
+                    escritorio_id,
+                    host_nombre,
+                    peticion,
+                );
             }
             protocolo::MensajeServidor::VersionIncompatible { .. } => {}
             protocolo::MensajeServidor::PideLlavero {
@@ -3817,6 +4500,17 @@ impl App {
             } => {
                 self.salida_recibida(ejecucion_id, host_id, stdout.0, stderr.0, truncada);
             }
+            // ------------------------------------------------ servicios (F13)
+            // La pista de la vista implementa estos mensajes en
+            // `evento_servicios`; de momento se descartan.
+            protocolo::MensajeServidor::Servicios { .. }
+            | protocolo::MensajeServidor::Consumo { .. }
+            | protocolo::MensajeServidor::Detalle { .. }
+            | protocolo::MensajeServidor::SudoComprobado { .. }
+            | protocolo::MensajeServidor::AccionServicioHecha { .. }
+            | protocolo::MensajeServidor::AccionesServicio { .. }
+            | protocolo::MensajeServidor::LineasLog { .. }
+            | protocolo::MensajeServidor::FinLog { .. } => {}
             protocolo::MensajeServidor::Ejecutado { .. }
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
@@ -3874,9 +4568,12 @@ impl App {
     /// servidor, conservando pantallas, orden y la activa.
     fn reconciliar_sesiones(&mut self, lista: Vec<protocolo::InfoSesion>) {
         let vivos: HashSet<u32> = lista.iter().map(|info| info.id).collect();
+        // Solo las terminales: las pestañas de escritorio las recompone
+        // Escritorios{lista} (Fase 12).
         let desaparecidas: Vec<u32> = self
             .pestanas
             .iter()
+            .filter(|pestaña| pestaña.escritorio_id.is_none())
             .filter(|pestaña| !vivos.contains(&pestaña.sesion_id))
             .map(|pestaña| pestaña.sesion_id)
             .collect();
@@ -3902,6 +4599,8 @@ impl App {
                 let activar = self.aperturas_pendientes.contains(&info.host_id);
                 self.pestanas.push(PestanaUI {
                     sesion_id: info.id,
+                    escritorio_id: None,
+                    tipo: None,
                     nombre: info.nombre,
                     host_id: info.host_id,
                     host_nombre: info.host_nombre,
@@ -4168,7 +4867,17 @@ impl App {
         self.ediciones_servidor_caido();
         self.sincronizaciones_servidor_caido();
         self.peticiones_archivos.clear();
-        // Las preguntas del servidor ya no tienen a quién contestar.
+        // Servicios: los listados se conservan con su hora y se marcan
+        // «desconectado»; ninguna respuesta de servicios va a llegar.
+        self.servicios_desconectado();
+        self.peticiones_servicio.clear();
+        // Las peticiones de escritorio en vuelo y sus enlaces ya no valen.
+        self.peticiones_escritorio.clear();
+        self.aperturas_escritorio.clear();
+        self.enlace_visible = None;
+        self.contrasenas_escritorio_pendientes.clear();
+        // Las preguntas del servidor ya no tienen a quién contestar (también
+        // las de escritorio: certificado y credenciales).
         self.pila_dialogos.retain(|dialogo| {
             !matches!(
                 dialogo,
@@ -4176,6 +4885,7 @@ impl App {
                     | Dialogo::HuellaCambiadaServidor { .. }
                     | Dialogo::FraseServidor { .. }
                     | Dialogo::ContrasenaServidor { .. }
+                    | Dialogo::Escritorio(_)
             )
         });
         self.anotar(
@@ -4194,6 +4904,11 @@ impl App {
     /// Respuesta al diálogo SERVIDOR CAÍDO: `s` relanza, `n` sigue sin sesiones.
     fn resolver_servidor_caido(&mut self, relanzar: bool) {
         self.pestanas.clear();
+        self.escritorios.clear();
+        self.peticiones_escritorio.clear();
+        self.aperturas_escritorio.clear();
+        self.enlace_visible = None;
+        self.contrasenas_escritorio_pendientes.clear();
         self.pestana_activa = None;
         if self.vista == Vista::Sesion {
             self.volver_tras_cierre();
@@ -4286,6 +5001,7 @@ impl App {
     }
 
     fn tecla_sesion(&mut self, tecla: KeyEvent) {
+        let escritorio = self.escritorio_activo_id();
         if self.modo_prefijo {
             self.modo_prefijo = false;
             if crate::teclas::es_prefijo(&tecla, self.prefijo) {
@@ -4315,7 +5031,9 @@ impl App {
                     self.ir_a_pestaña(c.to_digit(10).unwrap() as usize);
                 }
                 KeyCode::Char('f') => {
-                    if let Some(indice) = self.pestana_activa {
+                    if escritorio.is_some() {
+                        self.mensaje("un escritorio no tiene vista Archivos", true);
+                    } else if let Some(indice) = self.pestana_activa {
                         if let Some(pestana) = self.pestanas.get(indice) {
                             let host_id = pestana.host_id;
                             self.salir_de_sesion_si_hace_falta();
@@ -4330,14 +5048,24 @@ impl App {
                 }
                 KeyCode::Char('c') => self.abrir_paleta_conectar(),
                 KeyCode::Char('x') => {
-                    self.dialogo = Some(Dialogo::Confirmar {
-                        titulo: "CERRAR PESTAÑA".to_string(),
-                        lineas: vec!["¿Cerrar la sesión remota?".to_string()],
-                        peligro: true,
-                        accion: AccionDialogo::CerrarSesion,
-                    });
+                    if let Some(escritorio_id) = escritorio {
+                        self.preguntar_cerrar_escritorio(escritorio_id);
+                    } else {
+                        self.dialogo = Some(Dialogo::Confirmar {
+                            titulo: "CERRAR PESTAÑA".to_string(),
+                            lineas: vec!["¿Cerrar la sesión remota?".to_string()],
+                            peligro: true,
+                            accion: AccionDialogo::CerrarSesion,
+                        });
+                    }
                 }
-                KeyCode::Char('r') => self.reconectar_pestaña_activa(),
+                KeyCode::Char('r') => {
+                    if let Some(escritorio_id) = escritorio {
+                        self.reconectar_escritorio(escritorio_id);
+                    } else {
+                        self.reconectar_pestaña_activa();
+                    }
+                }
                 KeyCode::Char('w') => {
                     if let Err(error) = cliente::ventana::abrir(&self.config) {
                         self.mensaje(error, true);
@@ -4352,6 +5080,17 @@ impl App {
             return;
         }
         if tecla.kind == KeyEventKind::Release {
+            return;
+        }
+        // En una pestaña de escritorio no hay terminal: ↵ abre el visor e y
+        // copia un enlace de un solo uso; el resto de teclas no van a ningún
+        // sitio (el visor recibe lo suyo por su WebSocket).
+        if escritorio.is_some() {
+            match tecla.code {
+                KeyCode::Enter => self.abrir_visor_activo(),
+                KeyCode::Char('y') => self.copiar_enlace_activo(),
+                _ => {}
+            }
             return;
         }
         if let Some(bytes) = crate::teclas::bytes_de_tecla(tecla) {
@@ -4387,7 +5126,12 @@ impl App {
                 return;
             }
         };
-        self.ficha = Some(self.construir_ficha(Some(&host), host.grupo_id, verificaciones));
+        let mut ficha = self.construir_ficha(Some(&host), host.grupo_id, verificaciones);
+        // La contraseña del llavero se mira aquí y no en cada pintado.
+        if host.tipo.es_escritorio() && host.identidad_ref.usa_llavero() {
+            ficha.contrasena_guardada = self.contrasena_guardada(&host);
+        }
+        self.ficha = Some(ficha);
         self.vista = Vista::Ficha;
         self.refrescar_identidades();
     }
@@ -4410,7 +5154,7 @@ impl App {
             .almacen
             .listar_snippets()
             .unwrap_or_else(|_| self.snippets.lista.clone());
-        Self::ficha_de(
+        let mut ficha = Self::ficha_de(
             host,
             grupo_id,
             &self.grupos,
@@ -4418,7 +5162,15 @@ impl App {
             self.opciones_identidad(),
             &snippets,
             verificaciones,
-        )
+        );
+        // Las comprobaciones propias del host se leen al abrir la ficha.
+        if let Some(host) = host.filter(|host| host.tipo.es_ssh()) {
+            ficha.comprobaciones = self
+                .almacen
+                .comprobaciones_de_host(host.id)
+                .unwrap_or_default();
+        }
+        ficha
     }
 
     /// La ficha de `host` (o una nueva en `grupo_id`) a partir de lo que la
@@ -4439,6 +5191,9 @@ impl App {
                 grupo_id: host.grupo_id,
                 direccion: host.direccion.clone(),
                 puerto: host.puerto,
+                tipo: host.tipo,
+                escritorio_dominio: host.escritorio_dominio.clone(),
+                escritorio_opciones: host.escritorio_opciones.clone(),
                 usuario: host.usuario.clone(),
                 identidad_ref: host.identidad_ref.clone(),
                 salto_host_id: host.salto_host_id,
@@ -4483,6 +5238,33 @@ impl App {
         let snippet_original = host.and_then(|host| host.snippet_al_conectar_id);
         let verificaciones = verificaciones.unwrap_or_default().normalizada();
         let texto = |valor: &Option<String>| CampoTexto::nuevo(valor.clone().unwrap_or_default());
+        // Escritorios (Fase 12): opciones y campos propios del tipo.
+        let opciones = datos.escritorio_opciones.clone();
+        let mut teclado = Desplegable::nuevo(
+            ["auto", "es-ES", "en-US", "fr-FR", "de-DE", "pt-BR", "it-IT"]
+                .into_iter()
+                .map(|etiqueta| Opcion {
+                    etiqueta: etiqueta.to_string(),
+                    valor: ValorOpcion::Ninguno,
+                })
+                .collect(),
+        );
+        teclado.seleccionar_etiqueta(opciones.teclado.as_deref().unwrap_or("auto"));
+        let (tamano_fijo, tamano) = match opciones.tamano {
+            TamanoEscritorio::Ventana => (false, String::new()),
+            TamanoEscritorio::Fijo { ancho, alto } => (true, format!("{ancho}x{alto}")),
+        };
+        let sin_contrasena =
+            host.is_some() && datos.tipo == TipoHost::Vnc && datos.identidad_ref.es_auto();
+        let contrasena_modo = host.is_none() || datos.identidad_ref.usa_llavero();
+        let pantalla = opciones
+            .pantalla
+            .clone()
+            .unwrap_or_else(|| ":0".to_string());
+        let programa = opciones
+            .programa
+            .clone()
+            .unwrap_or_else(|| "voxl".to_string());
         Ficha {
             host_id: host.map(|host| host.id),
             original: datos.clone(),
@@ -4523,6 +5305,24 @@ impl App {
             sugerencias: Vec::new(),
             indice_sugerencia: 0,
             indice_tunel: 0,
+            tipo: datos.tipo,
+            tipo_guardado: host.map(|host| host.tipo),
+            dominio: texto(&datos.escritorio_dominio),
+            contrasena: CampoTexto::default(),
+            contrasena_modo,
+            sin_contrasena,
+            tamano_fijo,
+            tamano: CampoTexto::nuevo(tamano),
+            teclado,
+            portapapeles: opciones.portapapeles,
+            pantalla: CampoTexto::nuevo(pantalla),
+            programa: CampoTexto::nuevo(programa),
+            directo_confirmado: false,
+            huella: host.and_then(|host| host.huella_escritorio.clone()),
+            ultima_conexion: host.and_then(|host| host.ultima_conexion_en.clone()),
+            contrasena_guardada: false,
+            comprobaciones: Vec::new(),
+            indice_comprobacion: 0,
         }
     }
 
@@ -4583,6 +5383,23 @@ impl App {
     }
 
     fn tecla_ficha(&mut self, tecla: KeyEvent) {
+        // u abre Servicios con el host de la ficha, fuera de un campo de
+        // texto (dentro de un campo, u es una letra más).
+        if tecla.code == KeyCode::Char('u')
+            && !tecla
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self
+                .ficha
+                .as_ref()
+                .is_some_and(|ficha| !ficha.campo_es_texto())
+        {
+            match self.ficha.as_ref().and_then(|ficha| ficha.host_id) {
+                Some(host_id) => self.abrir_servicios(Some(host_id)),
+                None => self.mensaje("guarda el host antes de ver sus servicios", true),
+            }
+            return;
+        }
         let disponibles = self.etiquetas.clone();
         // El bloque de túneles necesita saber cuántos hay: la lista vive aquí.
         let total_tuneles = self
@@ -4615,8 +5432,22 @@ impl App {
             AccionFicha::TunelBorrar => self.tunel_borrar_en_ficha(),
             AccionFicha::TunelAutomatico => self.tunel_automatico_en_ficha(),
             AccionFicha::TunelImportar => self.importar_reenvios_ficha(),
+            AccionFicha::OlvidarHuella => {
+                if let Some(host_id) = self.ficha.as_ref().and_then(|ficha| ficha.host_id) {
+                    self.preguntar_olvidar_huella(host_id);
+                }
+            }
+            AccionFicha::OlvidarContrasena => {
+                if let Some(host_id) = self.ficha.as_ref().and_then(|ficha| ficha.host_id) {
+                    self.preguntar_olvidar_contrasena_escritorio(host_id);
+                }
+            }
+            AccionFicha::ComprobacionNueva => self.ficha_comprobacion_nueva(),
+            AccionFicha::ComprobacionEditar => self.ficha_comprobacion_editar(),
+            AccionFicha::ComprobacionBorrar => self.ficha_comprobacion_borrar(),
         }
         self.ajustar_indice_tunel();
+        self.ajustar_indice_comprobacion();
     }
 
     /// Túnel seleccionado en el bloque «Túneles» de la ficha abierta.
@@ -4768,7 +5599,9 @@ impl App {
         );
     }
 
-    fn validar_ficha(&self, datos: &DatosHost, host_id: Option<i64>) -> Result<(), String> {
+    /// Valida y normaliza la ficha. El tipo manda: un escritorio valida sus
+    /// opciones y no arrastra los campos SSH (y al revés).
+    fn validar_ficha(&self, datos: &mut DatosHost, host_id: Option<i64>) -> Result<(), String> {
         modelo::validar_nombre(&datos.nombre)?;
         if self
             .almacen
@@ -4780,22 +5613,25 @@ impl App {
                 datos.nombre
             ));
         }
-        modelo::validar_direccion(&datos.direccion)?;
-        if datos.puerto == 0 {
-            return Err("el puerto debe estar entre 1 y 65535".to_string());
-        }
-        modelo::validar_usuario(datos.usuario.as_deref())?;
-        modelo::validar_keepalive(datos.keepalive_seg)?;
-        modelo::validar_opciones_extra(&datos.opciones_extra)?;
-        validar_reenvios_gestionados(&datos.opciones_extra)?;
-        modelo::normalizar_servicios(&datos.servicios)?;
+        let tipo_guardado = host_id.and_then(|id| {
+            self.hosts
+                .iter()
+                .find(|host| host.id == id)
+                .map(|host| host.tipo)
+        });
         let mapa: HashMap<i64, Host> = self
             .hosts
             .iter()
             .cloned()
             .map(|host| (host.id, host))
             .collect();
-        modelo::validar_salto(host_id, datos.salto_host_id, &mapa)?;
+        modelo::validar_y_normalizar_host(datos, host_id, tipo_guardado, &mapa)?;
+        if datos.tipo.es_ssh() {
+            modelo::validar_keepalive(datos.keepalive_seg)?;
+            modelo::validar_opciones_extra(&datos.opciones_extra)?;
+            validar_reenvios_gestionados(&datos.opciones_extra)?;
+            modelo::normalizar_servicios(&datos.servicios)?;
+        }
         Ok(())
     }
 
@@ -4804,23 +5640,53 @@ impl App {
             return;
         };
         let host_id = ficha.host_id;
-        let mut datos = ficha.datos();
-        let datos_formulario = datos.clone();
+        let tipo = ficha.tipo;
+        let es_ssh = tipo.es_ssh();
+        let tamano_texto = ficha.tamano.texto.clone();
+        let tamano_fijo = ficha.tamano_fijo;
+        let contrasena_modo = ficha.contrasena_modo;
+        let contrasena_texto = ficha.contrasena.texto.clone();
         // Lo que va aparte de `DatosHost`: solo se escribe si ha cambiado.
         let snippet = ficha.snippet_al_conectar();
-        let snippet_cambiado = snippet != ficha.snippet_original;
+        let snippet_original = ficha.snippet_original;
         let verificaciones = ficha.datos_verificaciones();
-        let verificaciones_cambiadas = verificaciones != ficha.verificaciones_original;
-        if let Err(motivo) = self.validar_ficha(&datos, host_id) {
+        let verificaciones_original = ficha.verificaciones_original.clone();
+        let mut datos = ficha.datos();
+        let datos_formulario = datos.clone();
+        if tipo.es_escritorio() && tamano_fijo {
+            if let Err(motivo) = TamanoEscritorio::desde_texto(&tamano_texto) {
+                self.mensaje(motivo, true);
+                return;
+            }
+        }
+        if let Err(motivo) = self.validar_ficha(&mut datos, host_id) {
             self.mensaje(motivo, true);
             return;
         }
-        if let Err(motivo) = crate::deliberacion::validar_verificaciones(&verificaciones) {
-            self.mensaje(motivo, true);
-            return;
+        if es_ssh {
+            if let Err(motivo) = crate::deliberacion::validar_verificaciones(&verificaciones) {
+                self.mensaje(motivo, true);
+                return;
+            }
+            if let Ok(normalizados) = modelo::normalizar_servicios(&datos.servicios) {
+                datos.servicios = normalizados;
+            }
         }
-        if let Ok(normalizados) = modelo::normalizar_servicios(&datos.servicios) {
-            datos.servicios = normalizados;
+        // Un VNC directo sin cifrar pide confirmación al guardarlo (§6.2); al
+        // aceptar se marca en la ficha y se vuelve a guardar.
+        if let Some(aviso) = modelo::aviso_vnc_directo(
+            datos.tipo,
+            &datos.direccion,
+            datos.salto_host_id,
+            datos.escritorio_opciones.directo,
+        ) {
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "VNC DIRECTO SIN CIFRAR".to_string(),
+                lineas: vec![aviso, "¿Guardar el host así, sin cifrar?".to_string()],
+                peligro: true,
+                accion: AccionDialogo::GuardarEscritorioDirecto,
+            });
+            return;
         }
         let resultado = match host_id {
             Some(id) => self.almacen.actualizar_host(id, &datos).map(|_| id),
@@ -4833,48 +5699,79 @@ impl App {
                 return;
             }
         };
-        // Un host nuevo ya tiene id: el snippet y las verificaciones van
-        // detrás, cada uno con su escritura.
-        let escrito = guardar_aparte_de_host(
-            &self.almacen,
-            id,
-            snippet_cambiado.then_some(snippet),
-            verificaciones_cambiadas.then_some(&verificaciones),
-        );
-        if let Some(ficha) = &mut self.ficha {
-            if escrito.snippet {
-                ficha.snippet_original = snippet;
-            }
-            if escrito.verificaciones {
-                ficha.verificaciones_original = verificaciones;
-            }
-        }
-        if escrito.verificaciones {
-            // La vista Snippets dice con ellas si una ejecución pasará por la
-            // deliberación.
-            self.recargar_snippets();
-        }
-        if !escrito.fallos.is_empty() {
-            self.ficha_guardada_a_medias(id, datos_formulario, &escrito.fallos);
-            return;
-        }
-        let aviso_clave = match &datos.identidad_ref {
-            IdentidadRef::Agente(huella) => {
-                let cargada = self
-                    .identidades
-                    .agente
-                    .as_ref()
-                    .is_some_and(|agente| agente.iter().any(|c| &c.huella == huella));
-                if cargada {
-                    None
-                } else {
-                    Some(format!(
-                        "la clave {} no está en el agente ahora mismo",
-                        acorta_huella(huella)
-                    ))
+        // Contraseña del escritorio: al llavero, nunca a magi.db (T19).
+        let mut avisos: Vec<String> = Vec::new();
+        let mut fallo_contrasena = false;
+        if datos.tipo.es_escritorio()
+            && datos.tipo != TipoHost::Voxl
+            && contrasena_modo
+            && !contrasena_texto.is_empty()
+        {
+            let usuario = match datos.tipo {
+                TipoHost::Vnc => String::new(),
+                _ => datos.usuario.clone().unwrap_or_else(usuario_local),
+            };
+            match self.guardar_contrasena_escritorio(id, &usuario, &contrasena_texto) {
+                Ok(()) => avisos.push("contraseña guardada en el llavero".to_string()),
+                Err(error) => {
+                    fallo_contrasena = true;
+                    avisos.push(format!("no se pudo guardar la contraseña: {error}"));
                 }
             }
-            _ => None,
+        }
+        if datos.tipo == TipoHost::Vnc && contrasena_texto.chars().count() > 8 {
+            avisos.push("VNC solo usa los 8 primeros caracteres de la contraseña".to_string());
+        }
+        // Un host nuevo ya tiene id: el snippet y las verificaciones van
+        // detrás, cada uno con su escritura (solo en un host SSH).
+        let mut fallos_aparte: Vec<String> = Vec::new();
+        if es_ssh {
+            let escrito = guardar_aparte_de_host(
+                &self.almacen,
+                id,
+                (snippet != snippet_original).then_some(snippet),
+                (verificaciones != verificaciones_original).then_some(&verificaciones),
+            );
+            if let Some(ficha) = &mut self.ficha {
+                if escrito.snippet {
+                    ficha.snippet_original = snippet;
+                }
+                if escrito.verificaciones {
+                    ficha.verificaciones_original = verificaciones;
+                }
+            }
+            if escrito.verificaciones {
+                // La vista Snippets dice con ellas si una ejecución pasará por
+                // la deliberación.
+                self.recargar_snippets();
+            }
+            fallos_aparte = escrito.fallos;
+        }
+        if !fallos_aparte.is_empty() {
+            self.ficha_guardada_a_medias(id, datos_formulario, &fallos_aparte);
+            return;
+        }
+        let aviso_clave = if es_ssh {
+            match &datos.identidad_ref {
+                IdentidadRef::Agente(huella) => {
+                    let cargada = self
+                        .identidades
+                        .agente
+                        .as_ref()
+                        .is_some_and(|agente| agente.iter().any(|c| &c.huella == huella));
+                    if cargada {
+                        None
+                    } else {
+                        Some(format!(
+                            "la clave {} no está en el agente ahora mismo",
+                            acorta_huella(huella)
+                        ))
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
         };
         self.ficha = None;
         self.vista = Vista::Hosts;
@@ -4888,7 +5785,11 @@ impl App {
             texto.push_str(" · ");
             texto.push_str(&aviso);
         }
-        self.mensaje(texto, false);
+        for aviso in avisos {
+            texto.push_str(" · ");
+            texto.push_str(&aviso);
+        }
+        self.mensaje(texto, fallo_contrasena);
         if self.config.exportar_al_guardar {
             self.exportar(true, true);
         }
@@ -4926,6 +5827,13 @@ impl App {
         let Some(ficha) = &self.ficha else {
             return;
         };
+        if ficha.tipo.es_escritorio() {
+            self.mensaje(
+                "un escritorio se prueba abriéndolo con ↵ en Hosts; ^t es solo para SSH",
+                true,
+            );
+            return;
+        }
         let host_id = ficha.host_id.unwrap_or(0);
         let datos = ficha.datos();
         if modelo::validar_direccion(&datos.direccion).is_err() || datos.puerto == 0 {
@@ -4945,6 +5853,10 @@ impl App {
             grupo_id: datos.grupo_id,
             direccion: datos.direccion.clone(),
             puerto: datos.puerto,
+            tipo: datos.tipo,
+            escritorio_dominio: datos.escritorio_dominio.clone(),
+            escritorio_opciones: datos.escritorio_opciones.clone(),
+            huella_escritorio: None,
             usuario: datos.usuario.clone(),
             identidad_ref: datos.identidad_ref.clone(),
             salto_host_id: datos.salto_host_id,
@@ -5202,9 +6114,18 @@ impl App {
     fn abrir_paleta(&mut self) {
         let mut entradas = Vec::new();
         for host in &self.hosts {
+            let es_escritorio = host.tipo.es_escritorio();
             entradas.push(EntradaPaleta {
-                etiqueta: format!("conectar · {}", host.nombre),
-                categoria: "host",
+                etiqueta: if es_escritorio {
+                    format!(
+                        "abrir escritorio · {} · {}",
+                        host.nombre,
+                        host.tipo.etiqueta()
+                    )
+                } else {
+                    format!("conectar · {}", host.nombre)
+                },
+                categoria: if es_escritorio { "escritorio" } else { "host" },
                 accion: AccionPaleta::Conectar(host.id),
             });
             entradas.push(EntradaPaleta {
@@ -5212,11 +6133,20 @@ impl App {
                 categoria: "acción",
                 accion: AccionPaleta::Editar(host.id),
             });
-            entradas.push(EntradaPaleta {
-                etiqueta: format!("sftp · {}", host.nombre),
-                categoria: "archivos",
-                accion: AccionPaleta::AbrirSftp(host.id),
-            });
+            if !es_escritorio {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("sftp · {}", host.nombre),
+                    categoria: "archivos",
+                    accion: AccionPaleta::AbrirSftp(host.id),
+                });
+            }
+            if host.huella_escritorio.is_some() {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("olvidar huella del certificado · {}", host.nombre),
+                    categoria: "seguridad",
+                    accion: AccionPaleta::OlvidarHuella(host.id),
+                });
+            }
         }
         entradas.push(EntradaPaleta {
             etiqueta: "nuevo host".to_string(),
@@ -5280,11 +6210,15 @@ impl App {
             accion: AccionPaleta::ExportarRegistro,
         });
         for host in &self.hosts {
-            entradas.push(EntradaPaleta {
-                etiqueta: format!("sondear · {}", host.nombre),
-                categoria: "flota",
-                accion: AccionPaleta::SondearHost(host.id),
-            });
+            // Un escritorio no se sondea: su estado es el de su última
+            // apertura (Fase 12).
+            if !host.tipo.es_escritorio() {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("sondear · {}", host.nombre),
+                    categoria: "flota",
+                    accion: AccionPaleta::SondearHost(host.id),
+                });
+            }
             if host.identidad_ref.usa_llavero() {
                 entradas.push(EntradaPaleta {
                     etiqueta: format!("olvidar contraseña · {}", host.nombre),
@@ -5320,6 +6254,21 @@ impl App {
             accion: AccionPaleta::NuevaVentana,
         });
         for pestaña in &self.pestanas {
+            if let Some(escritorio_id) = pestaña.escritorio_id {
+                entradas.push(EntradaPaleta {
+                    etiqueta: format!("cerrar escritorio · {}", pestaña.nombre),
+                    categoria: "pestañas",
+                    accion: AccionPaleta::CerrarEscritorio(escritorio_id),
+                });
+                if pestaña.estado == EstadoSesionRemota::Caida {
+                    entradas.push(EntradaPaleta {
+                        etiqueta: format!("reconectar · {}", pestaña.nombre),
+                        categoria: "pestañas",
+                        accion: AccionPaleta::ReconectarEscritorio(escritorio_id),
+                    });
+                }
+                continue;
+            }
             entradas.push(EntradaPaleta {
                 etiqueta: format!("cerrar sesión · {}", pestaña.nombre),
                 categoria: "pestañas",
@@ -5371,8 +6320,20 @@ impl App {
         let mut entradas = Vec::new();
         for host in &self.hosts {
             entradas.push(EntradaPaleta {
-                etiqueta: format!("conectar · {}", host.nombre),
-                categoria: "host",
+                etiqueta: if host.tipo.es_escritorio() {
+                    format!(
+                        "abrir escritorio · {} · {}",
+                        host.nombre,
+                        host.tipo.etiqueta()
+                    )
+                } else {
+                    format!("conectar · {}", host.nombre)
+                },
+                categoria: if host.tipo.es_escritorio() {
+                    "escritorio"
+                } else {
+                    "host"
+                },
                 accion: AccionPaleta::Conectar(host.id),
             });
         }
@@ -5397,6 +6358,10 @@ impl App {
     fn abrir_paleta_con_consulta(&mut self, consulta: &str) {
         let mut entradas = Vec::new();
         for host in &self.hosts {
+            // Solo los hosts SSH tienen SFTP (Fase 12).
+            if !host.tipo.es_ssh() {
+                continue;
+            }
             entradas.push(EntradaPaleta {
                 etiqueta: format!("sftp · {}", host.nombre),
                 categoria: "sftp",
@@ -5471,6 +6436,21 @@ impl App {
                         self.paleta = None;
                         self.ir_a_vista(Vista::Flota);
                         self.sondear_hosts(vec![id]);
+                    }
+                    Some(AccionPaleta::OlvidarHuella(id)) => {
+                        let id = *id;
+                        self.paleta = None;
+                        self.preguntar_olvidar_huella(id);
+                    }
+                    Some(AccionPaleta::CerrarEscritorio(escritorio_id)) => {
+                        let escritorio_id = *escritorio_id;
+                        self.paleta = None;
+                        self.preguntar_cerrar_escritorio(escritorio_id);
+                    }
+                    Some(AccionPaleta::ReconectarEscritorio(escritorio_id)) => {
+                        let escritorio_id = *escritorio_id;
+                        self.paleta = None;
+                        self.reconectar_escritorio(escritorio_id);
                     }
                     Some(AccionPaleta::SondearTodos) => {
                         self.paleta = None;
@@ -5678,6 +6658,7 @@ impl App {
             Vista::Resultados => self.ir_a_resultados(),
             Vista::Sincronizacion => self.ir_a_sincronizacion(),
             Vista::Conflictos => self.ir_a_conflictos(),
+            Vista::Servicios => self.abrir_servicios(None),
         }
     }
 
@@ -6708,6 +7689,15 @@ impl App {
     }
 
     fn necesita_sondeo(&self, host_id: i64) -> bool {
+        // Un escritorio no se sondea: su estado es el de la última apertura.
+        if self
+            .hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .is_some_and(|host| host.tipo.es_escritorio())
+        {
+            return false;
+        }
         match self.sondeos.get(&host_id) {
             Some(sondeo) => flota::estado::antiguedad_segundos(&sondeo.fecha)
                 .is_none_or(|segundos| segundos > 60.0),
@@ -6733,6 +7723,10 @@ impl App {
             let Some(host) = todos.get(&id).cloned() else {
                 continue;
             };
+            // Los escritorios no se sondean (Fase 12).
+            if host.tipo.es_escritorio() {
+                continue;
+            }
             self.sondeando.insert(id);
             peticiones.push(self.peticion_de_sondeo(host, &todos));
         }
@@ -6852,6 +7846,20 @@ impl App {
     }
 
     fn tecla_flota(&mut self, tecla: KeyEvent) {
+        if tecla.code == KeyCode::Char('u') && !self.filtro_activo {
+            match self.host_flota_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_servicios(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!("«{}» es un escritorio: no tiene servicios", host.nombre),
+                    true,
+                ),
+                None => {}
+            }
+            return;
+        }
         if tecla.code == KeyCode::Char('s') && !self.filtro_activo {
             if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
                 self.abrir_archivos(Some(host_id));
@@ -6864,13 +7872,32 @@ impl App {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
             if tecla.code == KeyCode::Char('!') {
-                if let Some(host_id) = self.host_flota_seleccionado().map(|host| host.id) {
-                    self.paleta_snippets_de_host(host_id);
+                match self.host_flota_seleccionado() {
+                    Some(host) if host.tipo.es_ssh() => {
+                        self.paleta_snippets_de_host(host.id);
+                    }
+                    Some(host) => self.mensaje(
+                        format!("«{}» es un escritorio: no ejecuta snippets", host.nombre),
+                        true,
+                    ),
+                    None => {}
                 }
                 return;
             }
-            // Atajos de `[flota.atajos]` (solo teclas que Flota no usa).
+            // Atajos de `[flota.atajos]` (solo teclas que Flota no usa y solo
+            // en hosts SSH: un escritorio no ejecuta snippets).
             if let KeyCode::Char(caracter) = tecla.code {
+                let con_atajo = self
+                    .atajos_flota()
+                    .iter()
+                    .any(|(tecla, _)| *tecla == caracter);
+                let ssh = self
+                    .host_flota_seleccionado()
+                    .is_some_and(|host| host.tipo.es_ssh());
+                if con_atajo && !ssh {
+                    self.mensaje("los atajos de Flota no se ejecutan en un escritorio", true);
+                    return;
+                }
                 if self.ejecutar_atajo_flota(caracter) {
                     return;
                 }
@@ -6932,17 +7959,25 @@ impl App {
                     self.conectar(host.id);
                 }
             }
-            KeyCode::Char('r') => {
-                if let Some(id) = self.host_flota_seleccionado().map(|host| host.id) {
+            KeyCode::Char('r') => match self.host_flota_seleccionado() {
+                Some(host) if host.tipo.es_escritorio() => self.mensaje(
+                    "un escritorio no se sondea: su estado es el de la última apertura",
+                    false,
+                ),
+                Some(host) => {
+                    let id = host.id;
                     self.sondear_hosts(vec![id]);
                     self.mensaje("sondeando…", false);
                 }
-            }
+                None => {}
+            },
             KeyCode::Char('R') => {
                 let ids: Vec<i64> = self
                     .hosts_flota()
                     .iter()
-                    .filter_map(|indice| self.hosts.get(*indice).map(|host| host.id))
+                    .filter_map(|indice| self.hosts.get(*indice))
+                    .filter(|host| !host.tipo.es_escritorio())
+                    .map(|host| host.id)
                     .collect();
                 if !ids.is_empty() {
                     self.mensaje(format!("sondeando {} hosts…", ids.len()), false);
@@ -7258,6 +8293,14 @@ impl App {
             }
             return;
         }
+        // Los diálogos propios de Servicios son modales sobre la vista (también
+        // cuando se abren desde la ficha) y se atienden antes del aviso de
+        // tamaño (el aviso se pinta debajo).
+        if let Some(dialogo) = self.servicios.dialogo.take() {
+            self.tecla_dialogo_servicio(dialogo, tecla);
+            self.vigilar_salida_de_servicios();
+            return;
+        }
         // Por debajo del mínimo se ve el aviso en lugar de la vista: solo
         // valen `q`, `F1`-`F8` y `Ctrl+P` (en Sesión todo va al remoto). Los
         // diálogos, la paleta y la ayuda se pintan encima y ya se han atendido.
@@ -7352,6 +8395,10 @@ impl App {
                 self.ir_a_vista(Vista::Snippets);
                 return;
             }
+            KeyCode::F(9) => {
+                self.abrir_servicios(None);
+                return;
+            }
             KeyCode::Char('p') if tecla.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.abrir_paleta();
                 return;
@@ -7364,6 +8411,14 @@ impl App {
         if tecla.code == KeyCode::Char('?')
             && match self.vista {
                 Vista::Transferencias | Vista::Sesiones => true,
+                Vista::Servicios => {
+                    !self.servicios.filtro_activo
+                        && self
+                            .servicios
+                            .logs
+                            .as_ref()
+                            .is_none_or(|logs| !logs.filtro_activo)
+                }
                 Vista::Archivos => self.archivos.as_ref().is_some_and(|estado| {
                     estado.aviso.is_none()
                         && !estado.local.filtro_activo
@@ -7390,6 +8445,7 @@ impl App {
             Vista::Resultados => self.tecla_resultados(tecla),
             Vista::Sincronizacion => self.tecla_sincronizacion(tecla),
             Vista::Conflictos => self.tecla_conflictos(tecla),
+            Vista::Servicios => self.tecla_servicios(tecla),
         }
     }
 
@@ -7417,13 +8473,23 @@ impl App {
                 }
             }
             KeyCode::Char('n') => self.abrir_paleta_conectar(),
-            KeyCode::Char('r') => {
-                if let Some(sesion_id) = self.sesion_seleccionada_id() {
-                    self.reconectar_sesion(sesion_id);
+            KeyCode::Char('r') => match self.pestana_seleccionada() {
+                Some(pestana) if pestana.escritorio_id.is_some() => {
+                    if let Some(escritorio_id) = pestana.escritorio_id {
+                        self.reconectar_escritorio(escritorio_id);
+                    }
                 }
-            }
-            KeyCode::Char('x') => {
-                if let Some(sesion_id) = self.sesion_seleccionada_id() {
+                Some(pestana) => self.reconectar_sesion(pestana.sesion_id),
+                None => {}
+            },
+            KeyCode::Char('x') => match self.pestana_seleccionada() {
+                Some(pestana) if pestana.escritorio_id.is_some() => {
+                    if let Some(escritorio_id) = pestana.escritorio_id {
+                        self.preguntar_cerrar_escritorio(escritorio_id);
+                    }
+                }
+                Some(pestana) => {
+                    let sesion_id = pestana.sesion_id;
                     self.dialogo = Some(Dialogo::Confirmar {
                         titulo: "CERRAR PESTAÑA".to_string(),
                         lineas: vec!["¿Cerrar la sesión remota?".to_string()],
@@ -7431,7 +8497,8 @@ impl App {
                         accion: AccionDialogo::CerrarPestana(sesion_id),
                     });
                 }
-            }
+                None => {}
+            },
             KeyCode::Char('S') => {
                 let sesiones = self.pestanas.len();
                 self.dialogo = Some(Dialogo::Confirmar {
@@ -7463,11 +8530,9 @@ impl App {
         }
     }
 
-    /// Id de la sesión seleccionada en la vista Sesiones.
-    fn sesion_seleccionada_id(&self) -> Option<u32> {
-        self.pestanas
-            .get(self.seleccion_sesiones)
-            .map(|pestaña| pestaña.sesion_id)
+    /// Pestaña seleccionada en la vista Sesiones.
+    fn pestana_seleccionada(&self) -> Option<&PestanaUI> {
+        self.pestanas.get(self.seleccion_sesiones)
     }
 
     /// Abre un diálogo y lo deja listo para el próximo pintado (pruebas de
@@ -7497,6 +8562,9 @@ impl App {
                 | Dialogo::Detalle { .. }
                 | Dialogo::ImportacionBorrados { .. }
                 | Dialogo::Edicion(_)
+                // Certificado y credenciales también se desplazan con ↑↓
+                // (el campo del certificado va fijo en el pie).
+                | Dialogo::Escritorio(_)
         )
     }
 
@@ -8204,6 +9272,9 @@ impl App {
                     self.dialogo = Some(Dialogo::ExportarRegistro { estado });
                 }
             },
+            Dialogo::Escritorio(dialogo) => {
+                self.tecla_dialogo_escritorio(dialogo, tecla);
+            }
             Dialogo::ConflictoImportacion { nombre, restantes } => {
                 let decision = match tecla.code {
                     KeyCode::Char('s') => Some(true),
@@ -9651,6 +10722,13 @@ impl App {
                 // El servidor cierra las sesiones (anotándolas) y se apaga.
                 self.servidor.enviar(protocolo::MensajeCliente::Parar);
                 self.pestanas.clear();
+                self.escritorios.clear();
+                self.peticiones_escritorio.clear();
+                self.aperturas_escritorio.clear();
+                self.enlace_visible = None;
+                self.contrasenas_escritorio_pendientes.clear();
+                self.pila_dialogos
+                    .retain(|dialogo| !matches!(dialogo, Dialogo::Escritorio(_)));
                 self.pestana_activa = None;
                 self.servidor = cliente::Cliente::sin_servidor();
                 self.servidor_pid = None;
@@ -9713,6 +10791,7 @@ impl App {
                     Vista::Tuneles => self.ir_a_tuneles(),
                     Vista::Snippets => self.ir_a_snippets(),
                     Vista::Resultados => self.ir_a_resultados(),
+                    Vista::Servicios => self.abrir_servicios(None),
                     _ => self.vista = vista,
                 }
             }
@@ -9772,6 +10851,19 @@ impl App {
                     ),
                     Err(error) => self.mensaje(error.to_string(), true),
                 }
+            }
+            AccionDialogo::CerrarEscritorio(escritorio_id) => {
+                self.cerrar_escritorio(escritorio_id);
+            }
+            AccionDialogo::OlvidarHuellaEscritorio(host_id) => self.olvidar_huella(host_id),
+            AccionDialogo::OlvidarContrasenaEscritorio { host_id, usuario } => {
+                self.olvidar_contrasena_escritorio(host_id, &usuario);
+            }
+            AccionDialogo::GuardarEscritorioDirecto => {
+                if let Some(ficha) = &mut self.ficha {
+                    ficha.directo_confirmado = true;
+                }
+                self.guardar_ficha();
             }
         }
     }
@@ -9879,7 +10971,8 @@ fn opciones_salto(hosts: &[Host], excluido: Option<i64>) -> Vec<Opcion> {
         valor: ValorOpcion::Ninguno,
     }];
     for host in hosts {
-        if Some(host.id) == excluido {
+        // «A través de» y salto solo por hosts SSH (Fase 12).
+        if Some(host.id) == excluido || !host.tipo.es_ssh() {
             continue;
         }
         opciones.push(Opcion {
@@ -10018,6 +11111,14 @@ impl App {
             self.mensaje("ese host ya no existe", true);
             return;
         };
+        // Un escritorio no tiene SFTP (Fase 12).
+        if !host.tipo.es_ssh() {
+            self.mensaje(
+                format!("«{}» es un escritorio: no tiene SFTP", host.nombre),
+                true,
+            );
+            return;
+        }
         if self
             .archivos
             .as_ref()

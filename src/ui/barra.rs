@@ -56,6 +56,25 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
             ajustar(&format!(" {glifo}{}", mensaje.texto), ancho, tema),
             Style::default().fg(color),
         ))
+    } else if let Some(info) = app
+        .servicios
+        .acciones
+        .first()
+        .filter(|_| app.vista != Vista::Servicios)
+    {
+        // Acciones de servicio en curso de cualquier ventana (T67): también se
+        // ven desde Sesión.
+        let texto = format!(
+            "{} {} {} en {}",
+            tema.glifos.conectando,
+            info.accion.texto(),
+            info.objetivo.nombre,
+            info.host_nombre
+        );
+        Line::from(Span::styled(
+            ajustar(&format!(" {texto}"), ancho, tema),
+            Style::default().fg(tema.paleta.acento),
+        ))
     } else {
         linea_atajos(app, disponible, disp)
     };
@@ -345,6 +364,7 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             Atajo::new(tab, "etiquetas", 3),
             Atajo::new("/", "filtrar", 1),
             Atajo::new("!", "snippets", 3),
+            Atajo::new("u", "servicios", 4),
             Atajo::new("^p", "paleta", 3),
             Atajo::new("q", "salir", 3),
         ],
@@ -369,6 +389,7 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
                 Atajo::new("e", "editar", 2),
                 Atajo::new("/", "filtrar", 2),
                 Atajo::new("!", "snippets", 3),
+                Atajo::new("u", "servicios", 4),
                 Atajo::new("^p", "paleta", 3),
                 Atajo::new("q", "salir", 3),
             ]);
@@ -382,14 +403,21 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             }
             atajos
         }
-        Vista::Ficha => vec![
-            Atajo::new(tab, "campo", 2),
-            Atajo::new(intro, "desplegable", 3),
-            Atajo::new("espacio", "casilla", 3),
-            Atajo::new("^s", "guardar", 1),
-            Atajo::new("^t", "probar conexión", 3),
-            Atajo::new("esc", "descartar", 1),
-        ],
+        Vista::Ficha => {
+            let mut atajos = vec![
+                Atajo::new(tab, "campo", 2),
+                Atajo::new(intro, "desplegable", 3),
+                Atajo::new("espacio", "casilla", 3),
+                Atajo::new("^s", "guardar", 1),
+            ];
+            // Probar la conexión es solo para un host SSH (Fase 12).
+            if app.ficha.as_ref().is_some_and(|ficha| ficha.tipo.es_ssh()) {
+                atajos.push(Atajo::new("^t", "probar conexión", 3));
+            }
+            atajos.push(Atajo::new("u", "servicios", 3));
+            atajos.push(Atajo::new("esc", "descartar", 1));
+            atajos
+        }
         Vista::Tuneles => vec![
             Atajo::new(mover, "mover", 4),
             Atajo::new("espacio", "activar/parar", 1),
@@ -461,6 +489,98 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             Atajo::new("d", "descartar", 2),
             Atajo::new("q", "volver", 2),
         ],
+        Vista::Servicios => {
+            // Solo se ofrecen las acciones que valen en el estado del elemento
+            // seleccionado; su tecla, si se pulsa igualmente, explica el motivo.
+            let mut atajos = vec![Atajo::new(intro, "detalle", 1), Atajo::new("l", "logs", 1)];
+            if let Some(host_id) = app.servicios_host_seleccionado() {
+                if let Some(objetivo) = app.servicios_objetivo_seleccionado(host_id) {
+                    let permitidas = app.servicios_acciones_ofrecidas(host_id, &objetivo);
+                    for accion in [
+                        magi_nucleo::servicios::Accion::Arrancar,
+                        magi_nucleo::servicios::Accion::Lanzar,
+                        magi_nucleo::servicios::Accion::Parar,
+                        magi_nucleo::servicios::Accion::Reiniciar,
+                        magi_nucleo::servicios::Accion::Recargar,
+                    ] {
+                        if !permitidas.contains(&accion) {
+                            continue;
+                        }
+                        let (tecla_accion, texto) = match accion {
+                            magi_nucleo::servicios::Accion::Arrancar => ("A", "arrancar"),
+                            magi_nucleo::servicios::Accion::Lanzar => ("A", "lanzar"),
+                            magi_nucleo::servicios::Accion::Parar => ("P", "parar"),
+                            magi_nucleo::servicios::Accion::Reiniciar => ("R", "reiniciar"),
+                            magi_nucleo::servicios::Accion::Recargar => ("G", "recargar"),
+                            _ => continue,
+                        };
+                        atajos.push(Atajo::new(tecla_accion, texto, 2));
+                    }
+                    if permitidas.contains(&magi_nucleo::servicios::Accion::Activar) {
+                        atajos.push(Atajo::new("H", "activar", 3));
+                    } else if permitidas.contains(&magi_nucleo::servicios::Accion::Desactivar) {
+                        atajos.push(Atajo::new("H", "desactivar", 3));
+                    }
+                    if objetivo.tipo == magi_nucleo::servicios::TipoObjetivo::Contenedor {
+                        let corre = app
+                            .servicios_listado(host_id)
+                            .and_then(|listado| {
+                                listado
+                                    .listado
+                                    .contenedores
+                                    .iter()
+                                    .find(|contenedor| contenedor.nombre == objetivo.nombre)
+                            })
+                            .is_some_and(|contenedor| contenedor.admite_shell());
+                        if corre {
+                            atajos.push(Atajo::new("S", "shell", 3));
+                        }
+                    }
+                    if matches!(
+                        objetivo.tipo,
+                        magi_nucleo::servicios::TipoObjetivo::Unidad
+                            | magi_nucleo::servicios::TipoObjetivo::Proyecto
+                    ) {
+                        atajos.push(Atajo::new("c", "comprobación", 3));
+                    }
+                }
+            }
+            atajos.extend([
+                Atajo::new(mover, "mover", 4),
+                Atajo::new("/", "filtrar", 2),
+                Atajo::new("1", "servicios", 3),
+                Atajo::new("2", "timers", 3),
+                Atajo::new("3", "contenedores", 3),
+                Atajo::new("!", "sudo", 3),
+                Atajo::new("r", "refrescar", 1),
+                Atajo::new("esc", "volver", 2),
+            ]);
+            if app.servicios_host_seleccionado().is_none() {
+                atajos = vec![
+                    Atajo::new(intro, "ir al host", 1),
+                    Atajo::new("l", "logs", 2),
+                    Atajo::new("A", "arrancar", 3),
+                    Atajo::new("R", "reiniciar", 3),
+                    Atajo::new("r", "sondear todos", 1),
+                    Atajo::new(mover, "mover", 4),
+                    Atajo::new("esc", "volver", 2),
+                ];
+            }
+            if estrecho {
+                atajos.insert(
+                    0,
+                    Atajo::new(
+                        tab,
+                        match app.servicios.foco {
+                            crate::app::servicios::Foco::Hosts => "lista",
+                            crate::app::servicios::Foco::Lista => "hosts",
+                        },
+                        1,
+                    ),
+                );
+            }
+            atajos
+        }
         // La vista Sesión lleva su propia barra de estado.
         Vista::Sesion => vec![],
     };

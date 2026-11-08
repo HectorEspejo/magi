@@ -209,13 +209,20 @@ pub enum PoliticaConexion {
 pub enum UsoCanal {
     Pestana,
     Subsistema,
+    /// Canal `direct-tcpip` de una sesión de escritorio (Fase 12): como un
+    /// túnel, usa siempre el pool y mantiene viva la conexión mientras el
+    /// canal esté abierto.
+    Escritorio,
+    /// Canales `exec` de la vista Servicios (Fase 13): listados, consumo,
+    /// detalle, acciones y logs. Siempre sobre el pool.
+    Servicios,
 }
 
 /// La regla de quién comparte la conexión del host, en un solo sitio: todo lo
-/// que no es pestaña (SFTP, túneles, sondeo, ejecuciones) usa siempre el pool;
-/// las pestañas, solo con `multiplexar`.
+/// que no es pestaña (SFTP, túneles, escritorios, sondeo, ejecuciones) usa
+/// siempre el pool; las pestañas, solo con `multiplexar`.
 pub fn usa_pool(host: &Host, uso: UsoCanal) -> bool {
-    uso == UsoCanal::Subsistema || host.multiplexar
+    uso != UsoCanal::Pestana || host.multiplexar
 }
 
 /// De dónde salió una conexión tomada: decide cómo se suelta.
@@ -658,6 +665,8 @@ mod pruebas {
     fn solo_las_pestanas_dependen_de_multiplexar() {
         assert!(usa_pool(&host(false), UsoCanal::Subsistema));
         assert!(usa_pool(&host(true), UsoCanal::Subsistema));
+        assert!(usa_pool(&host(false), UsoCanal::Escritorio));
+        assert!(usa_pool(&host(true), UsoCanal::Escritorio));
         assert!(usa_pool(&host(true), UsoCanal::Pestana));
         assert!(!usa_pool(&host(false), UsoCanal::Pestana));
     }

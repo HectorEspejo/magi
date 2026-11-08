@@ -1,0 +1,65 @@
+#!/bin/sh
+# sudo falso para las pruebas de servicios.sh.
+# $ESTADO/sudo_modo: sin_clave | con_clave | sin_sudo
+# $ESTADO/sudo_clave: contraseña buena
+# $ESTADO/sudo_solo: si existe, órdenes permitidas (una por línea)
+echo "sudo $*" >> "$ESTADO/llamadas"
+modo=$(cat "$ESTADO/sudo_modo" 2>/dev/null || echo sin_clave)
+clave=$(cat "$ESTADO/sudo_clave" 2>/dev/null || echo secreta)
+leer=no
+quieto=no
+validar=no
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    -n) quieto=si; shift ;;
+    -S) leer=si; shift ;;
+    -p) shift; [ "$#" -gt 0 ] && shift ;;
+    -v) validar=si; shift ;;
+    -l) validar=si; shift ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+intento=
+if [ "$leer" = si ]; then
+  IFS= read -r intento || intento=
+fi
+case $modo in
+  sin_sudo)
+    echo "usuario is not in the sudoers file.  This incident will be reported." >&2
+    exit 1
+    ;;
+  sin_clave)
+    :
+    ;;
+  con_clave)
+    if [ "$leer" = no ]; then
+      echo "sudo: a password is required" >&2
+      exit 1
+    fi
+    if [ "$intento" != "$clave" ]; then
+      echo "Sorry, try again." >&2
+      exit 1
+    fi
+    ;;
+esac
+if [ "$validar" = si ]; then
+  exit 0
+fi
+if [ -f "$ESTADO/sudo_solo" ] && [ "$#" -gt 0 ]; then
+  permitida=no
+  while IFS= read -r orden; do
+    [ -n "$orden" ] || continue
+    if [ "$1" = "$orden" ]; then
+      permitida=si
+    fi
+  done < "$ESTADO/sudo_solo"
+  if [ "$permitida" = no ]; then
+    echo "Sorry, user usuario is not allowed to execute '$*' as root." >&2
+    exit 1
+  fi
+fi
+MAGI_SUDO_FAKE=si
+export MAGI_SUDO_FAKE
+exec "$@"

@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  HOSTS (7)               │  app.service · hetzner-01                                                                                                                                                 │
+│───────────────────────── │  1 Estado  ·  2 Dependencias  ·  3 Unidad                                                                                                                                 │
+│  ▲ Toda la flota         │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│  ◐ backup-nas            │  app de prueba                                                                                                                                                            │
+│  ○ dgx-spark             │  estado      active (running)                                                                                                                                             │
+│▸ ● hetzner-01            │  desde       hace 2 h                                                                                                                                                     │
+│  ● hetzner-02            │  PID         4121                                                                                                                                                         │
+│  ◐ mac-mini-m1           │  memoria     180 MB                                                                                                                                                       │
+│  ✕ rincon-dev            │  unidad      /etc/systemd/system/app.service                                                                                                                              │
+│  ● vps-openclaw          │  arranque    activado                                                                                                                                                     │
+│                          │  recargar    sí                                                                                                                                                           │
+│                          │  vigilada    ★                                                                                                                                                            │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ detalle  l logs  P parar  R reiniciar  G recargar  H desactivar  c comprobación  ↓↑ mover  / filtrar  1 servicios  2 timers  3 contenedores  ! sudo  r refrescar  esc volver  ? ayuda

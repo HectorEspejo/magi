@@ -485,6 +485,8 @@ fn leer_rechazo(valor: &serde_json::Value, pid_par: Option<u32>) -> RechazoVersi
                 transferencias: 1,
                 tuneles: 1,
                 ejecuciones: 1,
+                escritorios: 1,
+                acciones_servicio: 1,
             },
         )
     });

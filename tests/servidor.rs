@@ -383,6 +383,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
             host_id,
             cols: 80,
             filas: 24,
+            orden: None,
         },
     )
     .await;
@@ -573,6 +574,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
         host_id,
         cols: 80,
         filas: 24,
+        orden: None,
     });
 
     // 4. Espera la sesión abierta y adjunta.

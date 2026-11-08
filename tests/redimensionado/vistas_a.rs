@@ -599,13 +599,14 @@ fn hosts_la_seleccion_del_final_sigue_a_la_vista_al_encoger() {
 fn sesiones_columnas_por_prioridad() {
     let (mut prueba, sembrado) = AppPrueba::con_semilla(120, 30);
     en_sesiones(&mut prueba, &sembrado);
-    for (ancho, host, secundarias) in [
-        (120, true, true),
-        (80, true, true),
-        (79, true, false),
-        (60, true, false),
-        (59, false, false),
-        (40, false, false),
+    // Con la columna TIPO (Fase 12) la de ventanas es la primera que se cae.
+    for (ancho, host, tiempo, identidad, ventanas) in [
+        (120, true, true, true, true),
+        (80, true, true, true, false),
+        (79, true, true, false, false),
+        (60, true, false, false, false),
+        (59, false, true, false, false),
+        (40, false, false, false, false),
     ] {
         prueba.pasar_por(ancho, 24);
         let texto = prueba.texto();
@@ -614,10 +615,12 @@ fn sesiones_columnas_por_prioridad() {
             .find(|linea| linea.contains("ESTADO"))
             .expect("cabecera");
         assert!(cabecera.contains("PESTAÑA"), "{ancho}: {cabecera}");
+        // El tipo se ve siempre (Fase 12).
+        assert!(cabecera.contains("TIPO"), "{ancho}: {cabecera}");
         assert_eq!(cabecera.contains("HOST"), host, "{ancho}: {cabecera}");
-        assert_eq!(cabecera.contains("IDENTIDAD"), secundarias, "{ancho}");
-        assert_eq!(cabecera.contains("VENT."), secundarias, "{ancho}");
-        assert!(cabecera.contains("TIEMPO"), "{ancho}: {cabecera}");
+        assert_eq!(cabecera.contains("IDENTIDAD"), identidad, "{ancho}");
+        assert_eq!(cabecera.contains("VENT."), ventanas, "{ancho}");
+        assert_eq!(cabecera.contains("TIEMPO"), tiempo, "{ancho}: {cabecera}");
         // Glifo de estado y pestaña en todas las filas.
         assert!(
             texto.contains("✕ ") && texto.contains("mac-mini-m1"),

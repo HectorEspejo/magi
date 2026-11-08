@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS · LOGS ──────────── app.service · hetzner-01 · ● siguiendo ─┐
+│ / sin filtro   n todo   5 líneas · 14 omitidas                               │
+│───────────────────────────────────────────────────────────────────────────── │
+│             · 14 líneas omitidas (el cliente iba lento)                      │
+│ 08:53:20 • INFO arrancando app de prueba                                     │
+│ 08:53:20 ! WARNING Lentitud: GET /api/informes tardó 2,4 s                   │
+│ 08:53:20 ✕ ERROR Exception in ASGI application                               │
+│ 08:53:20 ✕ Traceback (most recent call last):                                │
+│ 08:53:20 ✕ KeyError: 'DATABASE_URL'                                          │
+│ / texto  n nivel  espacio pausa  fin al final  ↑ desplazar  t pestaña  esc ce│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

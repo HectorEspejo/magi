@@ -9,6 +9,57 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **Servicios, contenedores y logs (Fase 13).** Vista **Servicios** (`F9`, y `u`
+  desde Flota, Hosts y la ficha) con los hosts SSH a la izquierda y, a la
+  derecha, los servicios y timers de systemd y los contenedores de Docker o
+  Podman agrupados por proyecto Compose; arriba los vigilados (`★`) y los
+  fallidos, «Toda la flota» con los fallos del último sondeo de cada host y
+  `⚠N` en Flota. Detalle de estado, dependencias y unidad o `inspect`; acciones
+  arrancar, parar, reiniciar, recargar y activar o desactivar el arranque
+  (`A` `P` `R` `G` `H`, en mayúsculas) con espera al estado final, segunda
+  mirada a los 2 s y las últimas líneas del diario si algo no vuelve; timers con
+  su próxima y última ejecución y lanzar ahora; contenedores con acciones,
+  consumo y shell en una pestaña (`S`); proyectos Compose enteros con `-p` y
+  los ficheros de sus etiquetas. Lo que deja algo parado pasa por la
+  deliberación MAGI (`PlanDeliberado::Servicio`, con MELCHIOR-1 sin contar el
+  estado del propio objetivo) y lo demás pide confirmación. `sudo` orden a
+  orden, nunca `sudo sh`: `sudo -n` o una contraseña pedida por el cliente y
+  comprobada con `ComprobarSudo`, que llega al host por la entrada estándar y
+  se recuerda solo en memoria hasta `sudo_memoria_min` minutos (nunca va a
+  disco, al llavero, al log ni a REGISTRO). Antes de recargar o reiniciar
+  Nginx, Caddy, Apache, HAProxy o un proyecto Compose, y con una comprobación
+  propia por servicio o proyecto (COMPROBACIONES_SERVICIO), se valida la
+  configuración dentro de la propia acción: si falla no se ejecuta nada. Logs
+  en vivo en un panel con lotes de 100 ms, contrapresión, anillo de 10 000
+  líneas, filtros por texto y nivel, pausa y `t` para el seguimiento completo
+  en una pestaña; al cerrar el panel se corta `journalctl` en el host. El
+  sondeo amplía sus fallos (servicios fallidos y contenedores caídos) sin
+  cambiar el estado del host, y las acciones en curso las custodia el servidor
+  (`AccionesServicio{lista}`, `TrabajoServidor`). Migración 9
+  (`COMPROBACIONES_SERVICIO` y `SONDEOS.fallos_json`), protocolo v8
+  (`peticion_id` de servicios desde 2^45) y sección `[servicios]` en
+  `config.toml`. Las comprobaciones propias viajan como elemento
+  `comprobacion_servicio` y suben el `formato` de sincronización a 3 solo si
+  hay alguna; la app Android lee el formato 3 y las guarda en su copia sin
+  usarlas hasta la Fase 14.
+
+- **Escritorio remoto (Fase 12).** Hosts de tipo RDP, VNC y voxl en el mismo
+  inventario que los hosts SSH, con «a través de» un host SSH y opciones por
+  tipo. El escritorio se ve en una ventana del navegador servida por
+  `magi --servidor` solo en `127.0.0.1`, con enlaces de un solo uso y clave
+  por sesión. Cliente RDP con IronRDP (TLS con rustls, NLA/NTLM, huella del
+  certificado con la misma política que las huellas SSH, y mapas de bits y
+  RemoteFX como rectángulos; el H.264 de Windows queda pendiente de decodificar
+  los demás códecs de EGFX, ver el informe de la fase) y cliente VNC propio
+  (RFB 3.3/3.7/3.8, Raw, CopyRect, Hextile, ZRLE, portapapeles y cambio de
+  tamaño). `voxl` se arranca
+  por SSH con el script embebido `escritorio_voxl.sh` y se ve por el túnel de
+  la sesión. Sesiones custodiadas por el servidor con pestaña propia, un minuto
+  de gracia sin visor y un solo visor por sesión. Migración 8 (`tipo`,
+  `escritorio_dominio`, `escritorio_opciones` y `huella_escritorio` en
+  `HOSTS`), `formato` 2 de sincronización cuando hay escritorios, protocolo v7
+  y sección `[escritorio]` en `config.toml`.
+
 - **Sincronización cifrada del inventario (Fase 10).** El mismo inventario en
   todos los equipos del usuario mediante ficheros cifrados con age (X25519) y
   firmados con HMAC-SHA256 en una carpeta que él elige (Syncthing, Nextcloud,
@@ -27,6 +78,12 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Cambiado
 
+- Versión 1.3.0 (MINOR: funcionalidad nueva, migración de esquema 9,
+  protocolo 8 y `formato` 3 de sincronización).
+
+- Versión 1.2.0 (MINOR: funcionalidad nueva, migración de esquema 8,
+  protocolo 7 y `formato` 2 de sincronización).
+
 - **Codificación de teclas del terminal unificada (Fase 11).** La tabla
   de bytes de las teclas vive ahora en el núcleo compartido, como la usará la
   app Android. El escritorio gana la codificación estándar de flechas e
@@ -36,6 +93,14 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 - Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
 
 ### Corregido
+
+- **Pantalla negra al abrir un escritorio RDP.** El visor recibía
+  `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente
+  RDP mandaba mapas de bits como rectángulos; el visor los pintaba en su búfer
+  y no los presentaba. Ahora la imagen de apertura es siempre «rectángulos» y
+  solo se anuncia H.264 cuando llega el primer fotograma de vídeo; además el
+  puente cachea el último GOP y pide un repintado completo (Refresh Rect) al
+  visor que entra tarde o vuelve a la pestaña.
 
 - Evita el error «database is locked» al escribir el inventario con el
   servidor de sesiones activo: las transacciones del almacén se abren con

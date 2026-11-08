@@ -9,9 +9,11 @@ import org.cuatrodetres.magi.ui.modelos.FaseSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.PeticionDialogoVista
 import org.cuatrodetres.magi.ui.modelos.RespuestaDialogoVista
 import org.cuatrodetres.magi.ui.modelos.ResultadoInstalacionVista
+import org.cuatrodetres.magi.ui.modelos.TipoHostVista
 import org.cuatrodetres.magi.ui.modelos.TipoTunelVista
 import org.cuatrodetres.magi.ui.modelos.UbicacionClaveVista
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,6 +38,7 @@ class PruebaConversiones {
             nombre = "web-01",
             direccion = "192.0.2.10",
             puerto = 22U,
+            tipo = TipoHostMovil.SSH,
             usuario = "usuario",
             grupoUuid = "g1",
             etiquetas = listOf("web", "prod"),
@@ -51,12 +54,28 @@ class PruebaConversiones {
     }
 
     @Test
+    fun convierteElTipoDeHostYLosEscritorios() {
+        assertEquals(TipoHostVista.SSH, TipoHostMovil.SSH.aVista())
+        assertEquals(TipoHostVista.RDP, TipoHostMovil.RDP.aVista())
+        assertEquals(TipoHostVista.VNC, TipoHostMovil.VNC.aVista())
+        assertEquals(TipoHostVista.VOXL, TipoHostMovil.VOXL.aVista())
+        // SSH se abre desde el móvil; los escritorios, no.
+        assertFalse(TipoHostVista.SSH.esEscritorio)
+        assertTrue(TipoHostVista.RDP.esEscritorio)
+        assertTrue(TipoHostVista.VNC.esEscritorio)
+        assertTrue(TipoHostVista.VOXL.esEscritorio)
+        assertEquals("RDP", TipoHostVista.RDP.etiqueta)
+        assertEquals("voxl", TipoHostVista.VOXL.etiqueta)
+    }
+
+    @Test
     fun convierteLaFichaConHuellas() {
         val ficha = FichaHost(
             uuid = "h1",
             nombre = "web-01",
             direccion = "192.0.2.10",
             puerto = 2222U,
+            tipo = TipoHostMovil.SSH,
             usuario = "usuario",
             grupoUuid = "g1",
             grupoNombre = "producción",
@@ -283,6 +302,12 @@ class PruebaConversiones {
             .aVista(app = "0.1.0", codigo = 1009)
         assertEquals("0.1.0", version.nucleo)
         assertEquals(7, version.userVersion)
+        // Fase 13: el núcleo declara el formato 3 y la migración 9; la app los
+        // muestra tal cual porque leer el fichero lo hace el núcleo, no Kotlin.
+        val version13 = VersionNucleo(nucleo = "1.3.0", formato = 3U, userVersion = 9U)
+            .aVista(app = "0.2.0", codigo = 209)
+        assertEquals(3, version13.formato)
+        assertEquals(9, version13.userVersion)
     }
 
     @Test

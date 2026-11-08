@@ -52,7 +52,7 @@ fn carpeta_de_prueba(entorno: &Entorno, nombre: &str) -> PathBuf {
 fn escribir_fichero_ajeno(carpeta: &std::path::Path, clave: &ClaveSincronizacion) -> String {
     let uuid_equipo = uuid::Uuid::new_v4().to_string();
     let documento = formato::Documento {
-        formato: formato::FORMATO,
+        formato: formato::FORMATO_1,
         app: "1.1.0".to_string(),
         equipo: formato::EquipoDocumento {
             uuid: uuid_equipo.clone(),
@@ -68,7 +68,7 @@ fn escribir_fichero_ajeno(carpeta: &std::path::Path, clave: &ClaveSincronizacion
     };
     let json = formato::serializar(&documento).unwrap();
     let firma = clave.firmar(json.as_bytes()).unwrap();
-    let plano = formato::componer(&json, &firma);
+    let plano = formato::componer(&json, &firma, documento.formato);
     let cifrado = clave.cifrar(&plano).unwrap();
     carpeta::escribir(carpeta, &uuid_equipo, &cifrado).unwrap();
     uuid_equipo
@@ -114,7 +114,7 @@ fn la_migracion_7_rellena_uuid_version_y_vector_y_crea_el_equipo() {
     let version: i64 = conexion
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
 
     let (uuid_equipo, reloj_ms): (String, i64) = conexion
         .query_row(

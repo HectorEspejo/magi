@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  LISTA                                                              ⇥ hosts  │
+│────────────────────────────────────────────────────────────────────────────  │
+│ ▸1 Servicios (1)   2 Timers (2)   3 Contenedores (4)                         │
+│  UNIDAD                                 ESTADO       ARRANQUE     DESDE      │
+│───────────────────────────────────────────────────────────────────────────── │
+│▸    app.service                          ✕ fallido    activado     hace 2 h  │
+│ 1 servicios · 1 fallido(s) · 0 vigilados                                     │
+│                                                                              │
+│       ┌ CONTRASEÑA DE SUDO ──────────────────────────────────────────┐       │
+│       │Contraseña de sudo de root@hetzner-01                         │       │
+│       │  ▏                                                           │       │
+│       │se recuerda 5 min sin uso; nunca se guarda                    │       │
+│       │ ↵ comprobar · esc cancelar · intento 1 de 3                  │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  A arrancar  R reiniciar  r refrescar  ? más

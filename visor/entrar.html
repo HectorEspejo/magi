@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="es">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="dark" />
+		<title>MAGI · visor de escritorio</title>
+		<link rel="stylesheet" href="/visor.css" />
+		<script src="/visor.js" defer></script>
+	</head>
+	<body>
+		<main id="escena">
+			<div id="superficie" tabindex="0" aria-label="Escritorio remoto">
+				<canvas id="lienzo"></canvas>
+			</div>
+		</main>
+
+		<textarea
+			id="teclado"
+			autocomplete="off"
+			autocorrect="off"
+			autocapitalize="off"
+			spellcheck="false"
+			tabindex="-1"
+			aria-hidden="true"></textarea>
+
+		<header id="barra">
+			<div class="barra-identidad">
+				<span id="barra-titulo">Escritorio remoto</span>
+				<span id="barra-tipo" class="etiqueta"></span>
+			</div>
+			<div class="barra-estado" role="status">
+				<span id="barra-conexion">conectando</span>
+				<span id="barra-fps">0 fps</span>
+				<span id="barra-latencia" hidden>— ms</span>
+			</div>
+			<div class="barra-botones">
+				<button
+					id="boton-pantalla-completa"
+					type="button"
+					aria-label="Alternar la pantalla completa"
+					title="Pantalla completa">
+					Pantalla completa
+				</button>
+				<button
+					id="boton-ctrl-alt-supr"
+					type="button"
+					aria-label="Enviar Ctrl+Alt+Supr al escritorio remoto"
+					title="Ctrl+Alt+Supr">
+					Ctrl+Alt+Supr
+				</button>
+				<button
+					id="boton-win"
+					type="button"
+					aria-label="Enviar la tecla Windows al escritorio remoto"
+					title="Tecla Windows">
+					Win
+				</button>
+				<button
+					id="boton-cerrar"
+					type="button"
+					aria-label="Cerrar el visor"
+					title="Cerrar visor">
+					Cerrar visor
+				</button>
+			</div>
+		</header>
+
+		<div id="portapapeles-aviso" role="status" aria-live="polite">
+			<p id="portapapeles-texto">Portapapeles del escritorio remoto listo.</p>
+			<button
+				id="boton-copiar"
+				type="button"
+				aria-label="Copiar el texto del escritorio remoto en este equipo">
+				Copiar
+			</button>
+		</div>
+		<div id="aviso" class="visible" role="alert" aria-live="polite">
+			<div class="aviso-caja">
+				<p id="aviso-titulo">Conectando…</p>
+				<p id="aviso-detalle" hidden></p>
+				<button
+					id="boton-reconectar"
+					type="button"
+					aria-label="Reconectar la sesión"
+					hidden>
+					Reconectar
+				</button>
+			</div>
+		</div>
+	</body>
+</html>

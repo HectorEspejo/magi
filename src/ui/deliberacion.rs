@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, DeliberacionAbierta};
+use crate::app::{dialogo_magi::PlanDeliberado, App, DeliberacionAbierta};
 use crate::deliberacion::estado::Fase;
 use crate::deliberacion::{Comprobacion, ComprobacionesHost, Veredicto};
 use crate::tema::Tema;
@@ -90,6 +90,17 @@ fn ventana_hosts(
     (inicio, seleccion)
 }
 
+/// «Antes de reiniciar: nginx -t» de la deliberación de un servicio (§6.5).
+fn comprobacion_visible(deliberacion: &DeliberacionAbierta) -> Option<String> {
+    match &deliberacion.plan {
+        PlanDeliberado::Servicio(plan) => plan
+            .comprobacion
+            .as_ref()
+            .map(|comprobacion| format!("Antes de {}: {comprobacion}", plan.accion.texto())),
+        _ => None,
+    }
+}
+
 fn dibujar_completo(
     marco: &mut Frame,
     area: Rect,
@@ -102,7 +113,10 @@ fn dibujar_completo(
     // separadores (2), cabecera (2), detalle (1), consenso y estado (2),
     // hueco y teclas (2); forzando, el rótulo y el campo (2) y, sin
     // comprobaciones activas, el aviso (1).
-    let fijo = 15
+    let comprobacion = comprobacion_visible(deliberacion);
+    let fijo: usize = 15
+        + usize::from(deliberacion.critica.is_some())
+        + usize::from(comprobacion.is_some())
         + match deliberacion.maquina.fase {
             Fase::Motivo => 2,
             Fase::Aprobada if deliberacion.consenso().activas == 0 => 1,
@@ -136,6 +150,7 @@ pub fn lineas(
     let texto = Style::default().fg(tema.paleta.texto);
     let tenue = Style::default().fg(tema.paleta.inactivo);
     let negrita = texto.add_modifier(Modifier::BOLD);
+    let comprobacion = comprobacion_visible(deliberacion);
     let mut lineas = Vec::new();
     lineas.push(Line::from(vec![
         Span::styled("ACCIÓN: ", negrita),
@@ -159,6 +174,20 @@ pub fn lineas(
         ),
         tenue,
     )));
+    if let Some(critica) = &deliberacion.critica {
+        lineas.push(Line::from(Span::styled(
+            recortar(&format!("⚑ {critica}"), ancho, ascii),
+            Style::default()
+                .fg(tema.paleta.critico)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    if let Some(comprobacion) = &comprobacion {
+        lineas.push(Line::from(Span::styled(
+            recortar(comprobacion, ancho, ascii),
+            tenue,
+        )));
+    }
     lineas.push(separador(ancho, tema));
 
     let columna = ancho.saturating_sub(ANCHO_HOST) / 3;
@@ -443,8 +472,12 @@ fn dibujar_compacto(
     let en_una = largo_consenso + 2 + estado.chars().count() <= anchos.texto;
     let lineas_estado = if en_una { 1 } else { 2 };
     let motivo = usize::from(maquina.fase == Fase::Motivo);
-    // Cabecera, estado, campo del motivo y teclas.
-    let fijas = 1 + lineas_estado + motivo + 1;
+    let con_critica = usize::from(deliberacion.critica.is_some());
+    let comprobacion = comprobacion_visible(deliberacion);
+    let con_comprobacion = usize::from(comprobacion.is_some());
+    // Cabecera (con las líneas de crítica y comprobación), estado, campo del
+    // motivo y teclas.
+    let fijas = 1 + lineas_estado + motivo + 1 + con_critica + con_comprobacion;
     let alto_max = usize::from(area.height.saturating_sub(2));
     let caben = alto_max.saturating_sub(2 + fijas).max(1);
     let filas_hosts = total.min(caben).max(1);
@@ -472,6 +505,20 @@ fn dibujar_compacto(
         ));
     }
     lineas.push(Line::from(cabecera));
+    if let Some(critica) = &deliberacion.critica {
+        lineas.push(Line::from(Span::styled(
+            recortar(&format!("⚑ {critica}"), ancho_texto, ascii),
+            Style::default()
+                .fg(tema.paleta.critico)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    if let Some(comprobacion) = &comprobacion {
+        lineas.push(Line::from(Span::styled(
+            recortar(comprobacion, ancho_texto, ascii),
+            tenue,
+        )));
+    }
     for (indice, fila) in deliberacion
         .filas
         .iter()

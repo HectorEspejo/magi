@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────────────────────────────────────────────┐
+│  TODA LA FLOTA                                                      ⇥ hosts  │
+│────────────────────────────────────────────────────────────────────────────  │
+│ FALLOS DE LA FLOTA (del último sondeo de cada host, sin abrir conexiones)    │
+│  HOST         TIPO        NOMBRE                    ESTADO         SONDEO    │
+│───────────────────────────────────────────────────────────────────────────── │
+│  hetzner-01   servicio    copia.service             ✕ fallido      hace NN s │
+│  hetzner-01   contenedor  web-worker-1              ✕ caído        hace NN s │
+│  hetzner-01   contenedor  panel                     ✕ caído        hace NN s │
+│  vps-openclaw servicio    exportar.service          ✕ fallido      hace NN min│
+│                                                                              │
+│  dgx-spark: sin sondeo · r para sondear                                      │
+│  rincon-dev: CAÍDA en el último sondeo (hace NN s) · sin datos de servicios  │
+│  backup-nas y hetzner-02 y mac-mini-m1: sin fallos                           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ lista  ↵ ir al host  l logs  A arrancar  r sondear todos  esc volver  ? más

@@ -53,6 +53,7 @@ class PruebaFuenteNucleoReal {
                 nombre = "web-01",
                 direccion = "192.0.2.10",
                 puerto = 22U,
+                tipo = TipoHostMovil.SSH,
                 usuario = "usuario",
                 grupoUuid = null,
                 etiquetas = listOf("web"),

@@ -2,14 +2,29 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, Row};
 
 use crate::almacen::{etiquetas, versiones};
+use crate::escritorio::{OpcionesEscritorio, TipoHost};
 use crate::modelo::{fecha_ahora, DatosHost, Host, IdentidadRef, Origen, UltimoEstado};
+
+/// Error de lectura de una fila que no se puede validar (T38): una fila con
+/// un tipo o unas opciones que este binario no entiende se rechaza al leerla.
+fn fila_invalida(columna: usize, motivo: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        columna,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            motivo.to_string(),
+        )),
+    )
+}
 
 const SELECCION: &str = "
     SELECT h.id, h.nombre, h.grupo_id, h.direccion, h.puerto, h.usuario,
            h.identidad_ref, h.salto_host_id, h.multiplexar, h.keepalive_seg,
            h.opciones_extra, h.origen, h.ultimo_estado, h.ultima_conexion_en,
            h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios,
-           h.sftp_dir_local, h.sftp_dir_remoto, h.snippet_al_conectar_id
+           h.sftp_dir_local, h.sftp_dir_remoto, h.snippet_al_conectar_id,
+           h.tipo, h.escritorio_dominio, h.escritorio_opciones, h.huella_escritorio
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -39,6 +54,18 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
         sftp_dir_local: fila.get(19)?,
         sftp_dir_remoto: fila.get(20)?,
         snippet_al_conectar_id: fila.get(21)?,
+        tipo: {
+            let texto: String = fila.get(22)?;
+            TipoHost::desde_texto(&texto)
+                .ok_or_else(|| fila_invalida(22, "tipo de host desconocido"))?
+        },
+        escritorio_dominio: fila.get(23)?,
+        escritorio_opciones: {
+            let texto: Option<String> = fila.get(24)?;
+            OpcionesEscritorio::desde_json(texto.as_deref())
+                .map_err(|motivo| fila_invalida(24, &motivo))?
+        },
+        huella_escritorio: fila.get(25)?,
     })
 }
 
@@ -99,8 +126,9 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
             "INSERT INTO HOSTS (
                 nombre, grupo_id, direccion, puerto, usuario, identidad_ref,
                 salto_host_id, multiplexar, keepalive_seg, opciones_extra,
-                origen, creado_en, actualizado_en, servicios
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
+                origen, creado_en, actualizado_en, servicios, tipo,
+                escritorio_dominio, escritorio_opciones
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16)",
             params![
                 datos.nombre.trim(),
                 datos.grupo_id,
@@ -115,6 +143,9 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
                 origen.como_texto(),
                 ahora,
                 datos.servicios,
+                datos.tipo.como_texto(),
+                datos.escritorio_dominio.as_deref(),
+                datos.escritorio_opciones.a_json(),
             ],
         )
         .map_err(|error| {
@@ -140,8 +171,9 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
                 nombre = ?1, grupo_id = ?2, direccion = ?3, puerto = ?4,
                 usuario = ?5, identidad_ref = ?6, salto_host_id = ?7,
                 multiplexar = ?8, keepalive_seg = ?9, opciones_extra = ?10,
-                actualizado_en = ?11, servicios = ?12
-             WHERE id = ?13",
+                actualizado_en = ?11, servicios = ?12, escritorio_dominio = ?13,
+                escritorio_opciones = ?14
+             WHERE id = ?15",
             params![
                 datos.nombre.trim(),
                 datos.grupo_id,
@@ -155,6 +187,8 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
                 datos.opciones_extra,
                 fecha_ahora(),
                 datos.servicios,
+                datos.escritorio_dominio.as_deref(),
+                datos.escritorio_opciones.a_json(),
                 id,
             ],
         )
@@ -177,10 +211,11 @@ pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<(
 fn hijas_para_lapida(
     conexion: &Connection,
     tabla: versiones::Tabla,
+    columna_nombre: &str,
     host_id: i64,
 ) -> Result<Vec<crate::almacen::FilaParaLapida>> {
     let mut sentencia = conexion.prepare(&format!(
-        "SELECT uuid, nombre, vector FROM {} WHERE host_id = ?1 ORDER BY id",
+        "SELECT uuid, {columna_nombre}, vector FROM {} WHERE host_id = ?1 ORDER BY id",
         tabla.nombre()
     ))?;
     let filas = sentencia.query_map(params![host_id], |fila| {
@@ -200,11 +235,21 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         // No hay fila que borrar: ni lápida ni cambios.
         return Ok(());
     };
-    // Túneles y sincronizaciones del host caen en cascada: también dejan
-    // lápida (Fase 10).
-    let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, id)?;
-    let sincronizaciones =
-        hijas_para_lapida(&transaccion, versiones::Tabla::SincronizacionesDir, id)?;
+    // Túneles, sincronizaciones y comprobaciones de servicio del host caen en
+    // cascada: también dejan lápida (Fase 10 y §3.7 de la Fase 13).
+    let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, "nombre", id)?;
+    let sincronizaciones = hijas_para_lapida(
+        &transaccion,
+        versiones::Tabla::SincronizacionesDir,
+        "nombre",
+        id,
+    )?;
+    let comprobaciones = hijas_para_lapida(
+        &transaccion,
+        versiones::Tabla::ComprobacionesServicio,
+        "objetivo",
+        id,
+    )?;
     // Los hosts que lo usaban como salto se quedan con la referencia a nulo
     // (ON DELETE SET NULL): eso cuenta como edición de cada uno.
     let saltos: Vec<i64> = {
@@ -251,6 +296,15 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         crate::almacen::dejar_lapida(
             &transaccion,
             versiones::Tabla::SincronizacionesDir,
+            &hija.uuid,
+            &hija.nombre,
+            &hija.vector,
+        )?;
+    }
+    for hija in &comprobaciones {
+        crate::almacen::dejar_lapida(
+            &transaccion,
+            versiones::Tabla::ComprobacionesServicio,
             &hija.uuid,
             &hija.nombre,
             &hija.vector,
@@ -370,6 +424,16 @@ pub fn marcar_estado(conexion: &Connection, id: i64, estado: Option<UltimoEstado
     conexion.execute(
         "UPDATE HOSTS SET ultimo_estado = ?1, actualizado_en = ?2 WHERE id = ?3",
         params![estado.map(UltimoEstado::como_texto), fecha_ahora(), id],
+    )?;
+    Ok(())
+}
+
+/// Fija (o borra) la huella del certificado RDP aceptado. Es propia del
+/// equipo: no sube la versión del host ni viaja (D218).
+pub fn fijar_huella_escritorio(conexion: &Connection, id: i64, huella: Option<&str>) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET huella_escritorio = ?1 WHERE id = ?2",
+        params![huella, id],
     )?;
     Ok(())
 }

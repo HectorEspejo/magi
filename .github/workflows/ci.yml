@@ -1,4 +1,4 @@
-# Integración continua de MAGI — Fases 9 y 11.
+# Integración continua de MAGI — Fases 9, 11 y 12.
 #
 # Se ejecuta en cada pull request y en cada push a main. La release (compilar
 # los cuatro objetivos, publicar en GitHub Releases, Homebrew y AUR) la lleva
@@ -97,6 +97,25 @@ jobs:
         env:
           TZ: UTC
         run: cargo test --lib --workspace --locked
+
+  visor:
+    name: Visor web (TypeScript)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: visor/package-lock.json
+      - name: Instalar dependencias del visor (fijadas por integridad)
+        run: npm --prefix visor ci
+      - name: Tipo, formato y lint del visor
+        run: npm --prefix visor run check
+      - name: El dist del visor está al día (Fase 12)
+        # Compilar MAGI no necesita Node: dist/ se versiona y se regenera con
+        # este script cuando cambia visor/src. La CI falla si no está al día.
+        run: scripts/generar-visor.sh --comprobar
 
   deny:
     name: Licencias y avisos (cargo-deny)

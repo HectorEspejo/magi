@@ -403,11 +403,19 @@ mod pruebas {
         )
         .unwrap();
         std::fs::write(carpeta.join(format!(".magi-{uuid_a}.age.tmp")), b"x").unwrap();
-        std::fs::write(
-            carpeta.join(format!("magi-{}.age", uuid_a.to_uppercase())),
-            b"x",
-        )
-        .unwrap();
+        let canonico = carpeta.join(nombre_fichero(uuid_a));
+        let en_mayusculas = carpeta.join(format!("magi-{}.age", uuid_a.to_uppercase()));
+        std::fs::write(&en_mayusculas, b"x").unwrap();
+        // APFS (macOS por defecto) es insensible a mayúsculas: ese nombre es el
+        // mismo fichero que el canónico y la escritura lo pisa. Se restaura y
+        // se sigue; el caso del nombre en mayúsculas solo existe en sistemas
+        // sensibles a mayúsculas.
+        let insensible = std::fs::metadata(&canonico)
+            .map(|meta| meta.len() != 6)
+            .unwrap_or(false);
+        if insensible {
+            std::fs::write(&canonico, b"aaaaaa").unwrap();
+        }
         std::fs::create_dir_all(carpeta.join(nombre_fichero(uuid_c))).unwrap();
         std::fs::write(carpeta.join("otra-cosa.txt"), b"x").unwrap();
 

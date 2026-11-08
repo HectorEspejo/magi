@@ -1,0 +1,21 @@
+{
+	"name": "magi-visor",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Cliente web del visor de escritorio remoto de MAGI (Fase 12), adaptado del cliente web de voxl 0.3.3 (MIT). Solo herramientas de desarrollo: el bundle final no tiene dependencias.",
+	"type": "module",
+	"scripts": {
+		"formato": "oxfmt --check .",
+		"formato:arreglar": "oxfmt .",
+		"lint": "oxlint",
+		"tipos": "tsc -p tsconfig.json && tsc -p tsconfig.trabajador.json",
+		"check": "npm run formato && npm run lint && npm run tipos",
+		"generar": "bash ../scripts/generar-visor.sh"
+	},
+	"devDependencies": {
+		"esbuild": "0.28.2",
+		"oxfmt": "0.76.0",
+		"oxlint": "1.91.0",
+		"typescript": "5.9.3"
+	}
+}

@@ -10,14 +10,29 @@
 
 use std::collections::BTreeMap;
 
+use magi_nucleo::escritorio::TipoHost;
 use magi_nucleo::sincronizacion::cifrado::ClaveSincronizacion;
 use magi_nucleo::sincronizacion::elementos::{DatosHost, DatosTunel};
-use magi_nucleo::sincronizacion::formato::{self, Documento, ElementoDocumento, EquipoDocumento};
+use magi_nucleo::sincronizacion::formato::{
+    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1,
+};
 
 const CLAVE: &str = "AGE-SECRET-KEY-1TSKT6QRX7APKJPLTTJUKRXVATA8H7DAX3ZZH8D5SEQ94R2G3YRDSZSYMTS";
 const UUID_EQUIPO: &str = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 const UUID_HOST: &str = "11111111-3333-4444-8555-666666666666";
 const UUID_TUNEL: &str = "22222222-4444-4555-8666-777777777777";
+
+/// Datos de un host tal como los exporta MAGI 1.1 (formato 1): sin los campos
+/// de escritorio, que no existían entonces.
+fn datos_host_formato_1(datos: DatosHost) -> serde_json::Value {
+    let mut valor = serde_json::to_value(datos).expect("datos del host a JSON");
+    if let Some(objeto) = valor.as_object_mut() {
+        objeto.remove("tipo");
+        objeto.remove("escritorio_dominio");
+        objeto.remove("escritorio_opciones");
+    }
+    valor
+}
 
 fn elemento(tipo: &str, uuid: &str, datos: serde_json::Value) -> ElementoDocumento {
     let mut vector = BTreeMap::new();
@@ -39,10 +54,13 @@ fn generar_fixture_tunel_android() {
         elemento(
             "host",
             UUID_HOST,
-            serde_json::to_value(DatosHost {
+            datos_host_formato_1(DatosHost {
                 nombre: "tunel-prueba".to_string(),
                 direccion: "10.0.2.2".to_string(),
                 puerto: 12222,
+                tipo: TipoHost::Ssh,
+                escritorio_dominio: None,
+                escritorio_opciones: serde_json::json!({}),
                 usuario: Some("usuario".to_string()),
                 identidad_ref: None,
                 salto: None,
@@ -55,8 +73,7 @@ fn generar_fixture_tunel_android() {
                 etiquetas: Vec::new(),
                 verificaciones: None,
                 snippet_al_conectar: None,
-            })
-            .unwrap(),
+            }),
         ),
         elemento(
             "tunel",
@@ -73,7 +90,7 @@ fn generar_fixture_tunel_android() {
         ),
     ];
     let documento = Documento {
-        formato: formato::FORMATO,
+        formato: FORMATO_1,
         app: "1.1.0".to_string(),
         equipo: EquipoDocumento {
             uuid: UUID_EQUIPO.to_string(),
@@ -89,7 +106,7 @@ fn generar_fixture_tunel_android() {
     };
     let json = formato::serializar(&documento).expect("JSON del documento");
     let firma = clave.firmar(json.as_bytes()).expect("firma");
-    let plano = formato::componer(&json, &firma);
+    let plano = formato::componer(&json, &firma, FORMATO_1);
     let cifrado = clave.cifrar(&plano).expect("cifrado");
     let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let carpeta = raiz.join("../../android/app/src/androidTest/assets/tunel");

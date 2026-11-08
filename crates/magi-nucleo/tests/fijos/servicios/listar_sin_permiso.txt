@@ -1,0 +1,22 @@
+MAGI_PRIV=sin_sudo
+MAGI_SYSTEMD=252
+MAGI_BLOQUE service
+Id=ssh.service
+Names=ssh.service
+Description=OpenBSD Secure Shell server
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/lib/systemd/system/ssh.service
+ExecMainPID=801
+MemoryCurrent=10485760
+ActiveEnterTimestampMonotonic=3390000000
+MAGI_FIN_BLOQUE
+MAGI_DIARIO=propio
+MAGI_RELOJ=1794141560 60121
+MAGI_MOTOR=docker sin_permiso
+MAGI_FIN

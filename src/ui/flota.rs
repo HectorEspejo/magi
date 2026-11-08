@@ -34,8 +34,8 @@ const BARRA_MAXIMA: usize = 40;
 const FUERA_DE_LA_BARRA: usize = 19;
 /// Sangría del texto del detalle, también en las líneas partidas.
 const SANGRIA_DETALLE: u16 = 2;
-/// Ancho de la palabra de estado (`NOMINAL`, `ALCANZ.`).
-const ANCHO_PALABRA: u16 = 7;
+/// Ancho de la palabra de estado (`NOMINAL`, `ALCANZ.`, `SIN SONDEO`).
+const ANCHO_PALABRA: u16 = 10;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
@@ -198,7 +198,16 @@ fn cabecera_derecha(app: &App, ancho: u16, titulo: &str) -> Option<String> {
             .values()
             .filter_map(|sondeo| estado::antiguedad_segundos(&sondeo.fecha))
             .fold(f64::INFINITY, f64::min);
-        let mut partes = vec![format!("{total} hosts"), format!("{nominales} nominal")];
+        let escritorios = app
+            .hosts
+            .iter()
+            .filter(|host| host.tipo.es_escritorio())
+            .count();
+        let mut partes = vec![format!("{total} hosts")];
+        if escritorios > 0 {
+            partes.push(format!("{escritorios} escritorios"));
+        }
+        partes.push(format!("{nominales} nominal"));
         if antiguedad.is_finite() {
             partes.push(format!(
                 "sondeo hace {}",
@@ -228,6 +237,22 @@ fn estado_de(app: &App, host_id: i64) -> (EstadoFlota, Vec<String>) {
 /// Glifo, color y palabra de estado de un host en Flota.
 fn estado_visible(app: &App, host_id: i64) -> (String, ratatui::style::Color, &'static str) {
     let tema = &app.tema;
+    // Un escritorio no se sondea: enseña el resultado de su última apertura
+    // (Fase 12).
+    if let Some(host) = app.hosts.iter().find(|host| host.id == host_id) {
+        if host.tipo.es_escritorio() {
+            let (glifo, color, palabra) = match host.ultimo_estado {
+                Some(crate::modelo::UltimoEstado::Ok) => {
+                    (tema.glifos.conectado, tema.paleta.correcto, "SIN SONDEO")
+                }
+                Some(crate::modelo::UltimoEstado::Error) => {
+                    (tema.glifos.error, tema.paleta.critico, "SIN SONDEO")
+                }
+                None => (tema.glifos.desconectado, tema.paleta.inactivo, "SIN SONDEO"),
+            };
+            return (glifo.to_string(), color, palabra);
+        }
+    }
     if app.sondeando.contains(&host_id) {
         return (
             tema.glifos.conectando.to_string(),
@@ -301,7 +326,13 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicio
         .map(|indice| {
             let host = &app.hosts[*indice];
             let tuneles = super::hosts::tuneles_activos_de_host(app, host.id) > 0;
-            host.nombre.chars().count() + if tuneles { 2 } else { 0 }
+            let fallos = app.servicios_fallos_total(host.id);
+            let marca_fallos = if fallos > 0 {
+                2 + fallos.to_string().chars().count()
+            } else {
+                0
+            };
+            host.nombre.chars().count() + if tuneles { 2 } else { 0 } + marca_fallos
         })
         .max()
         .unwrap_or(4)
@@ -330,16 +361,33 @@ fn dibujar_lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicio
             ),
             Span::raw(" "),
         ];
-        // Con túneles activos, `⇅` va pegado al nombre dentro de su columna.
+        // Con túneles activos, el glifo va pegado al nombre dentro de su
+        // columna; si el sondeo vio fallos, también la marca de fallos (⚠N).
         let ancho_nombre = usize::from(anchos[1]);
         let tuneles = super::hosts::tuneles_activos_de_host(app, host.id) > 0 && ancho_nombre >= 4;
-        let reserva = if tuneles { 2 } else { 0 };
-        let nombre = disposicion::recortar(&host.nombre, ancho_nombre - reserva, tema.ascii);
+        let fallos = app.servicios_fallos_total(host.id);
+        let marca_fallos = if fallos > 0 {
+            2 + fallos.to_string().chars().count()
+        } else {
+            0
+        };
+        let reserva = if tuneles { 2 } else { 0 } + marca_fallos;
+        let nombre = disposicion::recortar(
+            &host.nombre,
+            ancho_nombre.saturating_sub(reserva),
+            tema.ascii,
+        );
         let largo = nombre.chars().count() + reserva;
         spans.push(Span::styled(nombre, Style::default().fg(tema.paleta.texto)));
         if tuneles {
             spans.push(Span::styled(
                 format!(" {}", tema.glifos.tuneles),
+                Style::default().fg(tema.paleta.acento),
+            ));
+        }
+        if fallos > 0 {
+            spans.push(Span::styled(
+                format!(" {}{fallos}", crate::ui::tecla(tema, "⚠", "!")),
                 Style::default().fg(tema.paleta.acento),
             ));
         }
@@ -419,6 +467,61 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, bajo: bool) {
         format!("{}:{}", host.direccion, host.puerto),
         Style::default().fg(tema.paleta.inactivo),
     )));
+    // Fase 12: un escritorio no se sondea; enseña su tipo, su camino y el
+    // resultado de la última apertura.
+    if host.tipo.es_escritorio() {
+        hueco(&mut lineas);
+        lineas.push(Line::from(Span::styled(
+            format!(
+                "{} escritorio {} {punto} sin sondeo",
+                host.tipo.glifo(tema.ascii),
+                host.tipo.etiqueta()
+            ),
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        )));
+        if let Some(salto) = &host.salto_nombre {
+            lineas.push(Line::from(Span::styled(
+                format!("a través de {salto}"),
+                Style::default().fg(tema.paleta.texto),
+            )));
+        } else if host.tipo == crate::escritorio::TipoHost::Vnc {
+            lineas.push(Line::from(Span::styled(
+                format!("{} directo, sin cifrar", super::tecla(tema, "⚠", "!")),
+                Style::default().fg(tema.paleta.acento),
+            )));
+        }
+        let ultimo = match host.ultimo_estado {
+            Some(crate::modelo::UltimoEstado::Ok) => {
+                ("última apertura correcta", tema.paleta.correcto)
+            }
+            Some(crate::modelo::UltimoEstado::Error) => {
+                ("el último intento falló", tema.paleta.critico)
+            }
+            None => ("nunca se ha abierto en este equipo", tema.paleta.inactivo),
+        };
+        lineas.push(Line::from(Span::styled(
+            ultimo.0,
+            Style::default().fg(ultimo.1),
+        )));
+        if let Some(fecha) = &host.ultima_conexion_en {
+            lineas.push(Line::from(Span::styled(
+                format!("última conexión: {fecha}"),
+                Style::default().fg(tema.paleta.inactivo),
+            )));
+        }
+        hueco(&mut lineas);
+        lineas.push(Line::from(Span::styled(
+            format!(
+                "{} abre su pestaña y el visor desde Hosts",
+                tema.glifos.intro
+            ),
+            Style::default().fg(tema.paleta.inactivo),
+        )));
+        marco.render_widget(Paragraph::new(lineas).wrap(Wrap { trim: false }), area);
+        return;
+    }
     hueco(&mut lineas);
     let Some(sondeo) = app.sondeos.get(&host.id) else {
         lineas.push(Line::from(Span::styled(
@@ -553,6 +656,62 @@ fn dibujar_detalle(marco: &mut Frame, area: Rect, app: &App, bajo: bool) {
                             }),
                         ),
                     ]));
+                }
+            }
+            // Fallos del sondeo ampliado (Fase 13): no cambian el estado del
+            // host, solo se enseñan aquí.
+            if let Some(fallos) = app.servicios_fallos_de_host(host.id) {
+                if fallos.total() > 0 {
+                    hueco(&mut lineas);
+                    lineas.push(Line::from(Span::styled(
+                        "FALLOS",
+                        Style::default()
+                            .fg(tema.paleta.critico)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    for unidad in &fallos.unidades.nombres {
+                        lineas.push(Line::from(vec![
+                            Span::styled(
+                                format!("{} ", tema.glifos.error),
+                                Style::default()
+                                    .fg(tema.paleta.critico)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("{unidad} (servicio)"),
+                                Style::default().fg(tema.paleta.acento),
+                            ),
+                        ]));
+                    }
+                    if let Some(contenedores) = &fallos.contenedores {
+                        for nombre in &contenedores.nombres {
+                            lineas.push(Line::from(vec![
+                                Span::styled(
+                                    format!("{} ", tema.glifos.error),
+                                    Style::default()
+                                        .fg(tema.paleta.critico)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    format!("{nombre} (contenedor)"),
+                                    Style::default().fg(tema.paleta.acento),
+                                ),
+                            ]));
+                        }
+                    }
+                    let mostrados = fallos.unidades.nombres.len()
+                        + fallos
+                            .contenedores
+                            .as_ref()
+                            .map(|contenedores| contenedores.nombres.len())
+                            .unwrap_or(0);
+                    let total = fallos.total() as usize;
+                    if total > mostrados {
+                        lineas.push(Line::from(Span::styled(
+                            format!("… {} más sin nombre", total - mostrados),
+                            Style::default().fg(tema.paleta.inactivo),
+                        )));
+                    }
                 }
             }
         }

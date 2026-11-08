@@ -14,18 +14,20 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::almacen::conflictos::{self, Conflicto, NuevoConflicto};
 use crate::almacen::lapidas::{self, Lapida};
 use crate::almacen::versiones::{self, Tabla};
 use crate::deliberacion::validar_verificaciones;
+use crate::escritorio::TipoHost;
 use crate::modelo::Direccion;
 use crate::modelo::{fecha_ahora, IdentidadRef, Origen, OrigenIdentidad, TipoTunel};
 use crate::sincronizacion::elementos::{
-    ruta_desde_home, DatosGrupo, DatosHost, DatosIdentidad, DatosSincronizacion, DatosSnippet,
-    DatosTunel, DatosVerificaciones, DestinoSnippet,
+    opciones_desde_valor, ruta_desde_home, DatosComprobacionServicio, DatosGrupo, DatosHost,
+    DatosIdentidad, DatosSincronizacion, DatosSnippet, DatosTunel, DatosVerificaciones,
+    DestinoSnippet,
 };
 use crate::sincronizacion::fusion::{ConflictoFusion, PlanFusion};
 
@@ -77,6 +79,7 @@ struct VivosPlan {
     tuneles: BTreeMap<String, VivoPlan<DatosTunel>>,
     snippets: BTreeMap<String, VivoPlan<DatosSnippet>>,
     sincronizaciones: BTreeMap<String, VivoPlan<DatosSincronizacion>>,
+    comprobaciones: BTreeMap<String, VivoPlan<DatosComprobacionServicio>>,
 }
 
 impl VivosPlan {
@@ -111,6 +114,10 @@ impl VivosPlan {
             .expect("tabla creada")
             .extend(self.sincronizaciones.keys().cloned());
         mapas
+            .get_mut(&Tabla::ComprobacionesServicio)
+            .expect("tabla creada")
+            .extend(self.comprobaciones.keys().cloned());
+        mapas
     }
 
     /// Versión y vector del candidato vivo de esa tabla, para decidir si una
@@ -141,6 +148,10 @@ impl VivosPlan {
                 .sincronizaciones
                 .get(uuid)
                 .map(|vivo| (vivo.version.as_str(), &vivo.vector)),
+            Tabla::ComprobacionesServicio => self
+                .comprobaciones
+                .get(uuid)
+                .map(|vivo| (vivo.version.as_str(), &vivo.vector)),
         }
     }
 }
@@ -153,6 +164,10 @@ struct PlanLeido {
     lapidas: BTreeMap<String, Lapida>,
     /// uuids que hay que tratar como edición nueva al escribir (renombrados).
     renombrados: HashMap<Tabla, BTreeSet<String>>,
+    /// Hosts cuyo tipo (o cuyas opciones de escritorio) no se puede validar.
+    /// No se aplican: dejan un conflicto de elemento para que el usuario lo
+    /// vea, y la fila local de ese uuid, si la hay, no se borra (T38).
+    invalidos: Vec<ConflictoFusion>,
 }
 
 /// Fila local con lo justo para decidir actualizaciones y borrados.
@@ -184,6 +199,13 @@ pub fn aplicar(
 
     let mut leido = leer_plan(plan)?;
     let vivos_uuids = leido.vivos.uuids_por_tabla();
+    // Hosts que el fichero trae con un tipo o unas opciones que no se pueden
+    // validar: no se aplican y su fila local, si la hay, se conserva.
+    let invalidos: BTreeSet<String> = leido
+        .invalidos
+        .iter()
+        .map(|conflicto| conflicto.uuid.clone())
+        .collect();
 
     // Estado local antes de tocar nada: uuid → fila, y etiquetas por host para
     // no perder las de las filas que se quedan sin reescribir (borrados
@@ -212,7 +234,7 @@ pub fn aplicar(
                         actualizar.insert(uuid.clone());
                     }
                 }
-            } else if !opciones.borrados_aplazados.contains(uuid) {
+            } else if !opciones.borrados_aplazados.contains(uuid) && !invalidos.contains(uuid) {
                 // Una fila que el plan no trae ni en vivos ni en lápidas no
                 // participó en la fusión: es una fila que la exportación omite
                 // (datos ilegibles o sin versión/vector). No se borra, que el
@@ -271,6 +293,7 @@ pub fn aplicar(
     //    y después el DELETE, que arrastra en cascada los hijos de SQLite.
     //    Los hijos van antes que los padres para contarlos una sola vez.
     let orden_borrado = [
+        Tabla::ComprobacionesServicio,
         Tabla::Tuneles,
         Tabla::SincronizacionesDir,
         Tabla::Snippets,
@@ -284,7 +307,7 @@ pub fn aplicar(
         let locales_tabla = locales.get(&tabla).unwrap_or(&vacio);
         let algunas = a_borrar.get(&tabla).cloned().unwrap_or_default();
         for uuid in &algunas {
-            if aplazados.contains(uuid) {
+            if aplazados.contains(uuid) || invalidos.contains(uuid) {
                 continue;
             }
             let Some(fila) = locales_tabla.get(uuid) else {
@@ -379,6 +402,22 @@ pub fn aplicar(
         hogar,
         &mut resumen,
     )?;
+    // Una comprobación de servicio cuya clave natural (host + objetivo) ya está
+    // ocupada por otra fila con otro uuid no se puede escribir sin romper el
+    // UNIQUE. Se deja como conflicto de nombre y se descarta la copia: así una
+    // fusión con dos comprobaciones simultáneas para el mismo objetivo no
+    // aborta la importación entera (desviación anotada de la Fase 13).
+    let conflictos_de_comprobacion = escribir_comprobaciones(
+        &transaccion,
+        &leido.vivos,
+        &locales,
+        &a_actualizar,
+        &ids,
+        &mut resumen,
+    )?;
+    if !conflictos_de_comprobacion.is_empty() {
+        leido.invalidos.extend(conflictos_de_comprobacion);
+    }
 
     // 5. Hijos que viajan dentro del padre: destinos, etiquetas y
     //    verificaciones.
@@ -411,7 +450,12 @@ pub fn aplicar(
 
     // 8. Conflictos: los que ya estaban pendientes no se duplican ni cuentan.
     //    El modo lector filtra los tipos que no resuelve nunca.
-    for conflicto in plan.conflictos.iter().chain(conflictos_por_nombre.iter()) {
+    for conflicto in plan
+        .conflictos
+        .iter()
+        .chain(leido.invalidos.iter())
+        .chain(conflictos_por_nombre.iter())
+    {
         if let Some(tipos) = &opciones.tipos_conflicto {
             if !tipos.contains(&conflicto.tipo) {
                 continue;
@@ -548,6 +592,19 @@ pub fn recuperar_version(conexion: &Connection, conflicto: &Conflicto, hogar: &P
                 hogar,
             )?;
         }
+        Tabla::ComprobacionesServicio => {
+            let datos: DatosComprobacionServicio = serde_json::from_value(contenido)
+                .context("la versión perdedora no son datos de comprobación de servicio")?;
+            let host_uuid = texto_no_vacio(&datos.host)
+                .context("la versión perdedora de la comprobación no dice a qué host pertenece")?;
+            let Some(host_id) = id_por_uuid(&transaccion, Tabla::Hosts, host_uuid)? else {
+                bail!(
+                    "no se puede recuperar la comprobación «{}»: su host ya no existe",
+                    conflicto.nombre
+                );
+            };
+            escribir_comprobacion(&transaccion, &uuid, &version, &vector, &datos, host_id)?;
+        }
     }
 
     conflictos::resolver(
@@ -584,7 +641,10 @@ pub fn unir_por_nombre(
                 let Some(tabla) = Tabla::desde_tipo_elemento(&elemento.tipo) else {
                     continue;
                 };
-                let depende_del_host = matches!(tabla, Tabla::Tuneles | Tabla::SincronizacionesDir);
+                let depende_del_host = matches!(
+                    tabla,
+                    Tabla::Tuneles | Tabla::SincronizacionesDir | Tabla::ComprobacionesServicio
+                );
                 if depende_del_host != segunda_pasada {
                     continue;
                 }
@@ -728,6 +788,31 @@ fn id_local_por_clave_natural(
                 )
                 .optional()?
         }
+        Tabla::ComprobacionesServicio => {
+            let datos: DatosComprobacionServicio = match serde_json::from_value(datos.clone()) {
+                Ok(datos) => datos,
+                Err(error) => {
+                    tracing::warn!("comprobación ilegible en el fichero para unir: {error}");
+                    return Ok(None);
+                }
+            };
+            let (Some(host_uuid), Some(objetivo)) =
+                (texto_no_vacio(&datos.host), texto_no_vacio(&datos.objetivo))
+            else {
+                return Ok(None);
+            };
+            let Some(host_id) = id_por_uuid(conexion, Tabla::Hosts, host_uuid)? else {
+                return Ok(None);
+            };
+            conexion
+                .query_row(
+                    "SELECT id FROM COMPROBACIONES_SERVICIO
+                      WHERE host_id = ?1 AND objetivo_tipo = ?2 AND objetivo = ?3",
+                    params![host_id, datos.objetivo_tipo.trim(), objetivo],
+                    |fila| fila.get(0),
+                )
+                .optional()?
+        }
         Tabla::Tuneles | Tabla::SincronizacionesDir => {
             let (host_uuid, nombre) = if tabla == Tabla::Tuneles {
                 let datos: DatosTunel = match serde_json::from_value(datos.clone()) {
@@ -778,6 +863,7 @@ fn id_local_por_clave_natural(
 /// abortan la transacción entera.
 fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
     let mut vivos = VivosPlan::default();
+    let mut invalidos = Vec::new();
     for candidato in &plan.vivos {
         let Some(tabla) = Tabla::desde_tipo_elemento(&candidato.tipo) else {
             tracing::warn!(
@@ -812,15 +898,24 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
                 );
             }
             Tabla::Hosts => {
-                let datos = leer_datos::<DatosHost>(contenido, uuid, "host")?;
-                vivos.hosts.insert(
-                    uuid.to_string(),
-                    VivoPlan {
-                        version,
-                        vector,
-                        datos,
-                    },
-                );
+                match leer_host_de_plan(contenido, uuid) {
+                    Ok(datos) => {
+                        vivos.hosts.insert(
+                            uuid.to_string(),
+                            VivoPlan {
+                                version,
+                                vector,
+                                datos,
+                            },
+                        );
+                    }
+                    Err(motivo) => {
+                        // Un tipo que no se puede validar no se aplica: se
+                        // guarda como conflicto de elemento (T74, §7.12).
+                        tracing::warn!(uuid, "host del plan con datos no válidos: {motivo}");
+                        invalidos.push(conflicto_de_host_invalido(uuid, contenido));
+                    }
+                }
             }
             Tabla::Identidades => {
                 let datos = leer_datos::<DatosIdentidad>(contenido, uuid, "identidad")?;
@@ -866,6 +961,28 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
                     },
                 );
             }
+            Tabla::ComprobacionesServicio => match leer_comprobacion_de_plan(contenido, uuid) {
+                Ok(datos) => {
+                    vivos.comprobaciones.insert(
+                        uuid.to_string(),
+                        VivoPlan {
+                            version,
+                            vector,
+                            datos,
+                        },
+                    );
+                }
+                Err(motivo) => {
+                    // Un objetivo o una orden que no se pueden validar no se
+                    // aplican: quedan como conflicto de elemento, igual que un
+                    // host con un tipo que no se entiende (T38, §7.10).
+                    tracing::warn!(
+                        uuid,
+                        "comprobación de servicio del plan con datos no válidos: {motivo}"
+                    );
+                    invalidos.push(conflicto_de_comprobacion_invalida(uuid, contenido));
+                }
+            },
         }
     }
 
@@ -911,7 +1028,92 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
         vivos,
         lapidas,
         renombrados,
+        invalidos,
     })
+}
+
+/// Datos de un host del fichero, validados de lo que este MAGI entiende.
+///
+/// El tipo se comprueba antes de deserializar para poder distinguir «el otro
+/// equipo usa un tipo nuevo» de «los datos están corruptos»: el primero deja un
+/// conflicto de elemento y no se aplica; el segundo también, porque un fichero
+/// firmado por un par no debe abortar la importación entera por un host.
+fn leer_host_de_plan(contenido: &serde_json::Value, uuid: &str) -> Result<DatosHost> {
+    let tipo = match contenido.get("tipo") {
+        // Formato 1 (o un MAGI anterior a la Fase 12): todos los hosts eran SSH.
+        None | Some(serde_json::Value::Null) => TipoHost::Ssh,
+        Some(serde_json::Value::String(texto)) => TipoHost::desde_texto(texto)
+            .with_context(|| format!("el tipo de host «{texto}» no se entiende"))?,
+        Some(_) => bail!("el campo «tipo» del host no es texto"),
+    };
+    let datos = leer_datos::<DatosHost>(contenido, uuid, "host")?;
+    opciones_desde_valor(&datos.escritorio_opciones, tipo)
+        .with_context(|| format!("las opciones del host {uuid} del plan no son válidas"))?;
+    Ok(datos)
+}
+
+/// Datos de una comprobación propia del fichero, validados según §7.11. El
+/// objetivo y la orden se guardan recortados, que es la forma canónica que
+/// compara la fusión.
+fn leer_comprobacion_de_plan(
+    contenido: &serde_json::Value,
+    uuid: &str,
+) -> Result<DatosComprobacionServicio> {
+    use crate::servicios::TipoObjetivo;
+    let mut datos =
+        leer_datos::<DatosComprobacionServicio>(contenido, uuid, "comprobación de servicio")?;
+    let tipo_texto = datos.objetivo_tipo.trim();
+    let Some(tipo) = TipoObjetivo::desde_texto(tipo_texto) else {
+        bail!("el objetivo de la comprobación {uuid} tiene un tipo desconocido: «{tipo_texto}»");
+    };
+    if !matches!(tipo, TipoObjetivo::Unidad | TipoObjetivo::Proyecto) {
+        bail!(
+            "el objetivo de la comprobación {uuid} no puede ser de tipo «{}»",
+            tipo.texto()
+        );
+    }
+    let objetivo = datos.objetivo.trim();
+    let comando = datos.comando.trim();
+    crate::almacen::comprobaciones_servicio::validar(tipo, objetivo, comando)
+        .map_err(|motivo| anyhow!("la comprobación {uuid} del plan no es válida: {motivo}"))?;
+    datos.objetivo_tipo = tipo.texto().to_string();
+    datos.objetivo = objetivo.to_string();
+    datos.comando = comando.to_string();
+    Ok(datos)
+}
+
+/// Conflicto de elemento de una comprobación que no se puede aplicar. No
+/// guarda versión perdedora: el contenido recibido no es recuperable.
+fn conflicto_de_comprobacion_invalida(
+    uuid: &str,
+    contenido: &serde_json::Value,
+) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_ELEMENTO.to_string(),
+        elemento_tipo: "comprobacion_servicio".to_string(),
+        uuid: uuid.to_string(),
+        nombre: crate::sincronizacion::fusion::nombre_de_contenido(
+            "comprobacion_servicio",
+            contenido,
+        ),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
+}
+
+/// Conflicto de elemento de un host que no se puede aplicar. No guarda versión
+/// perdedora: el contenido recibido no es recuperable.
+fn conflicto_de_host_invalido(uuid: &str, contenido: &serde_json::Value) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_ELEMENTO.to_string(),
+        elemento_tipo: "host".to_string(),
+        uuid: uuid.to_string(),
+        nombre: crate::sincronizacion::fusion::nombre_de_contenido("host", contenido),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
 }
 
 fn leer_datos<T>(contenido: &serde_json::Value, uuid: &str, que: &str) -> Result<T>
@@ -926,7 +1128,10 @@ where
 
 /// Filas locales con uuid de una tabla (las que participan en la sincronización).
 fn leer_locales(conexion: &Connection, tabla: Tabla) -> Result<BTreeMap<String, FilaLocal>> {
-    let con_host = matches!(tabla, Tabla::Tuneles | Tabla::SincronizacionesDir);
+    let con_host = matches!(
+        tabla,
+        Tabla::Tuneles | Tabla::SincronizacionesDir | Tabla::ComprobacionesServicio
+    );
     let consulta = format!(
         "SELECT id, uuid, version, vector, {}{} FROM {} ORDER BY id",
         if con_host { "host_id, " } else { "" },
@@ -1065,6 +1270,9 @@ fn fila_exportable(conexion: &Connection, tabla: Tabla, id: i64) -> bool {
 fn columna_nombre(tabla: Tabla) -> &'static str {
     match tabla {
         Tabla::Identidades => "alias",
+        // La comprobación no tiene columna de nombre: su nombre natural es el
+        // objetivo, el que usan las lápidas y el que se aparta al aplicar.
+        Tabla::ComprobacionesServicio => "objetivo",
         Tabla::Grupos
         | Tabla::Hosts
         | Tabla::Tuneles
@@ -1350,6 +1558,180 @@ fn escribir_sincronizaciones(
     Ok(())
 }
 
+/// Escribe las comprobaciones de servicio del plan. Devuelve los conflictos de
+/// nombre de las copias que no se pueden escribir porque su clave natural
+/// (host + objetivo) ya está ocupada por otra fila con otro uuid.
+fn escribir_comprobaciones(
+    conexion: &Connection,
+    vivos: &VivosPlan,
+    locales: &HashMap<Tabla, BTreeMap<String, FilaLocal>>,
+    a_actualizar: &HashMap<Tabla, BTreeSet<String>>,
+    ids: &HashMap<Tabla, HashMap<String, i64>>,
+    resumen: &mut ResumenAplicacion,
+) -> Result<Vec<ConflictoFusion>> {
+    let ids_hosts = ids.get(&Tabla::Hosts).cloned().unwrap_or_default();
+    let locales_tabla = locales.get(&Tabla::ComprobacionesServicio);
+    let actualizar = a_actualizar.get(&Tabla::ComprobacionesServicio);
+    let mut conflictos = Vec::new();
+    for (uuid, vivo) in &vivos.comprobaciones {
+        let Some(host_id) = resolver_uuid(&ids_hosts, Some(vivo.datos.host.as_str())) else {
+            // Huérfana: la fusión (§7.10) ya la descarta y deja conflicto.
+            tracing::warn!(
+                uuid,
+                "comprobación de servicio cuyo host no está vivo; no se aplica"
+            );
+            continue;
+        };
+        if clave_ocupada_por_otra(conexion, host_id, &vivo.datos, uuid)? {
+            conflictos.push(conflicto_de_nombre_de_comprobacion(uuid, &vivo.datos));
+            continue;
+        }
+        match locales_tabla.and_then(|mapa| mapa.get(uuid)) {
+            None => {
+                escribir_comprobacion(
+                    conexion,
+                    uuid,
+                    &vivo.version,
+                    &vivo.vector,
+                    &vivo.datos,
+                    host_id,
+                )?;
+                resumen.creados += 1;
+            }
+            Some(fila) => {
+                let cambiar = actualizar.is_some_and(|uuids| uuids.contains(uuid))
+                    || fila.host_id != Some(host_id);
+                if cambiar {
+                    escribir_comprobacion(
+                        conexion,
+                        uuid,
+                        &vivo.version,
+                        &vivo.vector,
+                        &vivo.datos,
+                        host_id,
+                    )?;
+                    resumen.actualizados += 1;
+                }
+            }
+        }
+    }
+    Ok(conflictos)
+}
+
+/// ¿Hay ya otra fila con la misma clave natural (host, tipo y objetivo) y otro
+/// uuid? Las filas que se van a reescribir o borrar ya están apartadas con un
+/// nombre temporal, así que solo choca lo que se queda.
+fn clave_ocupada_por_otra(
+    conexion: &Connection,
+    host_id: i64,
+    datos: &DatosComprobacionServicio,
+    uuid: &str,
+) -> Result<bool> {
+    let existe: i64 = conexion.query_row(
+        "SELECT COUNT(*) FROM COMPROBACIONES_SERVICIO
+          WHERE host_id = ?1 AND objetivo_tipo = ?2 AND objetivo = ?3
+            AND (uuid IS NULL OR uuid <> ?4)",
+        params![
+            host_id,
+            datos.objetivo_tipo.trim(),
+            datos.objetivo.trim(),
+            uuid
+        ],
+        |fila| fila.get(0),
+    )?;
+    Ok(existe > 0)
+}
+
+fn conflicto_de_nombre_de_comprobacion(
+    uuid: &str,
+    datos: &DatosComprobacionServicio,
+) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_NOMBRE.to_string(),
+        elemento_tipo: "comprobacion_servicio".to_string(),
+        uuid: uuid.to_string(),
+        nombre: datos.objetivo.trim().to_string(),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
+}
+
+fn escribir_comprobacion(
+    conexion: &Connection,
+    uuid: &str,
+    version: &str,
+    vector: &BTreeMap<String, i64>,
+    datos: &DatosComprobacionServicio,
+    host_id: i64,
+) -> Result<i64> {
+    use crate::servicios::TipoObjetivo;
+    let objetivo = texto_no_vacio(&datos.objetivo)
+        .with_context(|| format!("la comprobación {uuid} del plan no tiene objetivo"))?;
+    let tipo_texto = datos.objetivo_tipo.trim();
+    let tipo = TipoObjetivo::desde_texto(tipo_texto).with_context(|| {
+        format!("la comprobación «{objetivo}» del plan tiene un tipo de objetivo desconocido")
+    })?;
+    if !matches!(tipo, TipoObjetivo::Unidad | TipoObjetivo::Proyecto) {
+        bail!(
+            "la comprobación «{objetivo}» del plan tiene un objetivo de tipo «{}»",
+            tipo.texto()
+        );
+    }
+    let comando = texto_no_vacio(&datos.comando)
+        .with_context(|| format!("la comprobación «{objetivo}» del plan no tiene orden"))?;
+    let vector = versiones::vector_a_json(vector);
+    let ahora = fecha_ahora();
+    match id_por_uuid(conexion, Tabla::ComprobacionesServicio, uuid)? {
+        Some(id) => {
+            conexion
+                .execute(
+                    "UPDATE COMPROBACIONES_SERVICIO
+                        SET host_id = ?1, objetivo_tipo = ?2, objetivo = ?3,
+                            comando = ?4, actualizado_en = ?5, version = ?6, vector = ?7
+                      WHERE id = ?8",
+                    params![
+                        host_id,
+                        tipo.texto(),
+                        objetivo,
+                        comando,
+                        ahora,
+                        version,
+                        vector,
+                        id
+                    ],
+                )
+                .map_err(|error| {
+                    conflicto_de_nombre("comprobación de servicio", objetivo, error)
+                })?;
+            Ok(id)
+        }
+        None => {
+            conexion
+                .execute(
+                    "INSERT INTO COMPROBACIONES_SERVICIO (
+                        host_id, objetivo_tipo, objetivo, comando, actualizado_en,
+                        uuid, version, vector
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        host_id,
+                        tipo.texto(),
+                        objetivo,
+                        comando,
+                        ahora,
+                        uuid,
+                        version,
+                        vector
+                    ],
+                )
+                .map_err(|error| {
+                    conflicto_de_nombre("comprobación de servicio", objetivo, error)
+                })?;
+            Ok(conexion.last_insert_rowid())
+        }
+    }
+}
+
 // --------------------------------------------------------- escrituras de fila
 
 fn escribir_grupo(
@@ -1490,6 +1872,19 @@ fn escribir_host(
     let keepalive = datos.keepalive_seg.map(i64::from);
     let opciones_extra = &datos.opciones_extra;
     let servicios = &datos.servicios;
+    // Desde el formato 2 viajan el tipo y los campos de escritorio. El tipo se
+    // fija al crear el host y un par nunca debería mandar otro, pero la
+    // importación no adivina: escribe el de la fila ganadora. Las opciones se
+    // validan antes de escribir.
+    let tipo = datos.tipo.como_texto();
+    let escritorio_dominio = datos
+        .escritorio_dominio
+        .as_deref()
+        .map(str::trim)
+        .filter(|texto| !texto.is_empty());
+    let escritorio_opciones = opciones_desde_valor(&datos.escritorio_opciones, datos.tipo)
+        .with_context(|| format!("las opciones del host «{nombre}» del plan no son válidas"))?
+        .a_json();
     let vector = versiones::vector_a_json(vector);
     let ahora = fecha_ahora();
     match id_por_uuid(conexion, Tabla::Hosts, uuid)? {
@@ -1502,8 +1897,10 @@ fn escribir_host(
                         nombre = ?1, direccion = ?2, puerto = ?3, usuario = ?4,
                         identidad_ref = ?5, multiplexar = ?6, keepalive_seg = ?7,
                         opciones_extra = ?8, origen = ?9, servicios = ?10,
-                        actualizado_en = ?11, version = ?12, vector = ?13
-                      WHERE id = ?14",
+                        tipo = ?11, escritorio_dominio = ?12,
+                        escritorio_opciones = ?13, actualizado_en = ?14,
+                        version = ?15, vector = ?16
+                      WHERE id = ?17",
                     params![
                         nombre,
                         direccion,
@@ -1515,6 +1912,9 @@ fn escribir_host(
                         opciones_extra,
                         origen,
                         servicios,
+                        tipo,
+                        escritorio_dominio,
+                        escritorio_opciones,
                         ahora,
                         version,
                         vector,
@@ -1529,9 +1929,11 @@ fn escribir_host(
                 .execute(
                     "INSERT INTO HOSTS (
                         nombre, direccion, puerto, usuario, identidad_ref, multiplexar,
-                        keepalive_seg, opciones_extra, origen, servicios, creado_en,
+                        keepalive_seg, opciones_extra, origen, servicios, tipo,
+                        escritorio_dominio, escritorio_opciones, creado_en,
                         actualizado_en, uuid, version, vector
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?14)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                               ?14, ?14, ?15, ?16, ?17)",
                     params![
                         nombre,
                         direccion,
@@ -1543,6 +1945,9 @@ fn escribir_host(
                         opciones_extra,
                         origen,
                         servicios,
+                        tipo,
+                        escritorio_dominio,
+                        escritorio_opciones,
                         ahora,
                         uuid,
                         version,

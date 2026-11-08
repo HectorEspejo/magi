@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use magi::almacen::{grupos, hosts, snippets, sondeos, tuneles};
 use magi::config::Rutas;
+use magi::escritorio::{OpcionesEscritorio, TamanoEscritorio, TipoHost};
 use magi::modelo::{
     DatosHost, DatosTunel, IdentidadRef, Origen, ResultadoSondeo, Sondeo, TipoTunel,
 };
@@ -463,4 +464,121 @@ pub fn sembrar(rutas: &Rutas) -> Sembrado {
 
     almacen.cerrar().unwrap();
     sembrado
+}
+/// Escritorios remotos sembrados para las instantáneas de la Fase 12.
+#[derive(Debug, Clone, Default)]
+pub struct EscritoriosSembrados {
+    pub rdp: i64,
+    pub vnc: i64,
+    pub voxl: i64,
+}
+
+/// Añade los escritorios de la Fase 12 a un inventario ya sembrado: un RDP a
+/// través de un SSH, un VNC directo y un voxl. Deja huella, último estado y
+/// última conexión fijos para que las instantáneas sean deterministas.
+pub fn sembrar_escritorios(rutas: &Rutas) -> EscritoriosSembrados {
+    let almacen = magi::almacen::abrir(&rutas.base_datos()).expect("almacén de la semilla");
+    let conexion = almacen.conexion();
+    let id_de = |nombre: &str| -> i64 {
+        hosts::por_nombre(conexion, nombre)
+            .unwrap()
+            .unwrap_or_else(|| panic!("host «{nombre}» no sembrado"))
+            .id
+    };
+    let grupo = |nombre: &str| -> Option<i64> {
+        conexion
+            .query_row(
+                "SELECT id FROM GRUPOS WHERE nombre = ?1",
+                [nombre],
+                |fila| fila.get(0),
+            )
+            .ok()
+    };
+    let hetzner_01 = id_de("hetzner-01");
+    let produccion = grupo("produccion");
+    let casa = grupo("casa");
+    let opciones = |tamano, portapapeles, directo| OpcionesEscritorio {
+        tamano,
+        portapapeles,
+        directo,
+        ..OpcionesEscritorio::default()
+    };
+    let crear = |datos: &DatosHost| -> i64 {
+        hosts::crear(conexion, datos, Origen::Manual).expect("escritorio de la semilla")
+    };
+
+    // RDP a través de un host SSH, con certificado aceptado y dominio.
+    let rdp = crear(&DatosHost {
+        nombre: "win-01".to_string(),
+        grupo_id: produccion,
+        direccion: "192.0.2.30".to_string(),
+        puerto: 3389,
+        tipo: TipoHost::Rdp,
+        escritorio_dominio: Some("OFICINA".to_string()),
+        escritorio_opciones: opciones(
+            TamanoEscritorio::Fijo {
+                ancho: 1920,
+                alto: 1080,
+            },
+            true,
+            false,
+        ),
+        usuario: Some("usuario".to_string()),
+        identidad_ref: IdentidadRef::Contrasena,
+        salto_host_id: Some(hetzner_01),
+        etiquetas: vec!["windows".to_string(), "oficina".to_string()],
+        ..DatosHost::default()
+    });
+
+    // VNC directo (sin SSH): la marca de aviso de Hosts.
+    let vnc = crear(&DatosHost {
+        nombre: "nas".to_string(),
+        grupo_id: casa,
+        direccion: "192.0.2.40".to_string(),
+        puerto: 5900,
+        tipo: TipoHost::Vnc,
+        escritorio_opciones: opciones(TamanoEscritorio::Ventana, true, true),
+        identidad_ref: IdentidadRef::Contrasena,
+        etiquetas: vec!["almacen".to_string()],
+        ..DatosHost::default()
+    });
+
+    // voxl en un host SSH, con su pantalla y su programa.
+    let mut opciones_voxl = opciones(TamanoEscritorio::Ventana, true, false);
+    opciones_voxl.pantalla = Some(":1".to_string());
+    opciones_voxl.programa = Some("voxl".to_string());
+    let voxl = crear(&DatosHost {
+        nombre: "web-01-voxl".to_string(),
+        grupo_id: produccion,
+        direccion: "127.0.0.1".to_string(),
+        puerto: 6901,
+        tipo: TipoHost::Voxl,
+        escritorio_opciones: opciones_voxl,
+        salto_host_id: Some(hetzner_01),
+        etiquetas: vec!["voxl".to_string()],
+        ..DatosHost::default()
+    });
+
+    // Campos propios del equipo (no viajan): fechas fijas para las pruebas.
+    for (id, ultimo, conexion_en) in [
+        (rdp, Some("ok"), Some("2026-11-01T09:12:03+00:00")),
+        (vnc, Some("error"), Some("2026-10-28T18:40:11+00:00")),
+        (voxl, None, None),
+    ] {
+        conexion
+            .execute(
+                "UPDATE HOSTS SET ultimo_estado = ?1, ultima_conexion_en = ?2 WHERE id = ?3",
+                rusqlite::params![ultimo, conexion_en, id],
+            )
+            .unwrap();
+    }
+    conexion
+        .execute(
+            "UPDATE HOSTS SET huella_escritorio = ?1 WHERE id = ?2",
+            rusqlite::params!["SHA256:T2qRAb3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7", rdp],
+        )
+        .unwrap();
+
+    almacen.cerrar().unwrap();
+    EscritoriosSembrados { rdp, vnc, voxl }
 }

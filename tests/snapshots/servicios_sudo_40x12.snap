@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  LISTA                      ⇥ hosts  │
+│────────────────────────────────────  │
+│┌ CONTRASEÑA DE SUDO ────────────────┐│
+││Contraseña de sudo de               ││
+││root@hetzner-01                     ││
+││  ▏                                 ││
+││se recuerda 5 min sin uso; nunca se ││
+│└────────────────────────────────────┘│
+│                                      │
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

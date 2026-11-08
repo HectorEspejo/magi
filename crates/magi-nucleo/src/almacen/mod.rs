@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+pub mod comprobaciones_servicio;
 pub mod conflictos;
 pub mod deliberaciones;
 pub mod equipos;
@@ -184,6 +185,12 @@ impl Almacen {
         hosts::marcar_estado(&self.conexion, id, estado)
     }
 
+    /// Fija (o borra) la huella del certificado RDP aceptado (Fase 12). Es
+    /// propia del equipo: no sube la versión del host ni viaja.
+    pub fn fijar_huella_escritorio(&self, id: i64, huella: Option<&str>) -> Result<()> {
+        hosts::fijar_huella_escritorio(&self.conexion, id, huella)
+    }
+
     /// Últimos directorios de la vista Archivos de un host (F4).
     pub fn fijar_dirs_sftp(
         &self,
@@ -230,6 +237,45 @@ impl Almacen {
 
     pub fn hosts_con_snippet_al_conectar(&self, id: i64) -> Result<Vec<(i64, String)>> {
         snippets::hosts_con_snippet_al_conectar(&self.conexion, id)
+    }
+
+    // Comprobaciones de servicio (Fase 13) ---------------------------------
+
+    pub fn comprobaciones_de_host(
+        &self,
+        host_id: i64,
+    ) -> Result<Vec<crate::modelo::ComprobacionServicio>> {
+        comprobaciones_servicio::de_host(&self.conexion, host_id)
+    }
+
+    pub fn comprobaciones_servicio(&self) -> Result<Vec<crate::modelo::ComprobacionServicio>> {
+        comprobaciones_servicio::listar(&self.conexion)
+    }
+
+    pub fn obtener_comprobacion(
+        &self,
+        host_id: i64,
+        tipo: crate::servicios::TipoObjetivo,
+        objetivo: &str,
+    ) -> Result<Option<crate::modelo::ComprobacionServicio>> {
+        comprobaciones_servicio::obtener(&self.conexion, host_id, tipo, objetivo)
+    }
+
+    /// Crea o actualiza (upsert por host, tipo y objetivo) la comprobación
+    /// propia de un objetivo y devuelve su id.
+    pub fn guardar_comprobacion(
+        &self,
+        host_id: i64,
+        tipo: crate::servicios::TipoObjetivo,
+        objetivo: &str,
+        comando: &str,
+    ) -> Result<i64> {
+        comprobaciones_servicio::guardar(&self.conexion, host_id, tipo, objetivo, comando)
+    }
+
+    /// Borra una comprobación dejando su lápida (Fase 10).
+    pub fn borrar_comprobacion(&self, id: i64) -> Result<()> {
+        comprobaciones_servicio::borrar(&self.conexion, id)
     }
 
     // Verificaciones previas y deliberaciones -----------------------------

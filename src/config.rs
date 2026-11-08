@@ -257,6 +257,172 @@ impl Default for SeccionServidor {
     }
 }
 
+/// Sección `[escritorio]` de `config.toml` (Fase 12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionEscritorio {
+    /// `auto` o una orden con `{url}`, por ejemplo `brave --app={url}`.
+    pub navegador: String,
+    /// Segundos sin visor antes de cerrar una sesión de escritorio (10-3600).
+    pub gracia_seg: u64,
+    /// Puerto del servidor del visor (0 = libre, o entre 1024 y 65535).
+    pub puerto_visor: u16,
+    /// Distribución que se anuncia a Windows: `auto` (sale de `LANG`) o una
+    /// distribución como `es-ES`.
+    pub distribucion_teclado: String,
+    /// Ofrecer AVC420 a Windows; `false` fuerza los rectángulos. Hoy MAGI no
+    /// anuncia el canal EGFX (ver la desviación 15 del informe de la Fase 12),
+    /// así que la opción queda preparada y RDP va siempre por rectángulos.
+    pub h264: bool,
+}
+
+impl Default for SeccionEscritorio {
+    fn default() -> Self {
+        Self {
+            navegador: "auto".to_string(),
+            gracia_seg: 60,
+            puerto_visor: 0,
+            distribucion_teclado: "auto".to_string(),
+            h264: true,
+        }
+    }
+}
+
+impl SeccionEscritorio {
+    /// Valida la sección y devuelve un aviso legible por cada problema (§5.4).
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        let navegador = self.navegador.trim();
+        if navegador.is_empty() {
+            avisos.push(
+                "[escritorio] navegador está vacío: usa auto o una orden con {url}".to_string(),
+            );
+        } else if navegador != "auto" && !navegador.contains("{url}") {
+            avisos.push("[escritorio] navegador no lleva {url}: no se sabrá qué abrir".to_string());
+        }
+        if !(10..=3600).contains(&self.gracia_seg) {
+            avisos.push("[escritorio] gracia_seg debe estar entre 10 y 3600 segundos".to_string());
+        }
+        if self.puerto_visor != 0 && self.puerto_visor < 1024 {
+            avisos.push(
+                "[escritorio] puerto_visor debe ser 0 (libre) o un puerto desde 1024".to_string(),
+            );
+        }
+        if crate::escritorio::validar_teclado(&self.distribucion_teclado).is_err() {
+            avisos.push(
+                "[escritorio] distribucion_teclado debe ser auto o algo como es-ES".to_string(),
+            );
+        }
+        avisos
+    }
+
+    /// Distribución efectiva: la de la configuración o, si es `auto`, la que
+    /// salga de `LANG`.
+    pub fn distribucion_efectiva(&self) -> String {
+        if self.distribucion_teclado == "auto" {
+            crate::escritorio::distribucion_desde_lang(std::env::var("LANG").ok().as_deref())
+        } else {
+            self.distribucion_teclado.clone()
+        }
+    }
+}
+
+/// Sección `[servicios]` de `config.toml` (Fase 13, §5.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionServicios {
+    /// Segundos entre refrescos de la vista abierta (5-300; `0` = solo al
+    /// entrar y con `r`).
+    pub refresco_seg: u64,
+    /// Espera máxima al estado final de una acción (5-300).
+    pub espera_seg: u64,
+    /// Tamaño del anillo del panel de logs (1 000-100 000).
+    pub lineas_log: usize,
+    /// Líneas anteriores al abrir los logs (0-5 000).
+    pub lineas_iniciales: u32,
+    /// Motores de contenedores, por orden de preferencia (§7.12: con los dos,
+    /// se usa el primero). Vacío = sin contenedores.
+    pub contenedores: Vec<String>,
+    /// Unidades críticas: las que pueden cortar la conexión con el host
+    /// (§7.9). Admiten patrones con `*`.
+    pub criticas: Vec<String>,
+    /// Minutos sin uso tras los que se olvida la contraseña de sudo
+    /// (0-15; `0` = pedirla siempre).
+    pub sudo_memoria_min: u64,
+}
+
+impl Default for SeccionServicios {
+    fn default() -> Self {
+        Self {
+            refresco_seg: magi_nucleo::servicios::limites::REFRESCO_POR_DEFECTO_SEG,
+            espera_seg: magi_nucleo::servicios::limites::ESPERA_POR_DEFECTO_SEG,
+            lineas_log: magi_nucleo::servicios::limites::LINEAS_LOG_POR_DEFECTO,
+            lineas_iniciales: magi_nucleo::servicios::limites::LINEAS_INICIALES_POR_DEFECTO,
+            contenedores: magi_nucleo::servicios::limites::MOTORES_POR_DEFECTO
+                .iter()
+                .map(|motor| motor.to_string())
+                .collect(),
+            criticas: magi_nucleo::servicios::limites::CRITICAS_POR_DEFECTO
+                .iter()
+                .map(|unidad| unidad.to_string())
+                .collect(),
+            sudo_memoria_min: magi_nucleo::servicios::limites::SUDO_MEMORIA_MIN_POR_DEFECTO,
+        }
+    }
+}
+
+impl SeccionServicios {
+    /// Valida la sección y devuelve un aviso legible por cada problema (§5.3).
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        if !(5..=300).contains(&self.refresco_seg) && self.refresco_seg != 0 {
+            avisos.push(
+                "[servicios] refresco_seg debe estar entre 5 y 300 segundos (0 = sin refresco)"
+                    .to_string(),
+            );
+        }
+        if !(5..=300).contains(&self.espera_seg) {
+            avisos.push("[servicios] espera_seg debe estar entre 5 y 300 segundos".to_string());
+        }
+        if !(1_000..=100_000).contains(&self.lineas_log) {
+            avisos.push("[servicios] lineas_log debe estar entre 1000 y 100000".to_string());
+        }
+        if self.lineas_iniciales > 5_000 {
+            avisos.push("[servicios] lineas_iniciales no puede pasar de 5000".to_string());
+        }
+        let mut vistos = std::collections::BTreeSet::new();
+        for motor in &self.contenedores {
+            if !matches!(motor.as_str(), "docker" | "podman") {
+                avisos.push(format!(
+                    "[servicios] contenedores solo admite docker o podman, no «{motor}»"
+                ));
+            } else if !vistos.insert(motor.clone()) {
+                avisos.push(format!("[servicios] contenedores repite «{motor}»"));
+            }
+        }
+        avisos.extend(magi_nucleo::servicios::orden::validar_criticas(
+            &self.criticas,
+        ));
+        if self.sudo_memoria_min > 15 {
+            avisos.push("[servicios] sudo_memoria_min debe estar entre 0 y 15 minutos".to_string());
+        }
+        avisos
+    }
+
+    /// Motores efectivos, en el orden de preferencia configurado.
+    pub fn motores(&self) -> Vec<magi_nucleo::servicios::MotorNombre> {
+        self.contenedores
+            .iter()
+            .filter_map(|motor| magi_nucleo::servicios::MotorNombre::desde_texto(motor))
+            .collect()
+    }
+
+    /// Segundos de refresco efectivos (0 = sin refresco).
+    pub fn refresco_efectivo(&self) -> u64 {
+        self.refresco_seg
+    }
+}
+
 /// Contenido de `~/.config/magi/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -281,6 +447,10 @@ pub struct Config {
     pub deliberacion: SeccionDeliberacion,
     /// Sincronización del inventario: `[sincronizacion]` carpeta y umbrales.
     pub sincronizacion: SeccionSincronizacion,
+    /// Escritorio remoto: `[escritorio]` navegador, gracia y visor.
+    pub escritorio: SeccionEscritorio,
+    /// Servicios, contenedores y logs: `[servicios]` (Fase 13).
+    pub servicios: SeccionServicios,
 }
 
 impl Default for Config {
@@ -296,6 +466,8 @@ impl Default for Config {
             archivos: SeccionArchivos::default(),
             deliberacion: SeccionDeliberacion::default(),
             sincronizacion: SeccionSincronizacion::default(),
+            escritorio: SeccionEscritorio::default(),
+            servicios: SeccionServicios::default(),
         }
     }
 }
@@ -306,7 +478,13 @@ impl Config {
     pub fn cargar(ruta: &Path) -> (Self, Option<String>) {
         match fs::read_to_string(ruta) {
             Ok(texto) => match toml::from_str::<Config>(&texto) {
-                Ok(config) => (config, None),
+                Ok(config) => {
+                    // Los valores de [servicios] fuera de rango no impiden
+                    // arrancar: se usan acotados donde se leen y se avisa aquí.
+                    let avisos = config.servicios.validar();
+                    let aviso = (!avisos.is_empty()).then(|| avisos.join(" · "));
+                    (config, aviso)
+                }
                 Err(error) => (
                     Config::default(),
                     Some(format!("config.toml no válido: {error}")),
@@ -421,5 +599,82 @@ editar_max_mb = 3
         assert!(avisos.iter().any(|aviso| aviso.contains("Flota ya usa")));
         assert!(avisos.iter().any(|aviso| aviso.contains("una sola tecla")));
         assert!(avisos.iter().any(|aviso| aviso.contains("no existe")));
+    }
+
+    /// Fase 13: [servicios] se lee con sus valores por defecto y se valida
+    /// con avisos claros; un config.toml anterior no trae la sección.
+    #[test]
+    fn las_claves_de_servicios_de_la_fase_13_se_leen_y_se_validan() {
+        let config: Config = toml::from_str(
+            r#"
+[servicios]
+refresco_seg = 20
+espera_seg = 45
+lineas_log = 20000
+lineas_iniciales = 500
+contenedores = ["podman"]
+criticas = ["sshd.service", "wg-quick@*.service"]
+sudo_memoria_min = 10
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.servicios.refresco_seg, 20);
+        assert_eq!(config.servicios.espera_seg, 45);
+        assert_eq!(config.servicios.lineas_log, 20_000);
+        assert_eq!(config.servicios.lineas_iniciales, 500);
+        assert_eq!(
+            config.servicios.motores(),
+            vec![magi_nucleo::servicios::MotorNombre::Podman]
+        );
+        assert_eq!(config.servicios.sudo_memoria_min, 10);
+        assert!(
+            config.servicios.validar().is_empty(),
+            "los valores son válidos"
+        );
+
+        let anterior: Config = toml::from_str("[archivos]\npager = \"less\"\n").unwrap();
+        let defecto = SeccionServicios::default();
+        assert_eq!(anterior.servicios.refresco_seg, defecto.refresco_seg);
+        assert_eq!(anterior.servicios.espera_seg, 30);
+        assert_eq!(anterior.servicios.lineas_log, 10_000);
+        assert_eq!(anterior.servicios.lineas_iniciales, 200);
+        assert_eq!(anterior.servicios.sudo_memoria_min, 5);
+        assert_eq!(
+            anterior.servicios.contenedores,
+            vec!["docker".to_string(), "podman".to_string()]
+        );
+        assert!(anterior
+            .servicios
+            .criticas
+            .iter()
+            .any(|unidad| unidad == "sshd.service"));
+        assert!(anterior.servicios.validar().is_empty());
+
+        let malo: Config = toml::from_str(
+            r#"
+[servicios]
+refresco_seg = 1
+espera_seg = 1000
+lineas_log = 10
+lineas_iniciales = 9000
+contenedores = ["docker", "docker", "lxc"]
+criticas = ["ssh d.service"]
+sudo_memoria_min = 99
+"#,
+        )
+        .unwrap();
+        let avisos = malo.servicios.validar();
+        assert!(avisos.iter().any(|aviso| aviso.contains("refresco_seg")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("espera_seg")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("lineas_log")));
+        assert!(avisos
+            .iter()
+            .any(|aviso| aviso.contains("lineas_iniciales")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("docker")));
+        assert!(avisos.iter().any(|aviso| aviso.contains("criticas")));
+        assert!(avisos
+            .iter()
+            .any(|aviso| aviso.contains("sudo_memoria_min")));
+        assert_eq!(avisos.len(), 8, "{avisos:?}");
     }
 }

@@ -22,6 +22,7 @@ import org.cuatrodetres.magi.ui.modelos.RespuestaDialogoVista
 import org.cuatrodetres.magi.ui.modelos.ResultadoInstalacionVista
 import org.cuatrodetres.magi.ui.modelos.SesionVista
 import org.cuatrodetres.magi.ui.modelos.TeclaVista
+import org.cuatrodetres.magi.ui.modelos.TipoHostVista
 import org.cuatrodetres.magi.ui.modelos.TipoTunelVista
 import org.cuatrodetres.magi.ui.modelos.TramoVista
 import org.cuatrodetres.magi.ui.modelos.TunelVista
@@ -47,11 +48,19 @@ fun GrupoInventario.aVista(): GrupoVista = GrupoVista(
     plegado = plegado,
 )
 
+fun TipoHostMovil.aVista(): TipoHostVista = when (this) {
+    TipoHostMovil.SSH -> TipoHostVista.SSH
+    TipoHostMovil.RDP -> TipoHostVista.RDP
+    TipoHostMovil.VNC -> TipoHostVista.VNC
+    TipoHostMovil.VOXL -> TipoHostVista.VOXL
+}
+
 fun HostInventario.aVista(): HostVista = HostVista(
     uuid = uuid,
     nombre = nombre,
     direccion = direccion,
     puerto = puerto.toInt(),
+    tipo = tipo.aVista(),
     usuario = usuario,
     grupoUuid = grupoUuid,
     etiquetas = etiquetas,
@@ -73,6 +82,7 @@ fun FichaHost.aVista(): FichaHostVista = FichaHostVista(
     nombre = nombre,
     direccion = direccion,
     puerto = puerto.toInt(),
+    tipo = tipo.aVista(),
     usuario = usuario,
     grupoNombre = grupoNombre,
     etiquetas = etiquetas,

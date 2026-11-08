@@ -1,0 +1,6 @@
+MAGI_FASE=comprobando
+MAGI_COMPROBACION=fallo 1
+MAGI_LINEA nginx: [emerg] unexpected end of file, expecting ";" or "}" in /etc/nginx/nginx.conf:42
+MAGI_LINEA nginx: configuration file /etc/nginx/nginx.conf test failed
+MAGI_RESULTADO=rechazada_configuracion - 0
+MAGI_FIN

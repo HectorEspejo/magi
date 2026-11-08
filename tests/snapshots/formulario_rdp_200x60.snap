@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · HOST · nuevo · nuevo ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         Tipo         ( ) SSH  (•) RDP  ( ) VNC  ( ) voxl                                                                                                             │
+│                                                                                                                                                                                                      │
+│                                        IDENTIFICACIÓN                                                                                                                                                │
+│                                         Nombre       [  ]                                                                                                                                            │
+│                                         Dirección    [  ]                                                                                                                                            │
+│                                         Puerto       [ 3389 ]     Grupo produccion                 ▾                                                                                                 │
+│                                         Etiquetas    [  ]                                                                                                                                            │
+│                                                                                                                                                                                                      │
+│                                        ESCRITORIO                                                                                                                                                    │
+│                                         Destino      (sin dirección):3389                                                                                                                            │
+│                                         A través de  [ ninguno                                  ▾ ]                                                                                                  │
+│                                         Usuario      [  ]                                                                                                                                            │
+│                                         Dominio      [  ]                                                                                                                                            │
+│                                         Contraseña   (•) guardar en el llavero  ( ) pedir siempre                                                                                                    │
+│                                         Nueva        [  ]                                                                                                                                            │
+│                                         Guardada     no; se pedirá al abrir                                                                                                                          │
+│                                         Tamaño       (•) ajustar a la ventana  ( ) fijo                                                                                                              │
+│                                         Teclado      [ auto                                     ▾ ]                                                                                                  │
+│                                         Portapapeles [x] texto en los dos sentidos                                                                                                                   │
+│                                         Certificado  sin certificado aceptado                                                                                                                        │
+│                                         Conexión     nunca                                                                                                                                           │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  u servicios  esc descartar

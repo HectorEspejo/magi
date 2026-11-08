@@ -810,6 +810,7 @@ async fn el_comando_inicial_se_escribe_y_solo_el_que_repite_al_reconectar() {
             host_id: host,
             cols: 80,
             filas: 24,
+            orden: None,
             comandos_iniciales: vec![
                 ComandoInicial {
                     texto: "tmux attach\n".to_string(),

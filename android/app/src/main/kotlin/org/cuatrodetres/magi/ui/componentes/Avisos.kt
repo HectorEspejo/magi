@@ -50,6 +50,8 @@ private fun textoDeTipoAviso(tipo: TipoAviso, detalle: String?): String = when (
     TipoAviso.TUNEL_DESCARTADO -> stringResource(R.string.aviso_tunel_descartado)
     TipoAviso.CLAVE_MOVIL_CREADA -> stringResource(R.string.aviso_clave_movil_creada)
     TipoAviso.CLAVE_MOVIL_NO_CREADA -> stringResource(R.string.aviso_clave_movil_no_creada)
+    TipoAviso.ESCRITORIO_EN_EL_ORDENADOR ->
+        stringResource(R.string.aviso_escritorio_en_el_ordenador, detalle ?: "")
 }
 
 /** Snackbar de la cabina: barra inferior con el aviso y una ✕ para cerrarlo. */

@@ -50,6 +50,8 @@ fn version_incompatible_tiene_una_forma_json_estable() {
             transferencias: 2,
             tuneles: 3,
             ejecuciones: 4,
+            escritorios: 0,
+            acciones_servicio: 5,
         }),
     };
     assert_eq!(
@@ -64,7 +66,9 @@ fn version_incompatible_tiene_una_forma_json_estable() {
                 "sesiones": 1,
                 "transferencias": 2,
                 "tuneles": 3,
-                "ejecuciones": 4
+                "ejecuciones": 4,
+                "escritorios": 0,
+                "acciones_servicio": 5
             }
         })
     );
@@ -101,6 +105,10 @@ async fn el_rechazo_de_un_servidor_v6_se_lee_entero() {
             transferencias: 0,
             tuneles: 1,
             ejecuciones: 0,
+            // Un servidor v6 no manda los campos: valen 1 («puede haber
+            // trabajo»).
+            escritorios: 1,
+            acciones_servicio: 1,
         })
     );
 }
@@ -119,6 +127,8 @@ async fn un_trabajo_incompleto_vale_como_lleno() {
             transferencias: 1,
             tuneles: 1,
             ejecuciones: 1,
+            escritorios: 1,
+            acciones_servicio: 1,
         })
     );
 }
@@ -138,6 +148,8 @@ async fn un_trabajo_con_campos_desconocidos_vale_como_lleno() {
             transferencias: 1,
             tuneles: 1,
             ejecuciones: 1,
+            escritorios: 1,
+            acciones_servicio: 1,
         })
     );
 }

@@ -143,7 +143,7 @@ impl Entorno {
 /// Documento de un equipo ajeno recién inventado, sin elementos.
 fn documento_vacio(equipo: &str, nombre: &str) -> Documento {
     Documento {
-        formato: formato::FORMATO,
+        formato: formato::FORMATO_1,
         app: "1.1.0".to_string(),
         equipo: EquipoDocumento {
             uuid: equipo.to_string(),
@@ -192,7 +192,7 @@ fn escribir_documento(carpeta: &Path, clave: &ClaveSincronizacion, documento: &D
     let firma = clave
         .firmar(json.as_bytes())
         .expect("firmando el documento");
-    let plano = formato::componer(&json, &firma);
+    let plano = formato::componer(&json, &firma, documento.formato);
     let cifrado = clave.cifrar(&plano).expect("cifrando el documento");
     carpeta::escribir(carpeta, &documento.equipo.uuid, &cifrado).expect("escribiendo el fichero");
 }
@@ -363,7 +363,13 @@ fn un_fichero_con_formato_mas_nuevo_se_ignora_con_aviso() {
         .pasada(PoliticaBorrados::Preguntar)
         .expect("la primera pasada no debería fallar");
 
-    escribir_documento_con_formato(&entorno.carpeta, &entorno.clave(), &documento, 2, true);
+    escribir_documento_con_formato(
+        &entorno.carpeta,
+        &entorno.clave(),
+        &documento,
+        formato::FORMATO_MAXIMO + 1,
+        true,
+    );
     let resultado = entorno
         .pasada(PoliticaBorrados::Preguntar)
         .expect("la pasada no debería fallar");
@@ -390,7 +396,7 @@ fn un_fichero_manipulado_queda_danado_y_no_se_aplica() {
         &entorno.carpeta,
         &entorno.clave(),
         &documento,
-        formato::FORMATO,
+        formato::FORMATO_1,
         false,
     );
 

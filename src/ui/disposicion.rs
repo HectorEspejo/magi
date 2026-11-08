@@ -132,6 +132,7 @@ pub fn minimo_vista(vista: Vista) -> Tamano {
         | Vista::Snippets => Tamano::new(50, 12),
         Vista::Resultados => Tamano::new(60, 14),
         Vista::Sincronizacion | Vista::Conflictos => Tamano::new(50, 12),
+        Vista::Servicios => MINIMO_GLOBAL,
         Vista::Flota | Vista::Hosts | Vista::Sesiones => MINIMO_GLOBAL,
     }
 }
@@ -152,6 +153,7 @@ pub fn nombre_vista(vista: Vista) -> &'static str {
         Vista::Resultados => "Resultados",
         Vista::Sincronizacion => "Sincronización",
         Vista::Conflictos => "Conflictos",
+        Vista::Servicios => "Servicios",
     }
 }
 
@@ -202,6 +204,12 @@ pub const ESTRECHO_SINCRONIZACIONES: u16 = 70;
 /// Por debajo de este ancho, el diálogo del servidor anterior parte cada
 /// recuento de custodia en su propio renglón.
 pub const ESTRECHO_SERVIDOR_ANTERIOR: u16 = 60;
+/// Diálogos de escritorio de la Fase 12: certificado (nuevo o cambiado),
+/// credenciales y aviso de VNC directo.
+pub const MINIMO_CERTIFICADO_ESCRITORIO: Tamano = Tamano::new(40, 12);
+pub const MINIMO_CREDENCIALES_ESCRITORIO: Tamano = Tamano::new(40, 12);
+pub const MINIMO_VNC_DIRECTO: Tamano = Tamano::new(40, 12);
+
 /// Anchos por debajo de los cuales las vistas y diálogos de la Fase 10 parten
 /// la cabecera o pierden la huella de la clave.
 pub const ESTRECHO_SINCRONIZACION: u16 = 90;
@@ -234,7 +242,41 @@ pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
             tamano: MINIMO_IMPORTACION_BORRADOS,
             exige: "IMPORTACIÓN CON BORRADOS",
         }),
+        Dialogo::Escritorio(dialogo) => {
+            use crate::app::escritorios::DialogoEscritorio;
+            match dialogo {
+                DialogoEscritorio::Certificado { .. } => Some(Minimo {
+                    tamano: MINIMO_CERTIFICADO_ESCRITORIO,
+                    exige: "diálogo certificado",
+                }),
+                DialogoEscritorio::Credenciales { .. } => Some(Minimo {
+                    tamano: MINIMO_CREDENCIALES_ESCRITORIO,
+                    exige: "diálogo credenciales",
+                }),
+                DialogoEscritorio::VncDirecto { .. } => Some(Minimo {
+                    tamano: MINIMO_VNC_DIRECTO,
+                    exige: "aviso VNC directo",
+                }),
+            }
+        }
         _ => None,
+    }
+}
+
+/// El mínimo de la pantalla con un mínimo extra si es mayor (diálogos de la
+/// vista Servicios, que no viven en App.dialogo).
+pub fn con_extra(minimo: Minimo, extra: Option<Minimo>) -> Minimo {
+    match extra {
+        Some(propio)
+            if !(minimo.tamano.cols >= propio.tamano.cols
+                && minimo.tamano.filas >= propio.tamano.filas) =>
+        {
+            Minimo {
+                tamano: minimo.tamano.max(propio.tamano),
+                exige: propio.exige,
+            }
+        }
+        _ => minimo,
     }
 }
 
@@ -568,6 +610,16 @@ pub enum Lista {
     DeliberacionHosts,
     /// Lista del plan en la vista previa de una sincronización (Fase 8).
     VistaPrevia,
+    /// Columna de hosts de la vista Servicios (Fase 13).
+    ServiciosHosts,
+    /// Lista de unidades, timers o contenedores de la vista Servicios.
+    ServiciosLista,
+    /// Fallos de «Toda la flota» (Fase 13).
+    ServiciosTodaLaFlota,
+    /// Texto del detalle de Servicios (Fase 13).
+    ServiciosDetalle,
+    /// Líneas del panel de logs de Servicios (Fase 13).
+    ServiciosLogs,
 }
 
 /// Lo que se ve de una lista en el último pintado.

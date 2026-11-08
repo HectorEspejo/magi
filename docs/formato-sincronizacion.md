@@ -1,9 +1,9 @@
 # Formato del fichero de sincronización de MAGI
 
-**Formato:** 1
-**Fase:** 10 (sincronización cifrada del inventario)
-**Lectores previstos:** MAGI de escritorio (Linux y macOS) y app Android (Fase 11)
-**Estado:** estable dentro del formato 1. Cualquier cambio de significado sube el número de formato.
+**Formato:** 3 (el 1 y el 2 se siguen leyendo y se siguen escribiendo cuando no hacen falta las novedades)
+**Fase:** 10 (sincronización cifrada del inventario); formato 2 en la Fase 12 (escritorios remotos); formato 3 en la Fase 13 (comprobaciones propias de servicio o proyecto)
+**Lectores previstos:** MAGI de escritorio 1.1 (solo formato 1), 1.2 (formatos 1 y 2) y 1.3 (formatos 1, 2 y 3), y app Android 0.2 en adelante (formatos 1 y 2) y la actualizada para el formato 3
+**Estado:** estable dentro de cada formato. Cualquier cambio de significado sube el número de formato.
 
 Este documento describe el fichero que cada equipo de MAGI escribe en la carpeta
 compartida que elige el usuario (Syncthing, Nextcloud, iCloud Drive, Dropbox, un
@@ -27,6 +27,14 @@ en esa carpeta.
   llavero del sistema de cada equipo.
 - El formato está pensado para ser leído y escrito por la app Android (F11) con
   una biblioteca de age y SHA-256/HMAC/HKDF estándar.
+- **Número de formato.** La exportación escribe **formato 3** solo si hay alguna
+  comprobación propia de servicio o proyecto (elemento `comprobacion_servicio`,
+  Fase 13); si no, **formato 2** si el inventario tiene algún host que no sea
+  SSH (un escritorio RDP, VNC o voxl) y **formato 1** si todos los hosts son
+  SSH, para que MAGI 1.1 siga leyendo el fichero (D220). Al leer se aceptan los
+  tres formatos, y un formato mayor que el máximo conocido se rechaza entero
+  como `formato_nuevo`: nunca se interpreta un formato 3 como si fuera 2, ni
+  uno 2 como si fueran hosts SSH.
 
 El fichero **no contiene** el historial (REGISTRO), los sondeos, las
 deliberaciones, `config.toml`, contraseñas del llavero, claves privadas ni la
@@ -99,7 +107,8 @@ firma: <64 hex en minúscula>
 ```
 
 - La primera línea es la cabecera: el literal `MAGI-SINCRONIZACION`, un espacio y
-  el número de formato en decimal.
+  el número de formato en decimal. Ese número **tiene que coincidir** con el
+  campo `formato` del JSON; MAGI escribe siempre los dos iguales.
 - La segunda línea es la firma: `firma: ` y la firma en hexadecimal.
 - Todo lo que sigue hasta el final del contenido en claro es el JSON (antes del
   salto de línea final). Puede ser compacto; MAGI lo escribe compacto
@@ -131,7 +140,7 @@ coincide con el nombre del fichero y que el equipo no está en `equipos_quitados
 
 | Campo | Tipo | Obligatorio | Descripción |
 |---|---|---|---|
-| `formato` | entero | sí | Número de formato. MAGI 1.1.0 conoce el 1. |
+| `formato` | entero | sí | Número de formato: 1 (todos los hosts son SSH), 2 (puede haber escritorios) o 3 (viajan comprobaciones propias de servicio o proyecto). MAGI 1.1.0 conoce solo el 1; MAGI 1.2 y la app Android anterior leen el 1 y el 2; MAGI 1.3 y la app actual leen el 1, el 2 y el 3. Un número mayor que el máximo conocido se rechaza como `formato_nuevo`. |
 | `app` | texto | sí | Versión de MAGI que escribió el fichero. Informativo. |
 | `equipo` | objeto | sí | Dueño del fichero: `uuid` (el del nombre del fichero), `nombre` y `plataforma` (`linux`, `macos`, `android`). |
 | `generado_en` | texto | sí | Fecha ISO 8601 con milisegundos y zona del momento de la exportación. |
@@ -201,7 +210,7 @@ Cada elemento de `elementos` tiene esta forma:
 
 | Campo | Descripción |
 |---|---|
-| `tipo` | `grupo`, `host`, `identidad`, `tunel`, `snippet` o `sincronizacion_dir`. |
+| `tipo` | `grupo`, `host`, `identidad`, `tunel`, `snippet`, `sincronizacion_dir` o `comprobacion_servicio` (formato 3). |
 | `uuid` | Identificador global del elemento. En identidades es UUIDv5 de la huella (§7.3). |
 | `version` | Versión de esta edición (§6). |
 | `vector` | Vector de esta edición (§6). |
@@ -225,9 +234,12 @@ No viaja `plegado` (es propio de cada equipo).
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `nombre` | texto | Nombre del host. Único entre hosts. |
-| `direccion` | texto | IP o nombre. |
-| `puerto` | entero | Puerto SSH. |
-| `usuario` | texto o null | Usuario SSH. |
+| `direccion` | texto | IP o nombre. En voxl, siempre `127.0.0.1`. |
+| `puerto` | entero | Puerto del servicio: SSH (22 por defecto), RDP (3389), VNC (5900) o el de voxl en el host (6901 por defecto). |
+| `tipo` | texto | **Desde el formato 2.** `ssh`, `rdp`, `vnc` o `voxl`. En un fichero del formato 1 no viene y cuenta como `ssh`. Un valor que el lector no entiende no se aplica: deja un conflicto de elemento. |
+| `escritorio_dominio` | texto o null | **Desde el formato 2.** Dominio de Windows para RDP. |
+| `escritorio_opciones` | objeto JSON | **Desde el formato 2.** Opciones del escritorio según el tipo (§7.2.1). Validadas al leer; un valor inválido deja conflicto de elemento. |
+| `usuario` | texto o null | Usuario SSH o de RDP. Vacío en VNC y voxl. |
 | `identidad_ref` | texto o null | Referencia de identidad: `auto`, `contrasena`, `contrasena:llavero`, `agente:<huella>` o `fichero:<ruta>`. La ruta bajo el home viaja como `~/…`. No es un secreto. |
 | `salto` | uuid o null | Host que hace de salto. |
 | `grupo` | uuid o null | Grupo del host. |
@@ -237,13 +249,50 @@ No viaja `plegado` (es propio de cada equipo).
 | `servicios` | texto | Unidades systemd, una por línea. |
 | `origen` | texto | `manual` o `ssh_config`. |
 | `etiquetas` | array de texto | Nombres de etiquetas. |
-| `verificaciones` | objeto o null | Comprobaciones previas de la deliberación (§7.2.1). |
+| `verificaciones` | objeto o null | Comprobaciones previas de la deliberación (§7.2.2). |
 | `snippet_al_conectar` | uuid o null | Snippet que se escribe en cada pestaña. |
 
 No viajan: `ultimo_estado`, `ultima_conexion_en`, `sftp_dir_local`,
-`sftp_dir_remoto`, `actualizado_en`.
+`sftp_dir_remoto`, `actualizado_en` ni `huella_escritorio` (la huella del
+certificado RDP aceptado es propia de cada equipo y se descarta si viene en un
+fichero). Tampoco viajan las contraseñas: su referencia (`identidad_ref`) sí,
+el secreto no.
 
-#### 7.2.1 Verificaciones
+Los campos de escritorio son campos que viajan como cualquier otro: editarlos
+sube la versión del host con el reloj híbrido. El tipo se fija al crear el host y
+no se cambia; para otro tipo se crea otro host.
+
+#### 7.2.1 Tipo de host y opciones de escritorio
+
+En el formato 1 todos los hosts eran SSH. El formato 2 añade el tipo y los
+campos de escritorio. Un host con tipo `rdp`, `vnc` o `voxl` es un escritorio:
+solo se abre desde MAGI de escritorio y **no** puede ser destino de terminal,
+SFTP, túneles, snippets ni «a través de» (`salto` apunta siempre a un host
+`ssh`).
+
+`escritorio_opciones` es un objeto JSON como el que guarda el modelo (§3.2 del
+informe de la Fase 12):
+
+```json
+{"tamano": "ventana", "portapapeles": true, "teclado": "auto"}
+{"tamano": "1920x1080", "portapapeles": false}
+{"tamano": "ventana", "portapapeles": true, "pantalla": ":1", "programa": "voxl"}
+```
+
+| Clave | Tipos | Valores |
+|---|---|---|
+| `tamano` | todos | `ventana` (se ajusta a la ventana del visor) o `AxH` fijo, entre 640×480 y 8192×8192 |
+| `portapapeles` | todos | `true` o `false`: texto en los dos sentidos |
+| `teclado` | rdp | `auto` o una distribución (`es-ES`, `en-US`, …) |
+| `pantalla` | voxl | Pantalla X11: `:N` o `:N.M` |
+| `programa` | voxl | `voxl` o una ruta absoluta sin espacios ni caracteres de shell |
+| `directo` | vnc | `true` si el usuario confirmó que va directo, sin cifrar |
+
+Una clave desconocida se conserva y se ignora. Un valor inválido (tamaño fuera de
+rango, `pantalla` en un host que no es voxl, etc.) no se aplica: el host entero
+se descarta como conflicto de elemento y el inventario local no se toca.
+
+#### 7.2.2 Verificaciones
 
 | Campo | Tipo |
 |---|---|
@@ -322,6 +371,48 @@ Objeto con **exactamente uno** de estos dos campos:
 
 No viajan: `ultima_ejecucion_en`, `ultimo_resultado`.
 
+### 7.7 Comprobación de servicio (formato 3)
+
+Comprobación propia de configuración de un servicio o de un proyecto Compose:
+sustituye a la comprobación conocida (Nginx, Caddy, Apache, HAProxy o Compose)
+antes de recargar o reiniciar el objetivo.
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `host` | uuid | Host `ssh` al que pertenece. |
+| `objetivo_tipo` | texto | `unidad` (servicio de systemd) o `proyecto` (Compose). |
+| `objetivo` | texto | Nombre de la unidad (`nginx.service`) o del proyecto Compose (`web`), con las reglas de §7.11 del informe de la Fase 13. |
+| `comando` | texto | Orden que se ejecuta antes de recargar o reiniciar, con `sh -c`. Una sola línea de 1 a 1 024 caracteres. |
+
+Reglas:
+
+- Solo existe en hosts de tipo `ssh`. Si al importar el host no está vivo, o
+  no es `ssh`, el elemento se descarta como conflicto `huerfano`: no se
+  aplica. Es recuperable y el inventario local no se toca.
+- Un `objetivo_tipo` desconocido y un objetivo o una orden que no validan se
+  descartan como conflicto de `elemento`: nunca se aplica a medias.
+- La clave natural es (host, `objetivo_tipo`, `objetivo`). Si dos equipos crean
+  a la vez la misma comprobación con `uuid` distinto, la copia perdedora se
+  descarta como conflicto de `nombre` al aplicar: el `objetivo` no se renombra,
+  porque un nombre inventado dejaría de ser un objetivo válido.
+- No viajan: `actualizado_en` (es una marca local), ni los campos propios del
+  equipo.
+
+```json
+{
+  "tipo": "comprobacion_servicio",
+  "uuid": "9a8b7c6d-5555-4e4f-8a9b-0123456789ab",
+  "version": "1793873600001.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873600001 },
+  "datos": {
+    "host": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+    "objetivo_tipo": "unidad",
+    "objetivo": "nginx.service",
+    "comando": "nginx -t"
+  }
+}
+```
+
 ---
 
 ## 8. Lápidas
@@ -345,7 +436,9 @@ edición posterior (que resucita el elemento). El `vector` de la lápida parte d
 vector del elemento borrado y sube la entrada del equipo que borra.
 
 Los borrados en cascada dejan lápida de los hijos: borrar un host deja lápida de
-sus túneles y de sus sincronizaciones de directorio.
+sus túneles, de sus sincronizaciones de directorio y de sus comprobaciones de
+servicio. La `lápida` de una comprobación lleva en `nombre` su `objetivo`
+(por ejemplo `nginx.service`).
 
 ---
 
@@ -415,14 +508,18 @@ seguir cualquier implementación (MAGI de escritorio y Android):
    resucitados). Un borrado gana a las ediciones anteriores y pierde ante las
    posteriores.
 6. **Referencias.** Las referencias por uuid a elementos inexistentes o borrados
-   se resuelven como vacías. Un túnel o una sincronización de directorio cuyo host
-   no existe se descarta como conflicto `huerfano`.
+   se resuelven como vacías. Un túnel, una sincronización de directorio o una
+   comprobación de servicio cuyo host no existe (en la comprobación, o ya no es
+   `ssh`) se descarta como conflicto `huerfano`.
 7. **Nombres.** Los nombres únicos por tipo (host, grupo, snippet, alias de
    identidad; nombre de túnel o de sincronización dentro de su host) no pueden
    repetirse. Si dos elementos distintos acaban con el mismo nombre, el de
    `uuid` mayor se renombra a `<nombre> (2)` (o el primer número libre) como
    edición nueva y se registra un conflicto `nombre`. Todos los equipos eligen el
-   mismo, porque el criterio es determinista.
+   mismo, porque el criterio es determinista. Las comprobaciones de servicio no
+   se renombran: su nombre es el `objetivo` y una clave natural (host,
+   `objetivo_tipo`, `objetivo`) repetida entre `uuid` distintos se resuelve al
+   aplicar como conflicto `nombre`, descartando la copia.
 8. **Trabajo vivo.** Una importación no cierra sesiones, túneles activos,
    transferencias ni ejecuciones en curso: el borrado de un host o de un túnel
    con trabajo vivo se aplaza y queda como conflicto `borrado`.
@@ -466,7 +563,9 @@ Orden obligatorio al leer un fichero ajeno:
    en la siguiente pasada.
 3. Comprobar que `equipo.uuid` coincide con el uuid del nombre del fichero y que
    el equipo no está en `equipos_quitados`.
-4. Comprobar `formato`. Si es mayor: `formato_nuevo`, se ignora con aviso.
+4. Comprobar `formato` (en la cabecera y en el JSON). Si es mayor que el
+   máximo conocido (3): `formato_nuevo`, se ignora con el aviso «actualiza
+   MAGI» y no se aplica nada del fichero.
 5. Parsear el JSON y validar los campos que se usan (tipos, uuids, versiones). Un
    fichero inválido se descarta entero: nunca se aplica a medias.
 
@@ -479,12 +578,32 @@ Estados de un equipo conocido: `al_dia`, `ilegible`, `danado`,
 
 - El número de formato se sube **solo si cambia el significado** de algo ya
   definido (campos, reglas de fusión, derivación de la firma o del cifrado).
+- **Formato 1 → formato 2 (Fase 12).** Un MAGI 1.1 lee un fichero del formato 2
+  como `formato_nuevo` (no lo malinterpreta como hosts SSH). Un MAGI 1.2 y la
+  app Android leen los dos: el formato 1 se interpreta con todos los hosts como
+  SSH, sin tipo ni campos de escritorio.
+- **Formato 2 → formato 3 (Fase 13).** Aparece el elemento
+  `comprobacion_servicio`. Un MAGI 1.2 lee un fichero del formato 3 como
+  `formato_nuevo` (no pierde las comprobaciones sin saberlo). MAGI 1.3 y la
+  app Android actualizada leen los tres formatos.
+- **Qué escribe cada versión:** MAGI 1.1 escribe siempre formato 1; MAGI 1.2
+  escribe formato 1 si todos los hosts son SSH y formato 2 si hay algún
+  escritorio; MAGI 1.3 escribe formato 3 si hay alguna comprobación propia y,
+  si no, 2 o 1 como la 1.2 (así los inventarios que no necesitan lo nuevo
+  siguen siendo legibles por las versiones anteriores).
 - Añadir campos opcionales nuevos o nuevos tipos de elemento no obliga a subir el
   formato, pero un lector antiguo los ignorará y un escritor nuevo no debe
   asumir que el otro los entiende.
-- Un lector debe ignorar campos JSON desconocidos (no fallar).
-- La app Android (F11) debe leer y escribir este formato 1; el QR de la clave
-  contiene el texto `AGE-SECRET-KEY-1…`, que se guarda en el Android Keystore.
+- Un lector debe ignorar campos JSON desconocidos (no fallar): `huella_escritorio`
+  se ignora si aparece.
+- La app Android (F11) lee este formato en modo lector: con el formato 2 enseña
+  los escritorios en Hosts con su tipo y «se abre en el ordenador», sin
+  conectarse a ellos ni crearles túneles. Con el formato 3 guarda las
+  comprobaciones de servicio en su copia (la misma tabla
+  `COMPROBACIONES_SERVICIO` que crea la migración 9, con los mismos campos) y
+  no las usa: la vista de servicios del móvil llega en la F14. El QR de la
+  clave contiene el texto `AGE-SECRET-KEY-1…`, que se guarda en el Android
+  Keystore.
 
 ---
 
@@ -501,7 +620,72 @@ firma: 9c1d0b7a2e5f4c3b1a0918273645f6e7d8c9b0a1f2e3d4c5b6a7988071625344
 
 ---
 
-## 16. Cómo abrir un fichero fuera de MAGI
+## 16. Ejemplo de host de escritorio (formato 2)
+
+En un fichero del formato 2, el mismo host de un escritorio RDP viaja así (los
+demás campos del host son los de §7.2). La cabecera dice
+`MAGI-SINCRONIZACION 2` y el campo `formato` del JSON, `2`:
+
+```json
+{
+  "tipo": "host",
+  "uuid": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+  "version": "1793873500001.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873500001 },
+  "datos": {
+    "nombre": "win-01",
+    "direccion": "192.0.2.30",
+    "puerto": 3389,
+    "tipo": "rdp",
+    "escritorio_dominio": "EJEMPLO",
+    "escritorio_opciones": { "tamano": "1920x1080", "portapapeles": true, "teclado": "es-ES" },
+    "usuario": "operador",
+    "identidad_ref": "contrasena:llavero",
+    "salto": "7a2b3c4d-3333-4e5f-8a9b-cdef01234567",
+    "grupo": null,
+    "multiplexar": false,
+    "keepalive_seg": null,
+    "opciones_extra": "",
+    "servicios": "",
+    "origen": "manual",
+    "etiquetas": ["windows"],
+    "verificaciones": null,
+    "snippet_al_conectar": null
+  }
+}
+```
+
+No hay `huella_escritorio`: si apareciera, el lector la descarta.
+
+---
+
+## 17. Ejemplo de comprobación propia (formato 3)
+
+En un fichero del formato 3, una comprobación propia viaja como un elemento más
+(los demás hosts y elementos son los de siempre). La cabecera dice
+`MAGI-SINCRONIZACION 3` y el campo `formato` del JSON, `3`:
+
+```json
+{
+  "tipo": "comprobacion_servicio",
+  "uuid": "9a8b7c6d-5555-4e4f-8a9b-0123456789ab",
+  "version": "1793873600001.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873600001 },
+  "datos": {
+    "host": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+    "objetivo_tipo": "proyecto",
+    "objetivo": "web",
+    "comando": "docker compose -p web -f /srv/web/docker-compose.yml config -q"
+  }
+}
+```
+
+Borrar una comprobación deja una lápida de tipo `comprobacion_servicio` con el
+`objetivo` en `nombre`.
+
+---
+
+## 18. Cómo abrir un fichero fuera de MAGI
 
 ```text
 # 1. Guardar la clave (una sola línea) en un fichero con permisos 600

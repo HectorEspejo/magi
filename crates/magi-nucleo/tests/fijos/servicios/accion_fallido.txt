@@ -1,0 +1,11 @@
+MAGI_FASE=ejecutando
+MAGI_MENSAJE Job for app.service failed because the control process exited with error code.
+MAGI_MENSAJE See "systemctl status app.service" and "journalctl -xeu app.service" for details.
+MAGI_LINEA 21:52:10 app[4121]: Traceback (most recent call last):
+MAGI_LINEA 21:52:10 app[4121]:   File "/srv/app/main.py", line 12, in <module>
+MAGI_LINEA 21:52:10 app[4121]: KeyError: 'DATABASE_URL'
+MAGI_LINEA 21:52:10 systemd[1]: app.service: Main process exited, code=exited, status=1/FAILURE
+MAGI_LINEA 21:52:10 systemd[1]: app.service: Failed with result 'exit-code'.
+MAGI_FASE=esperando
+MAGI_RESULTADO=fallido failed 3
+MAGI_FIN

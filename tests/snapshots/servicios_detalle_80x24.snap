@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  DETALLE                                                     ⇥ dependencias  │
+│────────────────────────────────────────────────────────────────────────────  │
+│ app.service · hetzner-01                                                     │
+│ 1 Estado  ·  2 Dependencias  ·  3 Unidad                                     │
+│───────────────────────────────────────────────────────────────────────────── │
+│ app de prueba                                                                │
+│ estado      active (running)                                                 │
+│ desde       hace 2 h                                                         │
+│ PID         4121                                                             │
+│ memoria     180 MB                                                           │
+│ unidad      /etc/systemd/system/app.service                                  │
+│ arranque    activado                                                         │
+│ recargar    sí                                                               │
+│ vigilada    ★                                                                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  P parar  R reiniciar  2 timers  r refrescar  ? más

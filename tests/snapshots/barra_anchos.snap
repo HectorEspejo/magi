@@ -16,9 +16,9 @@ Flota 99:
 Flota 100:
  ↵ ssh  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
 Flota 120:
- ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
 Flota 200:
- ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda
 Flota detalle 40:
  ↵ ssh  r sondear  ⇥ lista  ? más
 Flota detalle 50:
@@ -34,9 +34,9 @@ Flota detalle 99:
 Flota detalle 100:
  ↵ ssh  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
 Flota detalle 120:
- ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? más
 Flota detalle 200:
- ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda
 Hosts 40:
  ↵ conectar  e editar  / filtrar  ? más
 Hosts 50:
@@ -54,7 +54,7 @@ Hosts 100:
 Hosts 120:
  ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  ? más
 Hosts 200:
- ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  ^p paleta  q salir  ? ayuda
+ ↵ conectar  ↓↑ mover  →← plegar  e editar  n nuevo  g grupo  x borrar  ⇥ etiquetas  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda
 Sesiones 40:
  ↵ entrar  n nueva  r reconectar  ? más
 Sesiones 50:

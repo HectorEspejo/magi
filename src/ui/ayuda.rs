@@ -292,6 +292,31 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ("q / esc", "volver"),
                 ],
             ),
+            Vista::Servicios => (
+                "AYUDA · SERVICIOS",
+                vec![
+                    ("↑ ↓ / j k", "mover la selección"),
+                    ("⇥", "hosts ⇄ lista; en el detalle, de pestaña"),
+                    ("1 2 3", "servicios, timers o contenedores"),
+                    ("↵", "detalle (en «Toda la flota», ir al host)"),
+                    ("l", "panel de logs en vivo"),
+                    (
+                        "A P R G H",
+                        "arrancar, parar, reiniciar, recargar, arranque",
+                    ),
+                    ("A en un timer", "lanzar ahora el servicio que activa"),
+                    ("S", "shell en el contenedor (pestaña en Sesión)"),
+                    ("c", "comprobación propia del servicio o proyecto"),
+                    ("!", "pedir la contraseña de sudo para este host"),
+                    ("/", "filtrar por nombre en la sección visible"),
+                    ("r", "refrescar el host; en «Toda la flota», sondear todos"),
+                    ("esc", "cerrar el detalle, el filtro o volver"),
+                    (
+                        "logs: / n espacio fin t esc",
+                        "filtrar, nivel, pausa, final, pestaña, cerrar",
+                    ),
+                ],
+            ),
             Vista::Flota => (
                 "AYUDA · FLOTA",
                 vec![

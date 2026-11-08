@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/vistas_n.rs
+---
+┌ MAGI · HOST · win-01 · editar · #8 ──────────────────────────────────────────┐
+│ IDENTIFICACIÓN                                                               │
+│  Nombre                                                                      │
+│  [ win-01┃ ]                                                                 │
+│  Dirección                                                                   │
+│  [ 192.0.2.30 ]                                                              │
+│  Puerto                                                                      │
+│  [ 3389 ]                                                                    │
+│  Grupo                                                                       │
+│  [ produccion                 ▾ ]                                            │
+│  Etiquetas                                                                   │
+│  [ oficina windows ]                                                         │
+│                                                                              │
+│ ESCRITORIO                                                                   │
+│  Tipo         RDP (no se cambia)                                             │
+│  Destino      192.0.2.30:3389                                                │
+│  A través de                                                                 │
+│  [ hetzner-01                               ▾ ]                              │
+│  Usuario                                                                     │
+│  [ usuario ]                                                                 │
+│  Dominio                                                                     │
+│  [ OFICINA ]                                                                ↓│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

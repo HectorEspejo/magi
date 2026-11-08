@@ -1,6 +1,7 @@
 package org.cuatrodetres.magi.ui.modelos
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,6 +73,21 @@ class PruebaModelosInventario {
     fun sinSesionesElInventarioNoCambia() {
         val inventario = InventarioVista(hosts = listOf(host("h1", "web-01")))
         assertEquals(inventario, inventarioConSesiones(inventario, emptyList()))
+    }
+
+    @Test
+    fun losEscritoriosSeDistinguenDeLosHostsSsh() {
+        val ssh = host("h1", "web-01")
+        assertFalse(esEscritorio(ssh))
+        assertEquals(TipoHostVista.SSH, ssh.tipo)
+        assertFalse(ssh.tipo.esEscritorio)
+
+        val escritorio = ssh.copy(tipo = TipoHostVista.RDP)
+        assertTrue(esEscritorio(escritorio))
+        assertTrue(escritorio.tipo.esEscritorio)
+        assertEquals("RDP", escritorio.tipo.etiqueta)
+        assertEquals("VNC", TipoHostVista.VNC.etiqueta)
+        assertEquals("voxl", TipoHostVista.VOXL.etiqueta)
     }
 
     @Test

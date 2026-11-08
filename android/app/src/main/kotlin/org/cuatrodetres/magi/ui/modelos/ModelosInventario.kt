@@ -8,6 +8,31 @@ package org.cuatrodetres.magi.ui.modelos
  * móvil (GRUPOS.plegado).
  */
 
+/**
+ * Tipo de host del inventario (Fase 12): SSH o un escritorio remoto (RDP, VNC o
+ * voxl). Los escritorios se enseñan en el móvil, pero solo se abren en el
+ * ordenador con MAGI de escritorio: el teléfono no conecta a ellos ni les crea
+ * túneles.
+ */
+enum class TipoHostVista {
+    SSH,
+    RDP,
+    VNC,
+    VOXL;
+
+    /** Etiqueta corta de la interfaz (es el nombre técnico del protocolo). */
+    val etiqueta: String
+        get() = when (this) {
+            SSH -> "SSH"
+            RDP -> "RDP"
+            VNC -> "VNC"
+            VOXL -> "voxl"
+        }
+
+    /** Un escritorio no se abre desde el móvil. */
+    val esEscritorio: Boolean get() = this != SSH
+}
+
 /** Estado de un host en la lista (glifos de §6.1). */
 enum class EstadoHostVista {
     /** Sin sesión: ○. */
@@ -29,6 +54,7 @@ data class HostVista(
     val nombre: String,
     val direccion: String,
     val puerto: Int,
+    val tipo: TipoHostVista = TipoHostVista.SSH,
     val usuario: String,
     val grupoUuid: String? = null,
     val etiquetas: List<String> = emptyList(),
@@ -79,6 +105,7 @@ data class FichaHostVista(
     val nombre: String,
     val direccion: String,
     val puerto: Int,
+    val tipo: TipoHostVista = TipoHostVista.SSH,
     val usuario: String,
     val grupoNombre: String? = null,
     val etiquetas: List<String> = emptyList(),
@@ -90,6 +117,9 @@ data class FichaHostVista(
     val huellas: List<HuellaHostVista> = emptyList(),
     val tieneContrasena: Boolean = false,
 )
+
+/** Si el host es un escritorio: el móvil lo enseña pero no lo abre. */
+fun esEscritorio(host: HostVista): Boolean = host.tipo.esEscritorio
 
 /** Dirección de la ficha: usuario@dirección:puerto (informe §6.2). */
 fun textoDireccion(host: HostVista): String =

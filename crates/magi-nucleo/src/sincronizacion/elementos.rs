@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::almacen::versiones::{vector_desde_json, Tabla};
+use crate::escritorio::{OpcionesEscritorio, TipoHost};
+use crate::sincronizacion::formato::{FORMATO_1, FORMATO_2, FORMATO_3};
 use crate::sincronizacion::fusion::{nombre_de_contenido, Candidato};
 
 /// Datos de un grupo que viajan (sin `plegado`).
@@ -38,11 +40,26 @@ pub struct DatosGrupo {
 
 /// Datos de un host que viajan. Las referencias son uuids; las etiquetas, por
 /// nombre; las verificaciones van dentro del host.
+///
+/// Desde el formato 2 viajan también el tipo de host y los campos de
+/// escritorio. Un fichero del formato 1 no los trae: se leen con los valores de
+/// un host SSH (`tipo` = ssh y opciones vacías). `huella_escritorio` no viaja
+/// nunca, aunque venga en el fichero: serde la ignora al no estar aquí.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DatosHost {
     pub nombre: String,
     pub direccion: String,
     pub puerto: u16,
+    /// Tipo de host: `ssh`, `rdp`, `vnc` o `voxl` (desde el formato 2).
+    /// En un fichero del formato 1 no viene y cuenta como `ssh`.
+    #[serde(default = "tipo_ssh")]
+    pub tipo: TipoHost,
+    /// Dominio de Windows para RDP (opcional).
+    #[serde(default)]
+    pub escritorio_dominio: Option<String>,
+    /// Opciones del escritorio según el tipo, como objeto JSON (§3.2).
+    #[serde(default = "opciones_vacias")]
+    pub escritorio_opciones: Value,
     pub usuario: Option<String>,
     /// Referencia de identidad tal cual (`auto`, `contrasena`, `agente:<huella>`,
     /// `fichero:<ruta>`). Las rutas bajo el home se exportan como ~/.
@@ -57,6 +74,56 @@ pub struct DatosHost {
     pub etiquetas: Vec<String>,
     pub verificaciones: Option<DatosVerificaciones>,
     pub snippet_al_conectar: Option<String>,
+}
+
+/// Tipo por defecto de un host que no lo trae: un fichero del formato 1 es
+/// todo SSH.
+fn tipo_ssh() -> TipoHost {
+    TipoHost::Ssh
+}
+
+/// Opciones de escritorio por defecto cuando el fichero no las trae.
+fn opciones_vacias() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
+/// Convierte el JSON que viaja de `escritorio_opciones` en opciones validadas
+/// para el tipo (§3.2). Un valor inválido se rechaza: al importar se trata como
+/// conflicto de elemento y no se aplica (T38).
+pub fn opciones_desde_valor(valor: &Value, tipo: TipoHost) -> Result<OpcionesEscritorio> {
+    let texto = serde_json::to_string(valor).context("serializando escritorio_opciones")?;
+    let opciones = OpcionesEscritorio::desde_json(Some(&texto))
+        .map_err(|motivo| anyhow!("escritorio_opciones no válidas: {motivo}"))?;
+    opciones.validar(tipo).map_err(|motivo| {
+        anyhow!("escritorio_opciones no válidas para un host {tipo}: {motivo}")
+    })?;
+    Ok(opciones)
+}
+
+/// Formato que se escribe en el fichero propio.
+///
+/// - 3 si hay alguna comprobación propia (Fase 13, D249): un MAGI 1.2 lo verá
+///   como formato_nuevo en vez de perderla sin saberlo.
+/// - si no, 2 si el inventario tiene algún host que no es SSH (Fase 12, D220).
+/// - si no, 1 para que MAGI 1.1 siga leyendo los inventarios sin escritorios.
+pub fn formato_a_escribir(conexion: &Connection) -> Result<u32> {
+    let comprobaciones: i64 =
+        conexion.query_row("SELECT COUNT(*) FROM COMPROBACIONES_SERVICIO", [], |fila| {
+            fila.get(0)
+        })?;
+    if comprobaciones > 0 {
+        return Ok(FORMATO_3);
+    }
+    let mut sentencia = conexion.prepare("SELECT tipo FROM HOSTS")?;
+    let filas = sentencia.query_map([], |fila| fila.get::<_, Option<String>>(0))?;
+    for fila in filas {
+        // Un tipo nulo o desconocido (que no debería existir) también obliga a
+        // la 2: más vale que un MAGI viejo lo rechace a que lo lea mal.
+        if fila?.as_deref() != Some("ssh") {
+            return Ok(FORMATO_2);
+        }
+    }
+    Ok(FORMATO_1)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +177,20 @@ pub struct DatosSnippet {
     pub timeout_seg: u64,
     pub parar_al_fallo: bool,
     pub destinos: Vec<DestinoSnippet>,
+}
+
+/// Datos de una comprobación propia de servicio o proyecto que viajan
+/// (Fase 13, §7.10). El host va por uuid; el objetivo, por tipo y nombre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatosComprobacionServicio {
+    /// uuid del host ssh al que pertenece.
+    pub host: String,
+    /// «unidad» (servicio de systemd) o «proyecto» (Compose).
+    pub objetivo_tipo: String,
+    /// Nombre de la unidad (nginx.service) o del proyecto Compose (web).
+    pub objetivo: String,
+    /// Orden que se ejecuta antes de recargar o reiniciar el objetivo.
+    pub comando: String,
 }
 
 /// Datos de una sincronización de directorio que viajan (sin último
@@ -168,6 +249,7 @@ fn valor_de_fila(
         Tabla::Tuneles => a_valor(datos_tunel(conexion, id)?),
         Tabla::Snippets => a_valor(datos_snippet(conexion, id)?),
         Tabla::SincronizacionesDir => a_valor(datos_sincronizacion(conexion, id, hogar)?),
+        Tabla::ComprobacionesServicio => a_valor(datos_comprobacion_servicio(conexion, id)?),
     }
 }
 
@@ -210,6 +292,9 @@ struct FilaHost {
     servicios: String,
     origen: String,
     snippet_al_conectar_id: Option<i64>,
+    tipo: String,
+    escritorio_dominio: Option<String>,
+    escritorio_opciones: Option<String>,
 }
 
 fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Option<DatosHost>> {
@@ -217,7 +302,8 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
         .query_row(
             "SELECT nombre, grupo_id, direccion, puerto, usuario, identidad_ref,
                     salto_host_id, multiplexar, keepalive_seg, opciones_extra,
-                    servicios, origen, snippet_al_conectar_id
+                    servicios, origen, snippet_al_conectar_id, tipo,
+                    escritorio_dominio, escritorio_opciones
                FROM HOSTS WHERE id = ?1",
             params![id],
             |fila| {
@@ -235,6 +321,9 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
                     servicios: fila.get(10)?,
                     origen: fila.get(11)?,
                     snippet_al_conectar_id: fila.get(12)?,
+                    tipo: fila.get(13)?,
+                    escritorio_dominio: fila.get(14)?,
+                    escritorio_opciones: fila.get(15)?,
                 })
             },
         )
@@ -251,10 +340,27 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
         ),
         None => None,
     };
+    let tipo = TipoHost::desde_texto(&fila.tipo)
+        .with_context(|| format!("tipo de host desconocido en el host {id}: {}", fila.tipo))?;
+    let escritorio_opciones = {
+        let opciones = OpcionesEscritorio::desde_json(fila.escritorio_opciones.as_deref())
+            .map_err(|motivo| anyhow!("escritorio_opciones del host {id}: {motivo}"))?;
+        opciones
+            .validar(tipo)
+            .map_err(|motivo| anyhow!("escritorio_opciones del host {id}: {motivo}"))?;
+        // Se compara y se exporta en la misma forma canónica que se guarda.
+        serde_json::from_str(&opciones.a_json())
+            .context("convirtiendo escritorio_opciones a JSON canónico")?
+    };
     Ok(Some(DatosHost {
         nombre: fila.nombre,
         direccion: fila.direccion,
         puerto,
+        tipo,
+        escritorio_dominio: fila
+            .escritorio_dominio
+            .filter(|dominio| !dominio.is_empty()),
+        escritorio_opciones,
         usuario: fila.usuario.filter(|usuario| !usuario.is_empty()),
         identidad_ref: identidad_ref_exportada(fila.identidad_ref, hogar),
         salto: uuid_de(conexion, Tabla::Hosts, fila.salto_host_id)?,
@@ -474,6 +580,38 @@ fn datos_sincronizacion(
         direccion,
         borrar,
         exclusiones,
+    }))
+}
+
+fn datos_comprobacion_servicio(
+    conexion: &Connection,
+    id: i64,
+) -> Result<Option<DatosComprobacionServicio>> {
+    let fila = conexion
+        .query_row(
+            "SELECT host_id, objetivo_tipo, objetivo, comando
+               FROM COMPROBACIONES_SERVICIO WHERE id = ?1",
+            params![id],
+            |fila| {
+                Ok((
+                    fila.get::<_, i64>(0)?,
+                    fila.get::<_, String>(1)?,
+                    fila.get::<_, String>(2)?,
+                    fila.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((host_id, objetivo_tipo, objetivo, comando)) = fila else {
+        return Ok(None);
+    };
+    let host = uuid_de(conexion, Tabla::Hosts, Some(host_id))?
+        .ok_or_else(|| anyhow!("la comprobación {id} apunta a un host sin uuid"))?;
+    Ok(Some(DatosComprobacionServicio {
+        host,
+        objetivo_tipo,
+        objetivo,
+        comando,
     }))
 }
 

@@ -13,9 +13,11 @@ use magi_nucleo::almacen::conflictos::{self, Conflicto};
 use magi_nucleo::almacen::Almacen;
 use magi_nucleo::almacen::{equipos as equipos_bd, versiones};
 use magi_nucleo::configuracion::SeccionSincronizacion;
+use magi_nucleo::escritorio::{OpcionesEscritorio, TamanoEscritorio, TipoHost};
 use magi_nucleo::llavero::{LlaveroEnMemoria, LlaveroSecreto, CUENTA_SINCRONIZACION};
 use magi_nucleo::modelo::{DatosHost, DatosTunel, Host, Origen, TipoTunel, Tunel};
 use magi_nucleo::rutas::{Equipo, Rutas};
+use magi_nucleo::servicios::{Objetivo, TipoObjetivo};
 use magi_nucleo::sincronizacion::carpeta::{
     self, CarpetaDisco, CarpetaSincronizacion, EntradaCarpeta,
 };
@@ -252,6 +254,9 @@ impl Entorno {
                     grupo_id: host.grupo_id,
                     direccion: direccion.to_string(),
                     puerto: host.puerto,
+                    tipo: host.tipo,
+                    escritorio_dominio: host.escritorio_dominio.clone(),
+                    escritorio_opciones: host.escritorio_opciones.clone(),
                     usuario: host.usuario.clone(),
                     identidad_ref: host.identidad_ref.clone(),
                     salto_host_id: host.salto_host_id,
@@ -420,7 +425,7 @@ fn escribir_documento(carpeta: &Path, clave: &ClaveSincronizacion, documento: &f
     let firma = clave
         .firmar(json.as_bytes())
         .expect("firmando el documento");
-    let plano = formato::componer(&json, &firma);
+    let plano = formato::componer(&json, &firma, documento.formato);
     let cifrado = clave.cifrar(&plano).expect("cifrando el documento");
     carpeta::escribir(carpeta, &documento.equipo.uuid, &cifrado)
         .expect("escribiendo el fichero de sincronización");
@@ -942,6 +947,159 @@ fn sin_la_clave_nueva_queda_esperando_clave_y_se_recupera_al_escanearla() {
         "192.0.2.77"
     );
     assert_eq!(movil.estado_equipo(&escritorio.uuid_este()), "al_dia");
+}
+
+#[test]
+fn el_lector_lee_el_formato_2_y_guarda_los_escritorios() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let escritorio = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+
+    // Inventario del escritorio: un host SSH, un RDP y un VNC.
+    escritorio.crear_host("web", "192.0.2.10");
+    let opciones = OpcionesEscritorio {
+        tamano: TamanoEscritorio::Fijo {
+            ancho: 1600,
+            alto: 900,
+        },
+        ..OpcionesEscritorio::default()
+    };
+    escritorio
+        .almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "win-01".to_string(),
+                direccion: "192.0.2.30".to_string(),
+                puerto: 3389,
+                tipo: TipoHost::Rdp,
+                escritorio_dominio: Some("EJEMPLO".to_string()),
+                escritorio_opciones: opciones.clone(),
+                usuario: Some("operador".to_string()),
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("creando el host RDP");
+    escritorio
+        .almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "vm-01".to_string(),
+                direccion: "192.0.2.40".to_string(),
+                puerto: 5900,
+                tipo: TipoHost::Vnc,
+                escritorio_opciones: opciones,
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .expect("creando el host VNC");
+    escritorio.exportar();
+
+    // El fichero del equipo con escritorios ha subido a formato 2.
+    let ruta = carpeta.join(carpeta::nombre_fichero(&escritorio.uuid_este()));
+    let bytes = std::fs::read(&ruta).expect("leyendo el fichero del escritorio");
+    let plano = escritorio
+        .clave()
+        .descifrar(&bytes)
+        .expect("descifrando el fichero del escritorio");
+    let en_claro = formato::separar(&plano).expect("separando el fichero del escritorio");
+    assert_eq!(en_claro.formato, formato::FORMATO_2);
+
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_eq!(
+        resultado.resumen.as_ref().expect("hay resumen").creados,
+        3,
+        "el móvil importa los tres hosts del formato 2"
+    );
+    let hosts = movil.hosts();
+    assert_eq!(hosts.len(), 3);
+    let por_nombre = |nombre: &str| {
+        hosts
+            .iter()
+            .find(|host| host.nombre == nombre)
+            .unwrap_or_else(|| panic!("falta el host «{nombre}»: {hosts:?}"))
+    };
+    assert_eq!(por_nombre("web").tipo, TipoHost::Ssh);
+    let rdp = por_nombre("win-01");
+    assert_eq!(rdp.tipo, TipoHost::Rdp);
+    assert_eq!(rdp.escritorio_dominio.as_deref(), Some("EJEMPLO"));
+    assert_eq!(
+        rdp.escritorio_opciones.tamano,
+        TamanoEscritorio::Fijo {
+            ancho: 1600,
+            alto: 900
+        }
+    );
+    assert_eq!(por_nombre("vm-01").tipo, TipoHost::Vnc);
+    // El móvil no resuelve conflictos de elemento, así que tampoco guarda
+    // ninguno: para él, los escritorios son inventario de solo lectura.
+    assert_eq!(resultado.conflictos_pendientes, 0);
+    assert!(movil.conflictos().is_empty());
+}
+
+#[test]
+fn el_lector_lee_el_formato_3_y_guarda_las_comprobaciones() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let escritorio = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+
+    escritorio.crear_host("web", "192.0.2.10");
+    let web = escritorio.host_por_nombre("web").expect("host web").id;
+    escritorio
+        .almacen
+        .guardar_comprobacion(web, TipoObjetivo::Unidad, "nginx.service", "nginx -t")
+        .expect("comprobación propia del escritorio");
+    escritorio.exportar();
+
+    // El fichero del equipo con comprobaciones propias ha subido a formato 3.
+    let ruta = carpeta.join(carpeta::nombre_fichero(&escritorio.uuid_este()));
+    let bytes = std::fs::read(&ruta).expect("leyendo el fichero del escritorio");
+    let plano = escritorio
+        .clave()
+        .descifrar(&bytes)
+        .expect("descifrando el fichero del escritorio");
+    let en_claro = formato::separar(&plano).expect("separando el fichero del escritorio");
+    assert_eq!(en_claro.formato, formato::FORMATO_3);
+
+    // El móvil es lector: copia el host y su comprobación, sin usarla.
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_eq!(
+        resultado.resumen.as_ref().expect("hay resumen").creados,
+        2,
+        "el móvil importa el host y su comprobación"
+    );
+    let host = movil
+        .host_por_nombre("web")
+        .expect("el móvil copia el host");
+    let comprobaciones = movil
+        .almacen
+        .comprobaciones_de_host(host.id)
+        .expect("comprobaciones del móvil");
+    assert_eq!(comprobaciones.len(), 1);
+    assert_eq!(
+        comprobaciones[0].objetivo,
+        Objetivo::unidad("nginx.service")
+    );
+    assert_eq!(comprobaciones[0].comando, "nginx -t");
+    // Conserva el uuid del escritorio: es el mismo elemento en los dos equipos.
+    let uuid_escritorio: String = escritorio
+        .conexion()
+        .query_row("SELECT uuid FROM COMPROBACIONES_SERVICIO", [], |fila| {
+            fila.get(0)
+        })
+        .expect("uuid de la comprobación del escritorio");
+    assert_eq!(
+        comprobaciones[0].uuid.as_deref(),
+        Some(uuid_escritorio.as_str())
+    );
+    // El móvil no resuelve conflictos: tampoco guarda ninguno.
+    assert_eq!(resultado.conflictos_pendientes, 0);
+    assert!(movil.conflictos().is_empty());
 }
 
 #[test]

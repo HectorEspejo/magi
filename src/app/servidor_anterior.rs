@@ -253,6 +253,8 @@ mod pruebas {
             transferencias,
             tuneles,
             ejecuciones,
+            escritorios: 0,
+            acciones_servicio: 0,
         }
     }
 
@@ -290,7 +292,11 @@ mod pruebas {
     #[test]
     fn un_servidor_mas_nuevo_nunca_se_para() {
         assert_eq!(
-            decidir(&rechazo(7, Some(trabajo(0, 0, 0, 0)), Some(0))),
+            decidir(&rechazo(
+                super::VERSION_PROTOCOLO + 1,
+                Some(trabajo(0, 0, 0, 0)),
+                Some(0)
+            )),
             Decision::MasNuevo
         );
     }
@@ -358,7 +364,11 @@ mod pruebas {
 
     #[test]
     fn la_barra_avisa_de_forma_distinta_al_mas_nuevo_y_al_anterior() {
-        let mas_nuevo = rechazo(7, Some(trabajo(0, 0, 0, 0)), Some(0));
+        let mas_nuevo = rechazo(
+            super::VERSION_PROTOCOLO + 1,
+            Some(trabajo(0, 0, 0, 0)),
+            Some(0),
+        );
         assert_eq!(
             aviso_barra(&mas_nuevo),
             "este magi es más antiguo que su servidor; actualiza magi"
@@ -394,7 +404,11 @@ mod pruebas {
     #[test]
     fn las_operaciones_que_necesitan_servidor_distinguen_mas_nuevo_de_anterior() {
         assert_eq!(motivo_sin_servidor(None), None);
-        let mas_nuevo = rechazo(7, Some(trabajo(0, 0, 0, 0)), Some(0));
+        let mas_nuevo = rechazo(
+            super::VERSION_PROTOCOLO + 1,
+            Some(trabajo(0, 0, 0, 0)),
+            Some(0),
+        );
         assert_eq!(
             motivo_sin_servidor(Some(&mas_nuevo)).as_deref(),
             Some("este magi es más antiguo que su servidor; actualiza magi")

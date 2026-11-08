@@ -265,7 +265,7 @@ pub(crate) fn interpretar_fichero(
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
             return Err(FalloLectura::Danado("firma no válida".to_string()));
         }
-        if en_claro.formato > formato::FORMATO {
+        if en_claro.formato > formato::FORMATO_MAXIMO {
             return Err(FalloLectura::FormatoNuevo(en_claro.formato));
         }
         let documento = match formato::parsear(&en_claro.json) {
@@ -326,8 +326,10 @@ pub fn documento_propio(conexion: &Connection, rutas: &Rutas, app: &str) -> Resu
         }
     }
     equipos_quitados.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+    // El formato se decide con el inventario de este equipo, no con una
+    // constante (D220): solo sube a 2 cuando hay algún escritorio.
     Ok(Documento {
-        formato: formato::FORMATO,
+        formato: elementos::formato_a_escribir(conexion)?,
         app: app.to_string(),
         equipo: EquipoDocumento {
             uuid: este.uuid,
@@ -843,7 +845,7 @@ pub fn pasada(
         let clave = &claves[0];
         let json = formato::serializar(&documento)?;
         let firma = clave.firmar(json.as_bytes())?;
-        let plano = formato::componer(&json, &firma);
+        let plano = formato::componer(&json, &firma, documento.formato);
         let cifrado = clave.cifrar(&plano)?;
         if let Err(error) = carpeta::escribir(&carpeta, &este.uuid, &cifrado) {
             resultado.estado = EstadoPasada::Error(format!(

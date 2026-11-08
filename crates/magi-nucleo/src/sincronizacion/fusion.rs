@@ -118,6 +118,9 @@ pub fn candidatos_de_documento(documento: &Documento) -> Vec<Candidato> {
 fn clave_nombre(tipo: &str) -> &'static str {
     match tipo {
         "identidad" => "alias",
+        // La comprobación propia no tiene columna de nombre: su nombre natural
+        // para mostrar (y para las lápidas) es el objetivo.
+        "comprobacion_servicio" => "objetivo",
         _ => "nombre",
     }
 }
@@ -132,20 +135,45 @@ pub fn nombre_de_contenido(tipo: &str, contenido: &serde_json::Value) -> String 
         .to_string()
 }
 
-/// Clave natural para detectar colisiones: el nombre y, en túneles y
-/// sincronizaciones, el uuid del host.
+/// Clave natural para detectar colisiones: el nombre y, en túneles,
+/// sincronizaciones y comprobaciones de servicio, el uuid del host.
 pub fn clave_natural(tipo: &str, uuid_host: Option<&str>, contenido: &serde_json::Value) -> String {
     let nombre = nombre_de_contenido(tipo, contenido);
     match tipo {
         "tunel" | "sincronizacion_dir" => format!("{}|{}", uuid_host.unwrap_or(""), nombre),
+        "comprobacion_servicio" => format!(
+            "{}|{}|{}",
+            uuid_host.unwrap_or(""),
+            contenido
+                .get("objetivo_tipo")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+            nombre
+        ),
         "host" | "grupo" | "snippet" | "identidad" => nombre,
         _ => uuid_host.map_or(nombre.clone(), |host| format!("{host}|{nombre}")),
     }
 }
 
-/// uuid del host al que cuelga un túnel o una sincronización de directorio.
+/// uuid del host al que cuelga un túnel, una sincronización de directorio o
+/// una comprobación de servicio.
 fn host_de_contenido(candidato: &Candidato) -> Option<&str> {
     candidato.contenido.as_ref()?.get("host")?.as_str()
+}
+
+/// ¿El host de un candidato vivo es SSH? Solo los hosts SSH tienen servicios,
+/// así que una comprobación que cuelga de otro tipo es huérfana (§7.10). Un
+/// host sin campo `tipo` viene de un fichero del formato 1 (todos eran SSH).
+fn host_es_ssh(candidato: &Candidato) -> bool {
+    match candidato
+        .contenido
+        .as_ref()
+        .and_then(|contenido| contenido.get("tipo"))
+    {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(tipo)) => tipo == "ssh",
+        Some(_) => false,
+    }
 }
 
 /// Orden total entre candidatos para desempatar de forma determinista: primero
@@ -341,19 +369,27 @@ pub fn fusionar(local: &[Candidato], documentos: &[Documento]) -> Result<PlanFus
         }
     }
 
-    // 3. Huérfanos: un túnel o una sincronización cuyo host ya no está vivo se
+    // 3. Huérfanos: un túnel, una sincronización o una comprobación de servicio
+    //    cuyo host ya no está vivo (en la comprobación, o ya no es SSH) se
     //    descarta; su lápida, si la hay, se queda en `lapidas`.
-    let hosts_vivos: BTreeSet<String> = vivos
+    let hosts_vivos: BTreeMap<String, bool> = vivos
         .iter()
         .filter(|candidato| candidato.tipo == "host")
-        .map(|candidato| candidato.uuid.clone())
+        .map(|candidato| (candidato.uuid.clone(), host_es_ssh(candidato)))
         .collect();
     vivos.retain(|candidato| {
-        if !matches!(candidato.tipo.as_str(), "tunel" | "sincronizacion_dir") {
+        if !matches!(
+            candidato.tipo.as_str(),
+            "tunel" | "sincronizacion_dir" | "comprobacion_servicio"
+        ) {
             return true;
         }
         let host = host_de_contenido(candidato).unwrap_or("");
-        if hosts_vivos.contains(host) {
+        let sirve = match hosts_vivos.get(host) {
+            Some(es_ssh) => candidato.tipo != "comprobacion_servicio" || *es_ssh,
+            None => false,
+        };
+        if sirve {
             return true;
         }
         anyadir_conflicto(&mut conflictos, conflicto_huerfano(candidato));
@@ -421,10 +457,18 @@ fn ambito_de_nombre(candidato: &Candidato) -> (String, String) {
 /// la misma clave natural, el de uuid menor conserva el nombre y los demás, por
 /// orden creciente de uuid, pasan a "<nombre> (2)", "<nombre> (3)"… (el primer
 /// número libre). Devuelve los renombrados como (tipo, uuid).
+///
+/// Las comprobaciones de servicio no se renombran: su nombre es el objetivo
+/// (una unidad o un proyecto) y un nombre inventado dejaría de ser un objetivo
+/// válido. Una colisión real entre dos comprobaciones se resuelve al aplicar,
+/// como conflicto de nombre, sin tocar el contenido.
 pub fn resolver_nombres(vivos: &mut [Candidato]) -> Vec<(String, String)> {
     // Agrupa los índices por ámbito de unicidad.
     let mut ambitos: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (indice, candidato) in vivos.iter().enumerate() {
+        if candidato.tipo == "comprobacion_servicio" {
+            continue;
+        }
         ambitos
             .entry(ambito_de_nombre(candidato))
             .or_default()

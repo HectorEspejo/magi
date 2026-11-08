@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Fila};
-use crate::modelo::UltimoEstado;
+use crate::modelo::{Host, UltimoEstado};
 use crate::tema::Tema;
 use crate::ui::disposicion::{
     self, Columna, Disposicion, Lista, VentanaLista, ANCHO_COLUMNAS_MINIMAS,
@@ -28,7 +28,20 @@ const SANGRIA_HOST: u16 = 4;
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
     let titulo = format!(" MAGI {} HOSTS ", tema.glifos.punto_medio);
-    let recuento = format!(" {} hosts ", app.hosts.len());
+    let escritorios = app
+        .hosts
+        .iter()
+        .filter(|host| host.tipo.es_escritorio())
+        .count();
+    let recuento = if escritorios == 0 {
+        format!(" {} hosts ", app.hosts.len())
+    } else {
+        format!(
+            " {} hosts {} {escritorios} escritorios ",
+            app.hosts.len(),
+            tema.glifos.punto_medio
+        )
+    };
     let mut bloque = Block::default()
         .borders(Borders::ALL)
         .border_set(tema.bordes())
@@ -156,6 +169,7 @@ const DIRECCION: usize = 2;
 const USUARIO: usize = 3;
 const PUERTO: usize = 4;
 const ETIQUETAS: usize = 5;
+const SALTO: usize = 6;
 
 impl TablaHosts {
     fn nueva(app: &App, ancho_listado: u16, ancho_vista: u16) -> Self {
@@ -183,10 +197,23 @@ impl TablaHosts {
             .max()
             .unwrap_or(0)
             .clamp(4, 30) as u16;
+        let ascii = app.tema.ascii;
+        // «⤴ salto» o, en un VNC sin SSH, «⚠ directo» (Fase 12).
         let ancho_salto = hosts
             .iter()
-            .filter_map(|host| host.salto_nombre.as_ref())
-            .map(|salto| salto.chars().count() + 2)
+            .filter_map(|host| {
+                if let Some(salto) = host.salto_nombre.as_ref() {
+                    Some(salto.chars().count() + 2)
+                } else if host.tipo == crate::escritorio::TipoHost::Vnc {
+                    Some(if ascii {
+                        "! directo".len()
+                    } else {
+                        "⚠ directo".chars().count()
+                    })
+                } else {
+                    None
+                }
+            })
             .max()
             .unwrap_or(0)
             .min(24) as u16;
@@ -310,11 +337,6 @@ fn construir_linea(app: &App, tabla: &TablaHosts, indice: usize, ancho: u16) -> 
             let (glifo, color) = glifo_y_color(app, host.id, host.ultimo_estado);
             let texto = Style::default().fg(tema.paleta.texto);
             let inactivo = Style::default().fg(tema.paleta.inactivo);
-            let salto = host
-                .salto_nombre
-                .as_ref()
-                .map(|salto| format!("{} {salto}", tema.glifos.salto))
-                .unwrap_or_default();
             let mut spans = vec![Span::raw(format!("{marca}   "))];
             for (columna, ancho) in tabla.anchos.iter().enumerate() {
                 if *ancho == 0 {
@@ -325,7 +347,7 @@ fn construir_linea(app: &App, tabla: &TablaHosts, indice: usize, ancho: u16) -> 
                 }
                 // El nombre lleva pegado el glifo de túneles: va aparte.
                 if columna == NOMBRE {
-                    spans.extend(columna_nombre(app, host.id, &host.nombre, *ancho));
+                    spans.extend(columna_nombre(app, host, *ancho));
                     continue;
                 }
                 let (texto, estilo) = match columna {
@@ -343,7 +365,19 @@ fn construir_linea(app: &App, tabla: &TablaHosts, indice: usize, ancho: u16) -> 
                         host.etiquetas.join(" "),
                         Style::default().fg(tema.paleta.correcto),
                     ),
-                    _ => (salto.clone(), inactivo),
+                    SALTO => {
+                        if let Some(salto) = &host.salto_nombre {
+                            (format!("{} {salto}", tema.glifos.salto), inactivo)
+                        } else if host.tipo == crate::escritorio::TipoHost::Vnc {
+                            (
+                                format!("{} directo", super::tecla(tema, "⚠", "!")),
+                                Style::default().fg(tema.paleta.acento),
+                            )
+                        } else {
+                            (String::new(), inactivo)
+                        }
+                    }
+                    _ => (String::new(), inactivo),
                 };
                 spans.push(Span::styled(
                     disposicion::columna(&texto, usize::from(*ancho), ascii),
@@ -390,21 +424,49 @@ fn estilizar(linea: Line<'static>, seleccionada: bool, app: &App) -> Line<'stati
     }
 }
 
-/// Columna del nombre: siempre el mismo ancho. Con túneles activos el glifo
-/// `⇅` va pegado al nombre y el nombre se acorta lo mismo, de modo que las
-/// columnas de la derecha no se desplazan.
-fn columna_nombre(app: &App, host_id: i64, nombre: &str, ancho: u16) -> Vec<Span<'static>> {
+/// Columna del nombre: siempre el mismo ancho. Un escritorio lleva delante su
+/// glifo de tipo y detrás `· TIPO`; con túneles activos (solo hosts SSH) el
+/// glifo `⇅` va pegado al nombre. Todo se acorta para no mover las columnas
+/// de la derecha.
+fn columna_nombre(app: &App, host: &Host, ancho: u16) -> Vec<Span<'static>> {
     let tema = &app.tema;
     let estilo = Style::default().fg(tema.paleta.texto);
     let ancho = usize::from(ancho);
-    if tuneles_activos_de_host(app, host_id) == 0 || ancho < 4 {
+    if host.tipo.es_escritorio() {
+        let glifo = host.tipo.glifo(tema.ascii);
+        let disponible = ancho.saturating_sub(glifo.chars().count() + 1);
+        let sufijo = format!(" {} {}", tema.glifos.punto_medio, host.tipo.etiqueta());
+        let sufijo = if disponible > sufijo.chars().count() + 2 {
+            sufijo
+        } else {
+            String::new()
+        };
+        let hueco = disponible.saturating_sub(sufijo.chars().count());
+        let nombre = disposicion::recortar(&host.nombre, hueco.max(1), tema.ascii);
+        let usado = glifo.chars().count() + 1 + nombre.chars().count() + sufijo.chars().count();
+        return vec![
+            Span::styled(
+                format!("{glifo} "),
+                Style::default()
+                    .fg(tema.paleta.acento)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(nombre, estilo),
+            Span::styled(sufijo, Style::default().fg(tema.paleta.inactivo)),
+            Span::raw(" ".repeat(ancho.saturating_sub(usado))),
+        ];
+    }
+    if tuneles_activos_de_host(app, host.id) == 0 || ancho < 4 {
         return vec![Span::styled(
-            disposicion::columna(nombre, ancho, tema.ascii),
+            disposicion::columna(&host.nombre, ancho, tema.ascii),
             estilo,
         )];
     }
     vec![
-        Span::styled(disposicion::columna(nombre, ancho - 2, tema.ascii), estilo),
+        Span::styled(
+            disposicion::columna(&host.nombre, ancho - 2, tema.ascii),
+            estilo,
+        ),
         Span::styled(
             format!("{} ", tema.glifos.tuneles),
             Style::default().fg(tema.paleta.acento),
@@ -447,7 +509,7 @@ pub fn glifo_y_color(
     if sesiones == 1 {
         return (tema.glifos.conectado.to_string(), tema.paleta.correcto);
     }
-    if app.aperturas_pendientes.contains(&host_id) {
+    if app.aperturas_pendientes.contains(&host_id) || app.aperturas_escritorio.contains(&host_id) {
         return (tema.glifos.conectando.to_string(), tema.paleta.acento);
     }
     match estado {

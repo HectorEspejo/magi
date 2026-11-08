@@ -948,6 +948,21 @@ impl App {
                 .into_iter()
                 .map(|host| (host.id, host.nombre.clone()))
                 .collect();
+        // Los escritorios no ejecutan snippets: si el destino por etiqueta solo
+        // apunta a ellos, se dice en vez de «no apunta a ningún host».
+        if resueltos.is_empty() {
+            let omitidos = crate::snippets::escritorios_omitidos(&snippet.destinos, &self.hosts);
+            if omitidos > 0 {
+                let nombre = limpio(&snippet.nombre);
+                self.mensaje(
+                    format!(
+                        "«{nombre}» solo apunta a escritorios: los escritorios no ejecutan snippets"
+                    ),
+                    true,
+                );
+                return;
+            }
+        }
         match preparar(&snippet, resueltos, &origen) {
             Ok(Preparacion::Dialogo(dialogo)) => {
                 self.dialogo = Some(Dialogo::Ejecutar(dialogo));

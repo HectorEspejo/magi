@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ────────────────────┐
+│  LISTA                      ⇥ hosts  │
+│────────────────────────────────────  │
+│┌ COMPROBACIÓN PROPIA ───────────────┐│
+││Objetivo: web (proyecto)            ││
+││Comando:  ▏                         ││
+││Se ejecuta con sh -c y los          ││
+││privilegios de la acción, justo     ││
+│└────────────────────────────────────┘│
+│ 4 contenedores · 2 en marcha · 2 caíd│
+└──────────────────────────────────────┘
+ ⇥ hosts  ↵ detalle  l logs  ? más

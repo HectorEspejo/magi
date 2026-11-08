@@ -44,6 +44,21 @@ ignore = [
   # TOML propio es la crate toml) y no hay versión de age sin este árbol.
   # Revisar al actualizar age.
   { id = "RUSTSEC-2026-0374", reason = "basic-toml sin mantener, transitiva de age/i18n-embed; sin alternativa en el stack" },
+  # 2026-11-04 · rustls-pemfile 2.2.0 (sin mantener) es dependencia SOLO de
+  # desarrollo de ironrdp-server 0.13, que se usa únicamente en las pruebas del
+  # cliente RDP de la Fase 12: no entra en el binario publicado. No hay versión
+  # de ironrdp-server sin ella. Revisar al subir IronRDP (la generación nueva
+  # ya no la usa).
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile sin mantener, solo dev-dependency de ironrdp-server para pruebas RDP" },
+  # 2026-11-08 · pin-utils 0.1.1 (sin mantener: su repositorio se archivó el
+  # 1 de octubre de 2026) llega por async-dnssd → sspi 0.23.1 →
+  # ironrdp-connector, que va vendorizado junto a IronRDP (CLAUDE.md: no se
+  # toca el vendor salvo las líneas de adaptación). No lo usa MAGI directamente
+  # y no hay versión de sspi sin él; no entra en el escenario de las funciones
+  # afectadas (pin_mut!/unsafe_pinned! solo se usan dentro de async-dnssd).
+  # Revisar al subir IronRDP/sspi y, si async-dnssd desaparece, quitar esta
+  # excepción. Aviso publicado después de la Fase 13: no lo introduce esta fase.
+  { id = "RUSTSEC-2026-0441", reason = "pin-utils sin mantener, transitiva de sspi/async-dnssd en el vendor de IronRDP; sin alternativa en el stack" },
 ]
 
 [licenses]

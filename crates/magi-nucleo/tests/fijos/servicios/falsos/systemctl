@@ -1,0 +1,110 @@
+#!/bin/sh
+# systemctl falso para las pruebas de servicios.sh.
+echo "systemctl $*" >> "$ESTADO/llamadas"
+case $1 in
+  --version)
+    cat "$ESTADO/systemctl_version" 2>/dev/null || echo "systemd 252 (252.31-1~deb12u1)"
+    ;;
+  list-units)
+    tipo=$(printf '%s' "$2" | sed 's/^--type=//')
+    cat "$ESTADO/list_units_$tipo" 2>/dev/null
+    ;;
+  list-unit-files)
+    tipo=$(printf '%s' "$2" | sed 's/^--type=//')
+    cat "$ESTADO/list_unit_files_$tipo" 2>/dev/null
+    ;;
+  show)
+    shift
+    valor=no
+    props=
+    unidades=
+    while [ "$#" -gt 0 ]; do
+      case $1 in
+        --no-pager) ;;
+        --value) valor=si ;;
+        -p) shift; props="$props $1" ;;
+        -*) ;;
+        *) unidades="$unidades $1" ;;
+      esac
+      shift
+    done
+    primero=si
+    for unidad in $unidades; do
+      if [ "$primero" = no ]; then
+        printf '\n'
+      fi
+      primero=no
+      fichero="$ESTADO/show/$unidad"
+      [ -f "$fichero" ] || continue
+      if [ "$valor" = si ]; then
+        if [ -n "$props" ]; then
+          for prop in $props; do
+            [ -n "$prop" ] && sed -n "s/^$prop=//p" "$fichero"
+          done
+        else
+          cat "$fichero"
+        fi
+      elif [ -n "$props" ]; then
+        for prop in $props; do
+          [ -n "$prop" ] && grep "^$prop=" "$fichero" 2>/dev/null
+        done
+      else
+        cat "$fichero"
+      fi
+    done
+    ;;
+  list-dependencies)
+    reverse=no
+    unidad=
+    for argumento in "$@"; do
+      case $argumento in
+        --reverse) reverse=si ;;
+        -*) ;;
+        *) unidad=$argumento ;;
+      esac
+    done
+    if [ "$reverse" = si ]; then
+      fichero="$ESTADO/deps_reverse/$unidad"
+    else
+      fichero="$ESTADO/deps/$unidad"
+    fi
+    [ -f "$fichero" ] || exit 1
+    cat "$fichero"
+    ;;
+  cat)
+    unidad=
+    for argumento in "$@"; do
+      case $argumento in
+        -*) ;;
+        *) unidad=$argumento ;;
+      esac
+    done
+    [ -f "$ESTADO/cat/$unidad" ] || exit 1
+    cat "$ESTADO/cat/$unidad"
+    ;;
+  start|stop|restart|reload|enable|disable)
+    accion=$1
+    unidad=$2
+    fichero="$ESTADO/show/$unidad"
+    [ -f "$fichero" ] || exit 1
+    nuevo=$(cat "$ESTADO/accion_estado" 2>/dev/null) || nuevo=
+    if [ -n "$nuevo" ]; then
+      case $accion in
+        enable|disable) sed -i "s/^UnitFileState=.*/UnitFileState=$nuevo/" "$fichero" ;;
+        *) sed -i "s/^ActiveState=.*/ActiveState=$nuevo/" "$fichero" ;;
+      esac
+    fi
+    dormir=$(cat "$ESTADO/accion_dormir" 2>/dev/null) || dormir=
+    [ -n "$dormir" ] && exec sleep "$dormir"
+    codigo=$(cat "$ESTADO/accion_codigo" 2>/dev/null) || codigo=0
+    if [ "$codigo" != 0 ]; then
+      echo "Job for $unidad failed because the control process exited with error code." >&2
+    fi
+    exit "$codigo"
+    ;;
+  is-active)
+    unidad=$2
+    sed -n 's/^ActiveState=//p' "$ESTADO/show/$unidad" 2>/dev/null
+    ;;
+esac
+exit 0

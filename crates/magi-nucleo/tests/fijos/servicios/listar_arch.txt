@@ -1,0 +1,40 @@
+MAGI_PRIV=root
+MAGI_SYSTEMD=256
+MAGI_BLOQUE service
+Id=docker.service
+Names=docker.service
+Description=Docker Application Container Engine
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/usr/lib/systemd/system/docker.service
+ExecStart={ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+ExecMainPID=1100
+MemoryCurrent=209715200
+ActiveEnterTimestampMonotonic=5000000000
+MAGI_FIN_BLOQUE
+MAGI_BLOQUE service
+Id=sshd.service
+Names=sshd.service
+Description=OpenSSH Daemon
+LoadState=loaded
+ActiveState=active
+SubState=running
+Type=notify
+Result=success
+UnitFileState=enabled
+CanReload=yes
+FragmentPath=/usr/lib/systemd/system/sshd.service
+ExecMainPID=702
+MemoryCurrent=8388608
+ActiveEnterTimestampMonotonic=4990000000
+MAGI_FIN_BLOQUE
+MAGI_DIARIO=todo
+MAGI_RELOJ=1794141533 7200
+MAGI_MOTOR=docker 29.7.2
+MAGI_CONTENEDOR {"Command":"\"sleep infinity\"","CreatedAt":"2026-11-08 10:00:00 +0100 CET","ID":"0a1b2c3d4e5f","Image":"alpine:3.20","Labels":"","Mounts":"","Names":"prueba","Networks":"bridge","Ports":"","RunningFor":"3 hours ago","Size":"0B","State":"created","Status":"Created"}
+MAGI_FIN

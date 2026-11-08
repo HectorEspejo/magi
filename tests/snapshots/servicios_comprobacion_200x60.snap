@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/vistas_o.rs
+---
+┌ MAGI · SERVICIOS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── hetzner-01 · systemd 252 · docker 27.3 · hace NN s ─┐
+│  HOSTS (7)               │   1 Servicios (8)   2 Timers (2)  ▸3 Contenedores (4)                                                                                                                     │
+│───────────────────────── │   NOMBRE                                       ESTADO           IMAGEN                                       PUERTOS                                    CPU    MEM        │
+│  ▲ Toda la flota         │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│  ◐ backup-nas            │   ▼ copias · compose · 1                                                                                                                                                  │
+│  ○ dgx-spark             │    copias-restic-1                              ○ parado (0)     ghcr.io/ejemplo/app:1.4                      127.0.0.1:8080->80/tcp                     —      —         │
+│▸ ● hetzner-01            │   ▼ web · compose · 2                                                                                                                                                     │
+│  ● hetzner-02            │    web-app-1                                    ● en marcha      ghcr.io/ejemplo/app:1.4                      127.0.0.1:8080->80/tcp                     —      —         │
+│  ◐ mac-mini-m1           │    web-worker-1                                 ✕ salió (1)      ghcr.io/ejemplo/app:1.4                      127.0.0.1:8080->80/tcp                     —      —         │
+│  ✕ rincon-dev            │   ▼ sin proyecto · 1                                                                                                                                                      │
+│  ● vps-openclaw          │    panel                                        ✕ unhealthy ✕un… ghcr.io/ejemplo/app:1.4                      127.0.0.1:8080->80/tcp                     —      —         │
+│                          │  4 contenedores · 2 en marcha · 2 caídos                                                                                                                                  │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                    ┌ COMPROBACIÓN PROPIA ─────────────────────────────────────────────────┐                                                               │
+│                          │                                    │Objetivo: web (proyecto)                                              │                                                               │
+│                          │                                    │Comando:  ▏                                                           │                                                               │
+│                          │                                    │Se ejecuta con sh -c y los privilegios de la acción, justo antes.     │                                                               │
+│                          │                                    │ ↵ guardar · esc cancelar                                             │                                                               │
+│                          │                                    └──────────────────────────────────────────────────────────────────────┘                                                               │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+│                          │                                                                                                                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ detalle  l logs  A arrancar  P parar  R reiniciar  c comprobación  ↓↑ mover  / filtrar  1 servicios  2 timers  3 contenedores  ! sudo  r refrescar  esc volver  ? ayuda

@@ -8,6 +8,8 @@ pub mod cliente_remoto;
 pub mod conexiones;
 pub mod difusion;
 pub mod ejecuciones;
+pub mod escritorios;
+pub mod servicios;
 pub mod sesiones;
 pub mod sftp;
 pub mod transferencias;
@@ -140,6 +142,16 @@ pub struct EstadoServidor {
     /// Túneles automáticos que el usuario paró a mano: no se vuelven a levantar
     /// hasta que el host se quede sin pestañas ni SFTP (el siguiente ciclo).
     pub tuneles_parados: std::collections::HashSet<(i64, i64)>,
+    /// Sesiones de escritorio remoto (Fase 12) y el servidor del visor.
+    pub escritorios: escritorios::Escritorios,
+    /// Acciones y suscripciones de log de la vista Servicios (Fase 13): las
+    /// acciones son trabajo del servidor y las suscripciones no.
+    pub servicios: servicios::Servicios,
+    /// Cola serial por cliente de los mensajes de la vista Servicios. Cada
+    /// ventana tiene su worker y los procesa en orden: sin esto, dos mensajes
+    /// del mismo cliente podían ejecutarse a la vez y dejar una suscripción de
+    /// log huérfana (M1 de la revisión adversarial).
+    pub servicios_tx: HashMap<u32, mpsc::UnboundedSender<MensajeCliente>>,
 }
 
 impl EstadoServidor {
@@ -166,6 +178,8 @@ impl EstadoServidor {
                 .iter()
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count() as u32,
+            escritorios: self.escritorios.cuenta(),
+            acciones_servicio: self.servicios.cuantas_acciones(),
         }
     }
 }
@@ -270,6 +284,9 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         ejecuciones: ejecuciones::Ejecuciones::default(),
         reenvios: Arc::new(crate::conexion::reenvios::Reenvios::default()),
         tuneles_parados: std::collections::HashSet::new(),
+        escritorios: escritorios::Escritorios::nuevo(),
+        servicios: servicios::Servicios::default(),
+        servicios_tx: HashMap::new(),
     }));
 
     let (tx_cola, rx_cola) = mpsc::unbounded_channel::<()>();
@@ -298,6 +315,10 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
     tokio::spawn(ejecuciones::revisar(estado.clone()));
+    tokio::spawn(escritorios::revisar(estado.clone()));
+    if let Some(avisos) = estado.lock().await.escritorios.tomar_avisos() {
+        tokio::spawn(escritorios::bucle_avisos(estado.clone(), avisos));
+    }
 
     loop {
         tokio::select! {
@@ -510,9 +531,11 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
             let mut estado_bloqueado = estado.lock().await;
             let ocupado = !estado_bloqueado.clientes.is_empty()
                 || !estado_bloqueado.sesiones.is_empty()
+                || estado_bloqueado.escritorios.cuenta() > 0
                 || estado_bloqueado.transferencias.hay_vivas()
                 || tuneles::hay_activos(&estado_bloqueado)
-                || estado_bloqueado.ejecuciones.hay_en_curso();
+                || estado_bloqueado.ejecuciones.hay_en_curso()
+                || estado_bloqueado.servicios.hay_acciones();
             if !ocupado {
                 match estado_bloqueado.vacio_desde {
                     None => {
@@ -610,8 +633,9 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
 
     // Fase 1: anotaciones y estado, sin red.
     ejecuciones::cancelar_todas_al_apagar(estado).await;
+    servicios::apagar(estado).await;
     let tuneles = tuneles::retirar_todos(estado, "el servidor se apaga").await;
-    let (conexiones, rutas) = {
+    let (conexiones, rutas, recursos_escritorios) = {
         let mut estado_bloqueado = estado.lock().await;
         let bd = estado_bloqueado.bd.clone();
         for (_, sesion) in estado_bloqueado.sesiones.drain() {
@@ -645,10 +669,19 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
             transferencias::emitir_cierre(&bd, cierre);
         }
         estado_bloqueado.pendientes.clear();
+        // Primero las sesiones de escritorio (con su difusión de lista vacía)
+        // y después se sueltan las ventanas.
+        let bd_escritorios = estado_bloqueado.bd.clone();
+        let recursos_escritorios = estado_bloqueado
+            .escritorios
+            .preparar_apagado(&bd_escritorios);
+        escritorios::difundir_lista(&mut estado_bloqueado);
         estado_bloqueado.clientes.clear();
+        estado_bloqueado.servicios_tx.clear();
         (
             estado_bloqueado.pool.vaciar(),
             estado_bloqueado.rutas.clone(),
+            recursos_escritorios,
         )
     };
 
@@ -658,6 +691,9 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
             .into_iter()
             .map(|tunel| tokio::spawn(tuneles::cerrar_retirado(tunel)))
             .collect();
+        tareas.push(tokio::spawn(escritorios::cerrar_recursos(
+            recursos_escritorios,
+        )));
         sftp::cerrar_todos(estado).await;
         tareas.extend(
             conexiones
@@ -687,7 +723,7 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
 async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     let (lectura, escritura) = stream.into_split();
     let mut entrada = FramedRead::new(lectura, crate::protocolo::codec());
-    let tx_escritura = cliente_remoto::lanzar_escritura(escritura);
+    let (tx_escritura, pendientes) = cliente_remoto::lanzar_escritura(escritura);
 
     // Saludo: el primer mensaje debe ser `Hola` con la versión correcta.
     let saludo = match tokio::time::timeout(Duration::from_secs(10), entrada.next()).await {
@@ -747,6 +783,7 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 VERSION_PROTOCOLO,
                 pid_cliente,
                 tx_escritura.clone(),
+                pendientes,
             ),
         );
         cliente_id
@@ -786,6 +823,44 @@ fn enviar_linea(tx: &mpsc::UnboundedSender<MensajeServidor>, mensaje: MensajeSer
     tx.send(mensaje).is_ok()
 }
 
+/// Encola un mensaje de la vista Servicios en la cola serial de su cliente,
+/// creando el worker de esa ventana si es el primero. El worker procesa en
+/// orden y para en cuanto la ventana deja de estar conectada (M1).
+async fn encolar_servicios(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    cliente_id: u32,
+    mensaje: MensajeCliente,
+) {
+    let (tx, nueva) = {
+        let mut estado_bloqueado = estado.lock().await;
+        match estado_bloqueado.servicios_tx.get(&cliente_id) {
+            Some(tx) => (tx.clone(), None),
+            None => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                estado_bloqueado.servicios_tx.insert(cliente_id, tx.clone());
+                (tx, Some(rx))
+            }
+        }
+    };
+    if let Some(mut rx) = nueva {
+        let estado_worker = estado.clone();
+        tokio::spawn(async move {
+            while let Some(mensaje) = rx.recv().await {
+                let conectado = estado_worker
+                    .lock()
+                    .await
+                    .clientes
+                    .contains_key(&cliente_id);
+                if !conectado {
+                    break;
+                }
+                servicios::manejar(&estado_worker, cliente_id, mensaje).await;
+            }
+        });
+    }
+    let _ = tx.send(mensaje);
+}
+
 /// `Bienvenida` con la versión, el pid del servidor, las sesiones vivas y la
 /// cola de transferencias (para que una ventana nueva la vea entera).
 async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id: u32) {
@@ -803,8 +878,16 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         transferencias: estado_bloqueado.transferencias.info(),
         tuneles: tuneles::lista(&estado_bloqueado),
         ejecuciones: estado_bloqueado.ejecuciones.info(),
+        acciones_servicio: estado_bloqueado.servicios.acciones(),
     };
     difusion::enviar(cliente, mensaje);
+    // La lista de escritorios va detrás de la Bienvenida cuando hay alguna
+    // sesión: es una difusión completa más, como la de sesiones (T27). Sin
+    // escritorios no se manda nada: la ventana arranca con la lista vacía.
+    let lista = estado_bloqueado.escritorios.lista();
+    if !lista.is_empty() {
+        difusion::enviar(cliente, MensajeServidor::Escritorios { lista });
+    }
 }
 
 /// Despacha un mensaje de un cliente; devuelve si la conexión continúa.
@@ -819,8 +902,18 @@ async fn manejar_mensaje(
             cols,
             filas,
             comandos_iniciales,
+            orden,
         } => {
-            abrir_sesion(estado, cliente_id, host_id, cols, filas, comandos_iniciales).await;
+            abrir_sesion(
+                estado,
+                cliente_id,
+                host_id,
+                cols,
+                filas,
+                comandos_iniciales,
+                orden,
+            )
+            .await;
         }
         MensajeCliente::Adjuntar {
             sesion_id,
@@ -1174,6 +1267,86 @@ async fn manejar_mensaje(
         MensajeCliente::Adios => {
             return false;
         }
+        // Fase 12: escritorios remotos. Abrir, reconectar y pedir enlace
+        // pueden tardar (red, diálogos): van a su propia tarea para no parar
+        // el bucle de lectura de esta ventana.
+        MensajeCliente::AbrirEscritorio {
+            peticion_id,
+            host_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                escritorios::abrir(&estado_tarea, cliente_id, peticion_id, host_id).await;
+            });
+        }
+        MensajeCliente::PedirEnlace {
+            peticion_id,
+            escritorio_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                escritorios::pedir_enlace(&estado_tarea, cliente_id, peticion_id, escritorio_id)
+                    .await;
+            });
+        }
+        MensajeCliente::ReconectarEscritorio {
+            peticion_id,
+            escritorio_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                escritorios::reconectar(&estado_tarea, cliente_id, peticion_id, escritorio_id)
+                    .await;
+            });
+        }
+        MensajeCliente::CerrarEscritorio { escritorio_id } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                escritorios::cerrar(&estado_tarea, cliente_id, escritorio_id).await;
+            });
+        }
+        MensajeCliente::RespuestaHuellaEscritorio {
+            peticion_id,
+            aceptada,
+        } => {
+            let mut estado_bloqueado = estado.lock().await;
+            estado_bloqueado
+                .escritorios
+                .resolver_huella(cliente_id, peticion_id, aceptada);
+        }
+        MensajeCliente::Credenciales {
+            peticion_id,
+            usuario,
+            dominio,
+            contrasena,
+            recordar,
+        } => {
+            let credenciales = crate::escritorio::CredencialesEscritorio {
+                usuario,
+                dominio,
+                contrasena: contrasena.0,
+                recordar,
+            };
+            let mut estado_bloqueado = estado.lock().await;
+            estado_bloqueado.escritorios.resolver_credenciales(
+                cliente_id,
+                peticion_id,
+                credenciales,
+            );
+        }
+        // ------------------------------------------------------- servicios (v8)
+        // Cada ventana tiene su cola serial: los mensajes de servicios se
+        // procesan en orden (M1 de la revisión adversarial). El bucle de
+        // lectura del cliente no espera a que hablen con el host.
+        MensajeCliente::ListarServicios { .. }
+        | MensajeCliente::PedirConsumo { .. }
+        | MensajeCliente::DetalleServicio { .. }
+        | MensajeCliente::ComprobarSudo { .. }
+        | MensajeCliente::AccionServicio { .. }
+        | MensajeCliente::SeguirLog { .. }
+        | MensajeCliente::PararLog { .. } => {
+            encolar_servicios(estado, cliente_id, mensaje).await;
+        }
         // El saludo ya se consumió en `tarea_conexion`.
         MensajeCliente::Hola { .. } => {
             let estado_bloqueado = estado.lock().await;
@@ -1249,9 +1422,18 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
         })
         .map(|activo| activo.tunel_id)
         .collect();
+    // Su cola de servicios deja de admitir mensajes: el worker termina al
+    // vaciarse y, si aún procesa alguno, ya no encontrará la ventana.
+    estado_bloqueado.servicios_tx.remove(&cliente_id);
     estado_bloqueado.clientes.remove(&cliente_id);
     difundir_lista(&mut estado_bloqueado);
     drop(estado_bloqueado);
+    // Los diálogos de escritorio que solo podía contestar esta ventana se
+    // sueltan y sus aperturas fallan en vez de esperar al plazo.
+    escritorios::cliente_desconectado(estado, cliente_id).await;
+    // Las suscripciones de log de esta ventana se cortan; las acciones de
+    // servicio siguen: son trabajo del servidor (§3.3, §3.4).
+    servicios::cliente_desconectado(estado, cliente_id).await;
     for tunel_id in activando {
         tuneles::caido_por_solicitante(estado, tunel_id, "la ventana que lo pidió se cerró").await;
     }
@@ -1273,6 +1455,7 @@ async fn abrir_sesion(
     cols: u16,
     filas: u16,
     comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
+    orden: Option<crate::protocolo::OrdenPestana>,
 ) {
     // Lo que se escribe en la shell viene del cliente: se acota.
     let comandos_iniciales: Vec<crate::protocolo::ComandoInicial> = comandos_iniciales
@@ -1312,6 +1495,45 @@ async fn abrir_sesion(
             );
         }
         return;
+    };
+
+    // Pestaña con orden (D248): el servidor arma el comando a partir del tipo
+    // cerrado `OrdenPestana`; el cliente nunca manda texto para ejecutar. Sin
+    // privilegios (p. ej. una shell de contenedor que exige sudo) no se abre.
+    let comandos_iniciales = match orden {
+        Some(orden) => {
+            let privilegio = estado.lock().await.servicios.privilegio(host_id);
+            match magi_nucleo::servicios::orden::comando_pestana(&orden, privilegio) {
+                Some(texto) => {
+                    let mut comandos = comandos_iniciales;
+                    comandos.push(crate::protocolo::ComandoInicial {
+                        texto: if texto.ends_with('\n') {
+                            texto
+                        } else {
+                            format!("{texto}\n")
+                        },
+                        // Se reescribe al reconectar, como el snippet al
+                        // conectar: la pestaña sigue siendo la misma orden.
+                        repetir: true,
+                    });
+                    comandos
+                }
+                None => {
+                    let estado_bloqueado = estado.lock().await;
+                    if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+                        difusion::enviar(
+                            cliente,
+                            MensajeServidor::Error {
+                                mensaje: "no se pudo armar la orden de la pestaña: el nombre del contenedor o de la unidad no es válido para acciones".to_string(),
+                                peticion_id: None,
+                            },
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+        None => comandos_iniciales,
     };
 
     let mut estado_bloqueado = estado.lock().await;
@@ -2536,12 +2758,13 @@ fn imprime_cabecera_servidor(
     }
     match trabajo {
         Some(trabajo) => println!(
-            "sesiones {} · clientes {} · transferencias {} · túneles {} · ejecuciones {}",
+            "sesiones {} · clientes {} · transferencias {} · túneles {} · ejecuciones {} · acciones de servicio {}",
             trabajo.sesiones,
             clientes.unwrap_or(0),
             trabajo.transferencias,
             trabajo.tuneles,
             trabajo.ejecuciones,
+            trabajo.acciones_servicio,
         ),
         None => println!("la versión anterior no informa de lo que custodia"),
     }
@@ -2549,6 +2772,43 @@ fn imprime_cabecera_servidor(
 
 /// `magi servidor estado`: pid, versión de protocolo, sesiones, clientes y la
 /// cola de transferencias (en curso y en cola por host).
+/// Lee la respuesta al saludo (Bienvenida o rechazo) y, si es una
+/// Bienvenida, la lista de escritorios que el servidor manda justo detrás.
+/// Un servidor anterior a la Fase 12 no manda la lista: no se espera más de un
+/// segundo por ella.
+async fn leer_bienvenida(
+    stream: &mut UnixStream,
+) -> Result<(MensajeServidor, Vec<crate::protocolo::InfoEscritorio>)> {
+    let futura = async {
+        let mut lector = FramedRead::new(
+            &mut *stream,
+            LinesCodec::new_with_max_length(crate::protocolo::LINEA_MAXIMA),
+        );
+        let Some(Ok(linea)) = lector.next().await else {
+            bail!("el servidor cerró la conexión");
+        };
+        let mensaje = decodificar::<MensajeServidor>(&linea).map_err(anyhow::Error::msg)?;
+        let mut escritorios = Vec::new();
+        if matches!(mensaje, MensajeServidor::Bienvenida { .. }) {
+            // La lista de escritorios va justo detrás; un servidor anterior a
+            // la Fase 12 no la manda y no se espera más de un segundo.
+            if let Ok(Some(Ok(linea))) =
+                tokio::time::timeout(Duration::from_secs(1), lector.next()).await
+            {
+                if let Ok(MensajeServidor::Escritorios { lista }) =
+                    decodificar::<MensajeServidor>(&linea)
+                {
+                    escritorios = lista;
+                }
+            }
+        }
+        Ok((mensaje, escritorios))
+    };
+    tokio::time::timeout(Duration::from_secs(5), futura)
+        .await
+        .map_err(|_| anyhow::anyhow!("el servidor no respondió en 5 s"))?
+}
+
 pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
     let ruta = ruta_socket(rutas);
     let mut stream = match UnixStream::connect(&ruta).await {
@@ -2563,7 +2823,8 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
     };
     let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    match leer_respuesta(&mut stream).await? {
+    let (respuesta, escritorios) = leer_bienvenida(&mut stream).await?;
+    match respuesta {
         MensajeServidor::Bienvenida {
             version,
             version_app,
@@ -2573,6 +2834,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             transferencias,
             tuneles,
             ejecuciones,
+            acciones_servicio,
             ..
         } => {
             let trabajo = crate::protocolo::TrabajoServidor {
@@ -2585,12 +2847,14 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                     .iter()
                     .filter(|tunel| tunel.estado.en_marcha())
                     .count() as u32,
+                escritorios: escritorios.len() as u32,
                 ejecuciones: ejecuciones
                     .iter()
                     .filter(|ejecucion| {
                         ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso
                     })
                     .count() as u32,
+                acciones_servicio: acciones_servicio.len() as u32,
             };
             imprime_cabecera_servidor(
                 Some(&version_app),
@@ -2618,6 +2882,27 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                         desde,
                         sesion.ventanas,
                         sesion.identidad,
+                    );
+                }
+            }
+            if escritorios.is_empty() {
+                println!("Sin escritorios abiertos.");
+            } else {
+                println!(
+                    "{:<6} {:<10} {:<12} {:<24} TIPO",
+                    "ID", "ESTADO", "DESDE", "PESTAÑA"
+                );
+                for escritorio in &escritorios {
+                    let desde = chrono::DateTime::from_timestamp(escritorio.desde, 0)
+                        .map(|fecha| fecha.format("%H:%M").to_string())
+                        .unwrap_or_default();
+                    println!(
+                        "{:<6} {:<10} {:<12} {:<24} {}",
+                        escritorio.id,
+                        escritorio.estado.como_texto(),
+                        desde,
+                        escritorio.nombre,
+                        escritorio.tipo.etiqueta(),
                     );
                 }
             }
@@ -2665,16 +2950,27 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
 /// ejecuciones en curso, además de sesiones y túneles.
 fn trabajo_que_se_pierde(
     sesiones: usize,
+    escritorios: usize,
     transferencias: usize,
     tuneles: usize,
     ejecuciones: usize,
+    acciones_servicio: usize,
 ) -> Option<String> {
-    if sesiones == 0 && transferencias == 0 && tuneles == 0 && ejecuciones == 0 {
+    if sesiones == 0
+        && escritorios == 0
+        && transferencias == 0
+        && tuneles == 0
+        && ejecuciones == 0
+        && acciones_servicio == 0
+    {
         return None;
     }
     let mut partes = Vec::new();
     if sesiones > 0 {
         partes.push(format!("{sesiones} sesión(es) abierta(s)"));
+    }
+    if escritorios > 0 {
+        partes.push(format!("{escritorios} escritorio(s) abierto(s)"));
     }
     if transferencias > 0 {
         partes.push(format!(
@@ -2687,6 +2983,11 @@ fn trabajo_que_se_pierde(
     if ejecuciones > 0 {
         partes.push(format!(
             "{ejecuciones} ejecución(es) de snippets en curso (se cancelarán)"
+        ));
+    }
+    if acciones_servicio > 0 {
+        partes.push(format!(
+            "{acciones_servicio} acción(es) de servicio en curso (seguirán en el host y no se anotarán)"
         ));
     }
     Some(format!("Hay {}", unir_con_y(&partes)))
@@ -2722,19 +3023,25 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     // El pid del otro extremo del socket, por si no habla nuestro protocolo.
     let pid_par = pid_del_par(&stream);
     saludo_y_envio(&mut stream).await?;
-    let (cuantas, transferencias_vivas, tuneles_vivos, ejecuciones_vivas) = match leer_respuesta(
-        &mut stream,
-    )
-    .await?
-    {
+    let (respuesta, escritorios) = leer_bienvenida(&mut stream).await?;
+    let (
+        cuantas,
+        escritorios_vivos,
+        transferencias_vivas,
+        tuneles_vivos,
+        ejecuciones_vivas,
+        acciones_vivas,
+    ) = match respuesta {
         MensajeServidor::Bienvenida {
             sesiones,
             transferencias,
             tuneles,
             ejecuciones,
+            acciones_servicio,
             ..
         } => (
             sesiones.len(),
+            escritorios.len(),
             transferencias
                 .iter()
                 .filter(|transferencia| !transferencia.estado.terminada())
@@ -2747,6 +3054,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
                 .iter()
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
                 .count(),
+            acciones_servicio.len(),
         ),
         MensajeServidor::VersionIncompatible {
             version,
@@ -2775,9 +3083,11 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
     if !si {
         if let Some(aviso) = trabajo_que_se_pierde(
             cuantas,
+            escritorios_vivos,
             transferencias_vivas,
             tuneles_vivos,
             ejecuciones_vivas,
+            acciones_vivas,
         ) {
             print!("{aviso}. ¿Cerrarlas y apagar el servidor? [s/N] ");
             use std::io::Write as _;
@@ -2942,25 +3252,6 @@ async fn saludo_y_envio(stream: &mut UnixStream) -> Result<()> {
     Ok(())
 }
 
-/// Lee una línea de respuesta del socket y la decodifica (con timeout).
-async fn leer_respuesta(stream: &mut UnixStream) -> Result<MensajeServidor> {
-    let futura = async {
-        let mut lector = FramedRead::new(
-            stream,
-            LinesCodec::new_with_max_length(crate::protocolo::LINEA_MAXIMA),
-        );
-        match lector.next().await {
-            Some(Ok(linea)) => Ok(linea),
-            Some(Err(error)) => Err(anyhow::anyhow!("respuesta no válida del servidor: {error}")),
-            None => Err(anyhow::anyhow!("el servidor cerró la conexión")),
-        }
-    };
-    let linea = tokio::time::timeout(Duration::from_secs(5), futura)
-        .await
-        .map_err(|_| anyhow::anyhow!("el servidor no respondió en 5 s"))??;
-    decodificar::<MensajeServidor>(&linea).map_err(|motivo| anyhow::anyhow!("{motivo}"))
-}
-
 fn formato_estado(estado: &crate::protocolo::EstadoSesionRemota) -> &'static str {
     use crate::protocolo::EstadoSesionRemota::*;
     match estado {
@@ -2980,17 +3271,22 @@ mod pruebas {
     #[test]
     fn el_aviso_de_parada_cuenta_las_transferencias() {
         // Solo transferencias: es trabajo que se pierde y hay que preguntar.
-        let aviso = trabajo_que_se_pierde(0, 2, 0, 0).expect("hay trabajo");
+        let aviso = trabajo_que_se_pierde(0, 0, 2, 0, 0, 0).expect("hay trabajo");
         assert!(aviso.contains("2 transferencia(s)"), "{aviso}");
         assert!(aviso.contains("se cancelarán"), "{aviso}");
+        // Un escritorio abierto también es trabajo que se pierde.
+        let aviso = trabajo_que_se_pierde(0, 1, 0, 0, 0, 0).expect("hay trabajo");
+        assert!(aviso.contains("1 escritorio(s)"), "{aviso}");
         // Sin trabajo no hay aviso.
-        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0), None);
+        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0, 0, 0), None);
         // Todo junto se une con comas y «y».
-        let aviso = trabajo_que_se_pierde(1, 1, 1, 1).expect("hay trabajo");
+        let aviso = trabajo_que_se_pierde(1, 1, 1, 1, 1, 1).expect("hay trabajo");
         assert!(aviso.contains("1 sesión(es)"), "{aviso}");
+        assert!(aviso.contains("1 escritorio(s)"), "{aviso}");
         assert!(aviso.contains("1 transferencia(s)"), "{aviso}");
         assert!(aviso.contains("1 túnel(es)"), "{aviso}");
         assert!(aviso.contains("1 ejecución(es)"), "{aviso}");
+        assert!(aviso.contains("1 acción(es) de servicio"), "{aviso}");
         assert!(aviso.contains(" y "), "{aviso}");
     }
 }

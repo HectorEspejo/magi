@@ -47,6 +47,7 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         "VERIFICACIONES_HOST",
         "DELIBERACIONES",
         "SINCRONIZACIONES_DIR",
+        "COMPROBACIONES_SERVICIO",
     ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
@@ -82,7 +83,7 @@ fn migracion_desde_fase1_conserva_los_datos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].nombre, "viejo");
@@ -697,7 +698,7 @@ fn migracion_desde_fase5_conserva_los_hosts_sin_snippet_al_conectar() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
 
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
@@ -1440,7 +1441,7 @@ fn migracion_desde_fase7_estrena_las_sincronizaciones() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let hosts = almacen.listar_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].servicios, "nginx");
@@ -1857,7 +1858,7 @@ fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version_esquema, 7);
+    assert_eq!(version_esquema, magi::almacen::migraciones::VERSION_BD);
 
     // Una sola fila de este equipo, con uuid, estado y reloj.
     let equipos = magi::almacen::equipos::listar(almacen.conexion()).unwrap();
@@ -1900,7 +1901,7 @@ fn la_migracion_7_rellena_versiones_y_estrena_equipos_lapidas_y_conflictos() {
     assert_eq!(conflictos, 0);
 }
 
-/// Crear cualquier elemento de las seis tablas que viajan deja uuid, versión y
+/// Crear cualquier elemento de las tablas que viajan deja uuid, versión y
 /// vector de este equipo; los uuid son distintos entre filas y el de la
 /// identidad es el UUIDv5 de su huella.
 #[test]
@@ -1926,6 +1927,14 @@ fn crear_deja_version_y_vector_de_este_equipo_en_cada_tabla() {
     let sincronizacion = almacen
         .crear_sincronizacion(&sincronizacion_de(host, "web"))
         .unwrap();
+    let comprobacion = almacen
+        .guardar_comprobacion(
+            host,
+            magi_nucleo::servicios::TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t",
+        )
+        .unwrap();
 
     let filas = [
         ("GRUPOS", grupo),
@@ -1934,6 +1943,7 @@ fn crear_deja_version_y_vector_de_este_equipo_en_cada_tabla() {
         ("TUNELES", tunel),
         ("SNIPPETS", snippet),
         ("SINCRONIZACIONES_DIR", sincronizacion),
+        ("COMPROBACIONES_SERVICIO", comprobacion),
     ];
     for (tabla, id) in filas {
         comprobar_nueva(&almacen, tabla, id);
@@ -2440,4 +2450,187 @@ fn la_version_crece_de_forma_monotona_y_el_reloj_la_acompana() {
     );
     // El uuid del elemento no cambia al editar.
     assert_eq!(version_de_fila(&almacen, "HOSTS", host).0.len(), 36);
+}
+
+// --------------------------------------- Fase 13: comprobaciones y fallos
+
+/// La migración 9 estrena COMPROBACIONES_SERVICIO y la columna
+/// SONDEOS.fallos_json, y una base de la fase 9 (user_version 6) sube a 9 sin
+/// perder sus hosts.
+#[test]
+fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 9);
+    let tablas: Vec<String> = almacen
+        .conexion()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .unwrap()
+        .query_map([], |fila| fila.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap();
+    assert!(tablas.contains(&"COMPROBACIONES_SERVICIO".to_string()));
+    let columnas: Vec<String> = almacen
+        .conexion()
+        .prepare("PRAGMA table_info(SONDEOS)")
+        .unwrap()
+        .query_map([], |fila| fila.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap();
+    assert!(
+        columnas.contains(&"fallos_json".to_string()),
+        "SONDEOS gana fallos_json: {columnas:?}"
+    );
+
+    // Base de la fase 9: migraciones 1 a 6 y user_version 6.
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        for migracion in &magi::almacen::migraciones::MIGRACIONES[..6] {
+            conexion.execute_batch(migracion).unwrap();
+        }
+        conexion.pragma_update(None, "user_version", 6).unwrap();
+        conexion
+            .execute(
+                "INSERT INTO HOSTS (nombre, direccion, puerto, opciones_extra, origen,
+                                    creado_en, actualizado_en)
+                 VALUES ('viejo', '192.0.2.9', 22, '', 'manual',
+                         '2026-01-01T00:00:00+01:00', '2026-01-01T00:00:00+01:00')",
+                [],
+            )
+            .unwrap();
+    }
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 9);
+    assert_eq!(
+        almacen.listar_hosts().unwrap().len(),
+        1,
+        "el host se conserva"
+    );
+}
+
+/// El CRUD de comprobaciones propias: valida objetivo y orden, solo hosts
+/// ssh, upsert por host y objetivo, sube la versión al editar y deja lápida al
+/// borrar.
+#[test]
+fn el_crud_de_comprobaciones_servicio_valida_y_deja_lapida() {
+    use magi_nucleo::servicios::TipoObjetivo;
+
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("web"), Origen::Manual).unwrap();
+
+    // Objetivo u orden que no valen.
+    assert!(almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx", "nginx -t")
+        .is_err());
+    assert!(almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx.service", "a\nb")
+        .is_err());
+    // Solo los hosts ssh.
+    let escritorio = almacen
+        .crear_host(
+            &DatosHost {
+                nombre: "win-01".to_string(),
+                direccion: "192.0.2.30".to_string(),
+                puerto: 3389,
+                tipo: magi_nucleo::escritorio::TipoHost::Rdp,
+                ..DatosHost::default()
+            },
+            Origen::Manual,
+        )
+        .unwrap();
+    assert!(almacen
+        .guardar_comprobacion(
+            escritorio,
+            TipoObjetivo::Unidad,
+            "nginx.service",
+            "nginx -t"
+        )
+        .is_err());
+
+    let id = almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx.service", "nginx -t")
+        .unwrap();
+    comprobar_nueva(&almacen, "COMPROBACIONES_SERVICIO", id);
+    let version = version_de_fila(&almacen, "COMPROBACIONES_SERVICIO", id).1;
+
+    // Upsert: la misma clave natural no duplica la fila y la edición sube la
+    // versión con el reloj híbrido.
+    let id_otra_vez = almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx.service", "nginx -t -q")
+        .unwrap();
+    assert_eq!(id_otra_vez, id);
+    assert_eq!(almacen.comprobaciones_de_host(host).unwrap().len(), 1);
+    let (_, version_editada, _) = version_de_fila(&almacen, "COMPROBACIONES_SERVICIO", id);
+    assert!(ms_de_version(&version_editada) > ms_de_version(&version));
+
+    let comprobacion = almacen
+        .obtener_comprobacion(host, TipoObjetivo::Unidad, "nginx.service")
+        .unwrap()
+        .expect("existe");
+    assert_eq!(comprobacion.comando, "nginx -t -q");
+    assert_eq!(comprobacion.objetivo.nombre, "nginx.service");
+    assert_eq!(comprobacion.host_id, host);
+
+    // Borrar deja lápida.
+    let (uuid, _, _) = version_de_fila(&almacen, "COMPROBACIONES_SERVICIO", id);
+    almacen.borrar_comprobacion(id).unwrap();
+    assert!(almacen.comprobaciones_de_host(host).unwrap().is_empty());
+    let lapida = magi::almacen::lapidas::obtener(almacen.conexion(), &uuid)
+        .unwrap()
+        .expect("el borrado deja lápida");
+    assert_eq!(lapida.tipo, "comprobacion_servicio");
+    assert_eq!(lapida.nombre, "nginx.service");
+}
+
+/// SONDEOS guarda los fallos del sondeo ampliado en fallos_json: NULL si el
+/// host no respondió y, si respondió, el JSON aunque no haya fallos.
+#[test]
+fn los_sondeos_guardan_los_fallos_del_sondeo_ampliado() {
+    use magi_nucleo::servicios::{FallosContenedores, FallosSondeo, FallosUnidades, MotorNombre};
+
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("web"), Origen::Manual).unwrap();
+    let mut sondeo = magi::modelo::Sondeo::vacio(host);
+    sondeo.resultado = magi::modelo::ResultadoSondeo::Ok;
+    sondeo.fallos = Some(FallosSondeo {
+        unidades: FallosUnidades {
+            total: 1,
+            nombres: vec!["copia.service".to_string()],
+        },
+        contenedores: Some(FallosContenedores {
+            motor: Some(MotorNombre::Docker),
+            total: 2,
+            nombres: vec!["panel".to_string()],
+        }),
+    });
+    almacen.guardar_sondeo(&sondeo).unwrap();
+    let leido = almacen.ultimo_sondeo(host).unwrap().expect("hay sondeo");
+    let fallos = leido.fallos.expect("los fallos se leen");
+    assert_eq!(fallos.unidades.total, 1);
+    assert_eq!(fallos.total(), 3);
+    assert_eq!(
+        fallos
+            .contenedores
+            .and_then(|contenedores| contenedores.motor),
+        Some(MotorNombre::Docker)
+    );
+
+    // Un host que no respondió no guarda fallos (NULL, no un JSON a ceros).
+    let mut caido = magi::modelo::Sondeo::vacio(host);
+    caido.resultado = magi::modelo::ResultadoSondeo::Error;
+    caido.fallos = Some(FallosSondeo::default());
+    almacen.guardar_sondeo(&caido).unwrap();
+    let leido = almacen.ultimo_sondeo(host).unwrap().expect("hay sondeo");
+    assert!(leido.fallos.is_none());
 }

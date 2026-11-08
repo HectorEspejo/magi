@@ -238,6 +238,8 @@ mod pruebas {
             transferencias: 0,
             tuneles: 1,
             ejecuciones: 0,
+            escritorios: 0,
+            acciones_servicio: 0,
         });
         rechazo
     }
