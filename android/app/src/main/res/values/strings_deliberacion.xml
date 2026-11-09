@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MAGI · app Android (Fase 14). Deliberación MAGI: tabla de comprobaciones y
+     mantener pulsado para ejecutar (informe §6.6, §6.7 y §7.8). -->
+<resources>
+    <string name="delib_titulo">DELIBERACIÓN MAGI</string>
+    <string name="delib_antes">antes: %1$s</string>
+    <string name="delib_comprobando">comprobando…</string>
+    <string name="delib_consenso">CONSENSO %1$s</string>
+    <string name="delib_sin_comprobaciones">sin comprobaciones configuradas</string>
+    <string name="delib_aprobado">▸ APROBADO: mantén pulsado para ejecutar</string>
+    <string name="delib_bloqueado">✕ BLOQUEADO: se requiere unanimidad</string>
+    <string name="delib_forzado">⚑ FORZADO: quedará registrado</string>
+    <string name="delib_cancelado">— CANCELADA</string>
+    <string name="delib_forzar">FORZAR…</string>
+    <string name="delib_forzar_confirmar">FORZAR</string>
+    <string name="delib_motivo">motivo (mín. 10 caracteres)</string>
+    <string name="delib_motivo_corto">El motivo necesita 10 caracteres o más.</string>
+    <string name="delib_mantener">MANTÉN PARA %1$s</string>
+    <string name="delib_mantener_para_ejecutar">mantén pulsado para ejecutar</string>
+    <string name="delib_mantener_accesible">Mantener pulsado para %1$s</string>
+    <string name="delib_detalle_celda">Toca una celda para ver el dato que la justifica.</string>
+    <string name="delib_col_host">HOST</string>
+    <string name="delib_col_salud">SALUD</string>
+    <string name="delib_col_backup">BACKUP</string>
+    <string name="delib_col_tests">TESTS</string>
+    <string name="delib_error_deliberar">No se pudo deliberar: %1$s</string>
+    <string name="delib_error_resolver">No se pudo resolver la deliberación: %1$s</string>
+    <string name="delib_cargando">Haciendo las comprobaciones en paralelo (2 s cada una)…</string>
+    <string name="delib_ejecutando">Ejecutando…</string>
+    <string name="delib_celda">%1$s, %2$s, %3$s</string>
+    <string name="delib_ms">%1$d ms</string>
+    <string name="delib_veredicto_no_activa">sin comprobación activa</string>
+    <string name="delib_veredicto_pendiente">comprobando</string>
+    <string name="delib_veredicto_aprueba">aprueba</string>
+    <string name="delib_veredicto_rechaza">rechaza</string>
+</resources>

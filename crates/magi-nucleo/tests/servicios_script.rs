@@ -4,10 +4,14 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+#[path = "fijos/servicios/binarios.rs"]
+mod binarios;
+
+use binarios::BinariosFalsos;
 
 const SCRIPT: &str = magi_nucleo::servicios::orden::SCRIPT;
 
@@ -23,123 +27,32 @@ impl Salida {
     }
 }
 
+/// Driver de `servicios.sh` para estas pruebas: los binarios falsos
+/// compartidos de `fijos/servicios/` van en el `PATH` y su estado, en un
+/// temporal (lo instala y lo prepara el helper `binarios`).
 struct Falsos {
-    _temporal: tempfile::TempDir,
-    estado: PathBuf,
-    bin: PathBuf,
+    binarios: BinariosFalsos,
 }
 
 impl Falsos {
     fn nuevo() -> Self {
-        let temporal = tempfile::tempdir().expect("temporal");
-        let estado = temporal.path().join("estado");
-        let bin = temporal.path().join("bin");
-        fs::create_dir_all(&estado).expect("estado");
-        fs::create_dir_all(&bin).expect("bin");
-        let fijos = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fijos/servicios/falsos");
-        for entrada in fs::read_dir(&fijos).expect("falsos") {
-            let entrada = entrada.expect("entrada");
-            let nombre = entrada.file_name().to_string_lossy().to_string();
-            let contenido = fs::read(entrada.path()).expect("leer falso");
-            if nombre == "motor" {
-                for motor in ["docker", "podman"] {
-                    Self::instalar(&bin.join(motor), &contenido);
-                }
-            } else {
-                Self::instalar(&bin.join(&nombre), &contenido);
-            }
-        }
-        let falsos = Self {
-            _temporal: temporal,
-            estado,
-            bin,
-        };
-        falsos.preparar_estado();
-        falsos
-    }
-
-    fn instalar(destino: &Path, contenido: &[u8]) {
-        fs::write(destino, contenido).expect("escribir falso");
-        let mut permisos = fs::metadata(destino).expect("metadata").permissions();
-        permisos.set_mode(0o755);
-        fs::set_permissions(destino, permisos).expect("permisos");
-    }
-
-    fn preparar_estado(&self) {
-        self.escribir("sudo_modo", "sin_clave");
-        self.escribir("sudo_clave", "secreta");
-        self.escribir("systemctl_version", "systemd 252 (252.31-1~deb12u1)\n");
-        self.escribir(
-            "list_units_service",
-            "app.service loaded active running Aplicación\n\
-             copia.service loaded failed failed Copia nocturna\n\
-             nginx.service loaded active running Servidor web\n",
-        );
-        self.escribir(
-            "list_unit_files_service",
-            "app.service enabled enabled\n\
-             copia.service enabled enabled\n\
-             nginx.service enabled enabled\n",
-        );
-        self.escribir("list_units_timer", "");
-        self.escribir("list_unit_files_timer", "");
-        self.escribir(
-            "show/app.service",
-            "Id=app.service\nNames=app.service\nDescription=Aplicación\n\
-             LoadState=loaded\nActiveState=active\nSubState=running\n\
-             Type=simple\nResult=success\nUnitFileState=enabled\nCanReload=no\n\
-             FragmentPath=/etc/systemd/system/app.service\n",
-        );
-        self.escribir(
-            "show/copia.service",
-            "Id=copia.service\nNames=copia.service\nDescription=Copia\n\
-             LoadState=loaded\nActiveState=failed\nSubState=failed\n\
-             Type=oneshot\nResult=exit-code\nUnitFileState=enabled\nCanReload=no\n",
-        );
-        self.escribir(
-            "show/nginx.service",
-            "Id=nginx.service\nNames=nginx.service\nDescription=Servidor web\n\
-             LoadState=loaded\nActiveState=active\nSubState=running\n\
-             Type=forking\nResult=success\nUnitFileState=enabled\nCanReload=yes\n\
-             FragmentPath=/lib/systemd/system/nginx.service\n",
-        );
-        self.escribir("docker_version", "Docker version 27.3.1, build a7dcaa6\n");
-        self.escribir("podman_version", "podman version 5.2.3\n");
-        self.escribir("docker_contenedores", "web-app-1\n");
-        self.escribir("docker_estado", "running|healthy\n");
-        self.escribir(
-            "docker_ps",
-            r#"{"ID":"a1b2c3d4e5f6","Names":"web-app-1","Image":"nginx:1.27.3","State":"running","Status":"Up 7 days (healthy)","Labels":"com.docker.compose.project=web","Ports":"0.0.0.0:8080->80/tcp"}"#,
-        );
-        self.escribir("docker_etiquetas", "web|/srv/web/docker-compose.yml\n");
-        self.escribir("docker_etiquetas_proyecto", "/srv/web/docker-compose.yml\n");
-        self.escribir("docker_estado_proyecto", "running\nrunning\n");
-        self.escribir(
-            "docker_inspect",
-            r#"[{"Id":"a1b2c3d4e5f6","Name":"/web-app-1","Config":{"Image":"nginx:1.27.3","Labels":{}}}]"#,
-        );
-        self.escribir("docker_stats", "");
-        self.escribir("podman_stats", "");
-        self.escribir("nginx_codigo", "0");
-        self.escribir("nginx_salida", "");
+        let binarios = BinariosFalsos::nuevos();
+        binarios.preparar_estado();
+        Self { binarios }
     }
 
     fn escribir(&self, nombre: &str, contenido: &str) {
-        let ruta = self.estado.join(nombre);
-        if let Some(padre) = ruta.parent() {
-            fs::create_dir_all(padre).expect("directorio de estado");
-        }
-        fs::write(ruta, contenido).expect("escribir estado");
+        self.binarios.escribir(nombre, contenido);
     }
 
     fn llamadas(&self) -> String {
-        fs::read_to_string(self.estado.join("llamadas")).unwrap_or_default()
+        self.binarios.llamadas()
     }
 
     fn path(&self) -> String {
         format!(
             "{}:{}",
-            self.bin.display(),
+            self.binarios.ruta().display(),
             std::env::var("PATH").unwrap_or_default()
         )
     }
@@ -148,11 +61,14 @@ impl Falsos {
         let mut comando = Command::new("sh");
         comando
             .env("PATH", self.path())
-            .env("ESTADO", &self.estado)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         comando
+    }
+
+    fn ruta_estado(&self) -> &Path {
+        self.binarios.estado()
     }
 
     fn ejecutar_crudo(&self, argumentos: &[&str], clave: &str) -> Salida {
@@ -184,7 +100,7 @@ impl Falsos {
     }
 
     fn existe_estado(&self, nombre: &str) -> bool {
-        self.estado.join(nombre).exists()
+        self.ruta_estado().join(nombre).exists()
     }
 
     /// Espera a que el falso señale que ya tiene instalado su trap de TERM.
@@ -960,7 +876,8 @@ fn un_journalctl_que_ignora_term_se_remata_con_kill() {
     drop(hijo.stdin.take());
     let codigo = esperar_salida(hijo, Duration::from_secs(8));
     assert_eq!(codigo, 0);
-    let pid = fs::read_to_string(falsos.estado.join("pid_journalctl")).expect("pid del falso");
+    let pid =
+        fs::read_to_string(falsos.ruta_estado().join("pid_journalctl")).expect("pid del falso");
     let pid = pid.trim();
     let vivo = Command::new("sh")
         .arg("-c")

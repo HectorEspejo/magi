@@ -710,6 +710,7 @@ fn sondear(
             hogar: rutas.hogar.clone(),
             usuario_local: usuario.clone(),
             servicios: magi::modelo::servicios_de(host),
+            motores: config.servicios.contenedores.clone(),
         })
         .collect();
     let total = peticiones.len();

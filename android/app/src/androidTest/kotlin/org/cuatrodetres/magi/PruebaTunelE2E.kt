@@ -15,6 +15,11 @@ import org.cuatrodetres.magi.nucleo.FirmanteMovil
 import org.cuatrodetres.magi.nucleo.LlaveroMovil
 import org.cuatrodetres.magi.nucleo.Nucleo
 import org.cuatrodetres.magi.nucleo.OyenteNucleo
+import org.cuatrodetres.magi.nucleo.AccionServicioMovil
+import org.cuatrodetres.magi.nucleo.EjecucionMovil
+import org.cuatrodetres.magi.nucleo.EstadoLogs
+import org.cuatrodetres.magi.nucleo.HostFlota
+import org.cuatrodetres.magi.nucleo.ResultadoServicioMovil
 import org.cuatrodetres.magi.nucleo.Pantalla
 import org.cuatrodetres.magi.nucleo.PeticionDialogo
 import org.cuatrodetres.magi.nucleo.RespuestaDialogo
@@ -43,7 +48,7 @@ import java.security.Signature
  * dispositivo recibe el eco. El servidor SSH y el servicio de eco los levanta
  * el anfitrión:
  *
- *   cargo run -p magi-movil --example servidor_pruebas_tunel
+ *   cargo run -p magi-movil --example servidor_pruebas
  *
  * La fixture se regenera con:
  *   cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored
@@ -107,7 +112,7 @@ class PruebaTunelE2E {
         }
         Assume.assumeTrue(
             "servidor de pruebas no disponible; arranca " +
-                "cargo run -p magi-movil --example servidor_pruebas_tunel",
+                "cargo run -p magi-movil --example servidor_pruebas",
             servidor,
         )
     }
@@ -361,6 +366,16 @@ class PruebaTunelE2E {
         }
 
         @Synchronized
+        override fun flota(lista: List<HostFlota>) = Unit
+
+        override fun accionesServicio(lista: List<AccionServicioMovil>) = Unit
+
+        override fun accionServicioHecha(resultado: ResultadoServicioMovil) = Unit
+
+        override fun logs(estado: EstadoLogs) = Unit
+
+        override fun ejecuciones(lista: List<EjecucionMovil>) = Unit
+
         override fun sincronizacion(estado: EstadoSincronizacion) = Unit
 
         @Synchronized

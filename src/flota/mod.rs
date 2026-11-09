@@ -1,5 +1,8 @@
-pub mod estado;
-pub mod parser;
+//! Orquestación del sondeo en el escritorio: la conexión (por el servidor o
+//! efímera) y el lote con semáforo. La lectura, los estados y el script viven
+//! en el núcleo desde la Fase 14 (D274).
+
+pub use magi_nucleo::flota::{estado, lectura as parser};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,16 +18,9 @@ use crate::conexion::salto::{conectar_cadena, construir_cadena};
 use crate::conexion::RegistroSesiones;
 use crate::modelo::{Host, ResultadoSondeo, Sondeo};
 
-/// Script ejecutado en el host remoto. Solo depende de `sh` y coreutils;
-/// sin `systemctl` los servicios quedan como `unknown`. Desde la Fase 13
-/// incluye el bloque de fallos del sondeo ampliado (unidades fallidas y
-/// contenedores caídos), siempre sin sudo.
-pub const SCRIPT: &str = include_str!("sondeo.sh");
-
-/// Sondeos simultáneos y tiempo máximo por host (DNS, TCP, autenticación y
-/// comando incluidos).
-pub const CONCURRENTES: usize = 8;
-pub const TIMEOUT_SEG: u64 = 5;
+/// Script, sondeos simultáneos y tiempo máximo por host (DNS, TCP,
+/// autenticación y comando incluidos): los pone el núcleo.
+pub use magi_nucleo::flota::{CONCURRENTES, SCRIPT, TIMEOUT_SEG};
 
 /// Todo lo necesario para sondear un host, calculado en el hilo de la UI.
 pub struct PeticionSondeo {
@@ -35,6 +31,9 @@ pub struct PeticionSondeo {
     pub hogar: PathBuf,
     pub usuario_local: String,
     pub servicios: Vec<String>,
+    /// Motores de contenedores de `[servicios] contenedores` (R125): el
+    /// sondeo los recibe como `<motores>`.
+    pub motores: Vec<String>,
 }
 
 /// Sondea un host y devuelve su `Sondeo` (nunca falla: los errores van dentro).
@@ -73,7 +72,7 @@ pub async fn sondear_via_servidor(
 ) -> Sondeo {
     let inicio = Instant::now();
     let mut sondeo = Sondeo::vacio(peticion.host.id);
-    let comando = comando_de_sondeo(&peticion.servicios);
+    let comando = magi_nucleo::flota::comando_de_sondeo(&peticion.servicios, &peticion.motores);
     let respuesta = tokio::time::timeout(
         Duration::from_secs(TIMEOUT_SEG),
         cliente.ejecutar(peticion.host.id, &comando),
@@ -102,32 +101,14 @@ pub async fn sondear_via_servidor(
 }
 
 fn rellenar(sondeo: &mut Sondeo, metricas: parser::Metricas) {
-    sondeo.nucleos = metricas.nucleos;
-    sondeo.carga_1m = metricas.carga_1m;
-    sondeo.carga_5m = metricas.carga_5m;
-    sondeo.carga_15m = metricas.carga_15m;
-    sondeo.mem_total_kb = metricas.mem_total_kb;
-    sondeo.mem_disponible_kb = metricas.mem_disponible_kb;
-    sondeo.disco_total_kb = metricas.disco_total_kb;
-    sondeo.disco_usado_kb = metricas.disco_usado_kb;
-    sondeo.red_rx_bytes = metricas.red_rx_bytes;
-    sondeo.red_tx_bytes = metricas.red_tx_bytes;
-    sondeo.uptime_seg = metricas.uptime_seg;
-    let tiene_metricas = metricas.tiene_metricas();
-    sondeo.servicios = metricas.servicios;
-    sondeo.fallos = metricas.fallos;
-    sondeo.resultado = if tiene_metricas {
-        ResultadoSondeo::Ok
-    } else {
-        ResultadoSondeo::SinMetricas
-    };
+    magi_nucleo::flota::aplicar_metricas(sondeo, metricas);
 }
 
 async fn intento(
     peticion: &PeticionSondeo,
     registro: &RegistroSesiones,
 ) -> Result<parser::Metricas, String> {
-    let comando = comando_de_sondeo(&peticion.servicios);
+    let comando = magi_nucleo::flota::comando_de_sondeo(&peticion.servicios, &peticion.motores);
     let viva = registro.lock().await.get(&peticion.host.id).cloned();
     if let Some(handle) = viva {
         match ejecutar_en_handle(&handle, &comando).await {
@@ -178,6 +159,22 @@ fn canal_testigo() -> mpsc::UnboundedSender<crate::conexion::EventoConexion> {
     tx
 }
 
+/// Tope de la salida del sondeo que se acumula: el script solo manda líneas
+/// `MAGI_*` (mismo tope que el servidor de sesiones para su `Ejecutar`). Un
+/// host que inunde el canal no puede inflar la memoria del proceso.
+const TOPE_SALIDA_SONDEO: usize = 4 * 1024 * 1024;
+
+/// Añade un trozo de la salida al acumulador sin pasar del tope; lo que sobra
+/// se descarta (el sondeo no necesita más para sus métricas).
+fn acumular_salida(salida: &mut Vec<u8>, datos: &[u8]) {
+    if salida.len() >= TOPE_SALIDA_SONDEO {
+        return;
+    }
+    let hueco = TOPE_SALIDA_SONDEO - salida.len();
+    let trozo = datos.get(..hueco).unwrap_or(datos);
+    salida.extend_from_slice(trozo);
+}
+
 /// Ejecuta el comando en un canal `exec` y devuelve su salida.
 async fn ejecutar_en_handle(
     handle: &russh::client::Handle<Cliente>,
@@ -194,8 +191,10 @@ async fn ejecutar_en_handle(
     let mut salida = Vec::new();
     loop {
         match canal.wait().await {
-            Some(ChannelMsg::Data { data }) => salida.extend_from_slice(&data),
-            Some(ChannelMsg::ExtendedData { data, .. }) => salida.extend_from_slice(&data),
+            Some(ChannelMsg::Data { data }) => acumular_salida(&mut salida, &data),
+            Some(ChannelMsg::ExtendedData { data, .. }) => {
+                acumular_salida(&mut salida, &data);
+            }
             Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
             _ => {}
         }
@@ -232,36 +231,21 @@ pub fn lanzar_lote(
     }
 }
 
-/// Comando `exec`: el script embebido viaja entrecomillado y las unidades del
-/// inventario se pasan como argumentos validados, nunca interpolados.
-pub fn comando_de_sondeo(servicios: &[String]) -> String {
-    let mut comando = format!("sh -c {} magi", entrecomillar(SCRIPT));
-    for servicio in servicios {
-        comando.push(' ');
-        comando.push_str(&entrecomillar(servicio));
-    }
-    comando
-}
-
-fn entrecomillar(texto: &str) -> String {
-    format!("'{}'", texto.replace('\'', "'\\''"))
-}
-
 #[cfg(test)]
 mod pruebas {
     use super::*;
 
     #[test]
-    fn el_comando_entrecomilla_el_script_y_los_servicios() {
-        let comando = comando_de_sondeo(&["nginx".to_string(), "magi@.service".to_string()]);
-        assert!(comando.starts_with("sh -c '#!/bin/sh"));
-        assert!(comando.contains(" magi 'nginx' 'magi@.service'"));
-    }
-
-    #[test]
-    fn las_comillas_simples_del_script_se_escapan() {
-        let comando = comando_de_sondeo(&[]);
-        assert!(comando.contains("'\\''"));
-        assert!(comando.starts_with("sh -c '"));
+    fn la_salida_del_sondeo_se_corta_al_tope() {
+        let mut salida = Vec::new();
+        acumular_salida(&mut salida, &vec![b'a'; TOPE_SALIDA_SONDEO + 100]);
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Lo que llega después del tope no se acumula, pero no falla.
+        acumular_salida(&mut salida, b"mas");
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Y cabe justo: no se pierde nada.
+        let mut justa = Vec::new();
+        acumular_salida(&mut justa, &[b'x'; 10]);
+        assert_eq!(justa, vec![b'x'; 10]);
     }
 }

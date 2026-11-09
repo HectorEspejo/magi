@@ -3,15 +3,14 @@
 //! remoto y dinámico, automáticos, trabajo vivo e «instalar mi clave».
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Duration;
 
 use magi_nucleo::almacen::{hosts as hosts_bd, movil as movil_bd};
-use magi_nucleo::conexion::cliente::{abrir_canal, ClaveMovil, Contexto};
-use magi_nucleo::conexion::reenvios::{Contadores, Reenvio, Reenvios};
-use magi_nucleo::conexion::salto::{conectar_cadena_movil, construir_cadena};
+use magi_nucleo::conexion::cliente::abrir_canal;
+use magi_nucleo::conexion::reenvios::{Contadores, Reenvio};
+use magi_nucleo::conexion::salto::construir_cadena;
 use magi_nucleo::conexion::terminal::Pantalla;
-use magi_nucleo::conexion::{EventoConexion, FuenteContrasena};
 use magi_nucleo::modelo::{Host, TipoTunel};
 use magi_nucleo::registro::{self, ResultadoRegistro};
 use magi_nucleo::terminal::teclas::{self, ModoTerminal};
@@ -20,417 +19,121 @@ use magi_nucleo::tuneles::escucha::{
     abrir_escucha_movil, escucha_movil, partir_escucha, validar_puerto_movil,
 };
 use magi_nucleo::tuneles::local::{servir_local, servir_socks};
-use russh::client::Handle;
 use russh::ChannelMsg;
 use tokio::sync::{mpsc, watch};
 
 use crate::api::{
     Color, ErrorNucleo, EstadoSesion, EstadoTunel, FilaPantalla, Modificadores,
-    Pantalla as PantallaDto, PeticionDialogo, Posicion, RespuestaDialogo,
-    ResultadoInstalacionClave, Tecla, Tramo, TunelVivo,
+    Pantalla as PantallaDto, Posicion, ResultadoInstalacionClave, Tecla, Tramo, TunelVivo,
 };
+use crate::conexiones::{self, Politica, UsoConexion};
 use crate::estado::{
-    con_almacen, ComandoSesion, ConexionHost, EstadoNucleo, EstadoTunelVivo, SesionViva,
-    TunelActivo,
+    con_almacen, ComandoSesion, EstadoNucleo, EstadoTunelVivo, SesionViva, TunelActivo,
 };
 
 /// Plazo de las operaciones con el host (pedir reenvíos, abrir canales).
 const PLAZO: Duration = Duration::from_secs(10);
 
-/// Conexión viva del host, compartida por sus sesiones y túneles.
+/// Qué hay que escribir en una sesión normal al conectar por el snippet del
+/// host (F14, §7.9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AlConectar {
+    /// El host no tiene snippet al conectar (o ya no existe).
+    Nada,
+    /// El snippet se puede escribir: su comando, con el salto de línea final.
+    Comando(String),
+    /// El snippet existe pero no se puede escribir (crítico o con variables):
+    /// se ignora con un aviso en la sesión.
+    Invalido(String),
+}
+
+/// Decide qué hacer con el snippet al conectar a partir del snippet del host.
+/// El escritorio solo deja elegir snippets no críticos y sin variables, pero lo
+/// que llega por la sincronización es entrada no fiable: el móvil lo vuelve a
+/// comprobar.
+fn decidir_al_conectar(snippet: Option<&magi_nucleo::snippets::Snippet>) -> AlConectar {
+    match snippet {
+        None => AlConectar::Nada,
+        Some(snippet) if snippet.apto_al_conectar() => AlConectar::Comando(
+            magi_nucleo::snippets::texto_comando_inicial(&snippet.comando),
+        ),
+        Some(snippet) => AlConectar::Invalido(snippet.nombre.clone()),
+    }
+}
+
+/// Snippet al conectar del host, leído de la base de datos del móvil (solo
+/// lectura: lo edita el escritorio y llega por la sincronización).
+fn resolver_snippet_al_conectar(estado: &EstadoNucleo, host_uuid: &str) -> AlConectar {
+    let uuid = host_uuid.to_string();
+    let snippet = con_almacen(
+        estado,
+        move |almacen| -> anyhow::Result<Option<magi_nucleo::snippets::Snippet>> {
+            let Some(host) = movil_bd::host_por_uuid(almacen.conexion(), &uuid)? else {
+                return Ok(None);
+            };
+            let Some(snippet_id) = host.snippet_al_conectar_id else {
+                return Ok(None);
+            };
+            Ok(almacen.obtener_snippet(snippet_id).ok())
+        },
+    );
+    match snippet {
+        Ok(Ok(snippet)) => decidir_al_conectar(snippet.as_ref()),
+        _ => AlConectar::Nada,
+    }
+}
+
+/// Texto del aviso que se escribe en la pantalla de la sesión cuando el snippet
+/// al conectar no vale.
+fn aviso_al_conectar(nombre_snippet: &str) -> String {
+    format!(
+        "snippet al conectar «{nombre_snippet}» no válido: es crítico o tiene variables; edítalo en el escritorio"
+    )
+}
+
+/// Toma un uso interactivo de la conexión del host. La Fase 11 no tenía
+/// políticas: todo lo que pedía el usuario podía dialogar. El código nuevo usa
+/// conexiones::conexion_para_host con su política; esta función se conserva
+/// porque la prueba de extremo a extremo de los túneles de la Fase 11 la llama
+/// por su nombre.
 pub async fn conexion_para_host(
     estado: &Arc<EstadoNucleo>,
     host_uuid: &str,
-) -> Result<Arc<ConexionHost>, ErrorNucleo> {
-    {
-        let conexiones = estado.conexiones.lock().await;
-        if let Some(conexion) = conexiones.get(host_uuid) {
-            return Ok(conexion.clone());
-        }
-    }
-    let cerrojo = estado.cerrojo_de_host(host_uuid);
-    let _guardia = cerrojo.lock().await;
-    {
-        let conexiones = estado.conexiones.lock().await;
-        if let Some(conexion) = conexiones.get(host_uuid) {
-            return Ok(conexion.clone());
-        }
-    }
-    let conexion = conectar_host(estado, host_uuid).await?;
-    estado
-        .conexiones
-        .lock()
-        .await
-        .insert(host_uuid.to_string(), conexion.clone());
-    // Sin sesiones, nadie más mira la conexión: si el host la cierra (cambio
-    // de red, doze, keepalive sin respuesta), el túnel se quedaría «activo»
-    // para siempre y cada conexión del navegador fallaría sin explicación.
-    vigilar_conexion(estado.clone(), host_uuid.to_string(), &conexion);
-    Ok(conexion)
-}
-
-/// Vigila que la conexión del host siga viva mientras haya trabajo con ella.
-fn vigilar_conexion(estado: Arc<EstadoNucleo>, host_uuid: String, conexion: &Arc<ConexionHost>) {
-    let debil = Arc::downgrade(conexion);
-    let handle = conexion.handle.clone();
-    let manejador = estado.runtime.handle().clone();
-    manejador.spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if debil.upgrade().is_none() {
-                // La conexión se soltó a propósito.
-                return;
-            }
-            if handle.is_closed() {
-                conexion_perdida(
-                    &estado,
-                    &host_uuid,
-                    &debil,
-                    "la conexión con el host se ha perdido; pulsa Relanzar",
-                )
-                .await;
-                return;
-            }
-        }
-    });
-}
-
-/// La conexión del host se cerró sin que nadie la parara: se suelta, las
-/// sesiones pasan a caídas y los túneles del host también, con su motivo.
-async fn conexion_perdida(
-    estado: &Arc<EstadoNucleo>,
-    host_uuid: &str,
-    debil: &Weak<ConexionHost>,
-    motivo: &str,
-) {
-    {
-        let mut conexiones = estado.conexiones.lock().await;
-        let Some(viva) = debil.upgrade() else {
-            return;
-        };
-        let coincide = conexiones
-            .get(host_uuid)
-            .map(|actual| Arc::ptr_eq(actual, &viva))
-            .unwrap_or(false);
-        if !coincide {
-            return;
-        }
-        conexiones.remove(host_uuid);
-    }
-    if let Ok(sesiones) = estado.sesiones.lock() {
-        for sesion in sesiones.values() {
-            if sesion.host_uuid != host_uuid {
-                continue;
-            }
-            if matches!(
-                sesion.estado(),
-                EstadoSesion::Abierta | EstadoSesion::Abriendo
-            ) {
-                sesion.fijar_estado(EstadoSesion::Caida, Some(motivo.to_string()));
-            }
-        }
-    }
-    estado.emitir_sesiones();
-    marcar_tuneles_caidos(estado, host_uuid, motivo);
-    estado.anotar_error(host_uuid, motivo);
-    let _ = estado.escritor.con_almacen({
-        let host_uuid = host_uuid.to_string();
-        move |almacen| {
-            movil_bd::marcar_estado(
-                almacen.conexion(),
-                &host_uuid,
-                Some(magi_nucleo::modelo::UltimoEstado::Error),
-            )
-        }
-    });
-}
-
-async fn conectar_host(
-    estado: &Arc<EstadoNucleo>,
-    host_uuid: &str,
-) -> Result<Arc<ConexionHost>, ErrorNucleo> {
-    let (host, otros, uuids) = con_almacen(estado, {
-        let host_uuid = host_uuid.to_string();
-        move |almacen| {
-            let conexion = almacen.conexion();
-            let host = movil_bd::host_por_uuid(conexion, &host_uuid)?;
-            let otros = hosts_bd::listar(conexion)?;
-            let uuids =
-                movil_bd::uuid_por_id(conexion, magi_nucleo::almacen::versiones::Tabla::Hosts)?;
-            Ok::<_, anyhow::Error>((host, otros, uuids))
-        }
-    })
-    .map_err(|error| ErrorNucleo::General {
-        detalle: error.to_string(),
-    })?
-    .map_err(|error| ErrorNucleo::General {
-        detalle: format!("leyendo el host: {error:#}"),
-    })?;
-    let Some(host) = host else {
-        return Err(ErrorNucleo::NoEncontrado {
-            detalle: format!("el host {host_uuid}"),
-        });
-    };
-    let mapa: HashMap<i64, Host> = otros.into_iter().map(|host| (host.id, host)).collect();
-    let cadena = construir_cadena(&host, &mapa).map_err(|error| ErrorNucleo::General {
-        detalle: error.to_string(),
-    })?;
-    let saltos_uuids: Vec<String> = cadena
-        .iter()
-        .skip(1)
-        .filter_map(|salto| uuids.get(&salto.id).cloned())
-        .collect();
-    let (tx, rx) = mpsc::unbounded_channel::<EventoConexion>();
-    lanzar_bucle_eventos(estado.clone(), rx);
-    let reenvios = Arc::new(Reenvios::default());
-    let contexto = Contexto {
-        known_hosts: estado.rutas.fichero_known_hosts(),
-        dir_ssh: estado.rutas.dir_ssh(),
-        hogar: estado.rutas.hogar.clone(),
-        usuario_local: host
-            .usuario
-            .clone()
-            .unwrap_or_else(|| "usuario".to_string()),
-        tx: tx.clone(),
-        interactivo: true,
-        fuente_contrasena: FuenteContrasena::Llavero,
-        reenvios: Some(reenvios.clone()),
-        llavero: estado.llavero.clone(),
-    };
-    let publica = estado.clave_publica()?;
-    let clave = ClaveMovil {
-        linea_publica: publica.linea_openssh,
-        firmante: estado.firmante.clone(),
-    };
-    let transporte = conectar_cadena_movil(&cadena, &contexto, &clave)
-        .await
-        .map_err(|error| {
-            let motivo = error.to_string();
-            estado.anotar_error(host_uuid, &motivo);
-            registrar_fallo(estado, host.id, &motivo);
-            ErrorNucleo::General { detalle: motivo }
-        })?;
-    estado.limpiar_error(host_uuid);
-    let identidad = transporte.identidad.descripcion.clone();
-    let host_id = host.id;
-    let _ = estado.escritor.con_almacen(move |almacen| {
-        registro::anotar(
-            almacen.conexion(),
-            registro::CONEXION_ABIERTA,
-            Some(host_id),
-            None,
-            &format!("móvil · {identidad}"),
-            ResultadoRegistro::Ok,
-        )
-    });
-    Ok(Arc::new(ConexionHost {
-        handle: transporte.handle,
-        saltos: transporte.saltos,
-        reenvios,
-        tx,
-        saltos_uuids,
-    }))
-}
-
-fn registrar_fallo(estado: &EstadoNucleo, host_id: i64, motivo: &str) {
-    let motivo = motivo.to_string();
-    let _ = estado.escritor.con_almacen(move |almacen| {
-        registro::anotar(
-            almacen.conexion(),
-            registro::CONEXION_FALLIDA,
-            Some(host_id),
-            None,
-            &motivo,
-            ResultadoRegistro::Error,
-        )
-    });
-}
-
-/// Traduce los eventos de conexión a diálogos de la app y respuestas.
-fn lanzar_bucle_eventos(
-    estado: Arc<EstadoNucleo>,
-    mut eventos: mpsc::UnboundedReceiver<EventoConexion>,
-) {
-    let manejador = estado.runtime.handle().clone();
-    manejador.spawn(async move {
-        while let Some(evento) = eventos.recv().await {
-            match evento {
-                EventoConexion::HuellaDesconocida {
-                    host,
-                    tipo,
-                    huella,
-                    responder,
-                } => {
-                    let datos = datos_host_por_direccion(&estado, &host);
-                    let (id, receptor) = estado.dialogos.registrar();
-                    estado
-                        .retrollamadas
-                        .oyente
-                        .dialogo(PeticionDialogo::HuellaNueva {
-                            id,
-                            host_uuid: datos.as_ref().map(|d| d.0.clone()).unwrap_or_default(),
-                            host_nombre: datos
-                                .as_ref()
-                                .map(|d| d.1.clone())
-                                .unwrap_or_else(|| host.clone()),
-                            tipo,
-                            sha256: huella,
-                        });
-                    let aceptado = matches!(receptor.await, Ok(RespuestaDialogo::AceptarHuella));
-                    let _ = responder.send(aceptado);
-                }
-                EventoConexion::HuellaCambiada {
-                    host,
-                    tipo,
-                    anterior,
-                    nueva,
-                    responder,
-                } => {
-                    let datos = datos_host_por_direccion(&estado, &host);
-                    let nombre = datos
-                        .as_ref()
-                        .map(|d| d.1.clone())
-                        .unwrap_or_else(|| host.clone());
-                    let (id, receptor) = estado.dialogos.registrar();
-                    estado
-                        .retrollamadas
-                        .oyente
-                        .dialogo(PeticionDialogo::HuellaCambiada {
-                            id,
-                            host_uuid: datos.as_ref().map(|d| d.0.clone()).unwrap_or_default(),
-                            host_nombre: nombre.clone(),
-                            tipo,
-                            anterior,
-                            nueva,
-                            nombre_a_escribir: nombre.clone(),
-                        });
-                    let sustituir = match receptor.await {
-                        Ok(RespuestaDialogo::SustituirHuella { nombre_escrito }) => {
-                            nombre_escrito.trim() == nombre.trim()
-                        }
-                        _ => false,
-                    };
-                    let _ = responder.send(sustituir);
-                }
-                EventoConexion::PideContrasena {
-                    host,
-                    intento,
-                    recordar_por_defecto,
-                    responder,
-                } => {
-                    let datos = datos_host_por_direccion(&estado, &host);
-                    let (id, receptor) = estado.dialogos.registrar();
-                    estado
-                        .retrollamadas
-                        .oyente
-                        .dialogo(PeticionDialogo::Contrasena {
-                            id,
-                            host_uuid: datos.as_ref().map(|d| d.0.clone()).unwrap_or_default(),
-                            host_nombre: datos
-                                .as_ref()
-                                .map(|d| d.1.clone())
-                                .unwrap_or_else(|| host.clone()),
-                            usuario: datos.as_ref().map(|d| d.2.clone()).unwrap_or_default(),
-                            direccion: host,
-                            intentos_restantes: u32::from(4u8.saturating_sub(intento)),
-                            recordar_ofrecido: recordar_por_defecto,
-                        });
-                    match receptor.await {
-                        Ok(RespuestaDialogo::Contrasena { bytes, recordar }) => {
-                            let bytes = zeroize::Zeroizing::new(bytes);
-                            match std::str::from_utf8(&bytes) {
-                                Ok(texto) => {
-                                    let contrasena = zeroize::Zeroizing::new(texto.to_string());
-                                    let _ = responder.send(Some((contrasena, recordar)));
-                                }
-                                Err(_) => {
-                                    // El contrato exige texto UTF-8: no se
-                                    // corrompe una contraseña en silencio.
-                                    let _ = responder.send(None);
-                                }
-                            }
-                        }
-                        _ => {
-                            let _ = responder.send(None);
-                        }
-                    }
-                }
-                EventoConexion::PideContrasenaLlavero {
-                    host,
-                    usuario,
-                    responder,
-                } => {
-                    let contrasena = magi_nucleo::llavero::LlaveroHost::recuperar_contrasena(
-                        estado.llavero.as_ref(),
-                        &host,
-                        &usuario,
-                    )
-                    .ok()
-                    .flatten();
-                    let _ = responder.send(contrasena);
-                }
-                EventoConexion::PideFrase { responder, .. } => {
-                    let _ = responder.send(None);
-                }
-                EventoConexion::HuellaRegistrada {
-                    host_id,
-                    anterior,
-                    nueva,
-                } => {
-                    let tipo = if anterior.is_some() {
-                        registro::HUELLA_SUSTITUIDA
-                    } else {
-                        registro::HUELLA_ACEPTADA
-                    };
-                    let detalle = match &anterior {
-                        Some(anterior) => format!("anterior {anterior}; nueva {nueva}"),
-                        None => format!("nueva {nueva}"),
-                    };
-                    let _ = estado.escritor.con_almacen(move |almacen| {
-                        registro::anotar(
-                            almacen.conexion(),
-                            tipo,
-                            Some(host_id),
-                            None,
-                            &detalle,
-                            ResultadoRegistro::Ok,
-                        )
-                    });
-                }
-                _ => {}
-            }
-        }
-    });
-}
-
-fn datos_host_por_direccion(
-    estado: &EstadoNucleo,
-    direccion: &str,
-) -> Option<(String, String, String)> {
-    let direccion = direccion.to_string();
-    con_almacen(estado, move |almacen| {
-        let conexion = almacen.conexion();
-        let hosts = hosts_bd::listar(conexion).ok()?;
-        let host = hosts.into_iter().find(|host| host.direccion == direccion)?;
-        let uuid = movil_bd::uuid_por_id(conexion, magi_nucleo::almacen::versiones::Tabla::Hosts)
-            .ok()?
-            .get(&host.id)
-            .cloned()
-            .unwrap_or_default();
-        Some((
-            uuid,
-            host.nombre.clone(),
-            host.usuario.clone().unwrap_or_default(),
-        ))
-    })
-    .ok()
-    .flatten()
+) -> Result<UsoConexion, ErrorNucleo> {
+    conexiones::conexion_para_host(estado, host_uuid, Politica::Interactiva).await
 }
 
 // ----------------------------------------------------------------- sesiones
 
 /// Abre una sesión nueva contra el host y devuelve su id.
 pub async fn abrir_sesion(estado: &Arc<EstadoNucleo>, host_uuid: &str) -> Result<u64, ErrorNucleo> {
+    abrir_sesion_interna(estado, host_uuid, None, None).await
+}
+
+/// Abre una sesión con nombre propio y comando inicial (D286): la usan las
+/// pestañas ordenadas de Servicios (shell de un contenedor o seguimiento de
+/// logs). No escribe snippet al conectar.
+pub async fn abrir_sesion_con_orden(
+    estado: &Arc<EstadoNucleo>,
+    host_uuid: &str,
+    nombre_sesion: String,
+    comando_inicial: String,
+) -> Result<u64, ErrorNucleo> {
+    abrir_sesion_interna(
+        estado,
+        host_uuid,
+        Some(nombre_sesion),
+        Some(comando_inicial),
+    )
+    .await
+}
+
+async fn abrir_sesion_interna(
+    estado: &Arc<EstadoNucleo>,
+    host_uuid: &str,
+    nombre: Option<String>,
+    comando_inicial: Option<String>,
+) -> Result<u64, ErrorNucleo> {
     let host = con_almacen(estado, {
         let host_uuid = host_uuid.to_string();
         move |almacen| movil_bd::host_por_uuid(almacen.conexion(), &host_uuid)
@@ -455,15 +158,30 @@ pub async fn abrir_sesion(estado: &Arc<EstadoNucleo>, host_uuid: &str) -> Result
             ),
         });
     }
+    // Snippet al conectar (F14, §7.9): solo en las sesiones normales; las
+    // ordenadas de Servicios llevan su propio comando (D286).
+    let (comando_inicial, aviso_al_conectar) = if nombre.is_none() && comando_inicial.is_none() {
+        match resolver_snippet_al_conectar(estado, host_uuid) {
+            AlConectar::Comando(comando) => (Some(comando), None),
+            AlConectar::Invalido(nombre_snippet) => {
+                (None, Some(aviso_al_conectar(&nombre_snippet)))
+            }
+            AlConectar::Nada => (None, None),
+        }
+    } else {
+        (comando_inicial, None)
+    };
     let id = estado.siguiente_id();
     let pantalla = nueva_pantalla(24, 80);
     let sesion = nueva_sesion(
         id,
         host_uuid,
-        &host.nombre,
+        nombre.as_deref().unwrap_or(&host.nombre),
         pantalla,
         EstadoSesion::Abriendo,
         Some("resolviendo".to_string()),
+        comando_inicial,
+        aviso_al_conectar,
     );
     estado
         .sesiones
@@ -487,6 +205,7 @@ fn nueva_pantalla(filas: u16, columnas: u16) -> Pantalla {
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn nueva_sesion(
     id: u64,
     host_uuid: &str,
@@ -494,6 +213,8 @@ fn nueva_sesion(
     pantalla: Pantalla,
     estado_inicial: EstadoSesion,
     detalle: Option<String>,
+    comando_inicial: Option<String>,
+    aviso_al_conectar: Option<String>,
 ) -> Arc<SesionViva> {
     let (comandos, receptor) = mpsc::unbounded_channel();
     Arc::new(SesionViva {
@@ -506,6 +227,8 @@ fn nueva_sesion(
         receptor: std::sync::Mutex::new(Some(receptor)),
         pantalla,
         abierta_en: Some(chrono::Utc::now().timestamp()),
+        comando_inicial,
+        aviso_al_conectar,
     })
 }
 
@@ -535,8 +258,8 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
             }
         }
     }
-    let conexion = match conexion_para_host(&estado, &host_uuid).await {
-        Ok(conexion) => conexion,
+    let uso = match conexion_para_host(&estado, &host_uuid).await {
+        Ok(uso) => uso,
         Err(error) => {
             fallar_sesion(&estado, &sesion, &error.to_string()).await;
             return;
@@ -554,9 +277,17 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     if let Ok(mut pantalla) = sesion.pantalla.lock() {
         pantalla.screen_mut().set_size(filas, columnas);
     }
+    // Aviso del snippet al conectar no válido: se escribe solo en la pantalla
+    // local de la sesión (nunca se manda al host) antes de que llegue la salida
+    // del shell.
+    if let Some(aviso) = sesion.aviso_al_conectar.clone() {
+        if let Ok(mut pantalla) = sesion.pantalla.lock() {
+            pantalla.process(format!("\r\n[aviso] {aviso}\r\n").as_bytes());
+        }
+    }
     let mut canal = match tokio::time::timeout(
         Duration::from_secs(10),
-        abrir_canal(&conexion.handle, columnas, filas),
+        abrir_canal(&uso.handle, columnas, filas),
     )
     .await
     {
@@ -573,6 +304,19 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     if !bytes_tempranos.is_empty() {
         let _ = canal.data_bytes(bytes_tempranos).await;
     }
+    // Comando inicial de las sesiones ordenadas (D286): el shell del
+    // contenedor o el seguimiento de logs. Se escribe como lo haría el
+    // usuario con un intro; no hay snippet al conectar en esta variante.
+    if let Some(comando) = sesion.comando_inicial.clone() {
+        let mut bytes = comando.into_bytes();
+        if !bytes.ends_with(b"\n") {
+            bytes.push(b'\n');
+        }
+        if let Err(error) = canal.data_bytes(bytes).await {
+            fallar_sesion(&estado, &sesion, &error.to_string()).await;
+            return;
+        }
+    }
     let rx_comandos = match receptor {
         Some(receptor) => receptor,
         None => mpsc::unbounded_channel().1,
@@ -585,7 +329,7 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     estado.limpiar_error(&host_uuid);
     estado.emitir_sesiones();
     actualizar_automaticos(&estado, &host_uuid);
-    bucle_sesion(estado, sesion, &mut canal, rx_comandos).await;
+    bucle_sesion(estado, sesion, &mut canal, rx_comandos, uso).await;
 }
 
 async fn fallar_sesion(estado: &Arc<EstadoNucleo>, sesion: &SesionViva, motivo: &str) {
@@ -604,7 +348,6 @@ async fn fallar_sesion(estado: &Arc<EstadoNucleo>, sesion: &SesionViva, motivo: 
         }
     });
     estado.emitir_sesiones();
-    soltar_conexion(estado, &sesion.host_uuid).await;
 }
 
 async fn bucle_sesion(
@@ -612,6 +355,7 @@ async fn bucle_sesion(
     sesion: Arc<SesionViva>,
     canal: &mut russh::Channel<russh::client::Msg>,
     mut comandos: mpsc::UnboundedReceiver<ComandoSesion>,
+    _uso: UsoConexion,
 ) {
     let mut generador = GeneradorTramos::nuevo(sesion.id);
     let mut intervalo = tokio::time::interval(Duration::from_millis(33));
@@ -634,7 +378,6 @@ async fn bucle_sesion(
                             &sesion.host_uuid,
                             "la conexión se ha perdido",
                         );
-                        soltar_conexion(&estado, &sesion.host_uuid).await;
                         actualizar_automaticos(&estado, &sesion.host_uuid);
                         return;
                     }
@@ -742,7 +485,6 @@ async fn cerrar_sesion_definitiva(estado: &Arc<EstadoNucleo>, sesion: &SesionViv
     });
     estado.emitir_sesiones();
     actualizar_automaticos(estado, &sesion.host_uuid);
-    cerrar_conexion_sin_trabajo(estado, &sesion.host_uuid).await;
 }
 
 fn mapear_pantalla(pantalla: &magi_nucleo::terminal::tramos::PantallaTramos) -> PantallaDto {
@@ -943,10 +685,26 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
             detalle: "solo se reconecta una sesión caída".to_string(),
         });
     }
-    soltar_conexion(estado, &sesion.host_uuid).await;
+    // D277: hay una sola conexión por host para todo. No se fuerza su cierre al
+    // reconectar: si sigue viva (o en gracia) se reutiliza, y si el host la
+    // cerró, el vigilante ya la retiró. Cerrarla aquí tiraría las sesiones y
+    // los túneles de otros que comparten la conexión (aviso de revisión
+    // adversarial de la F14).
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.remove(&id);
     }
+    // Al reconectar se vuelve a resolver el snippet al conectar del host (una
+    // sesión normal no guarda comando); las ordenadas reescriben el suyo.
+    let (comando_inicial, aviso_al_conectar) = match sesion.comando_inicial.clone() {
+        Some(comando) => (Some(comando), None),
+        None => match resolver_snippet_al_conectar(estado, &sesion.host_uuid) {
+            AlConectar::Comando(comando) => (Some(comando), None),
+            AlConectar::Invalido(nombre_snippet) => {
+                (None, Some(aviso_al_conectar(&nombre_snippet)))
+            }
+            AlConectar::Nada => (None, None),
+        },
+    };
     let pantalla = nueva_pantalla(24, 80);
     let nueva = nueva_sesion(
         id,
@@ -955,6 +713,8 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
         pantalla,
         EstadoSesion::Abriendo,
         Some("resolviendo".to_string()),
+        comando_inicial,
+        aviso_al_conectar,
     );
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.insert(id, nueva.clone());
@@ -1120,8 +880,9 @@ pub fn tuneles(
     Ok(lista)
 }
 
-/// Marca caídos los túneles activos de un host cuya conexión se ha perdido.
-fn marcar_tuneles_caidos(estado: &EstadoNucleo, host_uuid: &str, motivo: &str) {
+/// Marca caídos los túneles activos de un host cuya conexión se ha perdido y
+/// suelta el uso que cada uno tenía tomado (F14, D277).
+pub(crate) fn marcar_tuneles_caidos(estado: &EstadoNucleo, host_uuid: &str, motivo: &str) {
     if let Ok(activos) = estado.tuneles.lock() {
         for tunel in activos.values() {
             if tunel.host_uuid != host_uuid {
@@ -1138,6 +899,9 @@ fn marcar_tuneles_caidos(estado: &EstadoNucleo, host_uuid: &str, motivo: &str) {
                 if let Some(parada) = parada.take() {
                     let _ = parada.send(());
                 }
+            }
+            if let Ok(mut uso) = tunel.uso.lock() {
+                uso.take();
             }
         }
     }
@@ -1224,6 +988,7 @@ pub async fn activar_tunel(
         reenvio: std::sync::Mutex::new(None),
         puerto_efectivo: std::sync::Mutex::new(None),
         id_numerico: estado.siguiente_id() as i64,
+        uso: std::sync::Mutex::new(None),
     });
     {
         let mut activos = estado.tuneles.lock().map_err(|_| ErrorNucleo::General {
@@ -1250,43 +1015,44 @@ pub async fn activar_tunel(
         receptor_cancelacion,
     )
     .await;
-    // M3: si se pidió parar mientras el túnel se levantaba, se deshace lo
-    // levantado (listener y reenvío) en vez de dejarlo huérfano.
-    if *activo.cancelacion.borrow() {
-        if let Ok(mut parada) = activo.parada.lock() {
-            if let Some(parada) = parada.take() {
-                let _ = parada.send(());
-            }
-        }
-        if let Some((direccion, puerto_reenvio)) = activo
-            .reenvio
-            .lock()
-            .ok()
-            .and_then(|reenvio| reenvio.clone())
-        {
-            let conexiones = estado.conexiones.lock().await;
-            if let Some(conexion) = conexiones.get(&activo.host_uuid) {
-                let _ = conexion
-                    .handle
-                    .cancel_tcpip_forward(direccion, puerto_reenvio)
-                    .await;
-            }
-        }
-        if let Ok(mut activos) = estado.tuneles.lock() {
-            if activos
-                .get(uuid)
-                .map(|existente| Arc::ptr_eq(existente, &activo))
-                .unwrap_or(false)
-            {
-                activos.remove(uuid);
-            }
-        }
-        emitir_tuneles(estado);
-        return Ok(());
-    }
     match resultado {
-        Ok(()) => {
+        Ok(uso) => {
+            // M3: si se pidió parar mientras el túnel se levantaba, se deshace
+            // lo levantado (listener y reenvío) en vez de dejarlo huérfano.
+            if *activo.cancelacion.borrow() {
+                if let Ok(mut parada) = activo.parada.lock() {
+                    if let Some(parada) = parada.take() {
+                        let _ = parada.send(());
+                    }
+                }
+                if let Some((direccion, puerto_reenvio)) = activo
+                    .reenvio
+                    .lock()
+                    .ok()
+                    .and_then(|reenvio| reenvio.clone())
+                {
+                    let _ = uso
+                        .handle
+                        .cancel_tcpip_forward(direccion, puerto_reenvio)
+                        .await;
+                }
+                if let Ok(mut activos) = estado.tuneles.lock() {
+                    if activos
+                        .get(uuid)
+                        .map(|existente| Arc::ptr_eq(existente, &activo))
+                        .unwrap_or(false)
+                    {
+                        activos.remove(uuid);
+                    }
+                }
+                drop(uso);
+                emitir_tuneles(estado);
+                return Ok(());
+            }
             activo.fijar_estado(EstadoTunelVivo::Activo);
+            if let Ok(mut guardado) = activo.uso.lock() {
+                *guardado = Some(uso);
+            }
             let detalle = format!(
                 "{} · {} · {} → {}",
                 tunel.nombre,
@@ -1313,6 +1079,21 @@ pub async fn activar_tunel(
             Ok(())
         }
         Err(motivo) => {
+            // Si el usuario paró mientras se levantaba, no es un fallo: la
+            // parada ya quitó el túnel del mapa y no hay nada que marcar.
+            if *activo.cancelacion.borrow() {
+                if let Ok(mut activos) = estado.tuneles.lock() {
+                    if activos
+                        .get(uuid)
+                        .map(|existente| Arc::ptr_eq(existente, &activo))
+                        .unwrap_or(false)
+                    {
+                        activos.remove(uuid);
+                    }
+                }
+                emitir_tuneles(estado);
+                return Ok(());
+            }
             activo.fijar_estado(EstadoTunelVivo::Caido(motivo.clone()));
             let detalle = format!("{}: {motivo}", tunel.nombre);
             let host_id = host.id;
@@ -1340,9 +1121,11 @@ async fn levantar_tunel(
     puerto: u16,
     puerto_libre: bool,
     cancelacion: watch::Receiver<bool>,
-) -> Result<(), String> {
-    let conexion = match conexion_para_host(estado, &activo.host_uuid).await {
-        Ok(conexion) => conexion,
+) -> Result<UsoConexion, String> {
+    let uso = match conexiones::conexion_para_host(estado, &activo.host_uuid, Politica::Interactiva)
+        .await
+    {
+        Ok(uso) => uso,
         Err(error) => return Err(error.to_string()),
     };
     match tunel.tipo {
@@ -1362,7 +1145,7 @@ async fn levantar_tunel(
             let parada = if tunel.tipo == TipoTunel::Dinamico {
                 servir_socks(
                     listener,
-                    conexion.handle.clone(),
+                    uso.handle.clone(),
                     activo.contadores.clone(),
                     cancelacion,
                 )
@@ -1370,7 +1153,7 @@ async fn levantar_tunel(
                 let destino = tunel.destino.clone().unwrap_or_default();
                 servir_local(
                     listener,
-                    conexion.handle.clone(),
+                    uso.handle.clone(),
                     destino,
                     activo.contadores.clone(),
                     cancelacion,
@@ -1379,14 +1162,13 @@ async fn levantar_tunel(
             if let Ok(mut guardado) = activo.parada.lock() {
                 *guardado = Some(parada);
             }
-            Ok(())
+            Ok(uso)
         }
         TipoTunel::Remoto => {
             let (direccion, puerto_pedido) = partir_escucha(&tunel.escucha)?;
             let respuesta = tokio::time::timeout(
                 PLAZO,
-                conexion
-                    .handle
+                uso.handle
                     .tcpip_forward(direccion.clone(), u32::from(puerto_pedido)),
             )
             .await
@@ -1422,13 +1204,12 @@ async fn levantar_tunel(
                 contadores: activo.contadores.clone(),
                 cancelacion,
             });
-            conexion
-                .reenvios
+            uso.reenvios
                 .registrar(host.id, &direccion, efectivo, reenvio);
             if let Ok(mut guardado) = activo.reenvio.lock() {
                 *guardado = Some((direccion, efectivo));
             }
-            Ok(())
+            Ok(uso)
         }
     }
 }
@@ -1450,6 +1231,9 @@ pub async fn parar_tunel(estado: &Arc<EstadoNucleo>, uuid: &str) -> Result<(), E
         }
     }
     let _ = activo.cancelacion.send(true);
+    // El uso del túnel se suelta al terminar (RAII), después de deshacer el
+    // reenvío: así el cierre por gracia no se lleva la conexión por delante.
+    let uso = activo.uso.lock().ok().and_then(|mut uso| uso.take());
     let reenvio = activo
         .reenvio
         .lock()
@@ -1467,8 +1251,11 @@ pub async fn parar_tunel(estado: &Arc<EstadoNucleo>, uuid: &str) -> Result<(), E
         })
         .ok()
         .flatten();
-        let conexiones = estado.conexiones.lock().await;
-        if let Some(conexion) = conexiones.get(&activo.host_uuid) {
+        let conexion = uso
+            .as_ref()
+            .map(|uso| uso.conexion().clone())
+            .or_else(|| estado.conexiones.viva(&activo.host_uuid));
+        if let Some(conexion) = conexion {
             let _ = conexion
                 .handle
                 .cancel_tcpip_forward(direccion.clone(), puerto)
@@ -1493,8 +1280,8 @@ pub async fn parar_tunel(estado: &Arc<EstadoNucleo>, uuid: &str) -> Result<(), E
             ResultadoRegistro::Ok,
         )
     });
+    drop(uso);
     emitir_tuneles(estado);
-    cerrar_conexion_sin_trabajo(estado, &activo.host_uuid).await;
     Ok(())
 }
 
@@ -1572,42 +1359,6 @@ pub fn actualizar_automaticos(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
     }
 }
 
-/// Suelta la conexión del host y desconecta el handle con plazo corto.
-async fn soltar_conexion(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
-    let conexion = estado.conexiones.lock().await.remove(host_uuid);
-    if let Some(conexion) = conexion {
-        let handle: Arc<Handle<magi_nucleo::conexion::cliente::Cliente>> = conexion.handle.clone();
-        tokio::spawn(async move {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(5),
-                handle.disconnect(russh::Disconnect::ByApplication, "", ""),
-            )
-            .await;
-        });
-    }
-}
-
-async fn cerrar_conexion_sin_trabajo(estado: &Arc<EstadoNucleo>, host_uuid: &str) {
-    let hay_sesiones = estado
-        .sesiones
-        .lock()
-        .map(|sesiones| {
-            sesiones
-                .values()
-                .any(|sesion| sesion.host_uuid == host_uuid)
-        })
-        .unwrap_or(false);
-    let hay_tuneles = estado
-        .tuneles
-        .lock()
-        .map(|tuneles| tuneles.values().any(|tunel| tunel.host_uuid == host_uuid))
-        .unwrap_or(false);
-    if hay_sesiones || hay_tuneles {
-        return;
-    }
-    soltar_conexion(estado, host_uuid).await;
-}
-
 // ------------------------------------------------------- instalar mi clave
 
 /// Instala la clave del móvil en el host (flujo §4.4): entra con contraseña,
@@ -1663,27 +1414,8 @@ pub async fn instalar_clave_en_host(
             salto
         })
         .collect();
-    let (tx, rx) = mpsc::unbounded_channel::<EventoConexion>();
-    lanzar_bucle_eventos(estado.clone(), rx);
-    let contexto = Contexto {
-        known_hosts: estado.rutas.fichero_known_hosts(),
-        dir_ssh: estado.rutas.dir_ssh(),
-        hogar: estado.rutas.hogar.clone(),
-        usuario_local: host
-            .usuario
-            .clone()
-            .unwrap_or_else(|| "usuario".to_string()),
-        tx,
-        interactivo: true,
-        fuente_contrasena: FuenteContrasena::Llavero,
-        reenvios: None,
-        llavero: estado.llavero.clone(),
-    };
-    let transporte = magi_nucleo::conexion::salto::conectar_cadena(&cadena, &contexto)
-        .await
-        .map_err(|error| ErrorNucleo::General {
-            detalle: error.to_string(),
-        })?;
+    let transporte =
+        conexiones::conectar_efimera(estado, &cadena, &host, Politica::Interactiva, false).await?;
     let mut canal = tokio::time::timeout(
         Duration::from_secs(10),
         transporte.handle.channel_open_session(),
@@ -1760,30 +1492,7 @@ async fn comprobar_clave_movil(
     let Ok(cadena) = construir_cadena(host, mapa) else {
         return false;
     };
-    let (tx, rx) = mpsc::unbounded_channel::<EventoConexion>();
-    lanzar_bucle_eventos(estado.clone(), rx);
-    let contexto = Contexto {
-        known_hosts: estado.rutas.fichero_known_hosts(),
-        dir_ssh: estado.rutas.dir_ssh(),
-        hogar: estado.rutas.hogar.clone(),
-        usuario_local: host
-            .usuario
-            .clone()
-            .unwrap_or_else(|| "usuario".to_string()),
-        tx,
-        interactivo: true,
-        fuente_contrasena: FuenteContrasena::Llavero,
-        reenvios: None,
-        llavero: estado.llavero.clone(),
-    };
-    let Ok(publica) = estado.clave_publica() else {
-        return false;
-    };
-    let clave = ClaveMovil {
-        linea_publica: publica.linea_openssh,
-        firmante: estado.firmante.clone(),
-    };
-    match conectar_cadena_movil(&cadena, &contexto, &clave).await {
+    match conexiones::conectar_efimera(estado, &cadena, host, Politica::Interactiva, true).await {
         Ok(transporte) => {
             let con_clave =
                 transporte.identidad.descripcion == magi_nucleo::conexion::DESCRIPCION_CLAVE_MOVIL;
@@ -1796,5 +1505,57 @@ async fn comprobar_clave_movil(
             con_clave
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+    use magi_nucleo::snippets::Snippet;
+
+    fn snippet(comando: &str, critico: bool) -> Snippet {
+        Snippet {
+            id: 1,
+            nombre: "al conectar".to_string(),
+            comando: comando.to_string(),
+            descripcion: String::new(),
+            etiquetas: Vec::new(),
+            critico,
+            timeout_seg: 60,
+            parar_al_fallo: false,
+            usado_veces: 0,
+            ultimo_uso_en: None,
+            creado_en: String::new(),
+            actualizado_en: String::new(),
+            destinos: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sin_snippet_no_se_escribe_nada() {
+        assert_eq!(decidir_al_conectar(None), AlConectar::Nada);
+    }
+
+    #[test]
+    fn un_snippet_valido_se_escribe_con_su_salto() {
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("uptime", false))),
+            AlConectar::Comando("uptime\n".to_string())
+        );
+    }
+
+    #[test]
+    fn un_snippet_critico_o_con_variables_se_ignora_con_aviso() {
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("uptime", true))),
+            AlConectar::Invalido("al conectar".to_string())
+        );
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("cd {{ruta}}", false))),
+            AlConectar::Invalido("al conectar".to_string())
+        );
+        let aviso = aviso_al_conectar("al conectar");
+        assert!(aviso.contains("no válido"));
+        assert!(aviso.contains("edítalo en el escritorio"));
     }
 }

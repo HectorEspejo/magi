@@ -26,6 +26,7 @@ import org.cuatrodetres.magi.navegacion.SeccionAjustes
 import org.cuatrodetres.magi.ui.componentes.CabeceraMagi
 import org.cuatrodetres.magi.ui.componentes.Separador
 import org.cuatrodetres.magi.ui.componentes.textoFaseSincronizacion
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.EstadoMagi
 import org.cuatrodetres.magi.ui.modelos.huellaCorta
 import org.cuatrodetres.magi.ui.modelos.textoVersion
@@ -33,7 +34,11 @@ import org.cuatrodetres.magi.ui.tema.Paleta
 
 /**
  * Pantalla Ajustes (informe §6 y checklist de interfaz): sincronización, clave
- * del móvil, terminal, batería, borrar datos y acerca de (con licencias).
+ * del móvil, terminal, Flota, Servicios, Deliberación, batería, borrar datos y
+ * acerca de (con licencias).
+ *
+ * Las tres secciones nuevas de la Fase 14 (§5.4) guardan en DataStore lo que
+ * en el escritorio vive en config.toml y llegan al núcleo con aplicar_ajustes.
  */
 @Composable
 fun PantallaAjustes(
@@ -69,6 +74,24 @@ fun PantallaAjustes(
                 alPulsar = { alAbrirSeccion(SeccionAjustes.TERMINAL) },
             )
             FilaAjuste(
+                glifo = "▣",
+                titulo = stringResource(R.string.ajustes_flota),
+                detalle = detalleFlota(estado.ajustesMovil),
+                alPulsar = { alAbrirSeccion(SeccionAjustes.FLOTA) },
+            )
+            FilaAjuste(
+                glifo = "▦",
+                titulo = stringResource(R.string.ajustes_servicios),
+                detalle = detalleServicios(estado.ajustesMovil),
+                alPulsar = { alAbrirSeccion(SeccionAjustes.SERVICIOS) },
+            )
+            FilaAjuste(
+                glifo = "✓",
+                titulo = stringResource(R.string.ajustes_deliberacion),
+                detalle = detalleDeliberacion(estado.ajustesMovil),
+                alPulsar = { alAbrirSeccion(SeccionAjustes.DELIBERACION) },
+            )
+            FilaAjuste(
                 glifo = "⚡",
                 titulo = stringResource(R.string.ajustes_bateria),
                 detalle = stringResource(R.string.ajustes_bateria_detalle),
@@ -94,6 +117,58 @@ fun PantallaAjustes(
         }
     }
 }
+
+/** Resumen de la fila Flota: refresco y umbrales de CARGA (§5.4). */
+@Composable
+private fun detalleFlota(ajustes: AjustesMovilVista): String {
+    val refresco = if (ajustes.flotaRefrescoSeg <= 0) {
+        stringResource(R.string.ajustes_refresco_apagado)
+    } else {
+        stringResource(R.string.ajustes_segundos, ajustes.flotaRefrescoSeg)
+    }
+    return stringResource(
+        R.string.ajustes_flota_detalle,
+        refresco,
+        unDecimal(ajustes.umbralCargaPorNucleo),
+        sinDecimales(ajustes.umbralMemoriaPct),
+        sinDecimales(ajustes.umbralDiscoPct),
+    )
+}
+
+/** Resumen de la fila Servicios: refresco, espera, motores y sudo (§5.4). */
+@Composable
+private fun detalleServicios(ajustes: AjustesMovilVista): String {
+    val refresco = if (ajustes.serviciosRefrescoSeg <= 0) {
+        stringResource(R.string.ajustes_refresco_apagado)
+    } else {
+        stringResource(R.string.ajustes_segundos, ajustes.serviciosRefrescoSeg)
+    }
+    val motores = if (ajustes.serviciosContenedores.isEmpty()) {
+        stringResource(R.string.ajustes_servicios_sin_motores)
+    } else {
+        ajustes.serviciosContenedores.joinToString(", ")
+    }
+    val sudo = if (ajustes.sudoMemoriaMin <= 0) {
+        stringResource(R.string.ajustes_servicios_sudo_siempre)
+    } else {
+        stringResource(R.string.ajustes_minutos, ajustes.sudoMemoriaMin)
+    }
+    return stringResource(
+        R.string.ajustes_servicios_detalle,
+        refresco,
+        stringResource(R.string.ajustes_segundos, ajustes.serviciosEsperaSeg),
+        motores,
+        sudo,
+    )
+}
+
+/** Resumen de la fila Deliberación: horas del backup y minutos de salud (§5.4). */
+@Composable
+private fun detalleDeliberacion(ajustes: AjustesMovilVista): String = stringResource(
+    R.string.ajustes_deliberacion_detalle,
+    stringResource(R.string.ajustes_horas, ajustes.deliberacionBackupHoras),
+    stringResource(R.string.ajustes_minutos, ajustes.deliberacionSaludMaxMin),
+)
 
 /** Fila de ajuste con glifo, título, detalle y flecha. */
 @Composable

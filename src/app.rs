@@ -7770,6 +7770,7 @@ impl App {
             dir_ssh: self.rutas.dir_ssh(),
             hogar: self.rutas.hogar.clone(),
             usuario_local: usuario_local(),
+            motores: self.config.servicios.contenedores.clone(),
         }
     }
 

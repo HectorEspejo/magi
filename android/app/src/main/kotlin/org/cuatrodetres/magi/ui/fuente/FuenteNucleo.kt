@@ -2,8 +2,38 @@ package org.cuatrodetres.magi.ui.fuente
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import org.cuatrodetres.magi.ui.modelos.AccionEnCursoVista
+import org.cuatrodetres.magi.ui.modelos.AccionServicioVista
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
+import org.cuatrodetres.magi.ui.modelos.ConsumoVista
+import org.cuatrodetres.magi.ui.modelos.DecisionDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.DetalleRegistroVista
+import org.cuatrodetres.magi.ui.modelos.DetalleServiciosVista
+import org.cuatrodetres.magi.ui.modelos.EntradaRegistroVista
+import org.cuatrodetres.magi.ui.modelos.EjecucionVista
+import org.cuatrodetres.magi.ui.modelos.EstadoLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroRegistroVista
+import org.cuatrodetres.magi.ui.modelos.HostFlotaVista
+import org.cuatrodetres.magi.ui.modelos.InfoAccionVista
+import org.cuatrodetres.magi.ui.modelos.ListadoServiciosVista
+import org.cuatrodetres.magi.ui.modelos.ObjetivoVista
+import org.cuatrodetres.magi.ui.modelos.OrdenPestanaVista
+import org.cuatrodetres.magi.ui.modelos.PlanDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.PreparacionEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoAjustesVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoNucleoVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoServicioVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoSudoVista
+import org.cuatrodetres.magi.ui.modelos.SalidaEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.SnippetVista
+import org.cuatrodetres.magi.ui.modelos.TablaDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.TAMANO_PAGINA_REGISTRO
+import org.cuatrodetres.magi.ui.modelos.TodaLaFlotaVista
+import org.cuatrodetres.magi.ui.modelos.VariableSnippetVista
+import org.cuatrodetres.magi.ui.modelos.VentanaLogsVista
 import org.cuatrodetres.magi.ui.modelos.EntradaVista
 import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
@@ -191,6 +221,216 @@ interface FuenteNucleo {
 
     /** Guarda el tamaño de letra del terminal (8-24 sp). */
     suspend fun cambiarTamanoLetra(sp: Int): ResultadoAccion
+
+    // =======================================================================
+    // Fase 14 · flujos nuevos (informe §5.2)
+    // =======================================================================
+
+    /** Lista completa de hosts de Flota, al empezar y al terminar cada sondeo. */
+    val flota: StateFlow<List<HostFlotaVista>>
+
+    /** Lista completa de acciones de servicio en curso, en cada cambio. */
+    val accionesServicio: StateFlow<List<AccionEnCursoVista>>
+
+    /** Lista completa de ejecuciones de snippets (sin la salida), en cada cambio. */
+    val ejecuciones: StateFlow<List<EjecucionVista>>
+
+    /** Novedades de las suscripciones de logs, como mucho cada 100 ms. */
+    val avisosLogs: Flow<EstadoLogsVista>
+
+    /** Acciones de servicio terminadas, aunque la pantalla que las pidió ya no esté. */
+    val accionesHechas: Flow<ResultadoServicioVista>
+
+    // =======================================================================
+    // Fase 14 · ajustes y flota (informe §5.1 y §5.4)
+    // =======================================================================
+
+    /**
+     * Pasa al núcleo los ajustes del móvil. El núcleo los acota y devuelve los
+     * valores normalizados con un aviso por cada corrección.
+     */
+    suspend fun aplicarAjustes(ajustes: AjustesMovilVista): ResultadoAjustesVista
+
+    /** Hosts de Flota con su estado; mismo filtro que el inventario de la Fase 11. */
+    suspend fun flota(filtro: String? = null): List<HostFlotaVista>
+
+    /**
+     * Sondea esos hosts (con la lista vacía, todos los SSH) sin abrir diálogos.
+     * Los resultados llegan por el flujo [flota].
+     */
+    suspend fun sondear(hosts: List<String>): ResultadoAccion
+
+    // La ficha de host (fichaHost) gana el bloque flota, las verificaciones y el
+    // snippet al conectar; los modelos FichaHostVista ya los incluyen.
+
+    // =======================================================================
+    // Fase 14 · servicios (informe §5.1)
+    // =======================================================================
+
+    /** Fallos de todos los hosts según el último sondeo del móvil; no abre conexiones. */
+    suspend fun serviciosTodaLaFlota(): TodaLaFlotaVista
+
+    /**
+     * Listado de servicios de un host con los motores de los ajustes. Con
+     * [refresco] = true es automático y no puede abrir diálogos; con false lo
+     * pide el usuario y sí puede.
+     */
+    suspend fun serviciosListar(
+        hostUuid: String,
+        refresco: Boolean,
+    ): ResultadoNucleoVista<ListadoServiciosVista>
+
+    /** CPU y memoria de los contenedores en marcha de un host. */
+    suspend fun serviciosConsumo(hostUuid: String): ResultadoNucleoVista<List<ConsumoVista>>
+
+    /** Propiedades, dependencias y texto de la unidad o del inspect. */
+    suspend fun serviciosDetalle(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+    ): ResultadoNucleoVista<DetalleServiciosVista>
+
+    /** Lo que la app necesita saber antes de confirmar o deliberar una acción. */
+    suspend fun prepararAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+    ): ResultadoNucleoVista<InfoAccionVista>
+
+    /**
+     * Ejecuta la acción y devuelve su resultado. [deliberacion] es el id de la
+     * deliberación que la autoriza, si la acción la exige.
+     */
+    suspend fun servicioAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+        deliberacion: Long? = null,
+    ): ResultadoNucleoVista<ResultadoServicioVista>
+
+    /**
+     * Comprueba la contraseña de sudo con servicios.sh sudo. [contrasena] va en
+     * bytes para poder borrarla tras usarla (nunca a disco, log ni REGISTRO).
+     */
+    suspend fun sudoComprobar(hostUuid: String, contrasena: ByteArray): ResultadoSudoVista
+
+    /** Olvida la contraseña de sudo en memoria de un host. */
+    suspend fun sudoOlvidar(hostUuid: String): ResultadoAccion
+
+    /**
+     * Olvida todas las contraseñas de sudo en memoria al bloquearse MAGI
+     * (informe §7.5, D268): la siguiente acción la vuelve a pedir.
+     */
+    suspend fun olvidarSudoAlBloquear(): ResultadoAccion
+
+    // =======================================================================
+    // Fase 14 · logs y sesiones con orden (informe §5.1)
+    // =======================================================================
+
+    /**
+     * Abre la suscripción de logs de un objetivo y devuelve su id. Hay una por
+     * objetivo; [lineas] son las líneas iniciales que se piden.
+     */
+    suspend fun logsSeguir(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        lineas: Int = FiltroLogsVista.LINEAS_INICIALES,
+    ): ResultadoNucleoVista<Long>
+
+    /** Hasta 500 líneas ya filtradas de una suscripción (con su estado y omitidas). */
+    suspend fun logsVentana(
+        suscripcion: Long,
+        filtro: FiltroLogsVista = FiltroLogsVista(),
+    ): ResultadoNucleoVista<VentanaLogsVista>
+
+    /** Cierra el canal de una suscripción; las líneas se quedan en el anillo. */
+    suspend fun logsParar(suscripcion: Long): ResultadoAccion
+
+    /** Abre una sesión con PTY para una orden de pestaña del núcleo (T108). */
+    suspend fun abrirSesionConOrden(
+        hostUuid: String,
+        orden: OrdenPestanaVista,
+    ): ResultadoAperturaVista
+
+    // =======================================================================
+    // Fase 14 · snippets y ejecuciones (informe §5.1)
+    // =======================================================================
+
+    /** Snippets del inventario (solo lectura en el móvil), con filtro por subcadena. */
+    suspend fun snippets(filtro: String? = null): List<SnippetVista>
+
+    /** Los snippets que tienen ese host entre sus destinos. */
+    suspend fun snippetsDeHost(hostUuid: String): List<SnippetVista>
+
+    /** Detalle de un snippet; null si ya no existe. */
+    suspend fun snippet(uuid: String): SnippetVista?
+
+    /**
+     * Prepara una ejecución: el núcleo sustituye las variables con escape,
+     * valida y dice si delibera. Los errores por campo vienen dentro.
+     */
+    suspend fun prepararEjecucion(
+        snippetUuid: String,
+        hosts: List<String>,
+        variables: List<VariableSnippetVista> = emptyList(),
+    ): ResultadoNucleoVista<PreparacionEjecucionVista>
+
+    /**
+     * Lanza una ejecución preparada y devuelve su id. [deliberacion] es el id
+     * de la deliberación que la autoriza, si la ejecución la exige.
+     */
+    suspend fun ejecutarSnippet(
+        preparacion: PreparacionEjecucionVista,
+        pararAlFallo: Boolean,
+        deliberacion: Long? = null,
+    ): ResultadoNucleoVista<Long>
+
+    /** Ejecuciones en curso y terminadas, sin la salida. */
+    suspend fun ejecucionesLista(): List<EjecucionVista>
+
+    /** Salida de un host de una ejecución, ya sin secuencias de escape. */
+    suspend fun salidaEjecucion(
+        ejecucion: Long,
+        hostUuid: String,
+    ): ResultadoNucleoVista<SalidaEjecucionVista>
+
+    /** Cancela una ejecución en curso. */
+    suspend fun cancelarEjecucion(id: Long): ResultadoAccion
+
+    /** Prepara otra vez una ejecución terminada; volverá a deliberar si hace falta. */
+    suspend fun repetirEjecucion(id: Long): ResultadoNucleoVista<PreparacionEjecucionVista>
+
+    /** Olvida las ejecuciones terminadas. */
+    suspend fun limpiarEjecuciones(): ResultadoAccion
+
+    // =======================================================================
+    // Fase 14 · deliberación y registro (informe §5.1)
+    // =======================================================================
+
+    /** Hace las comprobaciones en paralelo (2 s cada una) y devuelve la tabla. */
+    suspend fun deliberar(plan: PlanDeliberacionVista): ResultadoNucleoVista<TablaDeliberacionVista>
+
+    /**
+     * Resuelve una deliberación (aprobar, forzar con motivo o cancelar), guarda
+     * su fila y devuelve el id que autoriza la acción o la ejecución.
+     */
+    suspend fun resolverDeliberacion(
+        id: Long,
+        decision: DecisionDeliberacionVista,
+    ): ResultadoNucleoVista<Long>
+
+    /**
+     * Una página del registro del móvil, de la más nueva a la más vieja.
+     * [desde] es el id de la última entrada de la página anterior; null empieza
+     * por la más nueva.
+     */
+    suspend fun registro(
+        filtro: FiltroRegistroVista = FiltroRegistroVista(),
+        desde: Long? = null,
+        cuantas: Int = TAMANO_PAGINA_REGISTRO,
+    ): List<EntradaRegistroVista>
+
+    /** Detalle de una entrada del registro, con la deliberación si la hay. */
+    suspend fun registroDetalle(id: Long): DetalleRegistroVista?
 }
 
 /** Entrada de texto ya interpretada (`EntradaVista`) para el terminal. */

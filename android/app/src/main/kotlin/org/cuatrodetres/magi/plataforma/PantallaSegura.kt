@@ -19,6 +19,19 @@ import androidx.compose.ui.platform.LocalContext
  */
 object PantallaSegura {
 
+    /** Recintos seguros abiertos por Activity: FLAG_SECURE solo se retira al salir el último. */
+    private val recintos = ContadorRecintos<Activity>()
+
+    /** Entra en un recinto seguro; aplica el flag solo si es el primero. */
+    fun entrar(actividad: Activity) {
+        if (recintos.entrar(actividad)) aplicar(actividad)
+    }
+
+    /** Sale de un recinto seguro; retira el flag solo si era el último. */
+    fun salir(actividad: Activity) {
+        if (recintos.salir(actividad)) retirar(actividad)
+    }
+
     fun aplicar(actividad: Activity) {
         actividad.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -42,11 +55,9 @@ object PantallaSegura {
 fun RecintoSeguro(activo: Boolean = true, contenido: @Composable () -> Unit) {
     val actividad = LocalContext.current.actividadAnfitriona()
     DisposableEffect(actividad, activo) {
-        if (actividad != null) {
-            if (activo) PantallaSegura.aplicar(actividad) else PantallaSegura.retirar(actividad)
-        }
+        if (actividad != null && activo) PantallaSegura.entrar(actividad)
         onDispose {
-            if (actividad != null) PantallaSegura.retirar(actividad)
+            if (actividad != null && activo) PantallaSegura.salir(actividad)
         }
     }
     contenido()

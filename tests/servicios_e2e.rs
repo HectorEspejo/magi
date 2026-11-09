@@ -10,7 +10,7 @@
 
 mod comun;
 
-#[path = "servicios_e2e/binarios.rs"]
+#[path = "../crates/magi-nucleo/tests/fijos/servicios/binarios.rs"]
 mod binarios;
 
 use std::time::{Duration, Instant};
@@ -73,11 +73,11 @@ fn vista_servidor_y_host_de_prueba_de_extremo_a_extremo() {
         .build()
         .expect("runtime del escenario");
 
-    // Binarios falsos del host: una unidad viva que muere al reiniciar y un
-    // journalctl que deja constancia de que lo mataron.
+    // Binarios falsos del host: los guiones compartidos de la F13
+    // (crates/magi-nucleo/tests/fijos/servicios/). Una unidad viva cuyo
+    // reinicio falla, el diario con sus últimas líneas y el seguimiento que
+    // deja constancia de que lo mataron.
     let binarios = BinariosFalsos::nuevos();
-    binarios.sistema();
-    binarios.marcar("relleno", "relleno de prueba");
     binarios.unidad(
         "app.service",
         &[
@@ -91,7 +91,15 @@ fn vista_servidor_y_host_de_prueba_de_extremo_a_extremo() {
         "app.service",
         "[Unit]\nDescription=app de prueba\n\n[Service]\nExecStart=/bin/true\n",
     );
-    binarios.marcar("muere.app.service", "1");
+    binarios.escribir("accion_codigo", "1");
+    binarios.escribir(
+        "journal_short/app.service",
+        "2026-11-08T12:00:00+00:00 aviso: el servicio no arrancó\n",
+    );
+    binarios.escribir(
+        "journal/app.service",
+        "{\"__REALTIME_TIMESTAMP\":\"1794139824180943\",\"PRIORITY\":\"6\",\"MESSAGE\":\"hola\"}\n",
+    );
 
     let escenario = runtime.block_on(comun::escenario(OpcionesEscenario {
         binarios: Some(binarios.ruta().to_path_buf()),
@@ -211,26 +219,26 @@ fn vista_servidor_y_host_de_prueba_de_extremo_a_extremo() {
                 .is_some_and(|listado| listado.estado == EstadoListado::Ok)
     });
     // El journalctl falso recibió el TERM: el seguimiento se cortó en el host.
-    let marcas = binarios.ruta().join("journalctl.paradas");
+    let marcas = binarios.estado().join("terminado_journalctl");
     bombear_hasta(&mut app, &mut terminal, PLAZO, |_| marcas.exists());
     assert!(
         binarios
             .llamadas()
-            .iter()
+            .lines()
             .any(|llamada| llamada.starts_with("journalctl") && llamada.contains("-f")),
         "el host debía arrancar journalctl -f: {:?}",
         binarios.llamadas()
     );
 
     // «Toda la flota» no abre conexiones: pasar a ella no deja más llamadas.
-    let antes = binarios.llamadas().len();
+    let antes = binarios.llamadas().lines().count();
     tecla(&mut app, &mut terminal, KeyCode::Tab);
     tecla(&mut app, &mut terminal, KeyCode::Up);
     assert_eq!(app.servicios_host_seleccionado(), None);
     app.bombear(&mut terminal, Duration::from_millis(300))
         .expect("bombeando sin pedir nada");
     assert_eq!(
-        binarios.llamadas().len(),
+        binarios.llamadas().lines().count(),
         antes,
         "entrar en «Toda la flota» no debe hablar con el host"
     );

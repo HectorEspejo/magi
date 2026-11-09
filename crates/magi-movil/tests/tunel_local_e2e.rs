@@ -3,144 +3,25 @@
 //!
 //! Lo que entra por el agujero del túnel tiene que salir por él y volver. Es la
 //! prueba que faltaba en la Fase 11 y que debe fallar si el reenvío no funciona.
+//! Desde la Fase 14 el servidor de pruebas compartido vivirá en
+//! `comun/servidor_pruebas.rs`; mientras tanto esta prueba conserva el suyo
+//! para los canales `direct-tcpip`.
 
-use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt as _;
+mod comun;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use magi_movil::api::{
-    ErrorNucleo, EstadoSincronizacion, EstadoTunel, Pantalla, PeticionDialogo, Retrollamadas,
-    Sesion, TunelVivo,
-};
-use magi_movil::estado::{con_almacen, EstadoNucleo};
-use magi_movil::retrollamadas::{
-    CarpetaMovil, FicheroCarpeta, FirmanteMovil, LlaveroMovil, OyenteNucleo,
-};
+use magi_movil::api::EstadoTunel;
+use magi_movil::estado::con_almacen;
 use magi_nucleo::almacen::movil as movil_bd;
+use magi_nucleo::almacen::tuneles as almacen_tuneles;
 use magi_nucleo::almacen::versiones::Tabla;
-use magi_nucleo::almacen::{hosts, tuneles as almacen_tuneles};
-use magi_nucleo::modelo::{DatosHost, DatosTunel, Origen, TipoTunel};
-use magi_nucleo::rutas::{Equipo, Rutas};
+use magi_nucleo::modelo::{DatosHost, DatosTunel, TipoTunel};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
-struct CarpetaVacia;
-
-impl CarpetaMovil for CarpetaVacia {
-    fn listar(&self) -> Result<Vec<FicheroCarpeta>, ErrorNucleo> {
-        Ok(Vec::new())
-    }
-
-    fn leer(&self, _nombre: String, _maximo: u64) -> Result<Vec<u8>, ErrorNucleo> {
-        Err(ErrorNucleo::Carpeta {
-            detalle: "carpeta vacía".to_string(),
-        })
-    }
-}
-
-#[derive(Clone, Default)]
-struct LlaveroMemoria {
-    secretos: Arc<Mutex<HashMap<String, Vec<u8>>>>,
-}
-
-impl LlaveroMemoria {
-    fn guardar_en_memoria(&self, cuenta: &str, valor: &[u8]) {
-        self.secretos
-            .lock()
-            .expect("llavero")
-            .insert(cuenta.to_string(), valor.to_vec());
-    }
-}
-
-impl LlaveroMovil for LlaveroMemoria {
-    fn leer(&self, clave: String) -> Result<Option<Vec<u8>>, ErrorNucleo> {
-        Ok(self.secretos.lock().expect("llavero").get(&clave).cloned())
-    }
-
-    fn guardar(&self, clave: String, secreto: Vec<u8>) -> Result<(), ErrorNucleo> {
-        self.secretos
-            .lock()
-            .expect("llavero")
-            .insert(clave, secreto);
-        Ok(())
-    }
-
-    fn borrar(&self, clave: String) -> Result<(), ErrorNucleo> {
-        self.secretos.lock().expect("llavero").remove(&clave);
-        Ok(())
-    }
-}
-
-/// Clave P-256 de pruebas: la cadena del móvil autentica con la clave pública
-/// y el servidor de pruebas acepta cualquier firma (no la verifica).
-struct FirmantePrueba {
-    clave: p256::ecdsa::SigningKey,
-}
-
-/// Cabecera SPKI de una clave pública EC P-256 sin comprimir.
-const PREFIJO_SPKI: [u8; 26] = [
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
-];
-
-impl FirmantePrueba {
-    fn nuevo() -> Self {
-        let clave = p256::ecdsa::SigningKey::from_bytes(&p256::FieldBytes::from([7u8; 32]))
-            .expect("clave P-256 de pruebas");
-        Self { clave }
-    }
-}
-
-impl FirmanteMovil for FirmantePrueba {
-    fn clave_publica_x509(&self) -> Result<Vec<u8>, ErrorNucleo> {
-        let punto = self.clave.verifying_key().to_sec1_bytes();
-        assert_eq!(punto.first(), Some(&0x04), "punto SEC1 sin comprimir");
-        let mut der = PREFIJO_SPKI.to_vec();
-        der.extend_from_slice(&punto);
-        Ok(der)
-    }
-
-    fn firmar(&self, datos: Vec<u8>) -> Result<Vec<u8>, ErrorNucleo> {
-        use p256::ecdsa::signature::Signer as _;
-        let firma: p256::ecdsa::Signature = self.clave.sign(datos.as_slice());
-        Ok(firma.to_der().as_bytes().to_vec())
-    }
-
-    fn olvidar_clave(&self) -> Result<(), ErrorNucleo> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct OyenteGuardado {
-    tuneles: Mutex<Vec<TunelVivo>>,
-    sesiones: Mutex<Vec<Sesion>>,
-}
-
-impl OyenteGuardado {
-    fn tuneles(&self) -> Vec<TunelVivo> {
-        self.tuneles.lock().expect("oyente").clone()
-    }
-}
-
-impl OyenteNucleo for OyenteGuardado {
-    fn pantalla(&self, _pantalla: Pantalla) {}
-
-    fn sesiones(&self, lista: Vec<Sesion>) {
-        *self.sesiones.lock().expect("oyente") = lista;
-    }
-
-    fn tuneles(&self, lista: Vec<TunelVivo>) {
-        *self.tuneles.lock().expect("oyente") = lista;
-    }
-
-    fn dialogo(&self, peticion: PeticionDialogo) {
-        eprintln!("DIALOGO PEDIDO: {peticion:?}");
-    }
-
-    fn sincronizacion(&self, _estado: EstadoSincronizacion) {}
-}
+use comun::{servir_eco, tunel_por_uuid, Entorno};
 
 // ------------------------------------------------------------ servidor SSH
 
@@ -218,35 +99,6 @@ impl russh::server::Handler for HandlerPruebas {
     }
 }
 
-// ------------------------------------------------------------ escenario
-
-/// Servicio de eco: devuelve lo que recibe.
-async fn servir_eco() -> u16 {
-    let escucha = TcpListener::bind(("127.0.0.1", 0)).await.expect("eco");
-    let puerto = escucha.local_addr().expect("eco").port();
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut flujo, _)) = escucha.accept().await else {
-                return;
-            };
-            tokio::spawn(async move {
-                let mut bufer = vec![0u8; 1024];
-                loop {
-                    match flujo.read(&mut bufer).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(leidos) => {
-                            if flujo.write_all(&bufer[..leidos]).await.is_err() {
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
-    puerto
-}
-
 /// Servidor SSH de pruebas; devuelve puerto, clave pública, mangos y tarea.
 async fn servir_ssh() -> (
     u16,
@@ -279,10 +131,10 @@ async fn servir_ssh() -> (
     (puerto, clave.public_key().clone(), mangos, tarea)
 }
 
+// ------------------------------------------------------------ escenario
+
 struct Montaje {
-    _temporal: tempfile::TempDir,
-    estado: Arc<EstadoNucleo>,
-    oyente: Arc<OyenteGuardado>,
+    entorno: Entorno,
     host_uuid: String,
     tunel_uuid: String,
     puerto_tunel: u16,
@@ -293,68 +145,15 @@ struct Montaje {
 async fn montar() -> Montaje {
     let puerto_eco = servir_eco().await;
     let (puerto_ssh, clave_host, mangos_ssh, tarea_ssh) = servir_ssh().await;
-
-    let temporal = tempfile::tempdir().expect("temporal");
-    let base = temporal.path();
-    let rutas = Rutas::nuevas(
-        base.join("datos"),
-        base.join("config"),
-        base.join("estado"),
-        base.join("hogar"),
-        base.join("runtime"),
-    );
-    std::fs::create_dir_all(&rutas.datos).expect("datos");
-    std::fs::create_dir_all(rutas.dir_ssh()).expect("ssh");
-
-    let ruta_conocidos = rutas.fichero_known_hosts();
-    std::fs::write(
-        &ruta_conocidos,
-        format!(
-            "[127.0.0.1]:{puerto_ssh} {}\n",
-            clave_host.to_openssh().expect("pública")
-        ),
-    )
-    .expect("known_hosts");
-    std::fs::set_permissions(&ruta_conocidos, std::fs::Permissions::from_mode(0o600))
-        .expect("permisos");
-
-    let llavero = LlaveroMemoria::default();
-    let oyente = Arc::new(OyenteGuardado::default());
-    let estado = EstadoNucleo::nuevo(
-        rutas,
-        Equipo::nuevo("pruebas", "android"),
-        Retrollamadas {
-            carpeta: Arc::new(CarpetaVacia),
-            llavero: Arc::new(llavero.clone()),
-            firmante: Arc::new(FirmantePrueba::nuevo()),
-            oyente: oyente.clone(),
-        },
-    )
-    .expect("estado del núcleo");
-
-    let host_id = con_almacen(&estado, move |almacen| {
-        hosts::crear(
-            almacen.conexion(),
-            &DatosHost {
-                nombre: "prueba".to_string(),
-                direccion: "127.0.0.1".to_string(),
-                puerto: puerto_ssh,
-                usuario: Some("usuario".to_string()),
-                ..DatosHost::default()
-            },
-            Origen::Manual,
-        )
-    })
-    .expect("escritor")
-    .expect("host");
-    let uuid_host = con_almacen(&estado, move |almacen| {
-        movil_bd::uuid_por_id(almacen.conexion(), Tabla::Hosts)
-            .map(|mapa| mapa.get(&host_id).cloned())
-    })
-    .expect("escritor")
-    .expect("mapa")
-    .expect("uuid del host");
-    llavero.guardar_en_memoria(&format!("contrasena:{uuid_host}"), b"secreta");
+    let entorno = Entorno::nuevo(&[(puerto_ssh, clave_host)]);
+    let (host_id, uuid_host) = entorno.crear_host(DatosHost {
+        nombre: "prueba".to_string(),
+        direccion: "127.0.0.1".to_string(),
+        puerto: puerto_ssh,
+        usuario: Some("usuario".to_string()),
+        ..DatosHost::default()
+    });
+    entorno.guardar_contrasena(&uuid_host, "secreta");
 
     // Puerto libre para la escucha del túnel (se libera justo antes de usarlo).
     let escucha = TcpListener::bind(("127.0.0.1", 0))
@@ -363,12 +162,11 @@ async fn montar() -> Montaje {
     let puerto_tunel = escucha.local_addr().expect("puerto").port();
     drop(escucha);
 
-    let host_id_tunel = host_id;
-    let tunel_id = con_almacen(&estado, move |almacen| {
+    let tunel_id = con_almacen(entorno.estado(), move |almacen| {
         almacen_tuneles::crear(
             almacen.conexion(),
             &DatosTunel {
-                host_id: host_id_tunel,
+                host_id,
                 nombre: "web".to_string(),
                 tipo: TipoTunel::Local,
                 escucha: format!("127.0.0.1:{puerto_tunel}"),
@@ -379,7 +177,7 @@ async fn montar() -> Montaje {
     })
     .expect("escritor")
     .expect("túnel");
-    let tunel_uuid = con_almacen(&estado, move |almacen| {
+    let tunel_uuid = con_almacen(entorno.estado(), move |almacen| {
         movil_bd::uuid_por_id(almacen.conexion(), Tabla::Tuneles)
             .map(|mapa| mapa.get(&tunel_id).cloned())
     })
@@ -388,9 +186,7 @@ async fn montar() -> Montaje {
     .expect("uuid del túnel");
 
     Montaje {
-        _temporal: temporal,
-        estado,
-        oyente,
+        entorno,
         host_uuid: uuid_host,
         tunel_uuid,
         puerto_tunel,
@@ -399,32 +195,27 @@ async fn montar() -> Montaje {
     }
 }
 
-fn tunel_por_uuid(oyente: &OyenteGuardado, uuid: &str) -> Option<TunelVivo> {
-    oyente
-        .tuneles()
-        .into_iter()
-        .find(|tunel| tunel.uuid == uuid)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn el_tunel_local_del_movil_reenvia_de_verdad() {
     let montaje = montar().await;
+    let estado = montaje.entorno.estado();
     tokio::time::timeout(
         Duration::from_secs(15),
-        magi_movil::gestor::conexion_para_host(&montaje.estado, &montaje.host_uuid),
+        magi_movil::gestor::conexion_para_host(estado, &montaje.host_uuid),
     )
     .await
     .expect("la conexión del host se colgó")
     .expect("conectando al host");
     tokio::time::timeout(
         Duration::from_secs(20),
-        magi_movil::gestor::activar_tunel(&montaje.estado, &montaje.tunel_uuid, false),
+        magi_movil::gestor::activar_tunel(estado, &montaje.tunel_uuid, false),
     )
     .await
     .expect("la activación del túnel se colgó")
     .expect("activando el túnel");
 
-    let tunel = tunel_por_uuid(&montaje.oyente, &montaje.tunel_uuid).expect("fila del túnel");
+    let tunel =
+        tunel_por_uuid(montaje.entorno.oyente(), &montaje.tunel_uuid).expect("fila del túnel");
     assert_eq!(tunel.estado, EstadoTunel::Activo, "{tunel:?}");
     assert_eq!(
         tunel.escucha,
@@ -436,7 +227,10 @@ async fn el_tunel_local_del_movil_reenvia_de_verdad() {
         .await
         .expect("conectando al agujero del túnel");
     flujo
-        .write_all(b"hola por el tunel\n")
+        .write_all(
+            b"hola por el tunel
+",
+        )
         .await
         .expect("escribiendo");
     let mut bufer = vec![0u8; 256];
@@ -444,12 +238,16 @@ async fn el_tunel_local_del_movil_reenvia_de_verdad() {
         .await
         .expect("el eco no llegó por el túnel")
         .expect("leyendo el eco");
-    assert_eq!(&bufer[..leidos], b"hola por el tunel\n");
+    assert_eq!(
+        &bufer[..leidos],
+        b"hola por el tunel
+"
+    );
 
     // Los contadores tienen que reflejarlo.
     let mut contadores = (0u32, 0u32, 0u64, 0u64);
     for _ in 0..100 {
-        let lista = magi_movil::gestor::tuneles(&montaje.estado, None).expect("túneles");
+        let lista = magi_movil::gestor::tuneles(estado, None).expect("túneles");
         if let Some(tunel) = lista.into_iter().find(|t| t.uuid == montaje.tunel_uuid) {
             contadores = (
                 tunel.conexiones,
@@ -468,7 +266,7 @@ async fn el_tunel_local_del_movil_reenvia_de_verdad() {
         "contadores sin tráfico: {contadores:?}"
     );
     // Con el interruptor normal no se marca «puerto libre».
-    let fila = magi_movil::gestor::tuneles(&montaje.estado, None)
+    let fila = magi_movil::gestor::tuneles(estado, None)
         .expect("túneles")
         .into_iter()
         .find(|t| t.uuid == montaje.tunel_uuid)
@@ -476,29 +274,26 @@ async fn el_tunel_local_del_movil_reenvia_de_verdad() {
     assert_eq!(fila.puerto_efectivo, None, "{fila:?}");
 
     // «Abrir en un puerto libre» sí lo marca y la escucha es la de verdad.
-    magi_movil::gestor::parar_tunel(&montaje.estado, &montaje.tunel_uuid)
+    magi_movil::gestor::parar_tunel(estado, &montaje.tunel_uuid)
         .await
         .expect("parando el túnel");
-    magi_movil::gestor::activar_tunel(&montaje.estado, &montaje.tunel_uuid, true)
+    magi_movil::gestor::activar_tunel(estado, &montaje.tunel_uuid, true)
         .await
         .expect("activando en puerto libre");
-    let libre = magi_movil::gestor::tuneles(&montaje.estado, None)
+    let libre = magi_movil::gestor::tuneles(estado, None)
         .expect("túneles")
         .into_iter()
         .find(|t| t.uuid == montaje.tunel_uuid)
         .expect("fila libre");
     let puerto = libre.puerto_efectivo.expect("puerto libre marcado");
     assert_eq!(libre.escucha, format!("127.0.0.1:{puerto}"), "{libre:?}");
-
-    // El runtime del núcleo no se puede soltar dentro del contexto async del
-    // test; se deja al proceso (los temporales se limpian al terminar).
-    std::mem::forget(montaje);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn si_cae_la_conexion_del_host_el_tunel_queda_caido() {
     let montaje = montar().await;
-    magi_movil::gestor::activar_tunel(&montaje.estado, &montaje.tunel_uuid, false)
+    let estado = montaje.entorno.estado();
+    magi_movil::gestor::activar_tunel(estado, &montaje.tunel_uuid, false)
         .await
         .expect("activando el túnel");
 
@@ -528,9 +323,9 @@ async fn si_cae_la_conexion_del_host_el_tunel_queda_caido() {
 
     let mut caido = None;
     for _ in 0..200 {
-        let lista = magi_movil::gestor::tuneles(&montaje.estado, None).expect("túneles");
+        let lista = magi_movil::gestor::tuneles(estado, None).expect("túneles");
         if let Some(tunel) = lista.into_iter().find(|t| t.uuid == montaje.tunel_uuid) {
-            if tunel.estado == magi_movil::api::EstadoTunel::Caido {
+            if tunel.estado == EstadoTunel::Caido {
                 caido = Some(tunel);
                 break;
             }
@@ -540,5 +335,4 @@ async fn si_cae_la_conexion_del_host_el_tunel_queda_caido() {
     let caido = caido.expect("el túnel no pasó a caído tras perder la conexión");
     let motivo = caido.error.unwrap_or_default();
     assert!(motivo.contains("conexión"), "motivo poco claro: {motivo:?}");
-    std::mem::forget(montaje);
 }

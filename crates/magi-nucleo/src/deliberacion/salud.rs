@@ -1,6 +1,6 @@
 //! MELCHIOR-1 · salud: el host está NOMINAL según su último sondeo (de hace
-//! menos de `salud_max_min`) o según uno nuevo, no interactivo. CARGA,
-//! ALCANZABLE o CAÍDA rechazan con el dato que lo justifica.
+//! menos de salud_max) o según uno nuevo, no interactivo. CARGA, ALCANZABLE o
+//! CAÍDA rechazan con el dato que lo justifica.
 
 use std::time::Duration;
 

@@ -1,8 +1,10 @@
 #!/bin/sh
-# sudo falso para las pruebas de servicios.sh.
+# sudo falso para las pruebas de servicios (F13). El helper compartido
+# sustituye @DIR@ por el directorio de estado de la prueba.
 # $ESTADO/sudo_modo: sin_clave | con_clave | sin_sudo
 # $ESTADO/sudo_clave: contraseña buena
 # $ESTADO/sudo_solo: si existe, órdenes permitidas (una por línea)
+ESTADO="@DIR@"
 echo "sudo $*" >> "$ESTADO/llamadas"
 modo=$(cat "$ESTADO/sudo_modo" 2>/dev/null || echo sin_clave)
 clave=$(cat "$ESTADO/sudo_clave" 2>/dev/null || echo secreta)

@@ -1,8 +1,8 @@
 //! BALTHASAR-2 · backup: el fichero más reciente del directorio de backups
-//! del host que casa con el patrón tiene menos de `backup_horas`. Se mira por
-//! SFTP (`ListarDir`), sin ejecutar nada en el host.
+//! del host que casa con el patrón tiene menos de backup_horas. Se mira por
+//! SFTP (sftp_lectura), sin ejecutar nada en el host.
 
-use crate::archivos::marcas::{Entrada, TipoEntrada};
+use crate::sftp_lectura::{EntradaListado, TipoEntradaListado};
 
 /// Compila el patrón (glob sobre el nombre del fichero).
 pub fn compilar_patron(patron: &str) -> Result<globset::GlobMatcher, String> {
@@ -12,9 +12,9 @@ pub fn compilar_patron(patron: &str) -> Result<globset::GlobMatcher, String> {
 }
 
 /// Juicio sobre un listado: aprueba si el fichero más reciente que casa con
-/// el patrón es más nuevo que `horas`. El texto siempre dice por qué.
+/// el patrón es más nuevo que horas. El texto siempre dice por qué.
 pub fn evaluar(
-    entradas: &[Entrada],
+    entradas: &[EntradaListado],
     patron: Option<&str>,
     ahora: i64,
     horas: u64,
@@ -29,14 +29,14 @@ pub fn evaluar(
     if entradas.is_empty() {
         return (false, "directorio vacío".to_string());
     }
-    let ficheros: Vec<&Entrada> = entradas
+    let ficheros: Vec<&EntradaListado> = entradas
         .iter()
-        .filter(|entrada| entrada.tipo == TipoEntrada::Fichero)
+        .filter(|entrada| entrada.tipo == TipoEntradaListado::Fichero)
         .collect();
     if ficheros.is_empty() {
         return (false, "sin ficheros en el directorio".to_string());
     }
-    let candidatos: Vec<&&Entrada> = ficheros
+    let candidatos: Vec<&&EntradaListado> = ficheros
         .iter()
         .filter(|entrada| {
             casa.as_ref()
@@ -85,16 +85,12 @@ mod pruebas {
 
     const AHORA: i64 = 1_800_000_000;
 
-    fn fichero(nombre: &str, hace_horas: i64) -> Entrada {
-        Entrada {
+    fn fichero(nombre: &str, hace_horas: i64) -> EntradaListado {
+        EntradaListado {
             nombre: nombre.to_string(),
-            tipo: TipoEntrada::Fichero,
+            tipo: TipoEntradaListado::Fichero,
             tamano: 10,
             mtime: AHORA - hace_horas * 3600,
-            permisos: None,
-            propietario: None,
-            enlace: None,
-            marca: Default::default(),
         }
     }
 
@@ -130,7 +126,7 @@ mod pruebas {
         assert!(!aprueba);
         assert_eq!(texto, "ningún fichero casa con *.gz");
         let mut directorio = fichero("sub", 1);
-        directorio.tipo = TipoEntrada::Directorio;
+        directorio.tipo = TipoEntradaListado::Directorio;
         assert!(!evaluar(&[directorio], None, AHORA, 24).0);
         let mut sin_fecha = fichero("x.gz", 1);
         sin_fecha.mtime = 0;

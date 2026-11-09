@@ -14,7 +14,7 @@ use crate::estado::{con_almacen, EstadoNucleo};
 
 /// Traduce el tipo de host del núcleo al DTO de UniFFI (la app no ve el tipo
 /// del núcleo directamente).
-fn tipo_a_vista(tipo: magi_nucleo::escritorio::TipoHost) -> TipoHostMovil {
+pub(crate) fn tipo_a_vista(tipo: magi_nucleo::escritorio::TipoHost) -> TipoHostMovil {
     use magi_nucleo::escritorio::TipoHost;
     match tipo {
         TipoHost::Ssh => TipoHostMovil::Ssh,
@@ -44,6 +44,31 @@ pub fn grupos(estado: &EstadoNucleo) -> Result<Vec<GrupoInventario>, ErrorNucleo
         .collect())
 }
 
+/// ¿Casa el host con una consulta ya normalizada? Es el mismo filtro que la
+/// lista de Hosts de la Fase 11 (nombre, dirección, usuario, grupo y
+/// etiquetas) y lo comparten Hosts y Flota.
+pub(crate) fn host_coincide(host: &magi_nucleo::modelo::Host, consulta: &str) -> bool {
+    if consulta.is_empty() {
+        return true;
+    }
+    [
+        normalizar_busqueda(&host.nombre),
+        normalizar_busqueda(&host.direccion),
+        normalizar_busqueda(host.usuario.as_deref().unwrap_or_default()),
+        host.grupo_nombre
+            .as_deref()
+            .map(normalizar_busqueda)
+            .unwrap_or_default(),
+        host.etiquetas
+            .iter()
+            .map(|etiqueta| normalizar_busqueda(etiqueta))
+            .collect::<Vec<_>>()
+            .join(" "),
+    ]
+    .iter()
+    .any(|texto| texto.contains(consulta))
+}
+
 /// Hosts con estado, sesiones abiertas y etiquetas; filtro por subcadena.
 pub fn hosts(
     estado: &EstadoNucleo,
@@ -71,26 +96,8 @@ pub fn hosts(
     for fila in hosts {
         let host = fila.host;
         if let Some(consulta) = &consulta {
-            if !consulta.is_empty() {
-                let coincide = [
-                    normalizar_busqueda(&host.nombre),
-                    normalizar_busqueda(&host.direccion),
-                    normalizar_busqueda(host.usuario.as_deref().unwrap_or_default()),
-                    host.grupo_nombre
-                        .as_deref()
-                        .map(normalizar_busqueda)
-                        .unwrap_or_default(),
-                    host.etiquetas
-                        .iter()
-                        .map(|etiqueta| normalizar_busqueda(etiqueta))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                ]
-                .iter()
-                .any(|texto| texto.contains(consulta.as_str()));
-                if !coincide {
-                    continue;
-                }
+            if !host_coincide(&host, consulta) {
+                continue;
             }
         }
         let uuid_host = fila.uuid.clone();
@@ -181,6 +188,11 @@ pub fn ficha(estado: &EstadoNucleo, host_uuid: &str) -> Result<FichaHost, ErrorN
             .or_else(|| Some("auto".to_string())),
         huellas,
         tiene_contrasena,
+        // Bloques nuevos de la ficha (Fase 14, informe §6.2): los rellena el
+        // módulo de Flota; de momento su esbozo devuelve None.
+        flota: crate::flota::detalle(estado, host_uuid)?,
+        verificaciones: crate::flota::verificaciones(estado, host_uuid)?,
+        snippet_al_conectar: crate::flota::snippet_al_conectar(estado, host_uuid)?,
     })
 }
 
@@ -222,7 +234,7 @@ fn abriendas(
 }
 
 /// Convierte una fecha ISO de magi.db en segundos desde la época.
-fn fecha_a_epoca(fecha: &str) -> Option<i64> {
+pub(crate) fn fecha_a_epoca(fecha: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(fecha)
         .ok()
         .map(|fecha| fecha.timestamp())

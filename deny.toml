@@ -59,6 +59,18 @@ ignore = [
   # Revisar al subir IronRDP/sspi y, si async-dnssd desaparece, quitar esta
   # excepción. Aviso publicado después de la Fase 13: no lo introduce esta fase.
   { id = "RUSTSEC-2026-0441", reason = "pin-utils sin mantener, transitiva de sspi/async-dnssd en el vendor de IronRDP; sin alternativa en el stack" },
+  # 2026-11-09 · RUSTSEC-2026-0459 (CVE-2026-119375): libsqlite3-sys 0.38.2
+  # (rusqlite 0.40 con SQLite embebido, fijado por CLAUDE.md) puede devolver
+  # memoria no inicializada de la caché de páginas si se abre una magi.db con
+  # un fichero -wal hermano de tamaño de página distinto escrito por un tercero.
+  # El vector es local y exige que la víctima abra esa pareja de ficheros;
+  # magi.db vive en el directorio privado del usuario y MAGI nunca abre bases
+  # de datos de la carpeta compartida. El parche llega con rusqlite 0.41
+  # (libsqlite3-sys 0.39, Rust 1.89): subirlo exige subir el rust-version del
+  # workspace y repetir las pruebas, así que se pospone a una fase de
+  # dependencias. Revisar al subir rusqlite.
+  # Caducidad de la excepción: 2027-05-09 (la comprueba el job deny de ci.yml).
+  { id = "RUSTSEC-2026-0459", reason = "SQLite embebido antiguo; vector local con un -wal ajeno y magi.db en el directorio privado del usuario; parche en rusqlite 0.41" },
 ]
 
 [licenses]

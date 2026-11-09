@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MAGI · app Android (Fase 14). Resultados de ejecuciones de snippets
+     (informe §6.9 y §7.6). -->
+<resources>
+    <string name="res_titulo">MAGI · RESULTADOS</string>
+    <string name="res_vacio_titulo">No hay ejecuciones</string>
+    <string name="res_vacio_detalle">Lanza un snippet desde Snippets: aquí verás en curso y terminadas, con la salida de cada host.</string>
+    <string name="res_elegir">Elige una ejecución de la lista.</string>
+    <string name="res_elegir_host">Toca un host para ver su salida.</string>
+    <string name="res_cargando">leyendo resultados…</string>
+    <string name="res_cargando_salida">pidiendo la salida al núcleo…</string>
+    <string name="res_forzada">⚑ forzada</string>
+    <string name="res_ejecucion">ejecución #%1$d</string>
+    <string name="res_hosts">hosts</string>
+    <string name="res_host">HOST</string>
+    <string name="res_salida">SALIDA</string>
+    <string name="res_stdout">STDOUT</string>
+    <string name="res_stderr">STDERR</string>
+    <string name="res_sin_salida">Sin salida en este flujo.</string>
+    <string name="res_truncada">… truncada a 1 MiB</string>
+    <string name="res_copiar">COPIAR</string>
+    <string name="res_repetir">REPETIR</string>
+    <string name="res_limpiar">LIMPIAR</string>
+    <string name="res_cancelar">CANCELAR</string>
+    <string name="res_confirmar_cancelar_titulo">CANCELAR LA EJECUCIÓN</string>
+    <string name="res_confirmar_cancelar_texto">Se pedirá al host que deje de ejecutar. Los hosts que ya habían terminado conservan su resultado.</string>
+    <string name="res_copiado">Salida copiada al portapapeles, marcada como sensible.</string>
+    <string name="res_copiado_error">No se pudo copiar al portapapeles.</string>
+    <string name="res_limpiadas">Ejecuciones terminadas olvidadas.</string>
+    <string name="res_repetida">Ejecución preparada otra vez.</string>
+    <string name="res_aviso">Aviso</string>
+    <string name="res_terminada">terminada</string>
+    <string name="res_en_curso_fila">en curso</string>
+    <string name="res_hora">%1$s</string>
+    <string name="res_a_sesion">A SESIÓN</string>
+    <string name="res_en_curso">%1$d en curso</string>
+    <string name="res_codigo">código %1$d</string>
+    <string name="res_bytes">%1$s</string>
+    <plurals name="res_en_curso_plural">
+        <item quantity="one">%1$d en curso</item>
+        <item quantity="other">%1$d en curso</item>
+    </plurals>
+</resources>

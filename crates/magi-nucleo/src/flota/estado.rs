@@ -1,8 +1,13 @@
+//! Estado derivado del último sondeo de un host (F2 §7.2): FRÍA, CAÍDA,
+//! ALCANZABLE, CARGA y NOMINAL, con sus culpables, la tasa de red y los
+//! formatos legibles. Lo comparten el escritorio y el móvil.
+
 use serde::{Deserialize, Serialize};
 
 use crate::modelo::{ResultadoSondeo, Sondeo};
 
-/// Umbrales globales de la flota, en `config.toml` `[flota.umbrales]`.
+/// Umbrales globales de la flota, en `config.toml` `[flota.umbrales]` en el
+/// escritorio y en los ajustes del móvil (DataStore).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Umbrales {
@@ -90,8 +95,10 @@ pub fn tasa_red(actual: &Sondeo, anterior: &Sondeo) -> Option<(f64, f64)> {
     if segundos <= 0.0 || segundos > 3600.0 {
         return None;
     }
-    let rx = actual.red_rx_bytes? - anterior.red_rx_bytes?;
-    let tx = actual.red_tx_bytes? - anterior.red_tx_bytes?;
+    // Los contadores vienen del host (entrada no fiable): una resta que se
+    // salga de i64 no puede tumbar el proceso.
+    let rx = actual.red_rx_bytes?.checked_sub(anterior.red_rx_bytes?)?;
+    let tx = actual.red_tx_bytes?.checked_sub(anterior.red_tx_bytes?)?;
     if rx < 0 || tx < 0 {
         return None;
     }
@@ -220,9 +227,7 @@ mod pruebas {
 
     #[test]
     fn los_fallos_del_sondeo_no_cambian_el_estado_del_host() {
-        use magi_nucleo::servicios::{
-            FallosContenedores, FallosSondeo, FallosUnidades, MotorNombre,
-        };
+        use crate::servicios::{FallosContenedores, FallosSondeo, FallosUnidades, MotorNombre};
         let mut sondeo = sondeo_ok();
         sondeo.fallos = Some(FallosSondeo {
             unidades: FallosUnidades {
@@ -261,6 +266,21 @@ mod pruebas {
 
         actual.fecha = "2026-09-15T10:00:10+02:00".to_string();
         actual.red_rx_bytes = Some(500);
+        assert!(tasa_red(&actual, &anterior).is_none());
+    }
+
+    #[test]
+    fn una_resta_de_contadores_desbordada_no_es_tasa_ni_panico() {
+        // El host es entrada no fiable: contadores en los extremos de i64 no
+        // pueden provocar una resta desbordada al calcular la tasa.
+        let mut anterior = sondeo_ok();
+        anterior.fecha = "2026-09-15T10:00:00+02:00".to_string();
+        anterior.red_rx_bytes = Some(i64::MAX);
+        anterior.red_tx_bytes = Some(i64::MAX);
+        let mut actual = sondeo_ok();
+        actual.fecha = "2026-09-15T10:00:10+02:00".to_string();
+        actual.red_rx_bytes = Some(i64::MIN);
+        actual.red_tx_bytes = Some(i64::MIN);
         assert!(tasa_red(&actual, &anterior).is_none());
     }
 

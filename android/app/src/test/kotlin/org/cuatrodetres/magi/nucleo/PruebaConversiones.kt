@@ -86,6 +86,9 @@ class PruebaConversiones {
             identidadEscritorio = "auto",
             huellas = listOf(HuellaHost("ssh-ed25519", "SHA256:p91X…c2Qz")),
             tieneContrasena = true,
+            flota = null,
+            verificaciones = null,
+            snippetAlConectar = null,
         ).aVista()
         assertEquals(2222, ficha.puerto)
         assertEquals(30, ficha.keepaliveSegundos)

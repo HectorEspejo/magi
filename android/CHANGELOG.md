@@ -16,6 +16,36 @@ en [`docs/publicar.md`](../docs/publicar.md).
   usarlas todavía (la vista de servicios del móvil llega en la Fase 14). Los
   ficheros del `formato` 1 y 2 se siguen leyendo igual, y uno con un formato
   mayor que 3 sigue avisando de que hay que actualizar MAGI.
+- **Flota (Fase 14).** Sustituye a Hosts y es la pantalla de inicio: grupos
+  plegables, búsqueda, estado de cada host (FRÍA, sondeando, CAÍDA, ALCANZABLE,
+  CARGA o NOMINAL) con sus culpables, métricas, fallos y sesiones; sondeo al
+  abrir, al volver, al deslizar y cada 30 s con la pantalla a la vista; la ficha
+  gana el bloque FLOTA, las verificaciones previas y el snippet al conectar.
+- **Servicios (Fase 14).** «Toda la flota» con los fallos del último sondeo y,
+  por host, servicios, timers y contenedores con su detalle, acciones con
+  confirmación o deliberación, sudo en memoria y logs en vivo con anillo,
+  filtros, pausa y «a sesión».
+- **Snippets con deliberación (Fase 14).** Ejecuta los snippets sincronizados
+  en uno o varios hosts, con variables, resultados por host y salida; la
+  deliberación MAGI (MELCHIOR-1, BALTHASAR-2 y CASPER-3 «solo en el
+  escritorio») se ejecuta manteniendo pulsado 1 s. Incluye el snippet al
+  conectar.
+- **Registro (Fase 14).** Las entradas del propio móvil con filtros por host,
+  tipo y texto y el detalle de cada deliberación.
+- **Ajustes de Flota, Servicios y Deliberación (Fase 14)** en DataStore, con
+  los valores por defecto y los rangos del escritorio.
+- **Servicio en primer plano ampliado:** cuenta también las acciones y las
+  ejecuciones en curso, y al volver avisa si Android cerró MAGI con trabajo
+  pendiente.
+
+### Cambiado
+
+- La barra inferior pasa a FLOTA · SESIONES · TÚNELES · SERVICIOS · MÁS, con
+  riel en plegable o pantalla ancha; MÁS agrupa Snippets, Resultados, Registro
+  y Ajustes. En plegable abierto, Flota, Servicios, Snippets y Registro van en
+  dos paneles (lista y detalle); el terminal sigue a pantalla completa.
+- La contraseña de sudo se pide y se guarda solo en memoria 5 min sin uso
+  (nunca en disco ni en el llavero) y se olvida al bloquear MAGI.
 
 ## [0.2.0] - 2026-11-05
 

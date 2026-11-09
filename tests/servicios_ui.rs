@@ -17,6 +17,7 @@ use ratatui::Terminal;
 use magi::app::servicios::{DialogoServicio, EstadoListado, Foco, PestanaDetalle, Seccion};
 use magi::app::{App, Evento};
 use magi::config::{Config, Rutas};
+use magi::deliberacion::LimitesDeConfig;
 use magi::modelo::{DatosHost, Origen, ResultadoSondeo, Sondeo};
 use magi::protocolo::{MensajeCliente, MensajeServidor, RANGO_SERVICIOS};
 use magi::tema::Tema;

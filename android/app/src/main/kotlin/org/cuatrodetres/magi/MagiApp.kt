@@ -4,7 +4,6 @@ import android.app.Application
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.cuatrodetres.magi.nucleo.FuenteNucleoReal
 import org.cuatrodetres.magi.nucleo.InfoClavePlataforma
@@ -17,11 +16,16 @@ import org.cuatrodetres.magi.ui.modelos.UbicacionClaveVista
 /**
  * Aplicación de MAGI en Android (Fase 11).
  *
- * Crea la capa de plataforma (SAF, Keystore, firma P-256, bloqueo, batería y
- * DataStore) y la fachada real del núcleo. El núcleo NO se arranca aquí: lo
- * pide la interfaz al desbloquear (`fuente.iniciar()` → `NucleoRepositorio`),
- * porque necesita el Keystore desbloqueado y el permiso de la carpeta ya
- * restaurado.
+ * Crea la capa de plataforma (SAF, Keystore, firma P-256, bloqueo, batería,
+ * DataStore y visibilidad) y la fachada real del núcleo. El núcleo NO se
+ * arranca aquí: lo pide la interfaz al desbloquear (`fuente.iniciar()` →
+ * `NucleoRepositorio`), porque necesita el Keystore desbloqueado y el permiso
+ * de la carpeta ya restaurado.
+ *
+ * Desde la Fase 14 mantiene el servicio en primer plano al día con las
+ * sesiones, los túneles, las acciones de servicio y las ejecuciones (D279).
+ * El trabajo que quedó abierto para el aviso de «Android cerró MAGI» lo anota
+ * VistaModeloMagi, cuando ya ha consumido el aviso pendiente.
  */
 class MagiApp : Application() {
 
@@ -34,6 +38,32 @@ class MagiApp : Application() {
         private set
 
     private val alcance = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Recuentos vivos para el servicio en primer plano (informe §3.3 y D279).
+    // Los actualiza el oyente del núcleo (sesiones y túneles) y los flujos de
+    // acciones y ejecuciones; el servicio se refresca con cada cambio.
+    @Volatile
+    private var sesionesVivas: Int = 0
+
+    @Volatile
+    private var tunelesVivos: Int = 0
+
+    @Volatile
+    private var accionesVivas: Int = 0
+
+    @Volatile
+    private var ejecucionesVivas: Int = 0
+
+    /** Refresca la notificación del servicio con los recuentos vivos. */
+    private fun actualizarServicioSesiones() {
+        ServicioSesiones.actualizar(
+            contexto = this,
+            sesiones = sesionesVivas,
+            tuneles = tunelesVivos,
+            acciones = accionesVivas,
+            ejecuciones = ejecucionesVivas,
+        )
+    }
 
     /**
      * Lanza una pasada de sincronización en el ámbito de la aplicación (A5 de
@@ -72,7 +102,9 @@ class MagiApp : Application() {
                 )
             },
             actualizarServicio = { sesiones, tuneles ->
-                ServicioSesiones.actualizar(this, sesiones, tuneles)
+                sesionesVivas = sesiones
+                tunelesVivos = tuneles
+                actualizarServicioSesiones()
             },
             alUsarClave = { texto ->
                 // La clave de sincronización es un secreto: si sigue en el
@@ -89,14 +121,25 @@ class MagiApp : Application() {
             olvidarCarpeta = { plataforma.carpeta.olvidarCarpeta() },
         )
         alcance.launch { plataforma.iniciar() }
+        // El servicio en primer plano cuenta también las acciones y las
+        // ejecuciones de la Fase 14, que siguen con la app en segundo plano
+        // (D279). Las sesiones y los túneles llegan por el oyente del núcleo.
         alcance.launch {
-            // Deja anotadas las sesiones vivas: si Android mata el proceso, al
-            // volver se puede avisar de «Android cerró MAGI con N sesiones»
-            // (informe §4.6). Se salta el valor inicial vacío para no borrar el
-            // aviso pendiente de un cierre anterior.
-            fuente.sesiones.drop(1).collect { sesiones ->
-                plataforma.preferencias.guardarSesionesAbiertas(sesiones.size)
+            fuente.accionesServicio.collect { acciones ->
+                accionesVivas = acciones.size
+                actualizarServicioSesiones()
             }
         }
+        alcance.launch {
+            fuente.ejecuciones.collect { ejecuciones ->
+                // La lista conserva 1 h las ejecuciones terminadas: para el
+                // servicio en primer plano solo cuentan las que siguen vivas.
+                ejecucionesVivas = ejecuciones.count { ejecucion -> !ejecucion.terminada }
+                actualizarServicioSesiones()
+            }
+        }
+        // El trabajo que queda abierto para el aviso de «Android cerró MAGI con
+        // acciones o ejecuciones en curso» lo anota VistaModeloMagi, cuando ya
+        // ha consumido el aviso pendiente (informe §7.12).
     }
 }

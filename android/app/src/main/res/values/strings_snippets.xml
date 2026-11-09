@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MAGI · app Android (Fase 14). Snippets y su ejecución (informe §6.8 y §7.6). -->
+<resources>
+    <string name="snip_titulo">MAGI · SNIPPETS</string>
+    <string name="snip_buscar">buscar snippet…</string>
+    <string name="snip_critico">⚑ CRÍTICO</string>
+    <string name="snip_timeout">timeout %1$d s</string>
+    <string name="snip_sin_usar">sin usar</string>
+    <string name="snip_destinos">Destinos</string>
+    <string name="snip_destinos_resumen">%1$s → %2$d hosts</string>
+    <string name="snip_vacio_titulo">No hay snippets</string>
+    <string name="snip_vacio_detalle">Los snippets se crean en el escritorio y llegan a este móvil con la sincronización.</string>
+    <string name="snip_vacio_busqueda_titulo">Ningún snippet coincide</string>
+    <string name="snip_vacio_busqueda_detalle">Prueba con otra parte del nombre, el comando, la etiqueta o el destino.</string>
+    <string name="snip_escritorios">%1$d destinos son escritorios: no ejecutan snippets y se omiten.</string>
+    <string name="snip_comando">COMANDO</string>
+    <string name="snip_descripcion">DESCRIPCIÓN</string>
+    <string name="snip_etiquetas">ETIQUETAS</string>
+    <string name="snip_titulo_ejecutar">EJECUTAR · %1$s</string>
+    <string name="snip_hosts">HOSTS (%1$d de %2$d)</string>
+    <string name="snip_variables">VARIABLES</string>
+    <string name="snip_variable_defecto">por defecto: %1$s</string>
+    <string name="snip_variable_sin_defecto">sin valor por defecto</string>
+    <string name="snip_variable_vacia">Falta el valor de esta variable: no se puede continuar.</string>
+    <string name="snip_parar_al_fallo">parar al primer fallo</string>
+    <string name="snip_continuar">CONTINUAR</string>
+    <string name="snip_mantener_ejecutar">EJECUTAR</string>
+    <string name="snip_preparando">preparando la ejecución…</string>
+    <string name="snip_ejecutando">lanzando la ejecución…</string>
+    <string name="snip_ejecucion_lanzada">Ejecución lanzada. Puedes seguirla en Resultados.</string>
+    <string name="snip_ver_resultados">VER RESULTADOS</string>
+    <string name="snip_sin_hosts_marcados">Marca al menos un host.</string>
+    <string name="snip_sin_hosts">El snippet no apunta a ningún host.</string>
+    <string name="snip_pie">timeout %1$d s · %2$s</string>
+    <string name="snip_sin_deliberacion">sin deliberación</string>
+    <string name="snip_delibera">delibera: %1$s</string>
+    <string name="snip_error_campo">%1$s: %2$s</string>
+    <string name="snip_cargando">leyendo snippets…</string>
+    <string name="snip_elegir">Elige un snippet de la lista para verlo y ejecutarlo.</string>
+    <string name="snip_deliberacion_abierta">DELIBERACIÓN</string>
+    <plurals name="snip_hosts_cuenta">
+        <item quantity="one">%1$d host</item>
+        <item quantity="other">%1$d hosts</item>
+    </plurals>
+    <plurals name="snip_marcados">
+        <item quantity="one">%1$d marcado</item>
+        <item quantity="other">%1$d marcados</item>
+    </plurals>
+</resources>

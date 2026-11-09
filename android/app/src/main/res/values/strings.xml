@@ -3,11 +3,60 @@
 <resources>
     <string name="nombre_app">MAGI</string>
 
-    <!-- Navegación de primer nivel (barra inferior / riel) -->
-    <string name="destino_hosts">HOSTS</string>
+    <!-- Navegación de primer nivel (barra inferior / riel, D265) -->
+    <string name="destino_flota">FLOTA</string>
     <string name="destino_sesiones">SESIONES</string>
     <string name="destino_tuneles">TÚNELES</string>
+    <string name="destino_servicios">SERVICIOS</string>
+    <string name="destino_mas">MÁS</string>
     <string name="destino_ajustes">AJUSTES</string>
+
+    <!-- Flota (Fase 14) -->
+    <string name="flota_titulo">MAGI · FLOTA</string>
+    <string name="flota_conectar_a">Conectar a %1$s</string>
+    <string name="flota_abrir_ficha">Abrir la ficha de %1$s</string>
+    <string name="flota_descripcion">%1$s, %2$s, %3$d fallos, %4$d sesiones</string>
+    <string name="flota_descripcion_sin_fallos">%1$s, %2$s, %3$d sesiones</string>
+    <string name="flota_plegar_grupo">%1$s, %2$d hosts, plegado</string>
+    <string name="flota_desplegar_grupo">%1$s, %2$d hosts, desplegado</string>
+    <string name="flota_sin_grupo">SIN GRUPO</string>
+    <string name="flota_sondeando">◐ %1$d/%2$d</string>
+    <string name="flota_menu_sincronizar">Sincronizar ahora</string>
+    <string name="flota_menu_asistente">Asistente de sincronización</string>
+    <string name="flota_menu_ajustes">Ajustes</string>
+    <string name="flota_sin_sondeo">sin sondeo: desliza en Flota</string>
+    <string name="flota_seccion_flota">FLOTA</string>
+    <string name="flota_seccion_vigilados">VIGILADOS</string>
+    <string name="flota_seccion_fallos">FALLOS</string>
+    <string name="flota_vigilados_ninguno">Sin servicios vigilados.</string>
+    <string name="flota_fallos_ninguno">Sin fallos en el último sondeo.</string>
+    <string name="flota_barra_carga">CARGA</string>
+    <string name="flota_barra_memoria">MEM</string>
+    <string name="flota_barra_disco">DISCO</string>
+    <string name="flota_red">RED</string>
+    <string name="flota_activo">ACTIVO</string>
+    <string name="flota_sondeo_hace">sondeo hace %1$s en %2$d ms</string>
+    <string name="flota_sondeo_sin">sin sondeo del móvil</string>
+    <string name="flota_verificaciones">VERIFICACIONES</string>
+    <string name="flota_al_conectar">AL CONECTAR</string>
+    <string name="flota_sin_verificaciones">Sin verificaciones previas.</string>
+    <string name="flota_snippet_al_conectar">Se escribe «%1$s» al conectar.</string>
+    <string name="flota_snippet_no_valido">«%1$s» no se puede escribir al conectar (crítico o con variables).</string>
+    <string name="flota_accion_servicios">SERVICIOS</string>
+    <string name="flota_accion_snippets">SNIPPETS</string>
+    <string name="flota_aviso_deslizar">Suelta para sondear y sincronizar</string>
+    <string name="flota_elige_host">Elige un host de la lista para ver su ficha.</string>
+
+    <!-- Destino MÁS -->
+    <string name="mas_titulo">MAGI · MÁS</string>
+    <string name="mas_snippets">Snippets</string>
+    <string name="mas_snippets_detalle">ejecutar los sincronizados en uno o varios hosts</string>
+    <string name="mas_resultados">Resultados</string>
+    <string name="mas_resultados_detalle">ejecuciones en curso y terminadas</string>
+    <string name="mas_registro">Registro</string>
+    <string name="mas_registro_detalle">lo que ha hecho este móvil, con filtros</string>
+    <string name="mas_ajustes_detalle">sincronización, clave, terminal, flota, servicios y deliberación</string>
+    <string name="en_construccion">vista en construcción</string>
 
     <!-- Acciones comunes -->
     <string name="accion_abrir_menu">Abrir menú</string>
@@ -232,6 +281,57 @@
     <string name="ajustes_acerca_de_detalle">versión %1$s</string>
     <string name="ajustes_acerca_de_detalle_sin_version">versiones y licencias</string>
 
+    <!-- Ajustes de la Fase 14: Flota, Servicios y Deliberación (§5.4) -->
+    <string name="ajustes_flota">Flota</string>
+    <string name="ajustes_flota_detalle">refresco %1$s · carga %2$s/núcleo · memoria %3$s %% · disco %4$s %%</string>
+    <string name="ajustes_flota_refresco">Auto-refresco de Flota</string>
+    <string name="ajustes_flota_refresco_ayuda">Cada cuánto se sondean los hosts visibles con Flota abierta. Solo con la pantalla a la vista; 0 = apagado.</string>
+    <string name="ajustes_flota_carga">Carga por núcleo</string>
+    <string name="ajustes_flota_carga_valor">%1$s/núcleo</string>
+    <string name="ajustes_flota_carga_ayuda">Si la carga por núcleo supera este umbral, el host sale en CARGA.</string>
+    <string name="ajustes_flota_memoria">Memoria</string>
+    <string name="ajustes_flota_memoria_ayuda">Umbral de memoria usada a partir del cual el host sale en CARGA.</string>
+    <string name="ajustes_flota_disco">Disco</string>
+    <string name="ajustes_flota_disco_ayuda">Umbral de disco usado a partir del cual el host sale en CARGA.</string>
+    <string name="ajustes_flota_nota">Son los mismos valores del escritorio. Un valor fuera de rango se acota al guardar y se dice por qué.</string>
+    <string name="ajustes_servicios">Servicios</string>
+    <string name="ajustes_servicios_detalle">refresco %1$s · espera %2$s · motores %3$s · sudo %4$s</string>
+    <string name="ajustes_servicios_refresco">Refresco del listado</string>
+    <string name="ajustes_servicios_refresco_ayuda">Cada cuánto se vuelve a listar el host con Servicios abierto. Solo con la pantalla a la vista; 0 = solo al entrar.</string>
+    <string name="ajustes_servicios_espera">Espera de una acción</string>
+    <string name="ajustes_servicios_espera_ayuda">Cuánto se espera al estado final de una acción antes de darla por sin confirmar.</string>
+    <string name="ajustes_servicios_motores">MOTORES DE CONTENEDORES</string>
+    <string name="ajustes_servicios_motores_ayuda">Qué motores se consultan en cada host. Sin ninguno marcado, no se listan contenedores.</string>
+    <string name="ajustes_servicios_motor_docker">Docker</string>
+    <string name="ajustes_servicios_motor_podman">Podman</string>
+    <string name="ajustes_servicios_sin_motores">sin contenedores</string>
+    <string name="ajustes_servicios_sudo">Contraseña de sudo en memoria</string>
+    <string name="ajustes_servicios_sudo_siempre">pedir siempre</string>
+    <string name="ajustes_servicios_sudo_ayuda">Minutos sin uso antes de olvidar la contraseña de sudo. Solo las acciones cuentan; al bloquear MAGI se olvida siempre.</string>
+    <string name="ajustes_servicios_nota">Son los mismos valores del escritorio. Un valor fuera de rango se acota al guardar y se dice por qué.</string>
+    <string name="ajustes_deliberacion">Deliberación</string>
+    <string name="ajustes_deliberacion_detalle">backup &lt; %1$s · salud &lt; %2$s</string>
+    <string name="ajustes_deliberacion_backup">Antigüedad máxima del backup</string>
+    <string name="ajustes_deliberacion_backup_ayuda">BALTHASAR-2 rechaza si el último backup que casa con el patrón es más antiguo que estas horas (1-720).</string>
+    <string name="ajustes_deliberacion_salud">Antigüedad máxima del sondeo de salud</string>
+    <string name="ajustes_deliberacion_salud_ayuda">MELCHIOR-1 reutiliza el último sondeo del móvil si es más reciente que estos minutos (1-1440).</string>
+    <string name="ajustes_deliberacion_nota">CASPER-3 (tests) no puede ejecutarse en el móvil: siempre rechaza con «solo en el escritorio» y solo se puede forzar con motivo.</string>
+    <string name="ajustes_deliberacion_nota_guardar">Son los mismos valores del escritorio. Afectan al resultado de la deliberación de este móvil.</string>
+    <string name="ajustes_guardar">GUARDAR</string>
+    <string name="ajustes_sin_cambios">Sin cambios que guardar.</string>
+    <string name="ajustes_avisos_titulo">AVISOS DE LA ACOTACIÓN</string>
+    <string name="ajustes_campo_no_valido">Escribe un número entero.</string>
+    <string name="ajustes_campo_fuera_de_rango">Debe estar entre %1$d y %2$d.</string>
+    <string name="ajustes_refresco_apagado">apagado</string>
+    <string name="ajustes_segundos">%1$d s</string>
+    <string name="ajustes_minutos">%1$d min</string>
+    <string name="ajustes_horas">%1$d h</string>
+    <string name="ajustes_porcentaje_valor">%1$s %%</string>
+
+    <!-- Deliberación MAGI integrada en AppMagi (informe §6.6, D271) -->
+    <string name="deliberacion_mantener_ejecutar">MANTÉN PARA EJECUTAR</string>
+    <string name="deliberacion_mantener_accion">MANTÉN PARA %1$s</string>
+
     <!-- Clave del móvil -->
     <string name="clave_titulo">CLAVE DEL MÓVIL</string>
     <string name="clave_creando">Creando la clave en el Keystore…</string>
@@ -372,4 +472,99 @@
     <string name="avisos_ahora_no">AHORA NO</string>
     <string name="avisos_ver_guia">VER LA GUÍA</string>
     <string name="aviso_clave_recreada">La clave del móvil se ha recreado para corregir el desbloqueo por cara. Vuelve a instalar mi clave en tus hosts.</string>
+
+    <!-- Avisos al volver: trabajo que Android cerró con MAGI (informe §7.12) -->
+    <string name="avisos_trabajo_perdido_uno">Android cerró MAGI con %1$s: puede que se hayan hecho en el host.</string>
+    <string name="avisos_trabajo_perdido_dos">Android cerró MAGI con %1$s y %2$s: puede que se hayan hecho en el host.</string>
+    <plurals name="avisos_acciones_en_curso">
+        <item quantity="one">%1$d acción en curso</item>
+        <item quantity="other">%1$d acciones en curso</item>
+    </plurals>
+    <plurals name="avisos_ejecuciones_en_curso">
+        <item quantity="one">%1$d ejecución en curso</item>
+        <item quantity="other">%1$d ejecuciones en curso</item>
+    </plurals>
+
+    <!-- Fase 14: Servicios, detalle, acciones y logs -->
+    <string name="servicios_toda_la_flota">TODA LA FLOTA</string>
+    <string name="servicios_toda_la_flota_detalle">fallos del último sondeo · entrar no abre conexiones</string>
+    <string name="servicios_vacia_titulo">Sin incidencias</string>
+    <string name="servicios_vacia_detalle">No hay fallos ni hosts caídos en el último sondeo.</string>
+    <string name="servicios_hosts">HOSTS</string>
+    <string name="servicios_fallos">FALLOS</string>
+    <string name="servicios_sondeo_hace">sondeo %1$s</string>
+    <string name="servicios_sin_hosts">Sin hosts SSH en el inventario.</string>
+    <string name="servicios_filtro">filtrar por nombre</string>
+    <string name="servicios_reintentar">REINTENTAR</string>
+    <string name="servicios_refrescar">REFRESCAR</string>
+    <string name="servicios_pie">%1$d visibles · %2$s</string>
+    <string name="servicios_sin_motor">Sin Docker ni Podman en el host.</string>
+    <string name="servicios_sin_systemd">systemd no utilizable: se abren los contenedores.</string>
+    <string name="servicios_eligiendo_titulo">ELIGE UN SERVICIO</string>
+    <string name="servicios_eligiendo_detalle">La lista de la izquierda abre su detalle en este panel.</string>
+    <string name="servicios_cargando">leyendo…</string>
+    <string name="servicios_listado_incompleto">listado incompleto (límites del host)</string>
+    <string name="servicio_acciones">ACCIONES</string>
+    <string name="servicio_en_curso">◐ %1$s</string>
+    <string name="servicio_comprobacion">Antes: %1$s</string>
+    <string name="servicio_critica">UNIDAD CRÍTICA: puede cortar la conexión con %1$s</string>
+    <string name="servicio_confirmar_texto">%1$s %2$s en %3$s</string>
+    <string name="servicio_resultado_titulo">RESULTADO</string>
+    <string name="servicio_lineas_diario">ÚLTIMAS LÍNEAS</string>
+    <string name="servicio_comprobacion_salida">COMPROBACIÓN</string>
+    <string name="servicio_sudo_titulo">CONTRASEÑA DE SUDO</string>
+    <string name="servicio_sudo_detalle">Se recuerda 5 min sin uso; nunca se guarda. Intentos: %1$d.</string>
+    <string name="servicio_sudo_campo">contraseña</string>
+    <string name="servicio_sudo_comprobar">COMPROBAR</string>
+    <string name="servicio_logs">LOGS</string>
+    <string name="servicio_shell">SHELL</string>
+    <string name="servicio_sesion">A SESIÓN</string>
+    <string name="servicio_necesita">NECESITA</string>
+    <string name="servicio_necesitada">LA NECESITAN</string>
+    <string name="servicio_sin_dependencias">Sin dependencias.</string>
+    <string name="servicio_detalle_cargando">leyendo el detalle…</string>
+    <string name="servicio_olvidar_sudo">OLVIDAR SUDO</string>
+    <string name="logs_cargando">abriendo la suscripción…</string>
+    <string name="logs_sin_lineas">Sin líneas todavía.</string>
+    <string name="logs_sin_coincidencias">Sin líneas que casen con el filtro.</string>
+    <string name="logs_filtro">filtrar texto</string>
+    <string name="logs_nivel">NIVEL: %1$s</string>
+    <string name="logs_stderr">STDERR</string>
+    <string name="logs_pausa">PAUSA</string>
+    <string name="logs_seguir">SEGUIR</string>
+    <string name="logs_al_final">AL FINAL</string>
+    <string name="logs_omitidas">… %1$d líneas omitidas</string>
+    <string name="logs_recuento">%1$d líneas · %2$d omitidas</string>
+    <string name="logs_parar">PARAR</string>
+    <string name="logs_motivo">fin: %1$s</string>
+    <string name="logs_dar_sudo">DAR CONTRASEÑA DE SUDO</string>
+    <string name="logs_sin_permiso">Sin permiso para el diario: da la contraseña de sudo.</string>
+    <string name="comun_sin_datos">Sin datos.</string>
+    <string name="servicios_sin_proyecto">SIN PROYECTO</string>
+    <string name="servicio_timer">timer</string>
+    <string name="servicio_estado">estado: %1$s</string>
+    <string name="servicio_exige_deliberacion">Esta acción exige deliberación MAGI.</string>
+    <string name="servicio_campo_imagen">imagen</string>
+    <string name="servicio_campo_estado">estado</string>
+    <string name="servicio_campo_salida">salida</string>
+    <string name="servicio_campo_reinicios">reinicios</string>
+    <string name="servicio_campo_salud">salud</string>
+    <string name="servicio_campo_puertos">puertos</string>
+    <string name="servicio_campo_montajes">montajes</string>
+    <string name="servicio_campo_redes">redes</string>
+    <string name="servicio_campo_proyecto">proyecto</string>
+    <string name="servicio_campo_orden">orden</string>
+    <string name="servicio_hace_segundos">%1$s s</string>
+    <string name="servicio_hace_minutos">%1$s min</string>
+    <string name="servicio_hace_horas">%1$s h</string>
+    <string name="servicio_hace_dias">%1$s d</string>
+    <string name="servicios_fallos_aviso">advertencia: %1$d fallos</string>
+    <string name="servicios_sin_hora">—</string>
+    <string name="accion_ver_seccion">Ver la sección %1$s</string>
+    <string name="accion_ver_pestana">Ver la pestaña %1$s</string>
+    <string name="logs_accion_nivel">Cambiar el filtro de nivel</string>
+    <string name="logs_accion_stderr">Filtrar solo la salida de errores</string>
+    <string name="logs_accion_pausa">Pausar o seguir la suscripción</string>
+    <string name="logs_accion_al_final">Ir al final de los logs</string>
+    <string name="logs_al_final_nuevas">AL FINAL (%1$d)</string>
 </resources>

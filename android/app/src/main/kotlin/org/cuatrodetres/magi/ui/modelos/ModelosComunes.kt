@@ -18,6 +18,19 @@ sealed interface ResultadoAccion {
     data class Error(val mensaje: String) : ResultadoAccion
 }
 
+/**
+ * Resultado de una lectura del núcleo (Fase 14) que puede fallar con un
+ * mensaje legible y con instrucción cuando aplica. Las pantallas que deben
+ * conservar el dato anterior y enseñar el error usan este envoltorio.
+ */
+sealed interface ResultadoNucleoVista<out T> {
+    /** La lectura salió bien. */
+    data class Listo<T>(val valor: T) : ResultadoNucleoVista<T>
+
+    /** La lectura falló; [mensaje] es legible y lleva instrucción cuando aplica. */
+    data class Error(val mensaje: String) : ResultadoNucleoVista<Nothing>
+}
+
 /** Aviso efímero para la barra inferior. */
 sealed interface AvisoVista {
     /** Cambia en cada aviso para que la interfaz lo vuelva a mostrar. */

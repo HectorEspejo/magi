@@ -1,11 +1,14 @@
 //! CASPER-3 · tests: un comando local que escribe el propio usuario en la
-//! ficha (`gh run list …`, `curl` a un CI, `test -f`) se ejecuta con `sh -c`;
-//! código 0 aprueba, otro código rechaza con la última línea de stderr. Con
-//! plazo duro: al vencer se mata el grupo entero y se rechaza.
+//! ficha (gh run list …, curl a un CI, test -f) se ejecuta con sh -c; código 0
+//! aprueba, otro código rechaza con la última línea de stderr. Con plazo duro:
+//! al vencer se mata el grupo entero y se rechaza.
 //!
-//! El proceso corre en una sesión propia (`setsid`): sin terminal de control
-//! no puede leer las teclas de la TUI (que está en modo raw), y todo lo que
-//! lance queda en su grupo, así que matarlo mata también a sus hijos.
+//! En el móvil este proveedor no existe: la comprobación rechaza con «solo en
+//! el escritorio» (T116), nunca se omite en silencio.
+//!
+//! El proceso corre en una sesión propia (setsid): sin terminal de control no
+//! puede leer las teclas de la TUI (que está en modo raw), y todo lo que lance
+//! queda en su grupo, así que matarlo mata también a sus hijos.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -36,8 +39,8 @@ impl Drop for GrupoProceso {
     }
 }
 
-/// Ejecuta el comando de tests en `dir` con plazo hasta `limite`. Devuelve
-/// si aprueba y el dato que lo justifica.
+/// Ejecuta el comando de tests en dir con plazo hasta limite. Devuelve si
+/// aprueba y el dato que lo justifica.
 pub async fn ejecutar(comando: &str, limite: tokio::time::Instant, dir: &Path) -> (bool, String) {
     let mut orden = tokio::process::Command::new("sh");
     orden
@@ -48,7 +51,7 @@ pub async fn ejecutar(comando: &str, limite: tokio::time::Instant, dir: &Path) -
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // SAFETY: entre fork y exec solo se llama a `setsid`, que es
+    // SAFETY: entre fork y exec solo se llama a setsid, que es
     // async-signal-safe y no reserva memoria.
     unsafe {
         orden.pre_exec(|| {
@@ -114,7 +117,7 @@ pub async fn ejecutar(comando: &str, limite: tokio::time::Instant, dir: &Path) -
         }
         Err(_) => {
             grupo.matar();
-            // Recoger al hijo: un zombi seguiría «existiendo» para `kill`.
+            // Recoger al hijo: un zombi seguiría «existiendo» para kill.
             let _ = tokio::time::timeout(std::time::Duration::from_millis(500), hijo.wait()).await;
             lector.abort();
             (false, "plazo vencido".to_string())
@@ -156,7 +159,7 @@ mod pruebas {
         assert_eq!(texto, "código 3: tests en rojo");
     }
 
-    /// AC (checklist l. 86): `sleep 3` con plazo de 2 s rechaza «plazo
+    /// AC (checklist l. 86): sleep 3 con plazo de 2 s rechaza «plazo
     /// vencido» a los 2 s y el proceso ya no existe.
     #[tokio::test]
     async fn al_vencer_el_plazo_se_mata_el_proceso() {

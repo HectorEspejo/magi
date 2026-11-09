@@ -43,7 +43,10 @@ No hay Google Play ni otro canal: la app no se publica en tiendas.
   cd android
   ./gradlew lint testDebugUnitTest assembleDebug
 
-  # Prueba de humo con un emulador x86_64 API 30 (como el del CI)
+  # Prueba de humo con un emulador x86_64 API 30 (como el del CI). Las
+  # pruebas instrumentadas de extremo a extremo necesitan antes el servidor de
+  # pruebas del móvil en el anfitrión (escucha solo en 127.0.0.1):
+  #   cargo run -p magi-movil --example servidor_pruebas
   ./gradlew connectedDebugAndroidTest
   ```
 

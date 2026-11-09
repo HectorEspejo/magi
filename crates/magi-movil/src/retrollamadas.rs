@@ -5,7 +5,10 @@
 //! y el oyente que pinta pantallas y listas completas en Compose. El núcleo las
 //! recibe una sola vez en Nucleo::iniciar.
 
-use crate::api::{ErrorNucleo, EstadoSincronizacion, Pantalla, PeticionDialogo, Sesion, TunelVivo};
+use crate::api::{
+    AccionServicioMovil, EjecucionMovil, ErrorNucleo, EstadoLogs, EstadoSincronizacion, HostFlota,
+    Pantalla, PeticionDialogo, ResultadoServicioMovil, Sesion, TunelVivo,
+};
 
 /// Fichero de la carpeta compartida tal como lo lista SAF (informe §5.2):
 /// nombre, tamaño y fecha de modificación.
@@ -77,4 +80,24 @@ pub trait OyenteNucleo: Send + Sync {
 
     /// Estado completo de la sincronización (lo pinta Ajustes y el indicador ⇅).
     fn sincronizacion(&self, estado: EstadoSincronizacion);
+
+    // -------------------- Fase 14 (informe §5.2) --------------------
+
+    /// Lista completa de hosts de Flota, al empezar y al terminar cada sondeo.
+    fn flota(&self, lista: Vec<HostFlota>);
+
+    /// Lista completa de acciones de servicio en curso, en cada cambio y antes
+    /// del efecto.
+    fn acciones_servicio(&self, lista: Vec<AccionServicioMovil>);
+
+    /// Una acción de servicio terminada, aunque la pantalla que la pidió ya no
+    /// esté.
+    fn accion_servicio_hecha(&self, resultado: ResultadoServicioMovil);
+
+    /// Novedades de una suscripción de logs, como mucho cada 100 ms.
+    fn logs(&self, estado: EstadoLogs);
+
+    /// Lista completa de ejecuciones de snippets (sin la salida), en cada
+    /// cambio.
+    fn ejecuciones(&self, lista: Vec<EjecucionMovil>);
 }

@@ -6,8 +6,12 @@ import kotlinx.coroutines.SupervisorJob
 import org.cuatrodetres.magi.navegacion.Destino
 import org.cuatrodetres.magi.navegacion.DetalleVista
 import org.cuatrodetres.magi.navegacion.SeccionAjustes
+import org.cuatrodetres.magi.navegacion.SeccionMas
+import org.cuatrodetres.magi.ui.dobles.AvisosPlataformaFalso
 import org.cuatrodetres.magi.ui.dobles.ControlBloqueoPrueba
 import org.cuatrodetres.magi.ui.dobles.FuenteNucleoFalsa
+import org.cuatrodetres.magi.ui.modelos.AccionEnCursoVista
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.AvisoVista
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
@@ -15,10 +19,12 @@ import org.cuatrodetres.magi.ui.modelos.DialogoVista
 import org.cuatrodetres.magi.ui.modelos.EstadoBloqueoVista
 import org.cuatrodetres.magi.ui.modelos.EstadoHostVista
 import org.cuatrodetres.magi.ui.modelos.EstadoSesionVista
+import org.cuatrodetres.magi.ui.modelos.EjecucionVista
 import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FaseSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
 import org.cuatrodetres.magi.ui.modelos.GrupoVista
+import org.cuatrodetres.magi.ui.modelos.HostEjecucionVista
 import org.cuatrodetres.magi.ui.modelos.HostVista
 import org.cuatrodetres.magi.ui.modelos.InventarioVista
 import org.cuatrodetres.magi.ui.modelos.PasoAsistente
@@ -28,6 +34,7 @@ import org.cuatrodetres.magi.ui.modelos.SesionVista
 import org.cuatrodetres.magi.ui.modelos.TipoAviso
 import org.cuatrodetres.magi.ui.modelos.TipoConfirmacion
 import org.cuatrodetres.magi.ui.modelos.TipoHostVista
+import org.cuatrodetres.magi.ui.modelos.TrabajoPerdidoVista
 import org.cuatrodetres.magi.ui.modelos.TunelVista
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -405,6 +412,124 @@ class PruebaVistaModeloMagi {
         val aviso = vm.estado.value.aviso
         assertTrue(aviso is AvisoVista.DeInterfaz)
         assertEquals(TipoAviso.CLAVE_MOVIL_NO_CREADA, (aviso as AvisoVista.DeInterfaz).tipo)
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase 14: ajustes, bloqueo y trabajo que Android cerró con MAGI
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun alArrancarAplicaLosAjustesGuardados() {
+        val fuente = FuenteNucleoFalsa()
+        val guardados = AjustesMovilVista(flotaRefrescoSeg = 60, umbralMemoriaPct = 70.0)
+        val avisos = AvisosPlataformaFalso(ajustesGuardados = guardados)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        assertEquals(guardados, fuente.ajustesAplicados)
+        assertEquals(guardados, vm.estado.value.ajustesMovil)
+        assertEquals(1, avisos.vecesAjustesLeidos)
+    }
+
+    @Test
+    fun guardarAjustesLosAcotaLosPersisteYLosAplicaLosNucleo() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = AvisosPlataformaFalso()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        vm.guardarAjustesMovil(
+            AjustesMovilVista(
+                umbralCargaPorNucleo = 99.0,
+                serviciosContenedores = listOf("rkt"),
+            ),
+        )
+        assertEquals(16.0, avisos.ajustesGuardados.umbralCargaPorNucleo, 0.0001)
+        assertEquals(emptyList<String>(), avisos.ajustesGuardados.serviciosContenedores)
+        assertEquals(avisos.ajustesGuardados, fuente.ajustesAplicados)
+        assertTrue(vm.estado.value.avisosAjustes.isNotEmpty())
+    }
+
+    @Test
+    fun alVolverSeVuelvenAAplicarLosAjustesGuardados() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = AvisosPlataformaFalso()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        val nuevos = AjustesMovilVista(sudoMemoriaMin = 10)
+        avisos.ajustesGuardados = nuevos
+        fuente.ajustesAplicados = null
+        vm.alVolverALaApp()
+        assertEquals(nuevos, fuente.ajustesAplicados)
+        assertEquals(nuevos, vm.estado.value.ajustesMovil)
+    }
+
+    @Test
+    fun alBloquearseMagiOlvidaElSudoEnMemoria() {
+        val fuente = FuenteNucleoFalsa()
+        val control = ControlBloqueoPrueba(bloquearAlVolver = true)
+        val vm = VistaModeloMagi(fuente, control, ambito())
+        vm.iniciar()
+        vm.alVolverALaApp()
+        assertEquals(EstadoBloqueoVista.BLOQUEADA, vm.estado.value.bloqueo)
+        assertTrue(fuente.llamadas.contains("olvidarSudoAlBloquear"))
+    }
+
+    @Test
+    fun avisaDelTrabajoQueAndroidCerroConMagi() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = AvisosPlataformaFalso(accionesPerdidas = 1, ejecucionesPerdidas = 2)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        assertEquals(TrabajoPerdidoVista(acciones = 1, ejecuciones = 2), vm.estado.value.trabajoPerdido)
+        vm.descartarTrabajoPerdido()
+        assertNull(vm.estado.value.trabajoPerdido)
+    }
+
+    @Test
+    fun noAvisaDeTrabajoSiElNucleoTieneAccionesVivas() {
+        val fuente = FuenteNucleoFalsa()
+        fuente.emitirAccionesServicio(listOf(AccionEnCursoVista(hostNombre = "web-01")))
+        val avisos = AvisosPlataformaFalso(accionesPerdidas = 1)
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        assertNull(vm.estado.value.trabajoPerdido)
+    }
+
+    @Test
+    fun persisteElTrabajoVivoParaElProximoArranque() {
+        val fuente = FuenteNucleoFalsa()
+        val avisos = AvisosPlataformaFalso()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
+        vm.iniciar()
+        // Una ejecución con un host en cola: la lista conserva 1 h las
+        // terminadas, pero solo las vivas cuentan para el aviso de §7.12.
+        fuente.emitirEjecuciones(
+            listOf(
+                EjecucionVista(
+                    id = 1,
+                    hosts = listOf(
+                        HostEjecucionVista(hostUuid = "h1", hostNombre = "web-01"),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(Triple(0, 0, 1), avisos.trabajoGuardado)
+    }
+
+    @Test
+    fun losServiciosYSnippetsSeAbrenDesdeLaFichaDeFlota() {
+        val fuente = FuenteNucleoFalsa()
+        val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito())
+        vm.iniciar()
+        vm.abrirServiciosDeHost("h1")
+        assertEquals(Destino.SERVICIOS, vm.estado.value.destino)
+        assertEquals("h1", vm.estado.value.hostServiciosInicial)
+        vm.abrirSnippetsDeHost("h1")
+        assertEquals(Destino.MAS, vm.estado.value.destino)
+        assertEquals(SeccionMas.SNIPPETS, vm.estado.value.seccionMas)
+        assertEquals("h1", vm.estado.value.hostSnippetsInicial)
+        assertNull(vm.estado.value.hostServiciosInicial)
+        vm.volver()
+        assertNull(vm.estado.value.hostSnippetsInicial)
     }
 
     private fun conflicto() = ConflictoHuellaVista(
