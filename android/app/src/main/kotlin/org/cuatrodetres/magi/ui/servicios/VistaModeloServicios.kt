@@ -28,6 +28,7 @@ import org.cuatrodetres.magi.ui.modelos.ResultadoNucleoVista
 import org.cuatrodetres.magi.ui.modelos.ResultadoServicioVista
 import org.cuatrodetres.magi.ui.modelos.ResultadoSudoVista
 import org.cuatrodetres.magi.ui.modelos.SeccionServiciosVista
+import org.cuatrodetres.magi.ui.modelos.TipoObjetivoVista
 import org.cuatrodetres.magi.ui.modelos.TodaLaFlotaVista
 import org.cuatrodetres.magi.ui.modelos.deObjetivo
 import org.cuatrodetres.magi.ui.vistaModelo.VistaModeloBase
@@ -74,6 +75,8 @@ data class EstadoServiciosUi(
     val pestana: PestanaDetalleVista = PestanaDetalleVista.ESTADO,
     val seccion: SeccionServiciosVista = SeccionServiciosVista.SERVICIOS,
     val filtro: String = "",
+    /** Objetivo que hay que abrir en cuanto llegue el listado (toque de un fallo). */
+    val objetivoInicial: ObjetivoVista? = null,
     val consumo: Map<String, ConsumoVista> = emptyMap(),
     val acciones: List<AccionEnCursoVista> = emptyList(),
     val confirmacion: ConfirmacionAccionUi? = null,
@@ -237,8 +240,12 @@ class VistaModeloServicios(
         }
     }
 
-    /** Abre los servicios de un host (lo pide el usuario: puede dialogar). */
-    fun abrirHost(hostUuid: String, hostNombre: String) {
+    /**
+     * Abre los servicios de un host (lo pide el usuario: puede dialogar). Con
+     * [objetivoInicial], al llegar el listado se abre el detalle de ese
+     * elemento: es lo que hace tocar un fallo de «Toda la flota».
+     */
+    fun abrirHost(hostUuid: String, hostNombre: String, objetivoInicial: ObjetivoVista? = null) {
         trabajoRefresco?.cancel()
         trabajoListado?.cancel()
         trabajoDetalle?.cancel()
@@ -250,6 +257,7 @@ class VistaModeloServicios(
                 listado = null,
                 detalle = null,
                 objetivo = null,
+                objetivoInicial = objetivoInicial,
                 filtro = "",
                 aviso = null,
                 consumo = emptyMap(),
@@ -257,6 +265,52 @@ class VistaModeloServicios(
         }
         cargarListado(manual = true)
         programarRefresco()
+    }
+
+    /**
+     * Abre el detalle del objetivo pendiente en cuanto hay listado (toque de un
+     * fallo en «Toda la flota»). Si el elemento ya no está, lo dice sin ruido.
+     */
+    private fun abrirObjetivoPendiente() {
+        val actual = _estado.value
+        val pendiente = actual.objetivoInicial ?: return
+        val listado = actual.listado ?: return
+        val objetivo = objetivoDelListado(listado, pendiente)
+        if (objetivo == null) {
+            _estado.update {
+                it.copy(objetivoInicial = null, aviso = "el elemento ya no está en el host")
+            }
+            return
+        }
+        val seccion = when (objetivo.tipo) {
+            TipoObjetivoVista.UNIDAD -> SeccionServiciosVista.SERVICIOS
+            TipoObjetivoVista.TIMER -> SeccionServiciosVista.TIMERS
+            TipoObjetivoVista.CONTENEDOR,
+            TipoObjetivoVista.PROYECTO,
+            -> SeccionServiciosVista.CONTENEDORES
+        }
+        _estado.update { it.copy(objetivoInicial = null, seccion = seccion) }
+        abrirDetalle(objetivo)
+        if (seccion == SeccionServiciosVista.CONTENEDORES) consumir()
+    }
+
+    /** El objetivo del listado que corresponde al pedido (nombre canónico). */
+    private fun objetivoDelListado(
+        listado: ListadoServiciosVista,
+        objetivo: ObjetivoVista,
+    ): ObjetivoVista? = when (objetivo.tipo) {
+        TipoObjetivoVista.UNIDAD -> listado.unidades
+            .firstOrNull { it.nombre == objetivo.nombre }
+            ?.let { ObjetivoVista(TipoObjetivoVista.UNIDAD, it.nombre) }
+        TipoObjetivoVista.TIMER -> listado.timers
+            .firstOrNull { it.nombre == objetivo.nombre }
+            ?.let { ObjetivoVista(TipoObjetivoVista.TIMER, it.nombre) }
+        TipoObjetivoVista.CONTENEDOR -> listado.contenedores
+            .firstOrNull { it.nombre == objetivo.nombre || it.id == objetivo.nombre }
+            ?.let { ObjetivoVista(TipoObjetivoVista.CONTENEDOR, it.nombre) }
+        TipoObjetivoVista.PROYECTO -> listado.proyectos
+            .firstOrNull { it.nombre == objetivo.nombre }
+            ?.let { ObjetivoVista(TipoObjetivoVista.PROYECTO, it.nombre) }
     }
 
     /** El botón REINTENTAR del aviso de «no responde» o «sin conexión». */
@@ -304,6 +358,8 @@ class VistaModeloServicios(
             }
             if (resultado.isFailure || resultado.getOrNull() is ResultadoNucleoVista.Error) {
                 pararRefresco()
+            } else {
+                abrirObjetivoPendiente()
             }
             if (_estado.value.seccion == SeccionServiciosVista.CONTENEDORES) {
                 consumir()

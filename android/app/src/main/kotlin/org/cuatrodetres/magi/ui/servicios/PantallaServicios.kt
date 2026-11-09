@@ -66,6 +66,8 @@ import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.ContenedorVista
 import org.cuatrodetres.magi.ui.modelos.EstadoContenedorVista
 import org.cuatrodetres.magi.ui.modelos.EstadoFlotaVista
+import org.cuatrodetres.magi.ui.modelos.FalloFlotaVista
+import org.cuatrodetres.magi.ui.modelos.FilaTodaLaFlotaVista
 import org.cuatrodetres.magi.ui.modelos.MotorNombreVista
 import org.cuatrodetres.magi.ui.modelos.ObjetivoVista
 import org.cuatrodetres.magi.ui.modelos.OrdenPestanaVista
@@ -74,6 +76,8 @@ import org.cuatrodetres.magi.ui.modelos.ProyectoVista
 import org.cuatrodetres.magi.ui.modelos.ResultadoAccionServicioVista
 import org.cuatrodetres.magi.ui.modelos.SeccionServiciosVista
 import org.cuatrodetres.magi.ui.modelos.TimerVista
+import org.cuatrodetres.magi.ui.modelos.TipoFalloVista
+import org.cuatrodetres.magi.ui.modelos.TipoObjetivoVista
 import org.cuatrodetres.magi.ui.modelos.UnidadVista
 import org.cuatrodetres.magi.ui.modelos.ahoraSegundos
 import org.cuatrodetres.magi.ui.modelos.formatoFecha
@@ -176,6 +180,13 @@ fun PantallaServicios(
             !estado.enHost -> ListaTodaLaFlota(
                 estado = estado,
                 alAbrirHost = { host -> vistaModelo.abrirHost(host.hostUuid, host.hostNombre) },
+                alAbrirFallo = { fila ->
+                    vistaModelo.abrirHost(
+                        fila.hostUuid,
+                        fila.hostNombre,
+                        objetivoDeFallo(fila.fallo),
+                    )
+                },
                 alReintentar = vistaModelo::reintentar,
                 alVolver = alVolver,
                 modifier = Modifier.fillMaxSize(),
@@ -298,6 +309,7 @@ fun PantallaServicios(
 private fun ListaTodaLaFlota(
     estado: EstadoServiciosUi,
     alAbrirHost: (org.cuatrodetres.magi.ui.modelos.HostTodaLaFlotaVista) -> Unit,
+    alAbrirFallo: (FilaTodaLaFlotaVista) -> Unit,
     alReintentar: () -> Unit,
     alVolver: () -> Unit,
     modifier: Modifier = Modifier,
@@ -339,6 +351,7 @@ private fun ListaTodaLaFlota(
                         estado = fila.fallo.estado,
                         host = fila.hostNombre,
                         hora = fila.sondeoEn,
+                        alPulsar = { alAbrirFallo(fila) },
                     )
                 }
             }
@@ -368,11 +381,18 @@ private fun ListaTodaLaFlota(
 }
 
 @Composable
-private fun FilaFallo(nombre: String, estado: String, host: String, hora: Long?) {
+private fun FilaFallo(
+    nombre: String,
+    estado: String,
+    host: String,
+    hora: Long?,
+    alPulsar: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = ALTURA_FILA)
+            .clickable(onClickLabel = host + ", " + nombre) { alPulsar() }
             .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1097,4 +1117,10 @@ private fun textoHace(instante: Long?): String {
             stringResource(R.string.servicio_hace_dias, relativo.cantidad.toString())
     }
     return stringResource(R.string.servicios_sondeo_hace, relativoTexto)
+}
+
+/** Objetivo del host al que corresponde un fallo del sondeo (§6.3). */
+private fun objetivoDeFallo(fallo: FalloFlotaVista): ObjetivoVista = when (fallo.tipo) {
+    TipoFalloVista.SERVICIO -> ObjetivoVista(TipoObjetivoVista.UNIDAD, fallo.nombre)
+    TipoFalloVista.CONTENEDOR -> ObjetivoVista(TipoObjetivoVista.CONTENEDOR, fallo.nombre)
 }

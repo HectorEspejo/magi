@@ -208,7 +208,7 @@ fn generar_fixture_flota_android() {
     elementos.push(snippet(
         UUID_SNIPPET_NGINX,
         "reiniciar nginx",
-        "systemctl restart nginx",
+        "systemctl restart nginx.service",
         "Reinicia nginx en los hosts web",
         true,
         vec![

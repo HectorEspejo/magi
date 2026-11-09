@@ -34,6 +34,63 @@ use crate::estado::{
 /// Plazo de las operaciones con el host (pedir reenvíos, abrir canales).
 const PLAZO: Duration = Duration::from_secs(10);
 
+/// Qué hay que escribir en una sesión normal al conectar por el snippet del
+/// host (F14, §7.9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AlConectar {
+    /// El host no tiene snippet al conectar (o ya no existe).
+    Nada,
+    /// El snippet se puede escribir: su comando, con el salto de línea final.
+    Comando(String),
+    /// El snippet existe pero no se puede escribir (crítico o con variables):
+    /// se ignora con un aviso en la sesión.
+    Invalido(String),
+}
+
+/// Decide qué hacer con el snippet al conectar a partir del snippet del host.
+/// El escritorio solo deja elegir snippets no críticos y sin variables, pero lo
+/// que llega por la sincronización es entrada no fiable: el móvil lo vuelve a
+/// comprobar.
+fn decidir_al_conectar(snippet: Option<&magi_nucleo::snippets::Snippet>) -> AlConectar {
+    match snippet {
+        None => AlConectar::Nada,
+        Some(snippet) if snippet.apto_al_conectar() => AlConectar::Comando(
+            magi_nucleo::snippets::texto_comando_inicial(&snippet.comando),
+        ),
+        Some(snippet) => AlConectar::Invalido(snippet.nombre.clone()),
+    }
+}
+
+/// Snippet al conectar del host, leído de la base de datos del móvil (solo
+/// lectura: lo edita el escritorio y llega por la sincronización).
+fn resolver_snippet_al_conectar(estado: &EstadoNucleo, host_uuid: &str) -> AlConectar {
+    let uuid = host_uuid.to_string();
+    let snippet = con_almacen(
+        estado,
+        move |almacen| -> anyhow::Result<Option<magi_nucleo::snippets::Snippet>> {
+            let Some(host) = movil_bd::host_por_uuid(almacen.conexion(), &uuid)? else {
+                return Ok(None);
+            };
+            let Some(snippet_id) = host.snippet_al_conectar_id else {
+                return Ok(None);
+            };
+            Ok(almacen.obtener_snippet(snippet_id).ok())
+        },
+    );
+    match snippet {
+        Ok(Ok(snippet)) => decidir_al_conectar(snippet.as_ref()),
+        _ => AlConectar::Nada,
+    }
+}
+
+/// Texto del aviso que se escribe en la pantalla de la sesión cuando el snippet
+/// al conectar no vale.
+fn aviso_al_conectar(nombre_snippet: &str) -> String {
+    format!(
+        "snippet al conectar «{nombre_snippet}» no válido: es crítico o tiene variables; edítalo en el escritorio"
+    )
+}
+
 /// Toma un uso interactivo de la conexión del host. La Fase 11 no tenía
 /// políticas: todo lo que pedía el usuario podía dialogar. El código nuevo usa
 /// conexiones::conexion_para_host con su política; esta función se conserva
@@ -101,6 +158,19 @@ async fn abrir_sesion_interna(
             ),
         });
     }
+    // Snippet al conectar (F14, §7.9): solo en las sesiones normales; las
+    // ordenadas de Servicios llevan su propio comando (D286).
+    let (comando_inicial, aviso_al_conectar) = if nombre.is_none() && comando_inicial.is_none() {
+        match resolver_snippet_al_conectar(estado, host_uuid) {
+            AlConectar::Comando(comando) => (Some(comando), None),
+            AlConectar::Invalido(nombre_snippet) => {
+                (None, Some(aviso_al_conectar(&nombre_snippet)))
+            }
+            AlConectar::Nada => (None, None),
+        }
+    } else {
+        (comando_inicial, None)
+    };
     let id = estado.siguiente_id();
     let pantalla = nueva_pantalla(24, 80);
     let sesion = nueva_sesion(
@@ -111,6 +181,7 @@ async fn abrir_sesion_interna(
         EstadoSesion::Abriendo,
         Some("resolviendo".to_string()),
         comando_inicial,
+        aviso_al_conectar,
     );
     estado
         .sesiones
@@ -134,6 +205,7 @@ fn nueva_pantalla(filas: u16, columnas: u16) -> Pantalla {
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn nueva_sesion(
     id: u64,
     host_uuid: &str,
@@ -142,6 +214,7 @@ fn nueva_sesion(
     estado_inicial: EstadoSesion,
     detalle: Option<String>,
     comando_inicial: Option<String>,
+    aviso_al_conectar: Option<String>,
 ) -> Arc<SesionViva> {
     let (comandos, receptor) = mpsc::unbounded_channel();
     Arc::new(SesionViva {
@@ -155,6 +228,7 @@ fn nueva_sesion(
         pantalla,
         abierta_en: Some(chrono::Utc::now().timestamp()),
         comando_inicial,
+        aviso_al_conectar,
     })
 }
 
@@ -202,6 +276,14 @@ async fn abrir_y_servir(estado: Arc<EstadoNucleo>, sesion: Arc<SesionViva>) {
     };
     if let Ok(mut pantalla) = sesion.pantalla.lock() {
         pantalla.screen_mut().set_size(filas, columnas);
+    }
+    // Aviso del snippet al conectar no válido: se escribe solo en la pantalla
+    // local de la sesión (nunca se manda al host) antes de que llegue la salida
+    // del shell.
+    if let Some(aviso) = sesion.aviso_al_conectar.clone() {
+        if let Ok(mut pantalla) = sesion.pantalla.lock() {
+            pantalla.process(format!("\r\n[aviso] {aviso}\r\n").as_bytes());
+        }
     }
     let mut canal = match tokio::time::timeout(
         Duration::from_secs(10),
@@ -611,6 +693,18 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.remove(&id);
     }
+    // Al reconectar se vuelve a resolver el snippet al conectar del host (una
+    // sesión normal no guarda comando); las ordenadas reescriben el suyo.
+    let (comando_inicial, aviso_al_conectar) = match sesion.comando_inicial.clone() {
+        Some(comando) => (Some(comando), None),
+        None => match resolver_snippet_al_conectar(estado, &sesion.host_uuid) {
+            AlConectar::Comando(comando) => (Some(comando), None),
+            AlConectar::Invalido(nombre_snippet) => {
+                (None, Some(aviso_al_conectar(&nombre_snippet)))
+            }
+            AlConectar::Nada => (None, None),
+        },
+    };
     let pantalla = nueva_pantalla(24, 80);
     let nueva = nueva_sesion(
         id,
@@ -619,7 +713,8 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
         pantalla,
         EstadoSesion::Abriendo,
         Some("resolviendo".to_string()),
-        sesion.comando_inicial.clone(),
+        comando_inicial,
+        aviso_al_conectar,
     );
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.insert(id, nueva.clone());
@@ -1410,5 +1505,57 @@ async fn comprobar_clave_movil(
             con_clave
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+    use magi_nucleo::snippets::Snippet;
+
+    fn snippet(comando: &str, critico: bool) -> Snippet {
+        Snippet {
+            id: 1,
+            nombre: "al conectar".to_string(),
+            comando: comando.to_string(),
+            descripcion: String::new(),
+            etiquetas: Vec::new(),
+            critico,
+            timeout_seg: 60,
+            parar_al_fallo: false,
+            usado_veces: 0,
+            ultimo_uso_en: None,
+            creado_en: String::new(),
+            actualizado_en: String::new(),
+            destinos: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sin_snippet_no_se_escribe_nada() {
+        assert_eq!(decidir_al_conectar(None), AlConectar::Nada);
+    }
+
+    #[test]
+    fn un_snippet_valido_se_escribe_con_su_salto() {
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("uptime", false))),
+            AlConectar::Comando("uptime\n".to_string())
+        );
+    }
+
+    #[test]
+    fn un_snippet_critico_o_con_variables_se_ignora_con_aviso() {
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("uptime", true))),
+            AlConectar::Invalido("al conectar".to_string())
+        );
+        assert_eq!(
+            decidir_al_conectar(Some(&snippet("cd {{ruta}}", false))),
+            AlConectar::Invalido("al conectar".to_string())
+        );
+        let aviso = aviso_al_conectar("al conectar");
+        assert!(aviso.contains("no válido"));
+        assert!(aviso.contains("edítalo en el escritorio"));
     }
 }

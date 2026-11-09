@@ -55,9 +55,14 @@ pub struct SesionViva {
     pub pantalla: Arc<Mutex<vt100::Parser>>,
     pub abierta_en: Option<i64>,
     /// Comando que se escribe al abrir el PTY en las sesiones ordenadas de
-    /// Servicios (shell de un contenedor, seguimiento de logs; D286). También
-    /// se reescribe al reconectar.
+    /// Servicios (shell de un contenedor, seguimiento de logs; D286) o el
+    /// snippet al conectar del host (F14, §7.9). También se reescribe al
+    /// reconectar.
     pub comando_inicial: Option<String>,
+    /// Aviso que se escribe en la pantalla al abrir la sesión cuando el snippet
+    /// al conectar del host no se puede escribir (es crítico o tiene
+    /// variables). Nunca va al host.
+    pub aviso_al_conectar: Option<String>,
 }
 
 impl SesionViva {

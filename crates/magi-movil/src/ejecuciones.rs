@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use magi_nucleo::deliberacion::EjecucionResultado;
+use magi_nucleo::deliberacion::{EjecucionResultado, ResultadoDeliberacion};
 use magi_nucleo::registro::{self, ResultadoRegistro};
 use magi_nucleo::snippets as nucleo_snippets;
 use magi_nucleo::snippets::ejecucion::{
@@ -29,7 +29,7 @@ use crate::api::{
     PreparacionEjecucion, ResultadoEjecucionMovil, SalidaEjecucion, VariableSnippetMovil,
 };
 use crate::conexiones::{self, OyenteConexion, UsoConexion};
-use crate::estado::EstadoNucleo;
+use crate::estado::{con_almacen, EstadoNucleo};
 
 /// Ahora en época (segundos), para la retención de las ejecuciones.
 fn ahora_epoca() -> i64 {
@@ -411,6 +411,22 @@ fn anotar_host(estado: &EstadoNucleo, anotacion: Anotacion) {
 
 // ------------------------------------------------------------ ejecutar
 
+/// ¿La deliberación que autoriza esta ejecución se resolvió como forzada?
+/// Lo enseña el DTO (informe §3.1 y §5.1) y solo se puede saber leyendo la
+/// fila de DELIBERACIONES: el plan no lo lleva.
+fn deliberacion_forzada(estado: &EstadoNucleo, id: u64) -> bool {
+    let Ok(id) = i64::try_from(id) else {
+        return false;
+    };
+    con_almacen(estado, move |almacen| {
+        almacen
+            .obtener_deliberacion(id)
+            .map(|registro| matches!(registro.resultado, ResultadoDeliberacion::Forzada))
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
 /// Plan fijo de una ejecución lanzada: el comando ya resuelto, los hosts y el
 /// plazo. Nada de esto se relee durante la ejecución.
 struct PlanEjecucion {
@@ -473,6 +489,11 @@ pub async fn ejecutar(
         crate::deliberacion::consumir(estado, deliberacion_id, &plan)?;
     }
 
+    // El DTO enseña si la deliberación se forzó (como en el escritorio).
+    let forzada = deliberacion
+        .map(|id| deliberacion_forzada(estado, id))
+        .unwrap_or(false);
+
     // usado_veces + 1 al lanzar (campo propio del móvil, no viaja).
     let snippet_id = preparada.snippet_id;
     let _ = estado
@@ -509,7 +530,7 @@ pub async fn ejecutar(
             hosts_uuid.clone(),
             preparada.publica.snippet_uuid.clone(),
             preparada.publica.variables.clone(),
-            false,
+            forzada,
         )
     };
     emitir(estado);
