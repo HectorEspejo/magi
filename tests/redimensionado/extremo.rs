@@ -165,6 +165,7 @@ fn dos_ventanas_manda_la_menor_y_al_cerrarse_vuelve_la_mayor() {
         sesion_id,
         cols: 120,
         filas: 36,
+        colores: None,
     }));
     assert!(e.hasta(|_, o| o.tamanos().last() == Some(&(120, 36))));
     e.rt.block_on(segunda.enviar(&MensajeCliente::Redimensionar {

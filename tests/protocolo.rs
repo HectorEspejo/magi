@@ -52,6 +52,7 @@ fn version_incompatible_tiene_una_forma_json_estable() {
             ejecuciones: 4,
             escritorios: 0,
             acciones_servicio: 5,
+            tuneles_temporales: 0,
         }),
     };
     assert_eq!(
@@ -68,7 +69,8 @@ fn version_incompatible_tiene_una_forma_json_estable() {
                 "tuneles": 3,
                 "ejecuciones": 4,
                 "escritorios": 0,
-                "acciones_servicio": 5
+                "acciones_servicio": 5,
+                "tuneles_temporales": 0
             }
         })
     );
@@ -109,6 +111,7 @@ async fn el_rechazo_de_un_servidor_v6_se_lee_entero() {
             // trabajo»).
             escritorios: 1,
             acciones_servicio: 1,
+            tuneles_temporales: 1,
         })
     );
 }
@@ -129,6 +132,7 @@ async fn un_trabajo_incompleto_vale_como_lleno() {
             ejecuciones: 1,
             escritorios: 1,
             acciones_servicio: 1,
+            tuneles_temporales: 1,
         })
     );
 }
@@ -150,6 +154,7 @@ async fn un_trabajo_con_campos_desconocidos_vale_como_lleno() {
             ejecuciones: 1,
             escritorios: 1,
             acciones_servicio: 1,
+            tuneles_temporales: 1,
         })
     );
 }

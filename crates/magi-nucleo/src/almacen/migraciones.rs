@@ -24,7 +24,7 @@ pub const MIGRACIONES: &[&str] = &[
 /// Versión de esquema que conoce este binario (las migraciones SQL de la lista,
 /// más la 7, que necesita Rust para rellenar uuid, versión y vector, la 8 de
 /// los escritorios remotos y la 9 de los servicios de la Fase 13).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 3;
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 4;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -448,6 +448,15 @@ CREATE INDEX idx_comprobaciones_servicio_host ON COMPROBACIONES_SERVICIO(host_id
 ALTER TABLE SONDEOS ADD COLUMN fallos_json TEXT;
 "#;
 
+/// Fase 15: terminal, segunda vuelta. Tres columnas propias del equipo en
+/// HOSTS (reconexión automática, sesión persistente con tmux y permiso del
+/// portapapeles del remoto). No viajan y no suben la versión del host.
+const MIGRACION_10_TERMINAL: &str = r#"
+ALTER TABLE HOSTS ADD COLUMN reconectar INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE HOSTS ADD COLUMN tmux_persistente INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE HOSTS ADD COLUMN portapapeles_remoto INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
@@ -539,6 +548,12 @@ pub fn aplicar(
         let transaccion = conexion.transaction()?;
         transaccion.execute_batch(MIGRACION_9_SERVICIOS)?;
         transaccion.pragma_update(None, "user_version", 9)?;
+        transaccion.commit()?;
+    }
+    if version < 10 {
+        let transaccion = conexion.transaction()?;
+        transaccion.execute_batch(MIGRACION_10_TERMINAL)?;
+        transaccion.pragma_update(None, "user_version", 10)?;
         transaccion.commit()?;
     }
     Ok(())

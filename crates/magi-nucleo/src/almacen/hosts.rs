@@ -24,7 +24,8 @@ const SELECCION: &str = "
            h.opciones_extra, h.origen, h.ultimo_estado, h.ultima_conexion_en,
            h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios,
            h.sftp_dir_local, h.sftp_dir_remoto, h.snippet_al_conectar_id,
-           h.tipo, h.escritorio_dominio, h.escritorio_opciones, h.huella_escritorio
+           h.tipo, h.escritorio_dominio, h.escritorio_opciones, h.huella_escritorio,
+           h.reconectar, h.tmux_persistente, h.portapapeles_remoto
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -66,6 +67,9 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
                 .map_err(|motivo| fila_invalida(24, &motivo))?
         },
         huella_escritorio: fila.get(25)?,
+        reconectar: fila.get::<_, i64>(26)? != 0,
+        tmux_persistente: fila.get::<_, i64>(27)? != 0,
+        portapapeles_remoto: fila.get::<_, i64>(28)? != 0,
     })
 }
 
@@ -434,6 +438,35 @@ pub fn fijar_huella_escritorio(conexion: &Connection, id: i64, huella: Option<&s
     conexion.execute(
         "UPDATE HOSTS SET huella_escritorio = ?1 WHERE id = ?2",
         params![huella, id],
+    )?;
+    Ok(())
+}
+
+/// Fija la reconexión automática de este host. Es propia del equipo: no sube
+/// la versión del host ni viaja (Fase 15).
+pub fn fijar_reconectar(conexion: &Connection, id: i64, reconectar: bool) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET reconectar = ?1 WHERE id = ?2",
+        params![reconectar as i64, id],
+    )?;
+    Ok(())
+}
+
+/// Fija la sesión persistente con tmux de este host. Propia del equipo.
+pub fn fijar_tmux_persistente(conexion: &Connection, id: i64, persistente: bool) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET tmux_persistente = ?1 WHERE id = ?2",
+        params![persistente as i64, id],
+    )?;
+    Ok(())
+}
+
+/// Fija el permiso del portapapeles del remoto (OSC 52) de este host. Propia
+/// del equipo. Leer el portapapeles, nunca.
+pub fn fijar_portapapeles_remoto(conexion: &Connection, id: i64, permitido: bool) -> Result<()> {
+    conexion.execute(
+        "UPDATE HOSTS SET portapapeles_remoto = ?1 WHERE id = ?2",
+        params![permitido as i64, id],
     )?;
     Ok(())
 }

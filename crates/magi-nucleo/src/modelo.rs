@@ -154,6 +154,15 @@ pub struct Host {
     pub sftp_dir_remoto: Option<String>,
     /// Snippet que se escribe en cada pestaña nueva o reconectada (Fase 6).
     pub snippet_al_conectar_id: Option<i64>,
+    /// Reconexión automática de las pestañas de este host (Fase 15). Propia
+    /// del equipo: no viaja.
+    pub reconectar: bool,
+    /// Las pestañas de este host abren o recuperan una sesión de tmux (Fase
+    /// 15). Propia del equipo: no viaja.
+    pub tmux_persistente: bool,
+    /// El host puede escribir en el portapapeles con OSC 52 (Fase 15).
+    /// Propia del equipo: no viaja. Leerlo, nunca.
+    pub portapapeles_remoto: bool,
 }
 
 /// Datos editables de un host (ficha), sin id ni marcas de tiempo.
@@ -1052,6 +1061,9 @@ pub fn host_de_prueba() -> Host {
         sftp_dir_local: None,
         sftp_dir_remoto: None,
         snippet_al_conectar_id: None,
+        reconectar: true,
+        tmux_persistente: false,
+        portapapeles_remoto: false,
     }
 }
 

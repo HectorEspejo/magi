@@ -6,11 +6,13 @@
 
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 /// Intervalo mínimo entre dos pantallas enviadas: 30 fps como máximo.
 pub const INTERVALO_ENTRE_PANTALLAS: Duration = Duration::from_millis(33);
 
 /// Color de una celda de la pantalla.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Color {
     /// El color por defecto del terminal.
     Predeterminado,
@@ -35,7 +37,7 @@ impl Color {
 ///
 /// `texto` cubre todas las celdas del tramo: las celdas vacías son espacios y un
 /// carácter ancho ocupa dos columnas de la fila (la segunda no se repite).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tramo {
     /// Texto de las celdas seguidas.
     pub texto: String,

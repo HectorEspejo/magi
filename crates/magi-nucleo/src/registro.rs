@@ -83,8 +83,19 @@ pub const CLAVE_INSTALADA: &str = "clave_instalada";
 /// Fase 13: una acción de servicio terminó (objetivo, acción, resultado,
 /// duración y deliberación; nunca la salida de las órdenes, T44).
 pub const SERVICIO_ACCION: &str = "servicio_accion";
+/// Fase 15: la reconexión automática se rindió (pestaña, intentos y causa).
+pub const RECONEXION_AGOTADA: &str = "reconexion_agotada";
+/// Fase 15: empezó una escritura en varios (pestañas, hosts y deliberación).
+pub const ESCRITURA_VARIOS_ACTIVADA: &str = "escritura_varios_activada";
+/// Fase 15: terminó la escritura en varios (duración, envíos y motivo).
+pub const ESCRITURA_VARIOS_TERMINADA: &str = "escritura_varios_terminada";
+/// Fase 15: se guardó una captura del historial (ruta, líneas y bytes; nunca
+/// el contenido).
+pub const HISTORIAL_GUARDADO: &str = "historial_guardado";
+/// Fase 15: MAGI terminó una sesión de tmux del host (host y nombre).
+pub const TMUX_TERMINADA: &str = "tmux_terminada";
 
-pub const TIPOS: [&str; 41] = [
+pub const TIPOS: [&str; 46] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -126,6 +137,11 @@ pub const TIPOS: [&str; 41] = [
     ESCRITORIO_FALLIDO,
     HUELLA_ESCRITORIO,
     SERVICIO_ACCION,
+    RECONEXION_AGOTADA,
+    ESCRITURA_VARIOS_ACTIVADA,
+    ESCRITURA_VARIOS_TERMINADA,
+    HISTORIAL_GUARDADO,
+    TMUX_TERMINADA,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

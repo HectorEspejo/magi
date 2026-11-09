@@ -106,6 +106,9 @@ fn host_de_prueba(puerto: u16) -> Host {
         sftp_dir_local: None,
         sftp_dir_remoto: None,
         snippet_al_conectar_id: None,
+        reconectar: true,
+        tmux_persistente: false,
+        portapapeles_remoto: false,
     }
 }
 

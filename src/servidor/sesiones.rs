@@ -129,6 +129,10 @@ impl Sesion {
             abierta_en: self.abierta_en,
             ventanas: self.adjuntos.len() as u32,
             actividad_no_vista: self.actividad_no_vista,
+            reconexion: None,
+            titulo: None,
+            aviso: None,
+            tmux: None,
         }
     }
 }

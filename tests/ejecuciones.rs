@@ -821,6 +821,7 @@ async fn el_comando_inicial_se_escribe_y_solo_el_que_repite_al_reconectar() {
                     repetir: false,
                 },
             ],
+            tmux: None,
         })
         .await;
     let sesion_id = escenario.esperar_sesion_nueva(&conocidas).await;

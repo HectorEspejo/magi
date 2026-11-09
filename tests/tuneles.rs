@@ -762,6 +762,7 @@ async fn el_ciclo_automatico_respeta_los_manuales() {
             cols: 80,
             filas: 24,
             orden: None,
+            tmux: None,
         })
         .await;
     let auto = montaje
@@ -925,6 +926,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
             cols: 80,
             filas: 24,
             orden: None,
+            tmux: None,
         })
         .await;
     montaje
@@ -950,6 +952,7 @@ async fn un_automatico_parado_a_mano_no_vuelve_en_el_mismo_ciclo() {
             cols: 80,
             filas: 24,
             orden: None,
+            tmux: None,
         })
         .await;
     montaje.esperar_sesion_abierta().await;

@@ -139,6 +139,7 @@ fn fuera_de_sesion_no_se_avisa_y_al_volver_se_adjunta_con_el_aplicado() {
         sesion_id: 1,
         cols: 140,
         filas: 46,
+        colores: None,
     }));
 }
 
@@ -156,6 +157,7 @@ fn adjuntar_usa_el_tamano_aplicado_y_no_el_pendiente() {
         sesion_id: 1,
         cols: 100,
         filas: 26,
+        colores: None,
     }));
     prueba.paso_en(ahora + MS * 60);
     assert_eq!(prueba.redimensionares(), vec![(1, 90, 16)]);
@@ -224,6 +226,7 @@ fn cambiar_de_pestana_adjunta_la_nueva_con_el_aplicado() {
                 sesion_id: 2,
                 cols: 120,
                 filas: 36,
+                colores: None,
             }
     });
     assert!(
@@ -276,6 +279,7 @@ fn al_relanzar_el_servidor_se_readjunta_con_el_aplicado() {
             sesion_id: 7,
             cols: 150,
             filas: 44,
+            colores: None,
         }),
         "{mensajes:?}"
     );

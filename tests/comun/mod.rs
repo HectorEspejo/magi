@@ -1239,6 +1239,7 @@ impl Escenario {
             cols: 80,
             filas: 24,
             orden: None,
+            tmux: None,
         })
         .await;
         self.esperar_sesion_nueva(&conocidas).await

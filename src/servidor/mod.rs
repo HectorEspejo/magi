@@ -180,6 +180,7 @@ impl EstadoServidor {
                 .count() as u32,
             escritorios: self.escritorios.cuenta(),
             acciones_servicio: self.servicios.cuantas_acciones(),
+            tuneles_temporales: 0,
         }
     }
 }
@@ -879,6 +880,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         tuneles: tuneles::lista(&estado_bloqueado),
         ejecuciones: estado_bloqueado.ejecuciones.info(),
         acciones_servicio: estado_bloqueado.servicios.acciones(),
+        tuneles_temporales: Vec::new(),
     };
     difusion::enviar(cliente, mensaje);
     // La lista de escritorios va detrás de la Bienvenida cuando hay alguna
@@ -903,6 +905,7 @@ async fn manejar_mensaje(
             filas,
             comandos_iniciales,
             orden,
+            tmux: _,
         } => {
             abrir_sesion(
                 estado,
@@ -919,6 +922,7 @@ async fn manejar_mensaje(
             sesion_id,
             cols,
             filas,
+            colores: _,
         } => {
             adjuntar(estado, cliente_id, sesion_id, Tamano { cols, filas }).await;
         }
@@ -1346,6 +1350,22 @@ async fn manejar_mensaje(
         | MensajeCliente::SeguirLog { .. }
         | MensajeCliente::PararLog { .. } => {
             encolar_servicios(estado, cliente_id, mensaje).await;
+        }
+        // Fase 15: la pista del servidor los implementa. Mientras tanto, no
+        // se hace nada (nunca se responde con un mensaje desconocido).
+        MensajeCliente::CapturarHistorial { .. }
+        | MensajeCliente::Foco { .. }
+        | MensajeCliente::IniciarEscrituraVarios { .. }
+        | MensajeCliente::EscribirVarios { .. }
+        | MensajeCliente::TerminarEscrituraVarios { .. }
+        | MensajeCliente::AbrirTunelTemporal { .. }
+        | MensajeCliente::CerrarTunelTemporal { .. }
+        | MensajeCliente::ListarTmux { .. }
+        | MensajeCliente::TerminarTmux { .. }
+        | MensajeCliente::PortapapelesPermitido { .. }
+        | MensajeCliente::RenombrarSesion { .. }
+        | MensajeCliente::MoverSesion { .. } => {
+            warn!(cliente = cliente_id, "mensaje del terminal sin implementar");
         }
         // El saludo ya se consumió en `tarea_conexion`.
         MensajeCliente::Hola { .. } => {
@@ -2848,6 +2868,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                     .filter(|tunel| tunel.estado.en_marcha())
                     .count() as u32,
                 escritorios: escritorios.len() as u32,
+                tuneles_temporales: 0,
                 ejecuciones: ejecuciones
                     .iter()
                     .filter(|ejecucion| {

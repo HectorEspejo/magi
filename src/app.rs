@@ -3866,6 +3866,7 @@ impl App {
                 filas,
                 comandos_iniciales,
                 orden,
+                tmux: None,
             });
         if activar {
             self.aperturas_pendientes.insert(host_id);
@@ -4111,6 +4112,7 @@ impl App {
                 sesion_id,
                 cols,
                 filas,
+                colores: None,
             });
         }
     }
@@ -4515,6 +4517,18 @@ impl App {
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
+            // ------------------------------------------------ terminal (F15)
+            // La pista del cliente implementa estos mensajes en sus propios
+            // módulos; de momento se descartan.
+            protocolo::MensajeServidor::HistorialLote { .. }
+            | protocolo::MensajeServidor::EscrituraVariosIniciada { .. }
+            | protocolo::MensajeServidor::EscrituraVariosTerminada { .. }
+            | protocolo::MensajeServidor::TunelTemporal { .. }
+            | protocolo::MensajeServidor::TunelesTemporales { .. }
+            | protocolo::MensajeServidor::SesionesTmux { .. }
+            | protocolo::MensajeServidor::TmuxTerminada { .. }
+            | protocolo::MensajeServidor::Portapapeles { .. }
+            | protocolo::MensajeServidor::PortapapelesPedido { .. } => {}
         }
     }
 
@@ -5875,6 +5889,9 @@ impl App {
             sftp_dir_local: None,
             sftp_dir_remoto: None,
             snippet_al_conectar_id: None,
+            reconectar: true,
+            tmux_persistente: false,
+            portapapeles_remoto: false,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);

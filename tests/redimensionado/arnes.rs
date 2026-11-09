@@ -390,6 +390,7 @@ pub fn bienvenida(cliente_id: u32, sesiones: Vec<InfoSesion>) -> MensajeServidor
         tuneles: Vec::new(),
         ejecuciones: Vec::new(),
         acciones_servicio: Vec::new(),
+        tuneles_temporales: Vec::new(),
     }
 }
 
@@ -406,5 +407,9 @@ pub fn sesion(id: u32, host: &str) -> InfoSesion {
         abierta_en: 0,
         ventanas: 1,
         actividad_no_vista: false,
+        reconexion: None,
+        titulo: None,
+        aviso: None,
+        tmux: None,
     }
 }
