@@ -159,6 +159,22 @@ fn canal_testigo() -> mpsc::UnboundedSender<crate::conexion::EventoConexion> {
     tx
 }
 
+/// Tope de la salida del sondeo que se acumula: el script solo manda líneas
+/// `MAGI_*` (mismo tope que el servidor de sesiones para su `Ejecutar`). Un
+/// host que inunde el canal no puede inflar la memoria del proceso.
+const TOPE_SALIDA_SONDEO: usize = 4 * 1024 * 1024;
+
+/// Añade un trozo de la salida al acumulador sin pasar del tope; lo que sobra
+/// se descarta (el sondeo no necesita más para sus métricas).
+fn acumular_salida(salida: &mut Vec<u8>, datos: &[u8]) {
+    if salida.len() >= TOPE_SALIDA_SONDEO {
+        return;
+    }
+    let hueco = TOPE_SALIDA_SONDEO - salida.len();
+    let trozo = datos.get(..hueco).unwrap_or(datos);
+    salida.extend_from_slice(trozo);
+}
+
 /// Ejecuta el comando en un canal `exec` y devuelve su salida.
 async fn ejecutar_en_handle(
     handle: &russh::client::Handle<Cliente>,
@@ -175,14 +191,35 @@ async fn ejecutar_en_handle(
     let mut salida = Vec::new();
     loop {
         match canal.wait().await {
-            Some(ChannelMsg::Data { data }) => salida.extend_from_slice(&data),
-            Some(ChannelMsg::ExtendedData { data, .. }) => salida.extend_from_slice(&data),
+            Some(ChannelMsg::Data { data }) => acumular_salida(&mut salida, &data),
+            Some(ChannelMsg::ExtendedData { data, .. }) => {
+                acumular_salida(&mut salida, &data);
+            }
             Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
             _ => {}
         }
     }
     let _ = canal.close().await;
     Ok(String::from_utf8_lossy(&salida).to_string())
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn la_salida_del_sondeo_se_corta_al_tope() {
+        let mut salida = Vec::new();
+        acumular_salida(&mut salida, &vec![b'a'; TOPE_SALIDA_SONDEO + 100]);
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Lo que llega después del tope no se acumula, pero no falla.
+        acumular_salida(&mut salida, b"mas");
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Y cabe justo: no se pierde nada.
+        let mut justa = Vec::new();
+        acumular_salida(&mut justa, &[b'x'; 10]);
+        assert_eq!(justa, vec![b'x'; 10]);
+    }
 }
 
 /// Lanza un sondeo por host respetando el semáforo de 8 concurrentes. Los

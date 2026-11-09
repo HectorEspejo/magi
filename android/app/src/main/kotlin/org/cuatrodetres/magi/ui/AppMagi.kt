@@ -27,13 +27,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -44,10 +47,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.cuatrodetres.magi.R
 import org.cuatrodetres.magi.navegacion.BarraInferior
@@ -55,8 +60,12 @@ import org.cuatrodetres.magi.navegacion.Destino
 import org.cuatrodetres.magi.navegacion.DetalleVista
 import org.cuatrodetres.magi.navegacion.RielNavegacion
 import org.cuatrodetres.magi.navegacion.SeccionAjustes
+import org.cuatrodetres.magi.navegacion.SeccionMas
 import org.cuatrodetres.magi.ui.ajustes.PantallaAcercaDe
 import org.cuatrodetres.magi.ui.ajustes.PantallaAjustes
+import org.cuatrodetres.magi.ui.ajustes.PantallaAjustesDeliberacion
+import org.cuatrodetres.magi.ui.ajustes.PantallaAjustesFlota
+import org.cuatrodetres.magi.ui.ajustes.PantallaAjustesServicios
 import org.cuatrodetres.magi.ui.ajustes.PantallaAjustesTerminal
 import org.cuatrodetres.magi.ui.ajustes.PantallaBateria
 import org.cuatrodetres.magi.ui.ajustes.PantallaBorrarDatos
@@ -66,16 +75,20 @@ import org.cuatrodetres.magi.ui.ajustes.PantallaSincronizacion
 import org.cuatrodetres.magi.ui.bloqueo.PantallaBloqueo
 import org.cuatrodetres.magi.ui.componentes.BarraAvisoMagi
 import org.cuatrodetres.magi.ui.componentes.MensajeVacio
+import org.cuatrodetres.magi.ui.dialogos.AsistenteDeliberacionResolutor
 import org.cuatrodetres.magi.ui.dialogos.DialogosMagi
 import org.cuatrodetres.magi.ui.dialogos.PantallaAsistente
 import org.cuatrodetres.magi.ui.componentes.BarraAviso
 import org.cuatrodetres.magi.ui.componentes.TipoBarra
 import org.cuatrodetres.magi.ui.fuente.AvisosPlataformaReal
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
+import org.cuatrodetres.magi.ui.flota.PantallaFlota
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
 import org.cuatrodetres.magi.ui.hosts.PantallaFicha
-import org.cuatrodetres.magi.ui.hosts.PantallaHosts
+import org.cuatrodetres.magi.ui.mas.PantallaMas
 import org.cuatrodetres.magi.ui.modelos.AvisoVista
+import org.cuatrodetres.magi.ui.registro.PantallaRegistro
+import org.cuatrodetres.magi.ui.resultados.PantallaResultados
 import org.cuatrodetres.magi.ui.modelos.AvisosPlataforma
 import org.cuatrodetres.magi.ui.modelos.ControlBloqueo
 import org.cuatrodetres.magi.ui.modelos.ControlBloqueoPermitido
@@ -84,11 +97,13 @@ import org.cuatrodetres.magi.ui.modelos.EstadoHostVista
 import org.cuatrodetres.magi.ui.modelos.EstadoMagi
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
 import org.cuatrodetres.magi.ui.modelos.PasoAsistente
+import org.cuatrodetres.magi.ui.modelos.PlanDeliberacionVista
 import org.cuatrodetres.magi.ui.modelos.TipoAviso
 import org.cuatrodetres.magi.ui.modelos.TunelVista
-import org.cuatrodetres.magi.ui.modelos.inventarioConSesiones
 import org.cuatrodetres.magi.ui.modelos.urlNavegador
+import org.cuatrodetres.magi.ui.servicios.PantallaServicios
 import org.cuatrodetres.magi.ui.sesiones.PantallaSesiones
+import org.cuatrodetres.magi.ui.snippets.PantallaSnippets
 import org.cuatrodetres.magi.ui.terminal.PantallaTerminal
 import org.cuatrodetres.magi.ui.tema.Paleta
 import org.cuatrodetres.magi.ui.tuneles.PantallaTuneles
@@ -138,6 +153,12 @@ fun AppMagi(
     val alcance = rememberCoroutineScope()
     val propietarioCiclo = LocalLifecycleOwner.current
 
+    // Diálogo MAGI (informe §6.6): PantallaServicios pide deliberar con su plan
+    // y AppMagi pinta el diálogo; al resolverse se le devuelve el id de
+    // DELIBERACIONES para que siga con la acción. Snippets y Resultados traen
+    // su propio AsistenteDeliberacion dentro de su pantalla.
+    var deliberacionPendiente by remember { mutableStateOf<DeliberacionPendiente?>(null) }
+
     // Bloqueo: arranque en frío bloqueado y margen de 5 minutos al volver.
     DisposableEffect(propietarioCiclo) {
         val observador = LifecycleEventObserver { _, evento ->
@@ -156,14 +177,17 @@ fun AppMagi(
 
     // Mientras se ven los túneles (o la ficha con su bloque), se refrescan los
     // contadores cada segundo: abiertas/aceptadas y bytes cambian sin que la
-    // lista de túneles lo haga.
+    // lista de túneles lo haga. Solo con la app a la vista (D266/D279): al pasar
+    // a segundo plano el bloque se cancela y no se hace trabajo de fondo.
     LaunchedEffect(estado.destino, estado.detalle) {
         val mirandoTuneles = estado.destino == Destino.TUNELES ||
             estado.detalle is DetalleVista.Ficha
         if (!mirandoTuneles) return@LaunchedEffect
-        while (true) {
-            delay(1_000)
-            vm.refrescarTuneles()
+        propietarioCiclo.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
+                delay(1_000)
+                vm.refrescarTuneles()
+            }
         }
     }
 
@@ -268,8 +292,6 @@ fun AppMagi(
         }
     }
 
-    val inventario = inventarioConSesiones(estado.inventario, estado.sesiones)
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -283,56 +305,100 @@ fun AppMagi(
                 // tableta (sin riel, sin lista y sin barra inferior).
                 estado.detalle is DetalleVista.Terminal -> SuperficieCompacta(
                     estado = estado,
-                    inventario = inventario,
+                    fuente = fuente,
                     vm = vm,
                     vmTerminal = vmTerminal,
                     alElegirCarpeta = elegirCarpeta,
                     alAbrirNavegador = abrirNavegador,
                     alAbrirBateria = abrirBateria,
+                    alDeliberar = { plan, alResolver ->
+                        deliberacionPendiente = DeliberacionPendiente(plan, alResolver)
+                    },
                 )
                 maxWidth >= 600.dp -> SuperficieAncha(
                     estado = estado,
-                    inventario = inventario,
+                    fuente = fuente,
                     vm = vm,
                     vmTerminal = vmTerminal,
                     alElegirCarpeta = elegirCarpeta,
                     alAbrirNavegador = abrirNavegador,
                     alAbrirBateria = abrirBateria,
+                    alDeliberar = { plan, alResolver ->
+                        deliberacionPendiente = DeliberacionPendiente(plan, alResolver)
+                    },
                 )
                 else -> SuperficieCompacta(
                     estado = estado,
-                    inventario = inventario,
+                    fuente = fuente,
                     vm = vm,
                     vmTerminal = vmTerminal,
                     alElegirCarpeta = elegirCarpeta,
                     alAbrirNavegador = abrirNavegador,
                     alAbrirBateria = abrirBateria,
+                    alDeliberar = { plan, alResolver ->
+                        deliberacionPendiente = DeliberacionPendiente(plan, alResolver)
+                    },
                 )
             }
         }
 
-        // Aviso no bloqueante: Android cerró MAGI con sesiones abiertas (§4.6).
+        // Avisos no bloqueantes del arranque/volver: sesiones, acciones y
+        // ejecuciones que Android cerró con MAGI, y la clave recreada. Se
+        // apilan en una columna para no taparse unos a otros (§4.6 y §7.12).
         val sesionesPerdidas = estado.sesionesPerdidas
-        if (sesionesPerdidas != null) {
-            Box(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-                BarraAviso(
-                    texto = stringResource(R.string.avisos_sesiones_perdidas_texto, sesionesPerdidas),
-                    tipo = TipoBarra.AVISO,
-                    textoAccion = stringResource(R.string.avisos_ver_guia),
-                    alAccion = vm::abrirGuiaBateria,
-                    alCerrar = vm::descartarSesionesPerdidas,
-                )
-            }
-        }
-
-        // Aviso: la clave del móvil se recreó al corregir el desbloqueo facial.
-        if (estado.avisoClaveRecreada) {
-            Box(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-                BarraAviso(
-                    texto = stringResource(R.string.aviso_clave_recreada),
-                    tipo = TipoBarra.AVISO,
-                    alCerrar = vm::descartarAvisoClaveRecreada,
-                )
+        val trabajoPerdido = estado.trabajoPerdido
+        val avisoClave = estado.avisoClaveRecreada
+        if (sesionesPerdidas != null || trabajoPerdido != null || avisoClave) {
+            Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                if (sesionesPerdidas != null) {
+                    BarraAviso(
+                        texto = stringResource(
+                            R.string.avisos_sesiones_perdidas_texto,
+                            sesionesPerdidas,
+                        ),
+                        tipo = TipoBarra.AVISO,
+                        textoAccion = stringResource(R.string.avisos_ver_guia),
+                        alAccion = vm::abrirGuiaBateria,
+                        alCerrar = vm::descartarSesionesPerdidas,
+                    )
+                }
+                if (trabajoPerdido != null) {
+                    val acciones = pluralStringResource(
+                        R.plurals.avisos_acciones_en_curso,
+                        trabajoPerdido.acciones,
+                        trabajoPerdido.acciones,
+                    )
+                    val ejecuciones = pluralStringResource(
+                        R.plurals.avisos_ejecuciones_en_curso,
+                        trabajoPerdido.ejecuciones,
+                        trabajoPerdido.ejecuciones,
+                    )
+                    val texto = if (trabajoPerdido.acciones > 0 && trabajoPerdido.ejecuciones > 0) {
+                        stringResource(
+                            R.string.avisos_trabajo_perdido_dos,
+                            acciones,
+                            ejecuciones,
+                        )
+                    } else if (trabajoPerdido.acciones > 0) {
+                        stringResource(R.string.avisos_trabajo_perdido_uno, acciones)
+                    } else {
+                        stringResource(R.string.avisos_trabajo_perdido_uno, ejecuciones)
+                    }
+                    BarraAviso(
+                        texto = texto,
+                        tipo = TipoBarra.AVISO,
+                        textoAccion = stringResource(R.string.avisos_ver_guia),
+                        alAccion = vm::abrirGuiaBateria,
+                        alCerrar = vm::descartarTrabajoPerdido,
+                    )
+                }
+                if (avisoClave) {
+                    BarraAviso(
+                        texto = stringResource(R.string.aviso_clave_recreada),
+                        tipo = TipoBarra.AVISO,
+                        alCerrar = vm::descartarAvisoClaveRecreada,
+                    )
+                }
             }
         }
 
@@ -381,6 +447,31 @@ fun AppMagi(
             alDescartarGuia = vm::descartarGuiaBateria,
         )
 
+        // Deliberación MAGI a pantalla completa (§6.6): el usuario mantiene
+        // pulsado 1 s para aprobar o forzar; cancelar vuelve a la confirmación.
+        val deliberacion = deliberacionPendiente
+        if (deliberacion != null) {
+            val textoMantener = when (val plan = deliberacion.plan) {
+                is PlanDeliberacionVista.Servicio -> stringResource(
+                    R.string.deliberacion_mantener_accion,
+                    plan.accionServicio.texto.uppercase(),
+                )
+                is PlanDeliberacionVista.Snippet ->
+                    stringResource(R.string.deliberacion_mantener_ejecutar)
+            }
+            AsistenteDeliberacionResolutor(
+                fuente = fuente,
+                plan = deliberacion.plan,
+                textoMantener = textoMantener,
+                alResolver = { id ->
+                    deliberacionPendiente = null
+                    // Con null, la confirmación de Servicios se cancela y no
+                    // se ejecuta nada; con id, sigue con la acción.
+                    deliberacion.alResolver(id)
+                },
+            )
+        }
+
         // Aviso efímero (errores del núcleo o avisos de la interfaz).
         val aviso: AvisoVista? = estado.aviso ?: estadoTerminal.aviso
         if (aviso != null) {
@@ -414,12 +505,13 @@ private fun nombreCarpeta(uri: Uri): String {
 @Composable
 private fun SuperficieCompacta(
     estado: EstadoMagi,
-    inventario: org.cuatrodetres.magi.ui.modelos.InventarioVista,
+    fuente: FuenteNucleo,
     vm: VistaModeloMagi,
     vmTerminal: VistaModeloTerminal,
     alElegirCarpeta: () -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
     alAbrirBateria: () -> Unit,
+    alDeliberar: ((PlanDeliberacionVista, (Long?) -> Unit) -> Unit)? = null,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         val detalle = estado.detalle
@@ -436,12 +528,13 @@ private fun SuperficieCompacta(
         } else {
             ContenidoDestino(
                 estado = estado,
-                inventario = inventario,
+                fuente = fuente,
                 destino = estado.destino,
                 vm = vm,
                 alElegirCarpeta = alElegirCarpeta,
                 alAbrirNavegador = alAbrirNavegador,
                 alAbrirBateria = alAbrirBateria,
+                alDeliberar = alDeliberar,
                 modifier = Modifier.weight(1f),
             )
             BarraInferior(destinoActual = estado.destino) { vm.elegirDestino(it) }
@@ -453,12 +546,13 @@ private fun SuperficieCompacta(
 @Composable
 private fun SuperficieAncha(
     estado: EstadoMagi,
-    inventario: org.cuatrodetres.magi.ui.modelos.InventarioVista,
+    fuente: FuenteNucleo,
     vm: VistaModeloMagi,
     vmTerminal: VistaModeloTerminal,
     alElegirCarpeta: () -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
     alAbrirBateria: () -> Unit,
+    alDeliberar: ((PlanDeliberacionVista, (Long?) -> Unit) -> Unit)? = null,
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
         RielNavegacion(estado.destino) { vm.elegirDestino(it) }
@@ -474,23 +568,25 @@ private fun SuperficieAncha(
             // todo el ancho: nada de panel vacío con «Elige un host…».
             ContenidoDestino(
                 estado = estado,
-                inventario = inventario,
+                fuente = fuente,
                 destino = estado.destino,
                 vm = vm,
                 alElegirCarpeta = alElegirCarpeta,
                 alAbrirNavegador = alAbrirNavegador,
                 alAbrirBateria = alAbrirBateria,
+                alDeliberar = alDeliberar,
                 modifier = Modifier.weight(1f),
             )
         } else {
             ContenidoDestino(
                 estado = estado,
-                inventario = inventario,
+                fuente = fuente,
                 destino = estado.destino,
                 vm = vm,
                 alElegirCarpeta = alElegirCarpeta,
                 alAbrirNavegador = alAbrirNavegador,
                 alAbrirBateria = alAbrirBateria,
+                alDeliberar = alDeliberar,
                 modifier = Modifier.weight(0.42f),
             )
             Box(
@@ -512,32 +608,29 @@ private fun SuperficieAncha(
     }
 }
 
-/** Contenido de un destino de primer nivel (Hosts, Sesiones, Túneles o Ajustes). */
+/** Contenido de un destino de primer nivel (Flota, Sesiones, Túneles, Servicios o Más). */
 @Composable
 private fun ContenidoDestino(
     estado: EstadoMagi,
-    inventario: org.cuatrodetres.magi.ui.modelos.InventarioVista,
+    fuente: FuenteNucleo,
     destino: Destino,
     vm: VistaModeloMagi,
     alElegirCarpeta: () -> Unit,
     alAbrirNavegador: (TunelVista) -> Unit,
     alAbrirBateria: () -> Unit,
+    alDeliberar: ((PlanDeliberacionVista, (Long?) -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     when (destino) {
-        Destino.HOSTS -> PantallaHosts(
-            estado = estado,
-            inventario = inventario,
-            alCambiarFiltro = vm::cambiarFiltro,
-            alPlegarGrupo = vm::plegarGrupo,
-            alAbrirFicha = vm::abrirFicha,
+        Destino.FLOTA -> PantallaFlota(
+            fuente = fuente,
+            ajustes = estado.ajustesMovil,
             alConectar = vm::abrirSesion,
-            alSincronizar = vm::sincronizarAhora,
+            alAbrirServicios = vm::abrirServiciosDeHost,
+            alAbrirSnippets = vm::abrirSnippetsDeHost,
             alAbrirAsistente = vm::abrirAsistente,
-            alResolverConflicto = vm::resolverConflicto,
-            alAbrirAjustes = { vm.elegirDestino(Destino.AJUSTES) },
+            alAbrirAjustes = { vm.abrirSeccionMas(SeccionMas.AJUSTES) },
             modifier = modifier,
-            hostSeleccionado = (estado.detalle as? DetalleVista.Ficha)?.hostUuid,
         )
         Destino.SESIONES -> PantallaSesiones(
             sesiones = estado.sesiones,
@@ -545,7 +638,7 @@ private fun ContenidoDestino(
             alAbrir = vm::abrirTerminal,
             alReconectar = vm::reconectarSesion,
             alCerrar = vm::cerrarSesion,
-            alIrAHosts = { vm.elegirDestino(Destino.HOSTS) },
+            alIrAHosts = { vm.elegirDestino(Destino.FLOTA) },
             modifier = modifier,
         )
         Destino.TUNELES -> PantallaTuneles(
@@ -555,14 +648,47 @@ private fun ContenidoDestino(
             alPuertoLibre = vm::tunelEnPuertoLibre,
             alAbrirNavegador = alAbrirNavegador,
             alDescartar = vm::descartarTunel,
-            alIrAHosts = { vm.elegirDestino(Destino.HOSTS) },
+            alIrAHosts = { vm.elegirDestino(Destino.FLOTA) },
             modifier = modifier,
         )
-        Destino.AJUSTES -> PantallaAjustes(
-            estado = estado,
-            alAbrirSeccion = vm::abrirSeccionAjustes,
+        Destino.SERVICIOS -> PantallaServicios(
+            fuente = fuente,
+            hostInicial = estado.hostServiciosInicial,
+            ajustes = estado.ajustesMovil,
+            alAbrirSesionConOrden = vm::abrirSesionConOrden,
+            alAbrirTerminal = vm::abrirTerminal,
+            alVolver = { vm.elegirDestino(Destino.FLOTA) },
+            alDeliberar = alDeliberar,
             modifier = modifier,
         )
+        Destino.MAS -> when (estado.seccionMas) {
+            SeccionMas.AJUSTES -> PantallaAjustes(
+                estado = estado,
+                alAbrirSeccion = vm::abrirSeccionAjustes,
+                modifier = modifier,
+            )
+            SeccionMas.SNIPPETS -> PantallaSnippets(
+                fuente = fuente,
+                hostInicial = estado.hostSnippetsInicial,
+                alVerResultados = vm::abrirResultadosDeEjecucion,
+                alVolver = vm::volver,
+                modifier = modifier,
+            )
+            SeccionMas.RESULTADOS -> PantallaResultados(
+                fuente = fuente,
+                modifier = modifier,
+            )
+            SeccionMas.REGISTRO -> PantallaRegistro(
+                fuente = fuente,
+                modifier = modifier,
+            )
+            // Sin sección, MÁS es su menú (Snippets · Resultados · Registro · Ajustes).
+            null -> PantallaMas(
+                seccion = null,
+                alElegir = vm::abrirSeccionMas,
+                modifier = modifier,
+            )
+        }
     }
 }
 
@@ -620,6 +746,40 @@ private fun ContenidoDetalle(
             alReconectar = vm::reconectarSesion,
             modifier = modifier,
         )
+        // Pantallas de la Fase 14: Flota, Servicios, Snippets, Resultados y
+        // Registro se autogestionan su lista y su detalle, así que ya no pasan
+        // por estas variantes de DetalleVista (se conservan por compatibilidad).
+        // Ajustes sí usa el panel de detalle.
+        is DetalleVista.ServiciosHost -> MensajeVacio(
+            titulo = stringResource(R.string.destino_servicios),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
+        is DetalleVista.Servicio -> MensajeVacio(
+            titulo = stringResource(R.string.destino_servicios),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
+        is DetalleVista.Logs -> MensajeVacio(
+            titulo = stringResource(R.string.mas_snippets),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
+        is DetalleVista.Snippet -> MensajeVacio(
+            titulo = stringResource(R.string.mas_snippets),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
+        is DetalleVista.Ejecucion -> MensajeVacio(
+            titulo = stringResource(R.string.mas_resultados),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
+        is DetalleVista.EntradaRegistro -> MensajeVacio(
+            titulo = stringResource(R.string.mas_registro),
+            detalle = stringResource(R.string.en_construccion),
+            modifier = modifier,
+        )
         is DetalleVista.Ajustes -> when (detalle.seccion) {
             SeccionAjustes.SINCRONIZACION -> PantallaSincronizacion(
                 estado = estado,
@@ -663,9 +823,36 @@ private fun ContenidoDetalle(
                 alVolver = vm::volver,
                 modifier = modifier,
             )
+            SeccionAjustes.FLOTA -> PantallaAjustesFlota(
+                ajustes = estado.ajustesMovil,
+                avisos = estado.avisosAjustes,
+                alGuardar = vm::guardarAjustesMovil,
+                alVolver = vm::volver,
+                modifier = modifier,
+            )
+            SeccionAjustes.SERVICIOS -> PantallaAjustesServicios(
+                ajustes = estado.ajustesMovil,
+                avisos = estado.avisosAjustes,
+                alGuardar = vm::guardarAjustesMovil,
+                alVolver = vm::volver,
+                modifier = modifier,
+            )
+            SeccionAjustes.DELIBERACION -> PantallaAjustesDeliberacion(
+                ajustes = estado.ajustesMovil,
+                avisos = estado.avisosAjustes,
+                alGuardar = vm::guardarAjustesMovil,
+                alVolver = vm::volver,
+                modifier = modifier,
+            )
         }
     }
 }
+
+/** Deliberación pedida por una pantalla de la Fase 14, con su continuación. */
+private data class DeliberacionPendiente(
+    val plan: PlanDeliberacionVista,
+    val alResolver: (Long?) -> Unit,
+)
 
 /** Sube por los contextos envueltos hasta la Activity (para las barras). */
 private fun Context.aActividad(): Activity? {

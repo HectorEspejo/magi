@@ -36,6 +36,12 @@ class ContenedorPlataforma(contexto: Context) : FachadaPlataforma {
     /** Portapapeles del sistema: se vacía la clave de sincronización tras usarla. */
     val portapapeles: Portapapeles = Portapapeles(aplicacion)
 
+    /**
+     * Si la app está a la vista (informe §8, D279): el sondeo, los refrescos y
+     * los logs solo corren con su pantalla delante.
+     */
+    val visibilidad: Visibilidad = Visibilidad()
+
     /** Restaura la carpeta recordada; lo llama el arranque de la app. */
     suspend fun iniciar() {
         carpeta.cargarCarpeta()

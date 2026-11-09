@@ -170,9 +170,12 @@ jobs:
   humo:
     name: Prueba de humo (emulador API 30 x86_64)
     needs: nucleo-y-apk
-    # En main y en las etiquetas android-v*; en pull requests no, para no
-    # alargar la validación de cada cambio.
-    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v')) }}
+    # En main, en las etiquetas android-v* y también en las pull requests que
+    # tocan el núcleo o la app: desde la Fase 14 las pruebas instrumentadas de
+    # extremo a extremo corren en CI (R106) y tienen que fallar en la PR que
+    # rompe, por ejemplo, el reenvío de un túnel (AC del checklist), no después
+    # de fusionar. Las PRs ya están filtradas por rutas en el disparador.
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v'))) }}
     runs-on: ubuntu-latest
     # El servidor de pruebas del móvil se compila en el anfitrión antes del
     # emulador; con la caché fría, el margen de 60 min se queda justo.

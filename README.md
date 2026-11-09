@@ -924,7 +924,20 @@ La app compañera para Android 11 o superior vive en [`android/`](android/) y se
 publica aparte del escritorio, con etiquetas `android-vX.Y.Z`: es **lectora**
 de la sincronización (el inventario llega del escritorio; el móvil nunca escribe
 en la carpeta) y permite conectar a los hosts, abrir el terminal y usar túneles.
-Funciona sin Google Play Services, sin cuenta y sin telemetría.
+
+Desde la Fase 14 es también el **móvil de guardia**: Flota es su pantalla de
+inicio, con el sondeo del escritorio (estados, métricas, vigilados y fallos) y
+refresco solo con la pantalla a la vista; Servicios maneja los servicios,
+timers y contenedores del host como en el escritorio, con acciones, sudo en
+memoria y logs en vivo; Snippets ejecuta los sincronizados en uno o varios
+hosts con variables, resultados y deliberación MAGI (lo deliberado se ejecuta
+manteniendo pulsado 1 s); y Registro enseña lo que ha hecho el móvil, con
+filtros y el detalle de cada deliberación. Toda la lógica (sondeo, acciones,
+lectura de salidas, snippets y deliberación) vive en el núcleo compartido; la
+app solo pinta y no decide qué se permite. Las acciones y las ejecuciones
+siguen en segundo plano con el servicio en primer plano; el sondeo, los
+refrescos y los logs solo corren con su pantalla a la vista. Funciona sin
+Google Play Services, sin cuenta y sin telemetría.
 
 Se instala y actualiza con [Obtainium](https://github.com/ImranR98/Obtainium)
 desde las [releases](https://github.com/4d3-org/magi/releases) del repositorio:

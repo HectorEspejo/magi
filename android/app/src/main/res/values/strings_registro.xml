@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MAGI · app Android (Fase 14). Registro del móvil (informe §6.10 y §7.10). -->
+<resources>
+    <string name="reg_titulo">MAGI · REGISTRO</string>
+    <string name="reg_buscar">buscar en el detalle…</string>
+    <string name="reg_filtros">FILTROS</string>
+    <string name="reg_todos">todos</string>
+    <string name="reg_host">HOST</string>
+    <string name="reg_todos_hosts">Todos los hosts</string>
+    <string name="reg_vacio_titulo">No hay entradas</string>
+    <string name="reg_vacio_detalle">Aún no hay actividad de este móvil. Conexiones, sondeos, snippets y acciones se anotan aquí.</string>
+    <string name="reg_vacio_busqueda_titulo">Ninguna entrada coincide</string>
+    <string name="reg_vacio_busqueda_detalle">Prueba con otro texto, otro host o menos tipos.</string>
+    <string name="reg_cargar_mas">CARGAR MÁS</string>
+    <string name="reg_cargando">leyendo el registro…</string>
+    <string name="reg_cargando_mas">cargando más entradas…</string>
+    <string name="reg_cargando_detalle">leyendo el detalle…</string>
+    <string name="reg_detalle">DETALLE</string>
+    <string name="reg_elegir">Toca una entrada para ver su detalle.</string>
+    <string name="reg_fecha">fecha</string>
+    <string name="reg_tipo">tipo</string>
+    <string name="reg_resultado">resultado</string>
+    <string name="reg_host_campo">host</string>
+    <string name="reg_detalle_campo">detalle</string>
+    <string name="reg_deliberacion">DELIBERACIÓN #%1$d</string>
+    <string name="reg_accion">acción</string>
+    <string name="reg_usuario">usuario</string>
+    <string name="reg_motivo">motivo</string>
+    <string name="reg_consenso">consenso %1$s</string>
+    <string name="reg_ejecucion">ejecución</string>
+    <string name="reg_sin_resultado">sin resultado: MAGI se cerró durante la ejecución</string>
+    <string name="reg_menu_filtrar_host">Filtrar por host</string>
+    <string name="reg_quitar_filtros">QUITAR FILTROS</string>
+    <plurals name="reg_entradas_cuenta">
+        <item quantity="one">%1$d entrada</item>
+        <item quantity="other">%1$d entradas</item>
+    </plurals>
+</resources>

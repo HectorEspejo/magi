@@ -14,6 +14,11 @@ import org.cuatrodetres.magi.nucleo.LlaveroMovil
 import org.cuatrodetres.magi.nucleo.Nucleo
 import org.cuatrodetres.magi.nucleo.NucleoRepositorio
 import org.cuatrodetres.magi.nucleo.OyenteNucleo
+import org.cuatrodetres.magi.nucleo.AccionServicioMovil
+import org.cuatrodetres.magi.nucleo.EjecucionMovil
+import org.cuatrodetres.magi.nucleo.EstadoLogs
+import org.cuatrodetres.magi.nucleo.HostFlota
+import org.cuatrodetres.magi.nucleo.ResultadoServicioMovil
 import org.cuatrodetres.magi.nucleo.Pantalla
 import org.cuatrodetres.magi.nucleo.PeticionDialogo
 import org.cuatrodetres.magi.nucleo.Retrollamadas
@@ -271,6 +276,16 @@ class PruebaHumoNucleo {
         override fun dialogo(peticion: PeticionDialogo) = Unit
 
         @Synchronized
+        override fun flota(lista: List<HostFlota>) = Unit
+
+        override fun accionesServicio(lista: List<AccionServicioMovil>) = Unit
+
+        override fun accionServicioHecha(resultado: ResultadoServicioMovil) = Unit
+
+        override fun logs(estado: EstadoLogs) = Unit
+
+        override fun ejecuciones(lista: List<EjecucionMovil>) = Unit
+
         override fun sincronizacion(estado: EstadoSincronizacion) {
             ultimaSincronizacion = estado
         }

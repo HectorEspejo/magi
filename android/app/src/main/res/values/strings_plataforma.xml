@@ -60,9 +60,10 @@
     <!-- ===================================================================== -->
     <!-- Servicio en primer plano (informe §4.6)                               -->
     <!-- ===================================================================== -->
-    <string name="plataforma_notificacion_canal">Sesiones y túneles</string>
-    <string name="plataforma_notificacion_canal_descripcion">MAGI mantiene las sesiones y los túneles abiertos mientras haya alguno activo</string>
-    <string name="plataforma_notificacion_servicio">MAGI · %1$s · %2$s</string>
+    <string name="plataforma_notificacion_canal">Sesiones y trabajo de MAGI</string>
+    <string name="plataforma_notificacion_canal_descripcion">MAGI mantiene el trabajo vivo abierto: sesiones, túneles, acciones de servicio y ejecuciones de snippets</string>
+    <string name="plataforma_notificacion_servicio">MAGI · %1$s</string>
+    <string name="plataforma_notificacion_servicio_sin_trabajo">MAGI</string>
     <plurals name="plataforma_notificacion_sesiones">
         <item quantity="one">%1$d sesión</item>
         <item quantity="other">%1$d sesiones</item>
@@ -70,6 +71,14 @@
     <plurals name="plataforma_notificacion_tuneles">
         <item quantity="one">%1$d túnel</item>
         <item quantity="other">%1$d túneles</item>
+    </plurals>
+    <plurals name="plataforma_notificacion_acciones">
+        <item quantity="one">%1$d acción</item>
+        <item quantity="other">%1$d acciones</item>
+    </plurals>
+    <plurals name="plataforma_notificacion_ejecuciones">
+        <item quantity="one">%1$d ejecución</item>
+        <item quantity="other">%1$d ejecuciones</item>
     </plurals>
 
     <!-- ===================================================================== -->

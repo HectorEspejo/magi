@@ -14,7 +14,37 @@ import kotlinx.coroutines.withContext
 import org.cuatrodetres.magi.BuildConfig
 import org.cuatrodetres.magi.preferencias.PreferenciasMagi
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
+import org.cuatrodetres.magi.ui.modelos.AccionEnCursoVista
+import org.cuatrodetres.magi.ui.modelos.AccionServicioVista
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
+import org.cuatrodetres.magi.ui.modelos.ConsumoVista
+import org.cuatrodetres.magi.ui.modelos.DecisionDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.DetalleRegistroVista
+import org.cuatrodetres.magi.ui.modelos.DetalleServiciosVista
+import org.cuatrodetres.magi.ui.modelos.EjecucionVista
+import org.cuatrodetres.magi.ui.modelos.EntradaRegistroVista
+import org.cuatrodetres.magi.ui.modelos.EstadoLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroRegistroVista
+import org.cuatrodetres.magi.ui.modelos.HostFlotaVista
+import org.cuatrodetres.magi.ui.modelos.InfoAccionVista
+import org.cuatrodetres.magi.ui.modelos.ListadoServiciosVista
+import org.cuatrodetres.magi.ui.modelos.ObjetivoVista
+import org.cuatrodetres.magi.ui.modelos.OrdenPestanaVista
+import org.cuatrodetres.magi.ui.modelos.PlanDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.PreparacionEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoAjustesVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoNucleoVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoServicioVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoSudoVista
+import org.cuatrodetres.magi.ui.modelos.SalidaEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.SnippetVista
+import org.cuatrodetres.magi.ui.modelos.TablaDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.TodaLaFlotaVista
+import org.cuatrodetres.magi.ui.modelos.VariableSnippetVista
+import org.cuatrodetres.magi.ui.modelos.VentanaLogsVista
+import org.cuatrodetres.magi.ui.modelos.acotarAjustes
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
 import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
@@ -139,6 +169,11 @@ class FuenteNucleoReal(
                     alRecibirPeticion = { canalPeticiones.trySend(it) },
                     alRecibirSincronizacion = { _sincronizacion.value = it },
                     alCambiarTrabajoVivo = actualizarServicio,
+                    alRecibirFlota = { _flota.value = it },
+                    alRecibirAccionesServicio = { _accionesServicio.value = it },
+                    alRecibirAccionHecha = { canalAccionesHechas.trySend(it) },
+                    alRecibirAvisoLogs = { canalAvisosLogs.trySend(it) },
+                    alRecibirEjecuciones = { _ejecuciones.value = it },
                 )
                 val instancia = iniciarNucleo(oyente)
                 nucleo = instancia
@@ -432,6 +467,261 @@ class FuenteNucleoReal(
         }
     }
 
+    // =======================================================================
+    // Fase 14 · contrato nuevo (informe §5.1 y §5.2)
+    // =======================================================================
+    //
+    // Los datos llegan del gestor del móvil por los flujos y las funciones son
+    // llamadas al Nucleo generado por UniFFI. Todo lo que puede fallar se
+    // devuelve con un mensaje legible y con instrucción cuando aplica
+    // (huella sin aceptar, sin credenciales, sin permiso, sudo rechazada…).
+
+    private val _flota = MutableStateFlow<List<HostFlotaVista>>(emptyList())
+    override val flota: StateFlow<List<HostFlotaVista>> = _flota.asStateFlow()
+
+    private val _accionesServicio = MutableStateFlow<List<AccionEnCursoVista>>(emptyList())
+    override val accionesServicio: StateFlow<List<AccionEnCursoVista>> =
+        _accionesServicio.asStateFlow()
+
+    private val _ejecuciones = MutableStateFlow<List<EjecucionVista>>(emptyList())
+    override val ejecuciones: StateFlow<List<EjecucionVista>> = _ejecuciones.asStateFlow()
+
+    // Los avisos de logs y las acciones terminadas no se pueden conflar: son
+    // eventos sueltos que la pantalla consume una vez. Canales sin límite, como
+    // las pantallas y las peticiones (M2 de la revisión): el oyente del núcleo
+    // hace trySend desde su hilo sin bloquearse y el consumidor recibe todo.
+    private val canalAvisosLogs = Channel<EstadoLogsVista>(Channel.UNLIMITED)
+    override val avisosLogs: Flow<EstadoLogsVista> = canalAvisosLogs.receiveAsFlow()
+
+    private val canalAccionesHechas = Channel<ResultadoServicioVista>(Channel.UNLIMITED)
+    override val accionesHechas: Flow<ResultadoServicioVista> =
+        canalAccionesHechas.receiveAsFlow()
+
+    /**
+     * Pasa los ajustes al núcleo. La app ya los acota al guardarlos (DataStore)
+     * y aquí se vuelven a acotar en local para no perder los valores efectivos;
+     * el núcleo devuelve el aviso de cada corrección.
+     */
+    override suspend fun aplicarAjustes(ajustes: AjustesMovilVista): ResultadoAjustesVista {
+        val acotado = acotarAjustes(ajustes)
+        val actual = nucleo
+            ?: return ResultadoAjustesVista(acotado.ajustes, acotado.avisos + SIN_NUCLEO)
+        return try {
+            val avisos = withContext(Dispatchers.IO) {
+                actual.aplicarAjustes(acotado.ajustes.aNucleo())
+            }
+            ResultadoAjustesVista(acotado.ajustes, avisos)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            ResultadoAjustesVista(acotado.ajustes, acotado.avisos + mensajeDeError(e))
+        }
+    }
+
+    /** Hosts de Flota con su estado; mismo filtro que el inventario. */
+    override suspend fun flota(filtro: String?): List<HostFlotaVista> =
+        leer(emptyList()) { actual -> actual.flota(filtro).map { it.aVista() } }
+
+    /** Sondea esos hosts sin diálogos; los resultados llegan por [flota]. */
+    override suspend fun sondear(hosts: List<String>): ResultadoAccion =
+        accion { actual -> actual.sondear(hosts) }
+
+    /** Fallos del último sondeo de todos los hosts; no abre conexiones. */
+    override suspend fun serviciosTodaLaFlota(): TodaLaFlotaVista =
+        leer(TodaLaFlotaVista()) { actual -> actual.serviciosTodaLaFlota().aVista() }
+
+    override suspend fun serviciosListar(
+        hostUuid: String,
+        refresco: Boolean,
+    ): ResultadoNucleoVista<ListadoServiciosVista> = consulta { actual ->
+        actual.serviciosListar(hostUuid, refresco).aVista()
+    }
+
+    override suspend fun serviciosConsumo(
+        hostUuid: String,
+    ): ResultadoNucleoVista<List<ConsumoVista>> = consulta { actual ->
+        actual.serviciosConsumo(hostUuid).map { it.aVista() }
+    }
+
+    override suspend fun serviciosDetalle(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+    ): ResultadoNucleoVista<DetalleServiciosVista> = consulta { actual ->
+        actual.serviciosDetalle(hostUuid, objetivo.aNucleo()).aVista()
+    }
+
+    override suspend fun prepararAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+    ): ResultadoNucleoVista<InfoAccionVista> = consulta { actual ->
+        actual.prepararAccion(hostUuid, objetivo.aNucleo(), accion.aNucleo()).aVista()
+    }
+
+    override suspend fun servicioAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+        deliberacion: Long?,
+    ): ResultadoNucleoVista<ResultadoServicioVista> = consulta { actual ->
+        actual.servicioAccion(
+            hostUuid,
+            objetivo.aNucleo(),
+            accion.aNucleo(),
+            deliberacion?.toULong(),
+        ).aVista()
+    }
+
+    /**
+     * Comprueba la contraseña de sudo. Los bytes se borran al terminar, pase lo
+     * que pase: nunca quedan en memoria de la app (informe §7.5).
+     */
+    override suspend fun sudoComprobar(
+        hostUuid: String,
+        contrasena: ByteArray,
+    ): ResultadoSudoVista {
+        val actual = nucleo ?: return ResultadoSudoVista.ERROR(SIN_NUCLEO)
+        return try {
+            withContext(Dispatchers.IO) { actual.sudoComprobar(hostUuid, contrasena).aVista() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            ResultadoSudoVista.ERROR(mensajeDeError(e))
+        } finally {
+            contrasena.fill(0)
+        }
+    }
+
+    override suspend fun sudoOlvidar(hostUuid: String): ResultadoAccion =
+        accion { actual -> actual.sudoOlvidar(hostUuid) }
+
+    /**
+     * Olvida todas las contraseñas de sudo en memoria al bloquearse MAGI
+     * (informe §7.5, D268). La siguiente acción la vuelve a pedir.
+     */
+    override suspend fun olvidarSudoAlBloquear(): ResultadoAccion =
+        accion { actual -> actual.olvidarSudoAlBloquear() }
+
+    override suspend fun logsSeguir(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        lineas: Int,
+    ): ResultadoNucleoVista<Long> = consulta { actual ->
+        actual.logsSeguir(
+            hostUuid,
+            objetivo.aNucleo(),
+            lineas.coerceIn(0, 5_000).toUInt(),
+        ).toLong()
+    }
+
+    override suspend fun logsVentana(
+        suscripcion: Long,
+        filtro: FiltroLogsVista,
+    ): ResultadoNucleoVista<VentanaLogsVista> = consulta { actual ->
+        actual.logsVentana(suscripcion.toULong(), filtro.aNucleo()).aVista()
+    }
+
+    override suspend fun logsParar(suscripcion: Long): ResultadoAccion =
+        accion { actual -> actual.logsParar(suscripcion.toULong()) }
+
+    override suspend fun abrirSesionConOrden(
+        hostUuid: String,
+        orden: OrdenPestanaVista,
+    ): ResultadoAperturaVista {
+        val actual = nucleo ?: return ResultadoAperturaVista.Error(SIN_NUCLEO)
+        return try {
+            val id = withContext(Dispatchers.IO) {
+                actual.abrirSesionConOrden(hostUuid, orden.aNucleo())
+            }
+            ResultadoAperturaVista.Abierta(id.toLong())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            ResultadoAperturaVista.Error(mensajeDeError(e))
+        }
+    }
+
+    override suspend fun snippets(filtro: String?): List<SnippetVista> =
+        leer(emptyList()) { actual -> actual.snippets(filtro).map { it.aVista() } }
+
+    override suspend fun snippetsDeHost(hostUuid: String): List<SnippetVista> =
+        leer(emptyList()) { actual -> actual.snippetsDeHost(hostUuid).map { it.aVista() } }
+
+    override suspend fun snippet(uuid: String): SnippetVista? =
+        leerONulo { actual -> actual.snippet(uuid).aVista() }
+
+    override suspend fun prepararEjecucion(
+        snippetUuid: String,
+        hosts: List<String>,
+        variables: List<VariableSnippetVista>,
+    ): ResultadoNucleoVista<PreparacionEjecucionVista> = consulta { actual ->
+        actual.prepararEjecucion(
+            snippetUuid,
+            hosts,
+            variables.map { it.aNucleo() },
+        ).aVista()
+    }
+
+    override suspend fun ejecutarSnippet(
+        preparacion: PreparacionEjecucionVista,
+        pararAlFallo: Boolean,
+        deliberacion: Long?,
+    ): ResultadoNucleoVista<Long> = consulta { actual ->
+        actual.ejecutarSnippet(
+            preparacion.aNucleo(),
+            pararAlFallo,
+            deliberacion?.toULong(),
+        ).toLong()
+    }
+
+    override suspend fun ejecucionesLista(): List<EjecucionVista> =
+        leer(emptyList()) { actual -> actual.ejecuciones().map { it.aVista() } }
+
+    override suspend fun salidaEjecucion(
+        ejecucion: Long,
+        hostUuid: String,
+    ): ResultadoNucleoVista<SalidaEjecucionVista> = consulta { actual ->
+        actual.salidaEjecucion(ejecucion.toULong(), hostUuid).aVista()
+    }
+
+    override suspend fun cancelarEjecucion(id: Long): ResultadoAccion =
+        accion { actual -> actual.cancelarEjecucion(id.toULong()) }
+
+    override suspend fun repetirEjecucion(
+        id: Long,
+    ): ResultadoNucleoVista<PreparacionEjecucionVista> = consulta { actual ->
+        actual.repetirEjecucion(id.toULong()).aVista()
+    }
+
+    override suspend fun limpiarEjecuciones(): ResultadoAccion =
+        accion { actual -> actual.limpiarEjecuciones() }
+
+    override suspend fun deliberar(
+        plan: PlanDeliberacionVista,
+    ): ResultadoNucleoVista<TablaDeliberacionVista> = consulta { actual ->
+        actual.deliberar(plan.aNucleo()).aVista()
+    }
+
+    override suspend fun resolverDeliberacion(
+        id: Long,
+        decision: DecisionDeliberacionVista,
+    ): ResultadoNucleoVista<Long> = consulta { actual ->
+        actual.resolverDeliberacion(id.toULong(), decision.aNucleo()).toLong()
+    }
+
+    override suspend fun registro(
+        filtro: FiltroRegistroVista,
+        desde: Long?,
+        cuantas: Int,
+    ): List<EntradaRegistroVista> = leer(emptyList()) { actual ->
+        actual.registro(filtro.aNucleo(), desde?.toULong(), cuantas.toUInt())
+            .map { it.aVista() }
+    }
+
+    override suspend fun registroDetalle(id: Long): DetalleRegistroVista? =
+        leerONulo { actual -> actual.registroDetalle(id.toULong()).aVista() }
+
+
     /**
      * Cierra el núcleo y suelta la referencia (B7 de la revisión): la fachada
      * no queda apuntando a un objeto destruido. La UI no debe usarse después.
@@ -473,6 +763,23 @@ class FuenteNucleoReal(
             } catch (e: Throwable) {
                 null
             }
+        }
+    }
+
+    /**
+     * Lectura del núcleo que puede fallar: Listo con el valor o Error con el
+     * mensaje legible que ya trae la instrucción cuando aplica.
+     */
+    private suspend fun <T> consulta(
+        bloque: suspend (NucleoInterface) -> T,
+    ): ResultadoNucleoVista<T> {
+        val actual = nucleo ?: return ResultadoNucleoVista.Error(SIN_NUCLEO)
+        return try {
+            ResultadoNucleoVista.Listo(withContext(Dispatchers.IO) { bloque(actual) })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            ResultadoNucleoVista.Error(mensajeDeError(e))
         }
     }
 

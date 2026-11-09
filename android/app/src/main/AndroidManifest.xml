@@ -47,10 +47,11 @@
         </activity>
 
         <!--
-          Servicio en primer plano specialUse (informe §4.6, checklist «Segundo
-          plano»): vive mientras haya alguna sesión o túnel, con la notificación
-          «MAGI · N sesiones · M túneles» y sin acciones (T6). Lo arranca y lo
-          para ServicioSesiones.actualizar desde la app.
+          Servicio en primer plano specialUse (informe §3.3 y §4.6, D279): vive
+          mientras haya alguna sesión, túnel, acción de servicio o ejecución de
+          snippets, con la notificación «MAGI · 2 sesiones · 1 acción» y sin
+          acciones (T6). Lo arranca y lo para ServicioSesiones.actualizar desde
+          la app.
         -->
         <service
             android:name=".plataforma.ServicioSesiones"

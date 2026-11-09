@@ -8,7 +8,37 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
+import org.cuatrodetres.magi.ui.modelos.AccionEnCursoVista
+import org.cuatrodetres.magi.ui.modelos.AccionServicioVista
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
+import org.cuatrodetres.magi.ui.modelos.ConsumoVista
+import org.cuatrodetres.magi.ui.modelos.DecisionDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.DetalleRegistroVista
+import org.cuatrodetres.magi.ui.modelos.DetalleServiciosVista
+import org.cuatrodetres.magi.ui.modelos.EjecucionVista
+import org.cuatrodetres.magi.ui.modelos.EntradaRegistroVista
+import org.cuatrodetres.magi.ui.modelos.EstadoLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroLogsVista
+import org.cuatrodetres.magi.ui.modelos.FiltroRegistroVista
+import org.cuatrodetres.magi.ui.modelos.HostFlotaVista
+import org.cuatrodetres.magi.ui.modelos.InfoAccionVista
+import org.cuatrodetres.magi.ui.modelos.ListadoServiciosVista
+import org.cuatrodetres.magi.ui.modelos.ObjetivoVista
+import org.cuatrodetres.magi.ui.modelos.OrdenPestanaVista
+import org.cuatrodetres.magi.ui.modelos.PlanDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.PreparacionEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoAjustesVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoNucleoVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoServicioVista
+import org.cuatrodetres.magi.ui.modelos.ResultadoSudoVista
+import org.cuatrodetres.magi.ui.modelos.SalidaEjecucionVista
+import org.cuatrodetres.magi.ui.modelos.SnippetVista
+import org.cuatrodetres.magi.ui.modelos.TablaDeliberacionVista
+import org.cuatrodetres.magi.ui.modelos.TodaLaFlotaVista
+import org.cuatrodetres.magi.ui.modelos.VariableSnippetVista
+import org.cuatrodetres.magi.ui.modelos.VentanaLogsVista
+import org.cuatrodetres.magi.ui.modelos.acotarAjustes
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
 import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
@@ -278,5 +308,316 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
     override suspend fun cambiarTamanoLetra(sp: Int): ResultadoAccion {
         tamanoLetraGuardado = sp
         return respuesta()
+    }
+
+    // =======================================================================
+    // Fase 14 · flujos nuevos (informe §5.2)
+    // =======================================================================
+
+    private val _flota = MutableStateFlow<List<HostFlotaVista>>(emptyList())
+    override val flota: StateFlow<List<HostFlotaVista>> = _flota.asStateFlow()
+
+    private val _accionesServicio = MutableStateFlow<List<AccionEnCursoVista>>(emptyList())
+    override val accionesServicio: StateFlow<List<AccionEnCursoVista>> =
+        _accionesServicio.asStateFlow()
+
+    private val _ejecuciones = MutableStateFlow<List<EjecucionVista>>(emptyList())
+    override val ejecuciones: StateFlow<List<EjecucionVista>> = _ejecuciones.asStateFlow()
+
+    private val _avisosLogs = MutableSharedFlow<EstadoLogsVista>(extraBufferCapacity = 64)
+    override val avisosLogs: Flow<EstadoLogsVista> = _avisosLogs.asSharedFlow()
+
+    private val _accionesHechas = MutableSharedFlow<ResultadoServicioVista>(extraBufferCapacity = 16)
+    override val accionesHechas: Flow<ResultadoServicioVista> = _accionesHechas.asSharedFlow()
+
+    // Datos que devuelven las llamadas de la Fase 14.
+    var flotaRespuesta: List<HostFlotaVista> = emptyList()
+    var todaLaFlotaRespuesta: TodaLaFlotaVista = TodaLaFlotaVista()
+    var listadoRespuesta: ListadoServiciosVista = ListadoServiciosVista()
+    var consumosRespuesta: List<ConsumoVista> = emptyList()
+    var detalleServicioRespuesta: DetalleServiciosVista = DetalleServiciosVista()
+    var infoAccionRespuesta: InfoAccionVista = InfoAccionVista()
+    var resultadoServicioRespuesta: ResultadoServicioVista = ResultadoServicioVista()
+    var resultadoSudoRespuesta: ResultadoSudoVista = ResultadoSudoVista.OK
+    var ventanaLogsRespuesta: VentanaLogsVista = VentanaLogsVista()
+    var snippetsRespuesta: List<SnippetVista> = emptyList()
+    var snippetRespuesta: SnippetVista? = null
+    var preparacionRespuesta: PreparacionEjecucionVista = PreparacionEjecucionVista()
+    var ejecucionesRespuesta: List<EjecucionVista> = emptyList()
+    var salidaRespuesta: SalidaEjecucionVista = SalidaEjecucionVista()
+    var tablaDeliberacionRespuesta: TablaDeliberacionVista = TablaDeliberacionVista()
+    var registroRespuesta: List<EntradaRegistroVista> = emptyList()
+    var registroDetalleRespuesta: DetalleRegistroVista? = null
+    /** Id que devuelven logsSeguir, ejecutarSnippet y resolverDeliberacion. */
+    var idRespuesta: Long = 1L
+    /** Si no es null, las lecturas nuevas devuelven este error. */
+    var errorConsulta: String? = null
+    var ajustesAplicados: AjustesMovilVista? = null
+
+    // Llamadas registradas de la Fase 14.
+    val sondas: MutableList<List<String>> = mutableListOf()
+    val accionesSolicitadas: MutableList<Triple<String, ObjetivoVista, AccionServicioVista>> =
+        mutableListOf()
+    val ventanasPedidas: MutableList<Pair<Long, FiltroLogsVista>> = mutableListOf()
+    val deliberacionesPedidas: MutableList<PlanDeliberacionVista> = mutableListOf()
+    val decisionesDeliberacion: MutableList<Pair<Long, DecisionDeliberacionVista>> =
+        mutableListOf()
+    val paginasRegistro: MutableList<Triple<FiltroRegistroVista, Long?, Int>> = mutableListOf()
+    val contrasenasSudo: MutableList<Pair<String, Int>> = mutableListOf()
+
+    fun emitirFlota(lista: List<HostFlotaVista>) {
+        _flota.value = lista
+    }
+
+    fun emitirAccionesServicio(lista: List<AccionEnCursoVista>) {
+        _accionesServicio.value = lista
+    }
+
+    fun emitirEjecuciones(lista: List<EjecucionVista>) {
+        _ejecuciones.value = lista
+    }
+
+    fun emitirAvisoLogs(estado: EstadoLogsVista) {
+        _avisosLogs.tryEmit(estado)
+    }
+
+    fun emitirAccionHecha(resultado: ResultadoServicioVista) {
+        _accionesHechas.tryEmit(resultado)
+    }
+
+    private fun <T> lectura(valor: T): ResultadoNucleoVista<T> =
+        errorConsulta?.let { ResultadoNucleoVista.Error(it) }
+            ?: ResultadoNucleoVista.Listo(valor)
+
+    // =======================================================================
+    // Fase 14 · ajustes y flota (informe §5.1 y §5.4)
+    // =======================================================================
+
+    override suspend fun aplicarAjustes(ajustes: AjustesMovilVista): ResultadoAjustesVista {
+        llamadas.add("aplicarAjustes")
+        ajustesAplicados = ajustes
+        return acotarAjustes(ajustes)
+    }
+
+    override suspend fun flota(filtro: String?): List<HostFlotaVista> {
+        ultimoFiltro = filtro
+        llamadas.add("flota:" + (filtro ?: ""))
+        return flotaRespuesta
+    }
+
+    override suspend fun sondear(hosts: List<String>): ResultadoAccion {
+        sondas.add(hosts)
+        llamadas.add("sondear:" + hosts.joinToString(","))
+        return respuesta()
+    }
+
+    // =======================================================================
+    // Fase 14 · servicios (informe §5.1)
+    // =======================================================================
+
+    override suspend fun serviciosTodaLaFlota(): TodaLaFlotaVista {
+        llamadas.add("serviciosTodaLaFlota")
+        return todaLaFlotaRespuesta
+    }
+
+    override suspend fun serviciosListar(
+        hostUuid: String,
+        refresco: Boolean,
+    ): ResultadoNucleoVista<ListadoServiciosVista> {
+        llamadas.add("serviciosListar:" + hostUuid + ":" + refresco)
+        return lectura(listadoRespuesta)
+    }
+
+    override suspend fun serviciosConsumo(
+        hostUuid: String,
+    ): ResultadoNucleoVista<List<ConsumoVista>> {
+        llamadas.add("serviciosConsumo:" + hostUuid)
+        return lectura(consumosRespuesta)
+    }
+
+    override suspend fun serviciosDetalle(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+    ): ResultadoNucleoVista<DetalleServiciosVista> {
+        llamadas.add("serviciosDetalle:" + hostUuid + ":" + objetivo.nombre)
+        return lectura(detalleServicioRespuesta)
+    }
+
+    override suspend fun prepararAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+    ): ResultadoNucleoVista<InfoAccionVista> {
+        llamadas.add("prepararAccion:" + hostUuid + ":" + objetivo.nombre + ":" + accion)
+        return lectura(infoAccionRespuesta)
+    }
+
+    override suspend fun servicioAccion(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        accion: AccionServicioVista,
+        deliberacion: Long?,
+    ): ResultadoNucleoVista<ResultadoServicioVista> {
+        accionesSolicitadas.add(Triple(hostUuid, objetivo, accion))
+        llamadas.add("servicioAccion:" + hostUuid + ":" + objetivo.nombre + ":" + accion)
+        return lectura(resultadoServicioRespuesta)
+    }
+
+    override suspend fun sudoComprobar(
+        hostUuid: String,
+        contrasena: ByteArray,
+    ): ResultadoSudoVista {
+        contrasenasSudo.add(hostUuid to contrasena.size)
+        llamadas.add("sudoComprobar:" + hostUuid)
+        return resultadoSudoRespuesta
+    }
+
+    override suspend fun sudoOlvidar(hostUuid: String): ResultadoAccion {
+        llamadas.add("sudoOlvidar:" + hostUuid)
+        return respuesta()
+    }
+
+    override suspend fun olvidarSudoAlBloquear(): ResultadoAccion {
+        llamadas.add("olvidarSudoAlBloquear")
+        return respuesta()
+    }
+
+    // =======================================================================
+    // Fase 14 · logs y sesiones con orden (informe §5.1)
+    // =======================================================================
+
+    override suspend fun logsSeguir(
+        hostUuid: String,
+        objetivo: ObjetivoVista,
+        lineas: Int,
+    ): ResultadoNucleoVista<Long> {
+        llamadas.add("logsSeguir:" + hostUuid + ":" + objetivo.nombre + ":" + lineas)
+        return lectura(idRespuesta)
+    }
+
+    override suspend fun logsVentana(
+        suscripcion: Long,
+        filtro: FiltroLogsVista,
+    ): ResultadoNucleoVista<VentanaLogsVista> {
+        ventanasPedidas.add(suscripcion to filtro)
+        llamadas.add("logsVentana:" + suscripcion)
+        return lectura(ventanaLogsRespuesta)
+    }
+
+    override suspend fun logsParar(suscripcion: Long): ResultadoAccion {
+        llamadas.add("logsParar:" + suscripcion)
+        return respuesta()
+    }
+
+    override suspend fun abrirSesionConOrden(
+        hostUuid: String,
+        orden: OrdenPestanaVista,
+    ): ResultadoAperturaVista {
+        llamadas.add("abrirSesionConOrden:" + hostUuid + ":" + orden)
+        return abrirSesionResultado
+    }
+
+    // =======================================================================
+    // Fase 14 · snippets y ejecuciones (informe §5.1)
+    // =======================================================================
+
+    override suspend fun snippets(filtro: String?): List<SnippetVista> {
+        ultimoFiltro = filtro
+        llamadas.add("snippets:" + (filtro ?: ""))
+        return snippetsRespuesta
+    }
+
+    override suspend fun snippetsDeHost(hostUuid: String): List<SnippetVista> {
+        llamadas.add("snippetsDeHost:" + hostUuid)
+        return snippetsRespuesta
+    }
+
+    override suspend fun snippet(uuid: String): SnippetVista? {
+        llamadas.add("snippet:" + uuid)
+        return snippetRespuesta ?: snippetsRespuesta.firstOrNull { it.uuid == uuid }
+    }
+
+    override suspend fun prepararEjecucion(
+        snippetUuid: String,
+        hosts: List<String>,
+        variables: List<VariableSnippetVista>,
+    ): ResultadoNucleoVista<PreparacionEjecucionVista> {
+        llamadas.add("prepararEjecucion:" + snippetUuid + ":" + hosts.joinToString(","))
+        return lectura(preparacionRespuesta)
+    }
+
+    override suspend fun ejecutarSnippet(
+        preparacion: PreparacionEjecucionVista,
+        pararAlFallo: Boolean,
+        deliberacion: Long?,
+    ): ResultadoNucleoVista<Long> {
+        llamadas.add("ejecutarSnippet:" + preparacion.snippetUuid)
+        return lectura(idRespuesta)
+    }
+
+    override suspend fun ejecucionesLista(): List<EjecucionVista> {
+        llamadas.add("ejecucionesLista")
+        return ejecucionesRespuesta
+    }
+
+    override suspend fun salidaEjecucion(
+        ejecucion: Long,
+        hostUuid: String,
+    ): ResultadoNucleoVista<SalidaEjecucionVista> {
+        llamadas.add("salidaEjecucion:" + ejecucion + ":" + hostUuid)
+        return lectura(salidaRespuesta)
+    }
+
+    override suspend fun cancelarEjecucion(id: Long): ResultadoAccion {
+        llamadas.add("cancelarEjecucion:" + id)
+        return respuesta()
+    }
+
+    override suspend fun repetirEjecucion(
+        id: Long,
+    ): ResultadoNucleoVista<PreparacionEjecucionVista> {
+        llamadas.add("repetirEjecucion:" + id)
+        return lectura(preparacionRespuesta)
+    }
+
+    override suspend fun limpiarEjecuciones(): ResultadoAccion {
+        llamadas.add("limpiarEjecuciones")
+        return respuesta()
+    }
+
+    // =======================================================================
+    // Fase 14 · deliberación y registro (informe §5.1)
+    // =======================================================================
+
+    override suspend fun deliberar(
+        plan: PlanDeliberacionVista,
+    ): ResultadoNucleoVista<TablaDeliberacionVista> {
+        deliberacionesPedidas.add(plan)
+        llamadas.add("deliberar:" + plan.accion)
+        return lectura(tablaDeliberacionRespuesta)
+    }
+
+    override suspend fun resolverDeliberacion(
+        id: Long,
+        decision: DecisionDeliberacionVista,
+    ): ResultadoNucleoVista<Long> {
+        decisionesDeliberacion.add(id to decision)
+        llamadas.add("resolverDeliberacion:" + id + ":" + decision)
+        return lectura(idRespuesta)
+    }
+
+    override suspend fun registro(
+        filtro: FiltroRegistroVista,
+        desde: Long?,
+        cuantas: Int,
+    ): List<EntradaRegistroVista> {
+        paginasRegistro.add(Triple(filtro, desde, cuantas))
+        llamadas.add("registro:desde=" + (desde ?: "") + ":cuantas=" + cuantas)
+        return registroRespuesta
+    }
+
+    override suspend fun registroDetalle(id: Long): DetalleRegistroVista? {
+        llamadas.add("registroDetalle:" + id)
+        return registroDetalleRespuesta
     }
 }

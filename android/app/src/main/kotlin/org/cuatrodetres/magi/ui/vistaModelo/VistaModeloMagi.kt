@@ -4,13 +4,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.cuatrodetres.magi.navegacion.Destino
 import org.cuatrodetres.magi.navegacion.DetalleVista
 import org.cuatrodetres.magi.navegacion.SeccionAjustes
+import org.cuatrodetres.magi.navegacion.SeccionMas
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
+import org.cuatrodetres.magi.ui.modelos.AjustesMovilVista
 import org.cuatrodetres.magi.ui.modelos.AvisoVista
 import org.cuatrodetres.magi.ui.modelos.ClaveMovilVista
 import org.cuatrodetres.magi.ui.modelos.ConflictoHuellaVista
@@ -22,6 +25,7 @@ import org.cuatrodetres.magi.ui.modelos.EstadoMagi
 import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
 import org.cuatrodetres.magi.ui.modelos.InventarioVista
+import org.cuatrodetres.magi.ui.modelos.OrdenPestanaVista
 import org.cuatrodetres.magi.ui.modelos.PasoAsistente
 import org.cuatrodetres.magi.ui.modelos.ResultadoAccion
 import org.cuatrodetres.magi.ui.modelos.ResultadoAperturaVista
@@ -30,9 +34,11 @@ import org.cuatrodetres.magi.ui.modelos.RespuestaDialogoVista
 import org.cuatrodetres.magi.ui.modelos.SesionVista
 import org.cuatrodetres.magi.ui.modelos.TipoAviso
 import org.cuatrodetres.magi.ui.modelos.TipoConfirmacion
+import org.cuatrodetres.magi.ui.modelos.TrabajoPerdidoVista
 import org.cuatrodetres.magi.ui.modelos.TunelVista
 import org.cuatrodetres.magi.ui.modelos.VersionVista
 import org.cuatrodetres.magi.ui.modelos.ZOOM_POR_DEFECTO
+import org.cuatrodetres.magi.ui.modelos.acotarAjustes
 import org.cuatrodetres.magi.ui.modelos.acotarZoom
 import org.cuatrodetres.magi.ui.modelos.numerarSesiones
 
@@ -61,8 +67,16 @@ class VistaModeloMagi(
     private var avisosComprobados = false
     private var guiaBateriaComprobada = false
 
+    /**
+     * Se enciende cuando ya se ha consumido el trabajo que quedó abierto: a
+     * partir de ahí VistaModeloMagi anota el trabajo vivo para el próximo
+     * arranque (informe §7.12). Antes no, para no pisar el aviso pendiente.
+     */
+    private var persistirTrabajo = false
+
     init {
         observarFuente()
+        observarTrabajo()
     }
 
     // -----------------------------------------------------------------------
@@ -102,6 +116,32 @@ class VistaModeloMagi(
         }
     }
 
+    /**
+     * Anota en DataStore el trabajo vivo (sesiones, acciones y ejecuciones) para
+     * poder avisar al volver si Android cerró MAGI mientras seguía en curso
+     * (informe §7.12). Solo se enciende después de consumir el aviso pendiente.
+     */
+    private fun observarTrabajo() {
+        if (avisosPlataforma == null) return
+        alcance.launch {
+            combine(
+                fuente.sesiones,
+                fuente.accionesServicio,
+                fuente.ejecuciones,
+            ) { sesiones, acciones, ejecuciones ->
+                Triple(sesiones.size, acciones.size, ejecuciones.size)
+            }.collect { (sesiones, acciones, ejecuciones) ->
+                if (!persistirTrabajo) return@collect
+                try {
+                    avisosPlataforma.guardarTrabajoAbierto(sesiones, acciones, ejecuciones)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    // Sin persistencia no hay aviso al volver; nada más que hacer.
+                }
+            }
+        }
+    }
+
     private fun aplicarSesiones(lista: List<SesionVista>) {
         val numeradas = numerarSesiones(lista)
         val antesHabia = _estado.value.sesiones.isNotEmpty()
@@ -121,33 +161,56 @@ class VistaModeloMagi(
     }
 
     /**
-     * Al arrancar, avisa si Android cerró MAGI con sesiones abiertas y ofrece la
-     * guía de batería (informe §4.6). Es un aviso no bloqueante: solo si el
-     * núcleo no tiene sesiones vivas. Sin plataforma inyectada no se muestra.
+     * Al arrancar, avisa si Android cerró MAGI con sesiones, acciones o
+     * ejecuciones en curso, y ofrece la guía de batería (informe §4.6 y §7.12).
+     *
+     * Es un aviso no bloqueante: las sesiones solo se echan de menos si el
+     * núcleo no tiene ninguna viva, y las acciones y ejecuciones solo si el
+     * núcleo no tiene ninguna en curso (si las tiene, el proceso no murió).
+     * Sin plataforma inyectada no se muestra.
      */
-    fun comprobarAvisosDePlataforma() {
+    private suspend fun comprobarAvisosDePlataforma() {
         val avisos = avisosPlataforma ?: return
         if (avisosComprobados) return
         avisosComprobados = true
-        alcance.launch {
-            val perdidas = try {
-                avisos.sesionesQueQuedaronAbiertas()
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                0
-            }
-            if (perdidas > 0 && _estado.value.sesiones.isEmpty()) {
-                _estado.update { it.copy(sesionesPerdidas = perdidas) }
-            }
-            val recreada = try {
-                avisos.claveMovilRecreada()
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                false
-            }
-            if (recreada) {
-                _estado.update { it.copy(avisoClaveRecreada = true) }
-            }
+        val perdidas = try {
+            avisos.sesionesQueQuedaronAbiertas()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            0
+        }
+        if (perdidas > 0 && _estado.value.sesiones.isEmpty()) {
+            _estado.update { it.copy(sesionesPerdidas = perdidas) }
+        }
+        val acciones = try {
+            avisos.accionesQueQuedaronAbiertas()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            0
+        }
+        val ejecuciones = try {
+            avisos.ejecucionesQueQuedaronAbiertas()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            0
+        }
+        val trabajo = TrabajoPerdidoVista(
+            acciones = if (fuente.accionesServicio.value.isEmpty()) acciones else 0,
+            ejecuciones = if (fuente.ejecuciones.value.isEmpty()) ejecuciones else 0,
+        )
+        if (trabajo.hayTrabajo) {
+            _estado.update { it.copy(trabajoPerdido = trabajo) }
+            // El aviso ya ofrece la guía de batería; la guía se abre sola una vez.
+            quizasOfrecerGuiaBateria()
+        }
+        val recreada = try {
+            avisos.claveMovilRecreada()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            false
+        }
+        if (recreada) {
+            _estado.update { it.copy(avisoClaveRecreada = true) }
         }
     }
 
@@ -194,6 +257,98 @@ class VistaModeloMagi(
         _estado.update { it.copy(sesionesPerdidas = null) }
     }
 
+    /** Cierra el aviso de las acciones o ejecuciones que Android cerró con MAGI. */
+    fun descartarTrabajoPerdido() {
+        _estado.update { it.copy(trabajoPerdido = null) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Ajustes de la Fase 14 (informe §5.4)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Guarda los ajustes de Flota, Servicios y Deliberación: los acota, los
+     * persiste en DataStore y los pasa al núcleo con aplicar_ajustes. Los avisos
+     * de lo corregido se quedan en el estado para enseñarlos en Ajustes.
+     */
+    fun guardarAjustesMovil(nuevos: AjustesMovilVista) {
+        alcance.launch {
+            val normalizados = acotarAjustes(nuevos).ajustes
+            val avisos = try {
+                avisosPlataforma?.guardarAjustesMovil(nuevos)
+                    ?: acotarAjustes(nuevos).avisos
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                acotarAjustes(nuevos).avisos
+            }
+            _estado.update {
+                it.copy(ajustesMovil = normalizados, avisosAjustes = avisos.distinct())
+            }
+            aplicarAjustesAlNucleo(normalizados, mostrarAviso = true)
+        }
+    }
+
+    /**
+     * Lee los ajustes guardados en DataStore y los pasa al núcleo al arrancar y
+     * al volver a la app (informe §5.4 y §5.1). Si el núcleo acota algo, se
+     * enseña un aviso al arrancar y queda en el estado para la pantalla Ajustes.
+     */
+    private suspend fun cargarYAplicarAjustes(mostrarAviso: Boolean) {
+        val avisos = avisosPlataforma ?: return
+        val guardados = try {
+            avisos.ajustesMovil()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return
+        }
+        aplicarAjustesAlNucleo(guardados, mostrarAviso = mostrarAviso)
+    }
+
+    /** Pasa los ajustes al núcleo y refleja lo que el núcleo acote (§5.4). */
+    private suspend fun aplicarAjustesAlNucleo(
+        ajustes: AjustesMovilVista,
+        mostrarAviso: Boolean,
+    ) {
+        val resultado = try {
+            fuente.aplicarAjustes(ajustes)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            org.cuatrodetres.magi.ui.modelos.ResultadoAjustesVista(
+                ajustes = acotarAjustes(ajustes).ajustes,
+                avisos = listOf(e.message.orEmpty()).filter { it.isNotBlank() },
+            )
+        }
+        val avisos = resultado.avisos.filter { it.isNotBlank() }
+        _estado.update {
+            it.copy(
+                ajustesMovil = resultado.ajustes,
+                avisosAjustes = (it.avisosAjustes + avisos).distinct(),
+            )
+        }
+        if (mostrarAviso && avisos.isNotEmpty()) avisoNucleo(avisos.first(), false)
+    }
+
+    /**
+     * Enciende la persistencia del trabajo vivo después de haber consumido el
+     * aviso pendiente, y anota la instantánea actual una vez (informe §7.12).
+     */
+    private fun activarPersistenciaDeTrabajo() {
+        if (avisosPlataforma == null || persistirTrabajo) return
+        persistirTrabajo = true
+        alcance.launch {
+            try {
+                avisosPlataforma.guardarTrabajoAbierto(
+                    sesiones = fuente.sesiones.value.size,
+                    acciones = fuente.accionesServicio.value.size,
+                    ejecuciones = fuente.ejecuciones.value.size,
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // Sin persistencia no hay aviso al volver.
+            }
+        }
+    }
+
     private fun quitarDialogoGuiaBateria() {
         _estado.update { actual ->
             actual.copy(dialogos = actual.dialogos.filter { it !is DialogoVista.GuiaBateria })
@@ -216,6 +371,8 @@ class VistaModeloMagi(
                 ResultadoAccion.Ok -> {
                     _estado.update { it.copy(iniciado = true) }
                     comprobarAvisosDePlataforma()
+                    cargarYAplicarAjustes(mostrarAviso = true)
+                    activarPersistenciaDeTrabajo()
                     refrescarInventario()
                     refrescarSincronizacion()
                     refrescarConflictos()
@@ -249,7 +406,11 @@ class VistaModeloMagi(
         }
     }
 
-    /** La app vuelve a primer plano: se bloquea si el margen de 5 min se agotó. */
+    /**
+     * La app vuelve a primer plano: se bloquea si el margen de 5 min se agotó y,
+     * si no, relee los ajustes de DataStore y los vuelve a pasar al núcleo
+     * (informe §5.4).
+     */
     fun alVolverALaApp() {
         if (_estado.value.bloqueo != EstadoBloqueoVista.DESBLOQUEADA) return
         val hayQueBloquear = try {
@@ -260,6 +421,27 @@ class VistaModeloMagi(
         }
         if (hayQueBloquear) {
             _estado.update { it.copy(bloqueo = EstadoBloqueoVista.BLOQUEADA) }
+            olvidarSudoAlBloquear()
+            return
+        }
+        if (_estado.value.iniciado) {
+            alcance.launch { cargarYAplicarAjustes(mostrarAviso = false) }
+        }
+    }
+
+    /**
+     * Al bloquearse MAGI, la contraseña de sudo que magi-movil guarda en memoria
+     * se olvida: la siguiente acción la vuelve a pedir (informe §7.5, D268).
+     * Un fallo no se enseña: el bloqueo ya protege lo demás.
+     */
+    private fun olvidarSudoAlBloquear() {
+        alcance.launch {
+            try {
+                fuente.olvidarSudoAlBloquear()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // El aviso no debe tapar la pantalla de bloqueo.
+            }
         }
     }
 
@@ -278,21 +460,114 @@ class VistaModeloMagi(
     // -----------------------------------------------------------------------
 
     fun elegirDestino(destino: Destino) {
-        _estado.update { it.copy(destino = destino, detalle = null, ficha = null) }
+        _estado.update {
+            it.copy(
+                destino = destino,
+                seccionMas = null,
+                detalle = null,
+                ficha = null,
+                hostServiciosInicial = null,
+                hostSnippetsInicial = null,
+                ejecucionInicial = null,
+            )
+        }
         when (destino) {
-            Destino.AJUSTES -> {
+            Destino.MAS -> Unit
+            Destino.TUNELES -> refrescarTuneles()
+            Destino.SESIONES -> Unit
+            Destino.SERVICIOS -> Unit
+            Destino.FLOTA -> refrescarInventario()
+        }
+    }
+
+    /**
+     * Abre los Servicios de un host (desde la ficha de Flota): destino SERVICIOS
+     * y host inicial para que la pantalla abra su listado sin conexiones extra.
+     */
+    fun abrirServiciosDeHost(hostUuid: String) {
+        _estado.update {
+            it.copy(
+                destino = Destino.SERVICIOS,
+                seccionMas = null,
+                detalle = null,
+                ficha = null,
+                hostServiciosInicial = hostUuid,
+                hostSnippetsInicial = null,
+            )
+        }
+    }
+
+    /**
+     * Abre los snippets que tienen ese host entre sus destinos (desde la ficha
+     * de Flota): destino MÁS > SNIPPETS con el host inicial.
+     */
+    fun abrirSnippetsDeHost(hostUuid: String) {
+        _estado.update {
+            it.copy(
+                destino = Destino.MAS,
+                seccionMas = SeccionMas.SNIPPETS,
+                detalle = null,
+                ficha = null,
+                hostServiciosInicial = null,
+                hostSnippetsInicial = hostUuid,
+            )
+        }
+    }
+
+    /**
+     * Abre RESULTADOS con una ejecución seleccionada (al lanzar un snippet).
+     * [id] null abre la lista sin selección.
+     */
+    fun abrirResultadosDeEjecucion(id: Long?) {
+        _estado.update {
+            it.copy(
+                destino = Destino.MAS,
+                seccionMas = SeccionMas.RESULTADOS,
+                detalle = null,
+                ficha = null,
+                hostSnippetsInicial = null,
+                ejecucionInicial = id,
+            )
+        }
+    }
+
+    /** Elige una sección dentro de MÁS (Snippets, Resultados, Registro o Ajustes). */
+    fun abrirSeccionMas(seccion: SeccionMas) {
+        _estado.update {
+            it.copy(
+                destino = Destino.MAS,
+                seccionMas = seccion,
+                detalle = null,
+                hostSnippetsInicial = if (seccion == SeccionMas.SNIPPETS) {
+                    it.hostSnippetsInicial
+                } else {
+                    null
+                },
+                ejecucionInicial = if (seccion == SeccionMas.RESULTADOS) {
+                    it.ejecucionInicial
+                } else {
+                    null
+                },
+            )
+        }
+        when (seccion) {
+            SeccionMas.AJUSTES -> {
                 refrescarSincronizacion()
                 refrescarClaveMovil()
                 cargarVersion()
             }
-            Destino.TUNELES -> refrescarTuneles()
-            Destino.SESIONES -> Unit
-            Destino.HOSTS -> refrescarInventario()
+            SeccionMas.SNIPPETS, SeccionMas.RESULTADOS, SeccionMas.REGISTRO -> Unit
         }
     }
 
     fun abrirSeccionAjustes(seccion: SeccionAjustes) {
-        _estado.update { it.copy(detalle = DetalleVista.Ajustes(seccion)) }
+        _estado.update {
+            it.copy(
+                destino = Destino.MAS,
+                seccionMas = SeccionMas.AJUSTES,
+                detalle = DetalleVista.Ajustes(seccion),
+            )
+        }
         when (seccion) {
             SeccionAjustes.SINCRONIZACION -> refrescarSincronizacion()
             SeccionAjustes.CLAVE_MOVIL -> refrescarClaveMovil()
@@ -303,7 +578,16 @@ class VistaModeloMagi(
 
     /** «Atrás» del detalle: vuelve a la lista sin cerrar sesiones ni túneles. */
     fun volver() {
-        _estado.update { it.copy(detalle = null, ficha = null, tunelesFicha = emptyList()) }
+        _estado.update {
+            it.copy(
+                detalle = null,
+                ficha = null,
+                tunelesFicha = emptyList(),
+                hostServiciosInicial = null,
+                hostSnippetsInicial = null,
+                ejecucionInicial = null,
+            )
+        }
     }
 
     fun abrirTerminal(sesionId: Long) {
@@ -393,6 +677,28 @@ class VistaModeloMagi(
             _estado.update { it.copy(cargando = true) }
             val resultado = try {
                 fuente.abrirSesion(hostUuid)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                ResultadoAperturaVista.Error(e.message.orEmpty())
+            }
+            _estado.update { it.copy(cargando = false) }
+            when (resultado) {
+                is ResultadoAperturaVista.Abierta ->
+                    _estado.update { it.copy(detalle = DetalleVista.Terminal(resultado.sesion)) }
+                is ResultadoAperturaVista.Error -> avisoNucleo(resultado.mensaje, true)
+            }
+        }
+    }
+
+    /**
+     * Abre una sesión con una orden de pestaña del núcleo (T108): la shell de un
+     * contenedor o un seguimiento de logs («A SESIÓN» y «SHELL»).
+     */
+    fun abrirSesionConOrden(hostUuid: String, orden: OrdenPestanaVista) {
+        alcance.launch {
+            _estado.update { it.copy(cargando = true) }
+            val resultado = try {
+                fuente.abrirSesionConOrden(hostUuid, orden)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 ResultadoAperturaVista.Error(e.message.orEmpty())

@@ -116,6 +116,12 @@ data class FichaHostVista(
     val identidadEscritorio: String? = null,
     val huellas: List<HuellaHostVista> = emptyList(),
     val tieneContrasena: Boolean = false,
+    /** Bloque FLOTA de la ficha; null si no es SSH o no tiene sondeo del móvil. */
+    val flota: DetalleFlotaVista? = null,
+    /** Verificaciones previas (solo lectura; se editan en el escritorio). */
+    val verificaciones: VerificacionesVista? = null,
+    /** Snippet que se escribe al conectar (solo lectura), si lo hay. */
+    val snippetAlConectar: SnippetAlConectarVista? = null,
 )
 
 /** Si el host es un escritorio: el móvil lo enseña pero no lo abre. */

@@ -160,6 +160,110 @@ class PruebaFuenteNucleoReal {
             versionLlamada += 1
             return VersionNucleo(nucleo = "nucleo-x", formato = 1U, userVersion = 7U)
         }
+
+        // -------------------------------------------------------------------
+        // Fase 14: métodos nuevos del contrato UniFFI. Este doble solo
+        // ejercita los de la Fase 11; los nuevos fallan si se llaman, para que
+        // una prueba que los necesite se dé cuenta y los implemente.
+        // -------------------------------------------------------------------
+
+        override fun aplicarAjustes(ajustes: AjustesMovil): List<String> = emptyList()
+
+        override fun flota(filtro: String?): List<HostFlota> = emptyList()
+
+        override suspend fun sondear(hosts: List<String>) = Unit
+
+        override fun serviciosTodaLaFlota(): TodaLaFlota = noUsado()
+
+        override suspend fun serviciosListar(host: String, refresco: Boolean): ListadoServicios =
+            noUsado()
+
+        override suspend fun serviciosConsumo(host: String): List<Consumo> = emptyList()
+
+        override suspend fun serviciosDetalle(
+            host: String,
+            objetivo: ObjetivoMovil,
+        ): DetalleServicios = noUsado()
+
+        override fun prepararAccion(
+            host: String,
+            objetivo: ObjetivoMovil,
+            accion: AccionMovil,
+        ): InfoAccionMovil = noUsado()
+
+        override suspend fun servicioAccion(
+            host: String,
+            objetivo: ObjetivoMovil,
+            accion: AccionMovil,
+            deliberacion: ULong?,
+        ): ResultadoServicioMovil = noUsado()
+
+        override suspend fun sudoComprobar(host: String, contrasena: ByteArray): ResultadoSudo =
+            noUsado()
+
+        override fun sudoOlvidar(host: String) = Unit
+
+        override fun olvidarSudoAlBloquear() = Unit
+
+        override suspend fun logsSeguir(
+            host: String,
+            objetivo: ObjetivoMovil,
+            lineas: UInt,
+        ): ULong = noUsado()
+
+        override fun logsVentana(suscripcion: ULong, filtro: FiltroLogs): VentanaLogs = noUsado()
+
+        override fun logsParar(suscripcion: ULong) = Unit
+
+        override suspend fun abrirSesionConOrden(
+            host: String,
+            orden: OrdenPestanaMovil,
+        ): ULong = noUsado()
+
+        override fun snippets(filtro: String?): List<SnippetMovil> = emptyList()
+
+        override fun snippetsDeHost(host: String): List<SnippetMovil> = emptyList()
+
+        override fun snippet(uuid: String): SnippetMovil = noUsado()
+
+        override fun prepararEjecucion(
+            snippet: String,
+            hosts: List<String>,
+            variables: List<VariableSnippetMovil>,
+        ): PreparacionEjecucion = noUsado()
+
+        override suspend fun ejecutarSnippet(
+            preparacion: PreparacionEjecucion,
+            pararAlFallo: Boolean,
+            deliberacion: ULong?,
+        ): ULong = noUsado()
+
+        override fun ejecuciones(): List<EjecucionMovil> = emptyList()
+
+        override fun salidaEjecucion(ejecucion: ULong, host: String): SalidaEjecucion = noUsado()
+
+        override fun cancelarEjecucion(id: ULong) = Unit
+
+        override fun repetirEjecucion(id: ULong): PreparacionEjecucion = noUsado()
+
+        override fun limpiarEjecuciones() = Unit
+
+        override suspend fun deliberar(plan: PlanDeliberadoMovil): TablaDeliberacion = noUsado()
+
+        override fun resolverDeliberacion(
+            id: ULong,
+            decision: DecisionDeliberacion,
+        ): ULong = noUsado()
+
+        override fun registro(
+            filtro: FiltroRegistro,
+            desde: ULong?,
+            cuantas: UInt,
+        ): List<EntradaRegistro> = emptyList()
+
+        override fun registroDetalle(id: ULong): DetalleRegistro = noUsado()
+
+        private fun <T> noUsado(): T = throw ErrorNucleo.General("no usado en las pruebas")
     }
 
     // -----------------------------------------------------------------------
