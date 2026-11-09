@@ -1,5 +1,7 @@
 #!/bin/sh
-# systemctl falso para las pruebas de servicios.sh.
+# systemctl falso para las pruebas de servicios (F13). El helper compartido
+# sustituye @DIR@ por el directorio de estado de la prueba.
+ESTADO="@DIR@"
 echo "systemctl $*" >> "$ESTADO/llamadas"
 case $1 in
   --version)
@@ -7,7 +9,21 @@ case $1 in
     ;;
   list-units)
     tipo=$(printf '%s' "$2" | sed 's/^--type=//')
-    cat "$ESTADO/list_units_$tipo" 2>/dev/null
+    # El sondeo del móvil pide --state=failed: si la prueba prepara
+    # list_units_<tipo>_failed se usa ese; si no, el listado completo de
+    # siempre (retrocompatible con las pruebas de la F13).
+    estado=
+    for argumento in "$@"; do
+      case $argumento in
+        --state=*) estado=${argumento#--state=} ;;
+      esac
+    done
+    case $estado in ''|*[!a-z-]*) estado= ;; esac
+    fichero="$ESTADO/list_units_$tipo"
+    if [ -n "$estado" ] && [ -f "${fichero}_${estado}" ]; then
+      fichero="${fichero}_${estado}"
+    fi
+    cat "$fichero" 2>/dev/null
     ;;
   list-unit-files)
     tipo=$(printf '%s' "$2" | sed 's/^--type=//')

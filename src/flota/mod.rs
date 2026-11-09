@@ -101,25 +101,7 @@ pub async fn sondear_via_servidor(
 }
 
 fn rellenar(sondeo: &mut Sondeo, metricas: parser::Metricas) {
-    sondeo.nucleos = metricas.nucleos;
-    sondeo.carga_1m = metricas.carga_1m;
-    sondeo.carga_5m = metricas.carga_5m;
-    sondeo.carga_15m = metricas.carga_15m;
-    sondeo.mem_total_kb = metricas.mem_total_kb;
-    sondeo.mem_disponible_kb = metricas.mem_disponible_kb;
-    sondeo.disco_total_kb = metricas.disco_total_kb;
-    sondeo.disco_usado_kb = metricas.disco_usado_kb;
-    sondeo.red_rx_bytes = metricas.red_rx_bytes;
-    sondeo.red_tx_bytes = metricas.red_tx_bytes;
-    sondeo.uptime_seg = metricas.uptime_seg;
-    let tiene_metricas = metricas.tiene_metricas();
-    sondeo.servicios = metricas.servicios;
-    sondeo.fallos = metricas.fallos;
-    sondeo.resultado = if tiene_metricas {
-        ResultadoSondeo::Ok
-    } else {
-        ResultadoSondeo::SinMetricas
-    };
+    magi_nucleo::flota::aplicar_metricas(sondeo, metricas);
 }
 
 async fn intento(

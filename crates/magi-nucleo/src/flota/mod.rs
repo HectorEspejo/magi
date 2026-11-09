@@ -13,6 +13,8 @@ pub use estado::{
 };
 pub use lectura::{parsear, Metricas};
 
+use crate::modelo::{ResultadoSondeo, Sondeo};
+
 /// Script ejecutado en el host remoto. Solo depende de `sh` y coreutils; sin
 /// `systemctl` los servicios quedan como `unknown`. Desde la Fase 14 recibe
 /// `<motores>` como primer argumento (R125).
@@ -22,6 +24,31 @@ pub const SCRIPT: &str = include_str!("../../scripts/sondeo.sh");
 /// comando incluidos).
 pub const CONCURRENTES: usize = 8;
 pub const TIMEOUT_SEG: u64 = 5;
+
+/// Rellena un sondeo con lo leído del host y decide su resultado: `Ok` si el
+/// host trae métricas y `SinMetricas` si responde pero no las da (sin
+/// `/proc/loadavg` ni `/proc/uptime`). Lo comparten el escritorio y el móvil.
+pub fn aplicar_metricas(sondeo: &mut Sondeo, metricas: Metricas) {
+    sondeo.nucleos = metricas.nucleos;
+    sondeo.carga_1m = metricas.carga_1m;
+    sondeo.carga_5m = metricas.carga_5m;
+    sondeo.carga_15m = metricas.carga_15m;
+    sondeo.mem_total_kb = metricas.mem_total_kb;
+    sondeo.mem_disponible_kb = metricas.mem_disponible_kb;
+    sondeo.disco_total_kb = metricas.disco_total_kb;
+    sondeo.disco_usado_kb = metricas.disco_usado_kb;
+    sondeo.red_rx_bytes = metricas.red_rx_bytes;
+    sondeo.red_tx_bytes = metricas.red_tx_bytes;
+    sondeo.uptime_seg = metricas.uptime_seg;
+    let tiene_metricas = metricas.tiene_metricas();
+    sondeo.servicios = metricas.servicios;
+    sondeo.fallos = metricas.fallos;
+    sondeo.resultado = if tiene_metricas {
+        ResultadoSondeo::Ok
+    } else {
+        ResultadoSondeo::SinMetricas
+    };
+}
 
 /// Motores de contenedores del sondeo como texto para el script: los válidos
 /// (docker y podman, sin repetir y en orden) separados por comas, o `-` si no

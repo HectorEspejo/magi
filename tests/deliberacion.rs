@@ -4,15 +4,18 @@
 
 mod comun;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use comun::{escenario, hay_sftp_server, OpcionesEscenario};
 use magi::deliberacion::{
-    lanzar, Comprobacion, Fuentes, Limites, ResultadoComprobacion, Trabajo, Veredicto,
+    lanzar, Comprobacion, Limites, LimitesDeConfig, ProveedoresEscritorio, ResultadoComprobacion,
+    Trabajo, Veredicto,
 };
 
-/// Delibera BALTHASAR-2 sobre `ruta` del host con un `Cliente` de verdad.
+/// Delibera BALTHASAR-2 sobre `ruta` del host con un `Cliente` de verdad y
+/// los proveedores del escritorio.
 async fn backup(escenario: &comun::Escenario, ruta: &str, patron: Option<&str>) -> Veredicto {
     let (tx_eventos, _rx_eventos) = tokio::sync::mpsc::unbounded_channel();
     let cliente = magi::cliente::conectar(escenario.rutas(), tx_eventos)
@@ -33,7 +36,13 @@ async fn backup(escenario: &comun::Escenario, ruta: &str, patron: Option<&str>) 
                 patron: patron.map(str::to_string),
             },
         )],
-        Fuentes::reales(cliente),
+        // Aquí solo se ejercita el listado por SFTP: sin sondeos ni tests.
+        Arc::new(ProveedoresEscritorio::nuevo(
+            cliente,
+            HashMap::new(),
+            std::path::PathBuf::new(),
+            limite,
+        )),
         limites,
         magi::flota::estado::Umbrales::default(),
         limite,

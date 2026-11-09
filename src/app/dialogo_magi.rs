@@ -15,12 +15,14 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::deliberacion::estado::{consenso, AccionMaquina, Consenso, MaquinaDeliberacion};
-use crate::deliberacion::salud::{self, DecisionSalud};
-use crate::deliberacion::{
-    self, Comprobacion, ComprobacionesHost, Fuentes, Limites, NuevaDeliberacion,
-    ResultadoComprobacion, ResultadoDeliberacion, Trabajo, Veredicto,
+use magi_nucleo::deliberacion::salud::{self, DecisionSalud};
+use magi_nucleo::deliberacion::{
+    lanzar, Comprobacion, ComprobacionesHost, Limites, NuevaDeliberacion, ResultadoComprobacion,
+    ResultadoDeliberacion, Trabajo, Veredicto,
 };
+
+use crate::deliberacion::estado::{consenso, AccionMaquina, Consenso, MaquinaDeliberacion};
+use crate::deliberacion::{self, LimitesDeConfig, ProveedoresEscritorio};
 use crate::modelo::{Host, ResultadoRegistro};
 use crate::protocolo::DeliberacionLanzada;
 use crate::snippets::MotivoDeliberacion;
@@ -356,6 +358,9 @@ impl App {
             .collect();
         let mut filas = Vec::new();
         let mut trabajos = Vec::new();
+        // Una petición de sondeo por host, fijada aquí para MELCHIOR-1: el
+        // proveedor no vuelve a leer el inventario al confirmar (T33).
+        let mut peticiones = HashMap::new();
         for (host_id, nombre) in &plan.hosts() {
             let verificacion = verificaciones.get(host_id).cloned().unwrap_or_default();
             let mut celdas = Vec::new();
@@ -386,12 +391,13 @@ impl App {
                                 }
                                 DecisionSalud::Sondear => match todos.get(host_id) {
                                     Some(host) => {
-                                        let mut peticion =
-                                            self.peticion_de_sondeo(host.clone(), &todos);
-                                        peticion
-                                            .servicios
-                                            .retain(|unidad| !excluir.contains(unidad));
-                                        Celda::Trabajo(Trabajo::Salud(Box::new(peticion)))
+                                        peticiones.insert(
+                                            *host_id,
+                                            self.peticion_de_sondeo(host.clone(), &todos),
+                                        );
+                                        Celda::Trabajo(Trabajo::Salud {
+                                            excluir: excluir.clone(),
+                                        })
                                     }
                                     None => rechazo("el host ya no existe"),
                                 },
@@ -405,10 +411,7 @@ impl App {
                             None => rechazo("sin ruta de backup configurada"),
                         },
                         Comprobacion::Tests => match verificacion.tests_comando.clone() {
-                            Some(comando) => Celda::Trabajo(Trabajo::Tests {
-                                comando,
-                                dir: self.rutas.hogar.clone(),
-                            }),
+                            Some(comando) => Celda::Trabajo(Trabajo::Tests { comando }),
                             None => rechazo("sin comando de tests configurado"),
                         },
                     }
@@ -435,14 +438,22 @@ impl App {
         let enviar: Arc<dyn Fn(ResultadoComprobacion) + Send + Sync> = Arc::new(move |resultado| {
             let _ = eventos.send(Evento::Deliberacion(resultado));
         });
-        let tareas = deliberacion::lanzar(
+        let limite = tokio::time::Instant::now() + limites.limite;
+        let proveedores: Arc<dyn magi_nucleo::deliberacion::Proveedores> =
+            Arc::new(ProveedoresEscritorio::nuevo(
+                self.servidor.clone(),
+                peticiones,
+                self.rutas.hogar.clone(),
+                limite,
+            ));
+        let tareas = lanzar(
             self.runtime.handle(),
             token,
             trabajos,
-            Fuentes::reales(self.servidor.clone()),
+            proveedores,
             limites,
             umbrales,
-            tokio::time::Instant::now() + limites.limite,
+            limite,
             enviar,
         );
         let mut abierta = DeliberacionAbierta {

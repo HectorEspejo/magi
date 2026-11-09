@@ -988,34 +988,44 @@ pub async fn autenticar_movil(
         }
     }
 
-    // 2. Contraseña guardada en este móvil.
-    if contexto.interactivo {
-        match contexto
-            .llavero
-            .recuperar_contrasena(&host.nombre, &usuario)
-        {
-            Ok(Some(contrasena)) => {
-                let intento = handle
-                    .authenticate_password(usuario.as_str(), contrasena.as_str())
-                    .await?;
-                if intento.success() {
-                    return Ok(IdentidadUsada {
-                        descripcion: "contraseña · llavero del móvil".to_string(),
-                        huella: None,
-                    });
-                }
+    // 2. Contraseña guardada en este móvil. Se prueba también en las
+    // conexiones automáticas: leerla del llavero no abre ningún diálogo y
+    // §7.2 de la Fase 14 la permite para el sondeo, los refrescos y las
+    // ejecuciones.
+    let mut contrasena_guardada_rechazada = false;
+    match contexto
+        .llavero
+        .recuperar_contrasena(&host.nombre, &usuario)
+    {
+        Ok(Some(contrasena)) => {
+            let intento = handle
+                .authenticate_password(usuario.as_str(), contrasena.as_str())
+                .await?;
+            if intento.success() {
+                return Ok(IdentidadUsada {
+                    descripcion: "contraseña · llavero del móvil".to_string(),
+                    huella: None,
+                });
             }
-            Ok(None) => {}
-            Err(_) => {}
+            contrasena_guardada_rechazada = true;
         }
+        Ok(None) => {}
+        Err(_) => {}
     }
 
     // 3. Diálogo de contraseña, con recordar en este móvil.
     if !contexto.interactivo {
-        return Err(ErrorCliente::Mensaje(format!(
-            "«{}» no acepta la clave del móvil y no hay contraseña guardada en este móvil",
-            host.nombre
-        )));
+        return Err(ErrorCliente::Mensaje(if contrasena_guardada_rechazada {
+            format!(
+                "«{}» rechazó la contraseña guardada en este móvil; vuelve a guardarla desde la ficha",
+                host.nombre
+            )
+        } else {
+            format!(
+                "«{}» no acepta la clave del móvil y no hay contraseña guardada en este móvil",
+                host.nombre
+            )
+        }));
     }
     if !quedan.is_empty() && !quedan.contains(&russh::MethodKind::Password) {
         return Err(ErrorCliente::Mensaje(format!(

@@ -1,5 +1,8 @@
 #!/bin/sh
-# journalctl falso para las pruebas de servicios.sh.
+# journalctl falso para las pruebas de servicios (F13). El helper compartido
+# sustituye @DIR@ por el directorio de estado de la prueba.
+ESTADO="@DIR@"
+printf 'journalctl %s\n' "$*" >> "$ESTADO/llamadas"
 if [ -f "$ESTADO/journal_sin_permiso" ]; then
   echo "No journal files were opened due to insufficient permissions." >&2
   exit 1
