@@ -82,7 +82,7 @@ fn treinta_eventos_un_clear_y_un_redimensionar() {
 
     prueba.paso_en(ultimo + MS * 50);
     assert_eq!(prueba.terminal.backend().limpiezas, limpiezas + 1);
-    assert_eq!(prueba.redimensionares(), vec![(1, 119, 44 - 4)]);
+    assert_eq!(prueba.redimensionares(), vec![(1, 119, 39)]);
     assert_eq!(prueba.app.geometria().aplicados(), aplicados + 1);
     assert_eq!(prueba.tamano_pintado(), (119, 44));
 
@@ -117,7 +117,7 @@ fn cada_tamano_aplicado_llega_a_la_pestana_adjunta() {
     prueba.redimensionar(80, 24);
     assert_eq!(
         prueba.redimensionares(),
-        vec![(1, 160, 41), (1, 150, 38), (1, 80, 20)]
+        vec![(1, 160, 40), (1, 150, 37), (1, 80, 19)]
     );
 }
 
@@ -135,12 +135,15 @@ fn fuera_de_sesion_no_se_avisa_y_al_volver_se_adjunta_con_el_aplicado() {
     prueba.redimensionar(140, 50);
     assert!(prueba.redimensionares().is_empty());
     prueba.tecla(KeyCode::F(3));
-    assert!(prueba.enviados().contains(&MensajeCliente::Adjuntar {
-        sesion_id: 1,
-        cols: 140,
-        filas: 46,
-        colores: None,
-    }));
+    assert!(prueba.enviados().iter().any(|mensaje| matches!(
+        mensaje,
+        MensajeCliente::Adjuntar {
+            sesion_id: 1,
+            cols: 140,
+            filas: 45,
+            ..
+        }
+    )));
 }
 
 /// Con un tamaño pendiente (aún agrupando), `Adjuntar` lleva el aplicado: el
@@ -153,14 +156,17 @@ fn adjuntar_usa_el_tamano_aplicado_y_no_el_pendiente() {
     prueba.redimensionar_en(90, 20, ahora);
     prueba.tecla(KeyCode::F(3));
     prueba.tecla(KeyCode::Enter);
-    assert!(prueba.enviados().contains(&MensajeCliente::Adjuntar {
-        sesion_id: 1,
-        cols: 100,
-        filas: 26,
-        colores: None,
-    }));
+    assert!(prueba.enviados().iter().any(|mensaje| matches!(
+        mensaje,
+        MensajeCliente::Adjuntar {
+            sesion_id: 1,
+            cols: 100,
+            filas: 25,
+            ..
+        }
+    )));
     prueba.paso_en(ahora + MS * 60);
-    assert_eq!(prueba.redimensionares(), vec![(1, 90, 16)]);
+    assert_eq!(prueba.redimensionares(), vec![(1, 90, 15)]);
 }
 
 /// `AbrirSesion` lleva el tamaño aplicado.
@@ -198,7 +204,7 @@ fn abrir_sesion_usa_el_tamano_aplicado() {
             abrir,
             Some(MensajeCliente::AbrirSesion {
                 cols: 132,
-                filas: 39,
+                filas: 38,
                 ..
             })
         ),
@@ -221,13 +227,15 @@ fn cambiar_de_pestana_adjunta_la_nueva_con_el_aplicado() {
         .iter()
         .position(|mensaje| *mensaje == MensajeCliente::Desadjuntar { sesion_id: 1 });
     let adjuntar = enviados.iter().position(|mensaje| {
-        *mensaje
-            == MensajeCliente::Adjuntar {
+        matches!(
+            mensaje,
+            MensajeCliente::Adjuntar {
                 sesion_id: 2,
                 cols: 120,
-                filas: 36,
-                colores: None,
+                filas: 35,
+                ..
             }
+        )
     });
     assert!(
         matches!((desadjuntar, adjuntar), (Some(d), Some(a)) if d < a),
@@ -250,7 +258,7 @@ fn la_vuelta_del_visor_aplica_el_tamano_real() {
         .unwrap();
     assert_eq!(prueba.app.geometria().aplicado(), (90, 28));
     assert_eq!(prueba.tamano_pintado(), (90, 28));
-    assert_eq!(prueba.redimensionares(), vec![(1, 90, 24)]);
+    assert_eq!(prueba.redimensionares(), vec![(1, 90, 23)]);
 
     // Sin cambio de tamaño: solo se repinta.
     prueba
@@ -275,12 +283,15 @@ fn al_relanzar_el_servidor_se_readjunta_con_el_aplicado() {
         mensajes.push(mensaje);
     }
     assert!(
-        mensajes.contains(&MensajeCliente::Adjuntar {
-            sesion_id: 7,
-            cols: 150,
-            filas: 44,
-            colores: None,
-        }),
+        mensajes.iter().any(|mensaje| matches!(
+            mensaje,
+            MensajeCliente::Adjuntar {
+                sesion_id: 7,
+                cols: 150,
+                filas: 43,
+                ..
+            }
+        )),
         "{mensajes:?}"
     );
 }

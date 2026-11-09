@@ -1,0 +1,14 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN ──────────────── web-01 ─
+▸┌ PEGAR VARIAS LÍNEAS ───────────────┐
+▸│ Vas a pegar 4 líneas en web-01 y   │─
+█│ el programa no protege el pegado:  │
+ │ cada línea se ejecutaría al        │
+ │ llegar.                            │
+ │   1  uno                           │
+ │   2  dos                           │
+ │                                    │
+ │ s confirmar   n / esc cancelar     │
+ └──────────────────────────── ↑↓ 1/3 ┘

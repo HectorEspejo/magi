@@ -1,0 +1,14 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN ──────────────── web-01 ─
+▸┌ ENLACE ────────────────────────────┐
+▸│                                    │─
+L│ http://localhost:5173/             │
+┌│ apunta a localhost:5173 de web-01  │┐
+││                                    ││
+││ ↵ abrir   c copiar                 ││
+└│ t túnel temporal   Esc salir       │┘
+ │                                    │
+ └────────────────────────────────────┘
+ ENLACES 2 pulsa la letra · Esc salir

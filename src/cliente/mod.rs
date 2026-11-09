@@ -528,16 +528,26 @@ async fn tarea_lectura(
     loop {
         tokio::select! {
             _ = intervalo.tick() => {
-                if !sucias.is_empty() {
-                    let ids: Vec<u32> = sucias.drain().collect();
+                // La salida sincronizada (2026) retiene el pintado de una
+                // pestaña hasta su cierre o 200 ms: aquí se anuncian las que
+                // vencieron solas.
+                let mut ids: Vec<u32> = pantallas
+                    .anuncios_vencidos(std::time::Instant::now())
+                    .into_iter()
+                    .collect();
+                ids.extend(sucias.drain());
+                ids.sort_unstable();
+                ids.dedup();
+                if !ids.is_empty() {
                     let _ = tx_eventos.send(crate::app::Evento::Pantallas(ids));
                 }
             }
             mensaje = entrada.next() => match mensaje {
                 Some(Ok(linea)) => match decodificar::<MensajeServidor>(&linea) {
                     Ok(MensajeServidor::Datos { sesion_id, bytes }) => {
-                        pantallas.procesar(sesion_id, &bytes);
-                        sucias.insert(sesion_id);
+                        if pantallas.procesar(sesion_id, &bytes) {
+                            sucias.insert(sesion_id);
+                        }
                     }
                     Ok(MensajeServidor::PantallaCompleta { sesion_id, bytes, cols, filas }) => {
                         pantallas.volcar(sesion_id, filas, cols, &bytes);

@@ -263,6 +263,10 @@ pub struct InfoSesion {
     /// Nombre de la sesión de tmux, si la pestaña es persistente.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmux: Option<String>,
+    /// La pestaña está en una escritura en varios activa (la marca `»`). Lo
+    /// ve cualquier ventana, no solo la que la activó (§7.14).
+    #[serde(default)]
+    pub escritura_varios: bool,
 }
 
 // ---------------------------------------------------------------- archivos
@@ -2395,6 +2399,7 @@ mod pruebas {
             titulo: None,
             aviso: None,
             tmux: None,
+            escritura_varios: false,
         }];
         ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
             version: 1,
@@ -2779,6 +2784,7 @@ mod pruebas {
                 hora: 1_700_000_005,
             }),
             tmux: Some("magi-portatil-1".to_string()),
+            escritura_varios: true,
         };
         ida_y_vuelta_servidor(MensajeServidor::Sesiones {
             lista: vec![sesion.clone()],

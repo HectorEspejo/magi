@@ -12,6 +12,7 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::almacen::Almacen;
+use crate::app::sesion::{EstadoTmux, PeticionTerminal};
 use crate::cliente;
 use crate::conexion::{self, ComandoConexion, EventoConexion, PlanConexion};
 use crate::config::{Config, Rutas};
@@ -35,15 +36,24 @@ use ratatui::Terminal;
 
 pub mod dialogo_magi;
 pub mod edicion;
+pub mod enlaces;
 pub mod escritorios;
+pub mod escritura_varios;
 pub mod formulario_snippet;
 pub mod geometria;
 pub mod guardadas;
+pub mod historial;
 pub mod lanzar;
+pub mod paneles;
+pub mod pegado;
 pub mod permisos;
+pub mod portapapeles;
+pub mod raton;
+pub mod rejilla;
 mod resultados;
 pub mod servicios;
 pub mod servidor_anterior;
+pub mod sesion;
 pub mod sincronizacion;
 pub mod sincronizar;
 mod snippets;
@@ -63,6 +73,10 @@ pub const REGISTRO_PAGINA: i64 = 200;
 /// del panel (desde 0, se reinicia al cambiar de host), los túneles (2^40) ni
 /// las ejecuciones (2^44).
 pub const RANGO_ARCHIVOS_APP: u64 = 1 << 42;
+
+/// Primer `peticion_id` de las peticiones del terminal (capturas, tmux y
+/// túneles temporales, Fase 15): por encima de todos los demás rangos.
+pub const RANGO_TERMINAL: u64 = 1 << 49;
 
 /// Operación de Archivos de la Fase 8 en vuelo, por `peticion_id`. Cada
 /// módulo define la suya y recibe aquí su respuesta.
@@ -559,6 +573,12 @@ pub enum Evento {
     Sondeo(Sondeo),
     /// Resultado de una comprobación de la deliberación MAGI.
     Deliberacion(crate::deliberacion::ResultadoComprobacion),
+    /// Pegado del terminal exterior (Fase 15): ya saneado en el despacho.
+    Pegado(String),
+    /// Evento de ratón del terminal exterior (Fase 15).
+    Raton(crossterm::event::MouseEvent),
+    /// La terminal exterior gana o pierde el foco (Fase 15, modo 1004).
+    FocoExterior(bool),
     /// Resultado de un hilo de Archivos (Fase 8).
     Archivos(EventoArchivos),
     ClaveGenerada(Result<crate::identidades::ClaveGenerada, String>),
@@ -651,9 +671,16 @@ pub enum CampoFicha {
     OlvidarHuella,
     /// Olvidar la contraseña del llavero (con confirmación).
     OlvidarContrasena,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Reconexión automática de las pestañas de este host.
+    Reconectar,
+    /// Sesión persistente con tmux.
+    Tmux,
+    /// Permitir que el host escriba en el portapapeles (OSC 52).
+    PortapapelesRemoto,
 }
 
-pub const ORDEN_CAMPOS: [CampoFicha; 22] = [
+pub const ORDEN_CAMPOS: [CampoFicha; 25] = [
     CampoFicha::Nombre,
     CampoFicha::Direccion,
     CampoFicha::Puerto,
@@ -676,6 +703,10 @@ pub const ORDEN_CAMPOS: [CampoFicha; 22] = [
     CampoFicha::Opciones,
     CampoFicha::Tuneles,
     CampoFicha::Comprobaciones,
+    // Fase 15: bloque TERMINAL, propio del equipo y solo en hosts SSH.
+    CampoFicha::Reconectar,
+    CampoFicha::Tmux,
+    CampoFicha::PortapapelesRemoto,
 ];
 
 pub enum AccionFicha {
@@ -870,6 +901,16 @@ pub struct Ficha {
     pub comprobaciones: Vec<magi_nucleo::modelo::ComprobacionServicio>,
     /// Comprobación seleccionada en su bloque.
     pub indice_comprobacion: usize,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Reconectar solo si se cae la red (propio del equipo).
+    pub reconectar: bool,
+    /// Sesión persistente con tmux (propio del equipo).
+    pub tmux_persistente: bool,
+    /// Permitir que el host copie al portapapeles con OSC 52 (propio del
+    /// equipo; leerlo, nunca).
+    pub portapapeles_remoto: bool,
+    /// Valores con los que se abrió la ficha, para saber si cambiaron.
+    pub terminal_original: (bool, bool, bool),
 }
 
 impl Ficha {
@@ -1071,6 +1112,17 @@ impl Ficha {
         self.datos() != self.original
             || self.snippet_al_conectar() != self.snippet_original
             || self.datos_verificaciones() != self.verificaciones_original
+            || self.terminal_actual() != self.terminal_original
+    }
+
+    /// Los tres ajustes del bloque TERMINAL, en el orden del formulario.
+    #[must_use]
+    pub fn terminal_actual(&self) -> (bool, bool, bool) {
+        (
+            self.reconectar,
+            self.tmux_persistente,
+            self.portapapeles_remoto,
+        )
     }
 
     fn campo_texto_mut(&mut self, campo: CampoFicha) -> Option<&mut CampoTexto> {
@@ -1114,6 +1166,9 @@ impl Ficha {
                 | CampoFicha::Backup
                 | CampoFicha::Tests
                 | CampoFicha::Portapapeles
+                | CampoFicha::Reconectar
+                | CampoFicha::Tmux
+                | CampoFicha::PortapapelesRemoto
         )
     }
 
@@ -1416,6 +1471,11 @@ impl Ficha {
                     CampoFicha::Backup => self.backup = !self.backup,
                     CampoFicha::Tests => self.tests = !self.tests,
                     CampoFicha::Portapapeles => self.portapapeles = !self.portapapeles,
+                    CampoFicha::Reconectar => self.reconectar = !self.reconectar,
+                    CampoFicha::Tmux => self.tmux_persistente = !self.tmux_persistente,
+                    CampoFicha::PortapapelesRemoto => {
+                        self.portapapeles_remoto = !self.portapapeles_remoto
+                    }
                     _ => {}
                 }
                 AccionFicha::Nada
@@ -2068,6 +2128,23 @@ pub enum AccionDialogo {
     /// Fase 12: el usuario aceptó guardar un VNC directo sin cifrar: se fija
     /// directo y se guarda la ficha.
     GuardarEscritorioDirecto,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Confirmación simple de la escritura en varios (un host sin
+    /// comprobaciones activas).
+    IniciarEscrituraVarios(Vec<u32>),
+    /// Confirmado el aviso: pegar varias líneas.
+    PegarVariasLineas,
+    /// Cerrar la pestaña y terminar también su sesión de tmux.
+    CerrarPestanaTerminandoTmux {
+        sesion_id: u32,
+        host_id: i64,
+        nombre: String,
+    },
+    /// Terminar una sesión de tmux (ya confirmado).
+    TerminarTmux {
+        host_id: i64,
+        nombre: String,
+    },
 }
 
 /// Acciones de la Fase 10 que sobreviven al cierre del diálogo (se ejecutan en
@@ -2119,6 +2196,10 @@ pub enum EntradaTextoAccion {
     },
     /// n en SINCRONIZACIÓN: elegir la carpeta compartida.
     CarpetaSincronizacion,
+    /// `,` en Sesión: renombrar una pestaña (para todas las ventanas).
+    RenombrarSesion(u32),
+    /// `w` en el modo historial: guardar la captura en un fichero.
+    GuardarHistorial,
 }
 
 pub enum Dialogo {
@@ -2278,6 +2359,19 @@ pub enum Dialogo {
     /// Escritorios remotos (Fase 12): certificado RDP, credenciales que pide
     /// el servidor y aviso de VNC directo sin cifrar.
     Escritorio(escritorios::DialogoEscritorio),
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Elegir entre dos acciones (por ejemplo, cerrar una pestaña con tmux).
+    Elegir {
+        titulo: String,
+        lineas: Vec<String>,
+        peligro: bool,
+        /// Cada opción: tecla, texto y acción.
+        opciones: Vec<(char, String, AccionDialogo)>,
+    },
+    /// Diálogo de un enlace visible (Fase 15).
+    Enlace(enlaces::DialogoEnlace),
+    /// Paleta «abrir en rejilla…»: hasta 4 hosts con casillas o un grupo.
+    Rejilla(rejilla::EstadoRejilla),
 }
 
 pub struct ImportacionPendiente {
@@ -2301,7 +2395,7 @@ pub struct PestanaUI {
     pub estado: EstadoSesionRemota,
     pub motivo: Option<String>,
     pub identidad: String,
-    pub pantalla: conexion::Pantalla,
+    pub pantalla: crate::cliente::pantallas::Pantalla,
     pub actividad_no_vista: bool,
     pub abierta_en: i64,
     pub ventanas: u32,
@@ -2310,6 +2404,18 @@ pub struct PestanaUI {
     pub filas_remoto: u16,
     /// Cliente que impone el tamaño mínimo (aviso «mín. ventana N»).
     pub ventana_minima: Option<u32>,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Estado de la reconexión automática, si está reconectando.
+    pub reconexion: Option<protocolo::InfoReconexion>,
+    /// Título que puso el programa remoto (OSC 0 y 2), saneado.
+    pub titulo: Option<String>,
+    /// Último aviso del remoto sin ver (campana, OSC 9 u OSC 777).
+    pub aviso: Option<protocolo::InfoAviso>,
+    /// Nombre de la sesión de tmux de la pestaña, si es persistente.
+    pub tmux: Option<String>,
+    /// La pestaña está en una escritura en varios de alguna ventana (la
+    /// marca `»`; también la ven las demás ventanas).
+    pub escritura_varios: bool,
 }
 
 impl PestanaUI {
@@ -2319,6 +2425,34 @@ impl PestanaUI {
             self.estado,
             EstadoSesionRemota::Abierta | EstadoSesionRemota::Abriendo
         )
+    }
+
+    /// Una pestaña vacía para las pruebas del núcleo de paneles.
+    #[doc(hidden)]
+    pub fn de_prueba(sesion_id: u32) -> Self {
+        Self {
+            sesion_id,
+            escritorio_id: None,
+            tipo: None,
+            nombre: format!("sesion-{sesion_id}"),
+            host_id: i64::from(sesion_id),
+            host_nombre: String::new(),
+            estado: EstadoSesionRemota::Abierta,
+            motivo: None,
+            identidad: String::new(),
+            pantalla: crate::cliente::pantallas::nuevo(24, 80),
+            actividad_no_vista: false,
+            abierta_en: 0,
+            ventanas: 1,
+            cols_remoto: 0,
+            filas_remoto: 0,
+            ventana_minima: None,
+            reconexion: None,
+            titulo: None,
+            aviso: None,
+            tmux: None,
+            escritura_varios: false,
+        }
     }
 
     /// Tiempo conectado (segundos desde la apertura que reporta el servidor).
@@ -2389,6 +2523,21 @@ pub enum AccionPaleta {
     SincronizarAhora,
     /// Paleta: ir a la vista CONFLICTOS.
     IrAConflictos,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Paleta: abrir de 2 a 4 hosts en la disposición que toque.
+    AbrirEnRejilla,
+    /// Paleta: siguiente disposición de paneles.
+    Disposicion,
+    /// Paleta: modo historial del panel enfocado.
+    Historial,
+    /// Paleta: modo historial con la búsqueda abierta.
+    BuscarHistorial,
+    /// Paleta: enlaces de lo visible.
+    Enlaces,
+    /// Paleta: activar o parar la escritura en varios.
+    EscrituraVarios,
+    /// Paleta: sesiones de tmux del host de la pestaña elegida.
+    SesionesTmux,
 }
 
 pub struct PaletaCmd {
@@ -2614,6 +2763,38 @@ pub struct App {
     /// Peticiones de servicios en vuelo, por peticion_id (desde 2^45).
     pub peticiones_servicio: HashMap<u64, servicios::PeticionServicio>,
     siguiente_peticion_servicios: u64,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Paneles de la vista Sesión: disposición, foco y pestaña de cada uno.
+    pub paneles: paneles::Paneles,
+    /// Modo historial abierto, si lo hay (captura congelada del servidor).
+    pub historial: Option<historial::EstadoHistorial>,
+    /// Modo enlaces y su diálogo.
+    pub enlaces: enlaces::EstadoEnlaces,
+    /// Escritura en varios paneles.
+    pub escritura_varios: escritura_varios::EscrituraVarios,
+    /// Peticiones pendientes del portapapeles del remoto (OSC 52).
+    pub portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto,
+    /// Lista de sesiones de tmux del host elegido en Sesiones, si se pidió.
+    pub tmux: Option<EstadoTmux>,
+    /// Peticiones del terminal en vuelo, por peticion_id (desde 2^49).
+    pub peticiones_terminal: HashMap<u64, PeticionTerminal>,
+    siguiente_peticion_terminal: u64,
+    /// ¿La terminal exterior tiene el foco? (modo 1004 del remoto).
+    pub foco_exterior: bool,
+    /// Último `Foco` enviado, para no repetirlo.
+    foco_enviado: Option<(u32, bool)>,
+    /// ¿El ratón del terminal exterior está capturado ahora mismo?
+    raton_capturado: bool,
+    /// Sesiones con `Adjuntar` vigente (para soltarlas al dejar la vista).
+    paneles_adjuntados: HashSet<u32>,
+    /// Pegado pendiente de la confirmación de varias líneas.
+    pegado_en_espera: Option<pegado::PendientePegado>,
+    /// Túneles temporales de los enlaces, tal como los difunde el servidor.
+    pub tuneles_temporales: Vec<protocolo::InfoTunelTemporal>,
+    /// Hosts de una «abrir en rejilla» cuyas pestañas aún no han aparecido.
+    rejilla_pendiente: Option<Vec<i64>>,
+    /// Sesiones que ha abierto la rejilla, en orden.
+    rejilla_sesiones: Vec<u32>,
 }
 
 impl App {
@@ -2813,6 +2994,22 @@ impl App {
             servicios: servicios::EstadoServicios::default(),
             peticiones_servicio: HashMap::new(),
             siguiente_peticion_servicios: protocolo::RANGO_SERVICIOS,
+            paneles: paneles::Paneles::nueva(),
+            historial: None,
+            enlaces: enlaces::EstadoEnlaces::default(),
+            escritura_varios: escritura_varios::EscrituraVarios::default(),
+            portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto::default(),
+            tmux: None,
+            peticiones_terminal: HashMap::new(),
+            siguiente_peticion_terminal: RANGO_TERMINAL,
+            foco_exterior: true,
+            foco_enviado: None,
+            raton_capturado: false,
+            paneles_adjuntados: HashSet::new(),
+            pegado_en_espera: None,
+            tuneles_temporales: Vec::new(),
+            rejilla_pendiente: None,
+            rejilla_sesiones: Vec::new(),
         };
         app.recargar_inventario()?;
         app.recargar_tuneles();
@@ -2981,6 +3178,9 @@ impl App {
 
     pub fn ejecutar(mut self) -> Result<()> {
         let mut terminal = crate::ui::iniciar_terminal()?;
+        // MAGI pide al terminal exterior pegado entre corchetes, foco y, si se
+        // admite, la desambiguación de kitty (Fase 15).
+        crate::ui::activar_extras(&self.config.terminal);
         // Primero el tamaño: la pestaña que se abra al arrancar lo necesita.
         self.iniciar_pintado(&mut terminal)?;
         if let Some(host_id) = self.abrir_al_arrancar.take() {
@@ -3002,6 +3202,7 @@ impl App {
         }
         // Una exportación pendiente se hace antes de cerrar (Fase 10).
         self.exportar_al_salir();
+        crate::ui::desactivar_extras();
         crate::ui::restaurar_terminal();
         self.teclado.salir();
         // Las sesiones sobreviven a la ventana; el servidor se entera del
@@ -3127,17 +3328,8 @@ impl App {
         self.geometria.confirmar(tamano);
         self.sucio = true;
         self.pintar(terminal)?;
-        if self.vista == Vista::Sesion {
-            if let Some(sesion_id) = self.pestana_activa_id() {
-                let (cols, filas) = self.tamano_pty();
-                self.servidor
-                    .enviar(protocolo::MensajeCliente::Redimensionar {
-                        sesion_id,
-                        cols,
-                        filas,
-                    });
-            }
-        }
+        // Los `Redimensionar` de los paneles los manda `pintar` con la
+        // geometría del último pintado (uno por panel, Fase 15).
         Ok(())
     }
 
@@ -3149,8 +3341,19 @@ impl App {
         let app: &App = self;
         let mut disposicion = Disposicion::default();
         terminal.draw(|marco| disposicion = crate::ui::dibujar(marco, app))?;
+        let panes = disposicion.panes.clone();
+        if let Some(alto) = disposicion.historial_alto {
+            if let Some(historial) = &mut self.historial {
+                historial.alto = alto.max(1);
+                historial.ajustar_vista();
+            }
+        }
         self.sincronizar_con(&disposicion);
         self.disposicion = disposicion;
+        if self.vista == Vista::Sesion {
+            self.aplicar_geometria_paneles(&panes);
+            self.sincronizar_terminal_exterior();
+        }
         self.sincronizar_resultados();
         self.sucio = false;
         Ok(())
@@ -3320,6 +3523,17 @@ impl App {
             }
             // Solo se anota: `Geometria` agrupa y el bucle lo aplica.
             Evento::Redimension(cols, filas) => self.geometria.registrar((cols, filas), ahora),
+            Evento::Pegado(texto) => {
+                self.sucio = true;
+                self.despachar_pegado(texto);
+            }
+            Evento::Raton(raton) => {
+                self.sucio = true;
+                self.despachar_raton(raton);
+            }
+            Evento::FocoExterior(enfocado) => {
+                self.despachar_foco_exterior(enfocado);
+            }
             Evento::Tick => self.tick(),
             Evento::Conexion(evento) => {
                 self.sucio = true;
@@ -3378,6 +3592,19 @@ impl App {
                     None
                 };
                 for sesion_id in ids {
+                    if self
+                        .historial
+                        .as_ref()
+                        .is_some_and(|historial| historial.sesion_id == sesion_id)
+                    {
+                        // La captura está congelada: la salida nueva solo se
+                        // cuenta en la barra.
+                        if let Some(historial) = &mut self.historial {
+                            historial.nueva_salida = true;
+                        }
+                        self.sucio = true;
+                        continue;
+                    }
                     if Some(sesion_id) == visible {
                         self.sucio = true;
                         self.limpiar_actividad(sesion_id);
@@ -3447,6 +3674,15 @@ impl App {
                 self.destello = None;
                 self.sucio = true;
             }
+        }
+        // Escritura en varios: se apaga sola a los 10 min sin escribir.
+        if self.escritura_varios.activa() && self.escritura_varios.inactiva(Instant::now()) {
+            self.terminar_escritura_varios(escritura_varios::MotivoFin::Inactividad);
+            self.sucio = true;
+        }
+        // La petición de portapapeles del remoto caduca a los 60 s.
+        if self.portapapeles_remoto.limpiar(Instant::now()) {
+            self.sucio = true;
         }
         if self.filtro_activo && self.contador_ticks % 3 == 0 {
             self.sucio = true;
@@ -3858,7 +4094,7 @@ impl App {
             self.mensaje("ya hay una conexión en curso con ese host", true);
             return false;
         }
-        let (cols, filas) = self.tamano_pty();
+        let (cols, filas) = self.tamano_pty_inicial();
         self.servidor
             .enviar(protocolo::MensajeCliente::AbrirSesion {
                 host_id,
@@ -4098,30 +4334,23 @@ impl App {
             .iter_mut()
             .find(|pestaña| pestaña.sesion_id == sesion_id)
         {
-            if !pestaña.actividad_no_vista {
-                return;
-            }
+            // Al verla se limpian también la marca de actividad y el aviso.
             pestaña.actividad_no_vista = false;
+            pestaña.aviso = None;
         }
     }
 
+    /// Adjunta todos los paneles visibles: es lo que hace que el servidor
+    /// mande los datos de cada pestaña a la vista.
     fn adjuntar_pestaña_activa(&mut self) {
-        if let Some(sesion_id) = self.pestana_activa_id() {
-            let (cols, filas) = self.tamano_pty();
-            self.servidor.enviar(protocolo::MensajeCliente::Adjuntar {
-                sesion_id,
-                cols,
-                filas,
-                colores: None,
-            });
+        if self.vista == Vista::Sesion {
+            self.sincronizar_paneles();
         }
+        self.adjuntar_paneles();
     }
 
     fn desadjuntar_pestaña_activa(&mut self) {
-        if let Some(sesion_id) = self.pestana_activa_id() {
-            self.servidor
-                .enviar(protocolo::MensajeCliente::Desadjuntar { sesion_id });
-        }
+        self.desadjuntar_paneles();
     }
 
     /// Activa la pestaña por posición de pestaña (1..=9) de la lista.
@@ -4137,12 +4366,11 @@ impl App {
         if indice >= self.pestanas.len() {
             return;
         }
-        if self.vista == Vista::Sesion {
-            self.desadjuntar_pestaña_activa();
-        }
+        let clave = paneles::ClavePestana::de(&self.pestanas[indice]);
         self.pestana_activa = Some(indice);
+        self.paneles.poner(clave);
         if self.vista == Vista::Sesion {
-            self.adjuntar_pestaña_activa();
+            self.tras_cambiar_paneles();
             if let Some(sesion_id) = self.pestana_activa_id() {
                 self.limpiar_actividad(sesion_id);
             }
@@ -4170,12 +4398,6 @@ impl App {
         }
     }
 
-    fn reconectar_pestaña_activa(&mut self) {
-        if let Some(sesion_id) = self.pestana_activa_id() {
-            self.reconectar_sesion(sesion_id);
-        }
-    }
-
     /// Reconecta una sesión caída (pestaña o lista).
     fn reconectar_sesion(&mut self, sesion_id: u32) {
         self.servidor
@@ -4183,16 +4405,12 @@ impl App {
         self.mensaje("reconectando…", false);
     }
 
-    fn enviar_a_sesion(&mut self, bytes: Vec<u8>) {
-        if let Some(sesion_id) = self.pestana_activa_id() {
-            self.servidor
-                .enviar(protocolo::MensajeCliente::Teclas { sesion_id, bytes });
-        }
-    }
-
     /// Mensajes del servidor de sesiones que no resuelve la tarea de lectura.
     fn evento_servidor(&mut self, mensaje: protocolo::MensajeServidor) {
         if self.evento_servicios(&mensaje) {
+            return;
+        }
+        if self.evento_terminal(&mensaje) {
             return;
         }
         match mensaje {
@@ -4215,7 +4433,7 @@ impl App {
                     .iter_mut()
                     .find(|pestaña| pestaña.sesion_id == sesion_id)
                 {
-                    crate::conexion::terminal::redimensionar(&pestaña.pantalla, filas, cols);
+                    crate::cliente::pantallas::redimensionar(&pestaña.pantalla, filas, cols);
                     pestaña.cols_remoto = cols;
                     pestaña.filas_remoto = filas;
                     pestaña.ventana_minima = ventana_minima;
@@ -4314,6 +4532,11 @@ impl App {
                 // Una operación de túnel con respuesta pendiente no es un
                 // error de la vista Archivos.
                 if let Some(peticion_id) = peticion_id {
+                    if peticion_id >= RANGO_TERMINAL
+                        && self.resolver_error_terminal(peticion_id, &mensaje)
+                    {
+                        return;
+                    }
                     if self
                         .respuesta_archivos(peticion_id, RespuestaArchivos::Error(mensaje.clone()))
                     {
@@ -4517,9 +4740,7 @@ impl App {
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
-            // ------------------------------------------------ terminal (F15)
-            // La pista del cliente implementa estos mensajes en sus propios
-            // módulos; de momento se descartan.
+            // Los del terminal (F15) los resuelve `evento_terminal`.
             protocolo::MensajeServidor::HistorialLote { .. }
             | protocolo::MensajeServidor::EscrituraVariosIniciada { .. }
             | protocolo::MensajeServidor::EscrituraVariosTerminada { .. }
@@ -4608,6 +4829,7 @@ impl App {
                 // difusión: se limpia al entrar en la pestaña.
                 pestaña.actividad_no_vista = pestaña.actividad_no_vista || info.actividad_no_vista;
                 pestaña.abierta_en = info.abierta_en;
+                pestaña.escritura_varios = info.escritura_varios;
             } else {
                 let pantalla = self.pantallas.crear(info.id, 24, 80);
                 let activar = self.aperturas_pendientes.contains(&info.host_id);
@@ -4628,8 +4850,14 @@ impl App {
                     cols_remoto: 0,
                     filas_remoto: 0,
                     ventana_minima: None,
+                    reconexion: info.reconexion.clone(),
+                    titulo: info.titulo.clone(),
+                    aviso: info.aviso.clone(),
+                    tmux: info.tmux.clone(),
+                    escritura_varios: info.escritura_varios,
                 });
                 self.aperturas_pendientes.remove(&info.host_id);
+                self.rejilla_sesion_nueva(info.id, info.host_id);
                 if activar {
                     // La sesión nueva pasa a ser la visible: la anterior deja
                     // de recibir datos.
@@ -5014,104 +5242,6 @@ impl App {
         self.servidor_desde
     }
 
-    fn tecla_sesion(&mut self, tecla: KeyEvent) {
-        let escritorio = self.escritorio_activo_id();
-        if self.modo_prefijo {
-            self.modo_prefijo = false;
-            if crate::teclas::es_prefijo(&tecla, self.prefijo) {
-                // prefijo + prefijo: el prefijo literal hacia el remoto.
-                if let Some(bytes) = crate::teclas::bytes_de_tecla(tecla) {
-                    self.enviar_a_sesion(bytes);
-                }
-                return;
-            }
-            match tecla.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    self.desadjuntar_pestaña_activa();
-                    let destino = self.vista_previa.unwrap_or(Vista::Hosts);
-                    // Si se entró desde la lista, se vuelve a ella.
-                    self.vista = if destino == Vista::Sesion {
-                        Vista::Sesiones
-                    } else {
-                        destino
-                    };
-                    self.mensaje("sesiones en el servidor", false);
-                }
-                KeyCode::Char('n') => self.navegar_pestañas(1),
-                KeyCode::Char('p') => self.navegar_pestañas(-1),
-                // La barra de estado anuncia «prefijo ? ayuda».
-                KeyCode::Char('?') => self.ayuda = true,
-                KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                    self.ir_a_pestaña(c.to_digit(10).unwrap() as usize);
-                }
-                KeyCode::Char('f') => {
-                    if escritorio.is_some() {
-                        self.mensaje("un escritorio no tiene vista Archivos", true);
-                    } else if let Some(indice) = self.pestana_activa {
-                        if let Some(pestana) = self.pestanas.get(indice) {
-                            let host_id = pestana.host_id;
-                            self.salir_de_sesion_si_hace_falta();
-                            self.abrir_archivos(Some(host_id));
-                        }
-                    }
-                }
-                KeyCode::Char('l') => {
-                    self.desadjuntar_pestaña_activa();
-                    self.vista_previa = Some(self.vista);
-                    self.vista = Vista::Sesiones;
-                }
-                KeyCode::Char('c') => self.abrir_paleta_conectar(),
-                KeyCode::Char('x') => {
-                    if let Some(escritorio_id) = escritorio {
-                        self.preguntar_cerrar_escritorio(escritorio_id);
-                    } else {
-                        self.dialogo = Some(Dialogo::Confirmar {
-                            titulo: "CERRAR PESTAÑA".to_string(),
-                            lineas: vec!["¿Cerrar la sesión remota?".to_string()],
-                            peligro: true,
-                            accion: AccionDialogo::CerrarSesion,
-                        });
-                    }
-                }
-                KeyCode::Char('r') => {
-                    if let Some(escritorio_id) = escritorio {
-                        self.reconectar_escritorio(escritorio_id);
-                    } else {
-                        self.reconectar_pestaña_activa();
-                    }
-                }
-                KeyCode::Char('w') => {
-                    if let Err(error) = cliente::ventana::abrir(&self.config) {
-                        self.mensaje(error, true);
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-        if crate::teclas::es_prefijo(&tecla, self.prefijo) {
-            self.modo_prefijo = true;
-            return;
-        }
-        if tecla.kind == KeyEventKind::Release {
-            return;
-        }
-        // En una pestaña de escritorio no hay terminal: ↵ abre el visor e y
-        // copia un enlace de un solo uso; el resto de teclas no van a ningún
-        // sitio (el visor recibe lo suyo por su WebSocket).
-        if escritorio.is_some() {
-            match tecla.code {
-                KeyCode::Enter => self.abrir_visor_activo(),
-                KeyCode::Char('y') => self.copiar_enlace_activo(),
-                _ => {}
-            }
-            return;
-        }
-        if let Some(bytes) = crate::teclas::bytes_de_tecla(tecla) {
-            self.enviar_a_sesion(bytes);
-        }
-    }
-
     // -------------------------------------------------------------------- ficha
 
     fn abrir_ficha(&mut self, host_id: Option<i64>) {
@@ -5337,6 +5467,14 @@ impl App {
             contrasena_guardada: false,
             comprobaciones: Vec::new(),
             indice_comprobacion: 0,
+            reconectar: host.is_none_or(|host| host.reconectar),
+            tmux_persistente: host.is_some_and(|host| host.tmux_persistente),
+            portapapeles_remoto: host.is_some_and(|host| host.portapapeles_remoto),
+            terminal_original: (
+                host.is_none_or(|host| host.reconectar),
+                host.is_some_and(|host| host.tmux_persistente),
+                host.is_some_and(|host| host.portapapeles_remoto),
+            ),
         }
     }
 
@@ -5665,6 +5803,8 @@ impl App {
         let snippet_original = ficha.snippet_original;
         let verificaciones = ficha.datos_verificaciones();
         let verificaciones_original = ficha.verificaciones_original.clone();
+        let terminal = ficha.terminal_actual();
+        let terminal_original = ficha.terminal_original;
         let mut datos = ficha.datos();
         let datos_formulario = datos.clone();
         if tipo.es_escritorio() && tamano_fijo {
@@ -5760,6 +5900,40 @@ impl App {
                 self.recargar_snippets();
             }
             fallos_aparte = escrito.fallos;
+            if terminal != terminal_original {
+                let (reconectar, tmux, portapapeles) = terminal;
+                let conexion = self.almacen.conexion();
+                let mut fallos = Vec::new();
+                if reconectar != terminal_original.0 {
+                    if let Err(error) =
+                        crate::almacen::hosts::fijar_reconectar(conexion, id, reconectar)
+                    {
+                        fallos.push(format!("no se pudo guardar la reconexión: {error}"));
+                    }
+                }
+                if tmux != terminal_original.1 {
+                    if let Err(error) =
+                        crate::almacen::hosts::fijar_tmux_persistente(conexion, id, tmux)
+                    {
+                        fallos.push(format!("no se pudo guardar el tmux: {error}"));
+                    }
+                }
+                if portapapeles != terminal_original.2 {
+                    if let Err(error) =
+                        crate::almacen::hosts::fijar_portapapeles_remoto(conexion, id, portapapeles)
+                    {
+                        fallos.push(format!(
+                            "no se pudo guardar el portapapeles remoto: {error}"
+                        ));
+                    }
+                }
+                fallos_aparte.extend(fallos.clone());
+                if fallos.is_empty() {
+                    if let Some(ficha) = &mut self.ficha {
+                        ficha.terminal_original = terminal;
+                    }
+                }
+            }
         }
         if !fallos_aparte.is_empty() {
             self.ficha_guardada_a_medias(id, datos_formulario, &fallos_aparte);
@@ -6185,6 +6359,42 @@ impl App {
             categoria: "acción",
             accion: AccionPaleta::IrASesion,
         });
+        // Terminal (Fase 15): paneles, historial, enlaces y escritura en varios.
+        entradas.push(EntradaPaleta {
+            etiqueta: "abrir en rejilla…".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::AbrirEnRejilla,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "disposición de paneles".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::Disposicion,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "historial del panel".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::Historial,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "buscar en el historial".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::BuscarHistorial,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "enlaces de lo visible".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::Enlaces,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "escritura en varios".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::EscrituraVarios,
+        });
+        entradas.push(EntradaPaleta {
+            etiqueta: "sesiones de tmux".to_string(),
+            categoria: "terminal",
+            accion: AccionPaleta::SesionesTmux,
+        });
         entradas.push(EntradaPaleta {
             etiqueta: "transferencias".to_string(),
             categoria: "archivos",
@@ -6580,6 +6790,59 @@ impl App {
                         self.paleta = None;
                         self.ir_a_conflictos();
                     }
+                    Some(AccionPaleta::AbrirEnRejilla) => {
+                        self.paleta = None;
+                        self.dialogo = Some(Dialogo::Rejilla(rejilla::EstadoRejilla::nuevo(
+                            &self.hosts,
+                            &self.grupos,
+                        )));
+                    }
+                    Some(AccionPaleta::Disposicion) => {
+                        self.paleta = None;
+                        if self.vista != Vista::Sesion && !self.pestanas.is_empty() {
+                            self.ir_a_sesion();
+                        }
+                        if self.vista == Vista::Sesion {
+                            self.cambiar_disposicion_paneles();
+                        }
+                    }
+                    Some(AccionPaleta::Historial) => {
+                        self.paleta = None;
+                        self.ir_a_sesion();
+                        if self.vista == Vista::Sesion {
+                            self.abrir_historial(false);
+                        }
+                    }
+                    Some(AccionPaleta::BuscarHistorial) => {
+                        self.paleta = None;
+                        self.ir_a_sesion();
+                        if self.vista == Vista::Sesion {
+                            self.abrir_historial(true);
+                        }
+                    }
+                    Some(AccionPaleta::Enlaces) => {
+                        self.paleta = None;
+                        self.ir_a_sesion();
+                        if self.vista == Vista::Sesion {
+                            self.abrir_enlaces();
+                        }
+                    }
+                    Some(AccionPaleta::EscrituraVarios) => {
+                        self.paleta = None;
+                        self.ir_a_sesion();
+                        if self.vista == Vista::Sesion {
+                            self.alternar_escritura_varios();
+                        }
+                    }
+                    Some(AccionPaleta::SesionesTmux) => {
+                        self.paleta = None;
+                        if self.pestanas.is_empty() {
+                            self.mensaje("no hay ninguna sesión abierta", true);
+                        } else {
+                            self.ir_a_vista(Vista::Sesiones);
+                            self.pedir_lista_tmux();
+                        }
+                    }
                     None => {}
                 }
             }
@@ -6643,7 +6906,7 @@ impl App {
     /// Salir de la vista Sesión deja la pestaña en el servidor.
     fn salir_de_sesion_si_hace_falta(&mut self) {
         if self.vista == Vista::Sesion {
-            self.desadjuntar_pestaña_activa();
+            self.dejar_vista_sesion();
         }
     }
 
@@ -8469,6 +8732,11 @@ impl App {
 
     /// Vista Sesiones: lista de sesiones del servidor (F3 sin pestaña activa).
     fn tecla_sesiones(&mut self, tecla: KeyEvent) {
+        // La lista de tmux se maneja encima de la lista de sesiones.
+        if self.tmux.is_some() {
+            self.tecla_tmux(tecla);
+            return;
+        }
         match tecla.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.seleccion_sesiones = self.seleccion_sesiones.saturating_sub(1);
@@ -8490,6 +8758,7 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('t') => self.pedir_lista_tmux(),
             KeyCode::Char('n') => self.abrir_paleta_conectar(),
             KeyCode::Char('r') => match self.pestana_seleccionada() {
                 Some(pestana) if pestana.escritorio_id.is_some() => {
@@ -8546,6 +8815,44 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Teclas de la lista de sesiones de tmux del host (Fase 15): `↑` `↓`
+    /// eligen, `↵` abre una pestaña enganchada, `T` termina (confirmación),
+    /// `r` refresca y `Esc` la cierra.
+    fn tecla_tmux(&mut self, tecla: KeyEvent) {
+        let Some(estado) = &mut self.tmux else {
+            return;
+        };
+        match tecla.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.tmux = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                estado.seleccion = estado.seleccion.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if estado.seleccion + 1 < estado.sesiones.len() {
+                    estado.seleccion += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let host_id = estado.host_id;
+                let nombre = estado
+                    .sesiones
+                    .get(estado.seleccion)
+                    .map(|sesion| sesion.nombre.clone());
+                match nombre {
+                    Some(nombre) if magi_nucleo::terminal::tmux::nombre_valido(&nombre) => {
+                        self.abrir_sesion_tmux(host_id, Some(nombre));
+                    }
+                    Some(_) => self.mensaje("nombre de tmux no admitido", true),
+                    None => {}
+                }
+            }
+            KeyCode::Char('T') => self.preguntar_terminar_tmux(),
+            KeyCode::Char('r') => self.pedir_lista_tmux(),
+            _ => {}
+        }
+        self.sucio = true;
     }
 
     /// Pestaña seleccionada en la vista Sesiones.
@@ -8779,7 +9086,11 @@ impl App {
                     self.desplazamiento_modal = 0;
                     self.ejecutar_accion(accion);
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    if matches!(accion, AccionDialogo::PegarVariasLineas) {
+                        self.cancelar_pegado_en_espera();
+                    }
+                }
                 _ => {
                     self.dialogo = Some(Dialogo::Confirmar {
                         titulo,
@@ -8789,6 +9100,42 @@ impl App {
                     });
                 }
             },
+            Dialogo::Rejilla(mut estado) => match estado.manejar_tecla(&tecla) {
+                rejilla::AccionRejilla::Nada => {
+                    self.dialogo = Some(Dialogo::Rejilla(estado));
+                }
+                rejilla::AccionRejilla::Cancelar => {}
+                rejilla::AccionRejilla::Abrir(host_ids) => {
+                    self.abrir_en_rejilla(host_ids);
+                }
+            },
+            Dialogo::Elegir {
+                titulo,
+                lineas,
+                peligro,
+                mut opciones,
+            } => {
+                let elegida = opciones.iter().position(|(caracter, _, _)| {
+                    matches!(tecla.code, KeyCode::Char(pulsada) if pulsada == *caracter)
+                });
+                match elegida {
+                    Some(indice) => {
+                        self.desplazamiento_modal = 0;
+                        let (_, _, accion) = opciones.remove(indice);
+                        self.ejecutar_accion(accion);
+                    }
+                    None if matches!(tecla.code, KeyCode::Esc | KeyCode::Char('q')) => {}
+                    None => {
+                        self.dialogo = Some(Dialogo::Elegir {
+                            titulo,
+                            lineas,
+                            peligro,
+                            opciones,
+                        });
+                    }
+                }
+            }
+            Dialogo::Enlace(dialogo) => self.tecla_dialogo_enlace(dialogo, tecla),
             Dialogo::ServidorCaido { perdidas } => match tecla.code {
                 KeyCode::Char('s') | KeyCode::Char('S') => {
                     self.resolver_servidor_caido(true);
@@ -9137,6 +9484,16 @@ impl App {
                             }
                             EntradaTextoAccion::CarpetaSincronizacion => {
                                 self.configurar_carpeta(&nombre);
+                            }
+                            EntradaTextoAccion::RenombrarSesion(sesion_id) => {
+                                self.servidor
+                                    .enviar(protocolo::MensajeCliente::RenombrarSesion {
+                                        sesion_id,
+                                        nombre,
+                                    });
+                            }
+                            EntradaTextoAccion::GuardarHistorial => {
+                                self.guardar_historial_en(&nombre);
                             }
                             EntradaTextoAccion::EditarAliasIdentidad(id) => {
                                 match self.almacen.renombrar_identidad(id, &nombre) {
@@ -10683,6 +11040,22 @@ impl App {
     fn ejecutar_accion(&mut self, accion: AccionDialogo) {
         match accion {
             AccionDialogo::Nada => {}
+            AccionDialogo::IniciarEscrituraVarios(sesiones) => {
+                self.iniciar_escritura_varios_desde_sesiones(sesiones, None);
+            }
+            AccionDialogo::PegarVariasLineas => self.confirmar_pegado_en_espera(),
+            AccionDialogo::CerrarPestanaTerminandoTmux {
+                sesion_id,
+                host_id,
+                nombre,
+            } => {
+                self.servidor
+                    .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+                self.terminar_tmux(host_id, nombre);
+            }
+            AccionDialogo::TerminarTmux { host_id, nombre } => {
+                self.terminar_tmux(host_id, nombre);
+            }
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
             AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
@@ -11057,6 +11430,9 @@ fn validar_reenvios_gestionados(texto: &str) -> Result<(), String> {
 pub fn instalar_hook_panico() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |informacion| {
+        // El terminal exterior queda como estaba también tras un pánico
+        // (pegado, foco, teclado de kitty y ratón; D314).
+        crate::ui::desactivar_extras();
         crate::ui::restaurar_terminal();
         original(informacion);
     }));

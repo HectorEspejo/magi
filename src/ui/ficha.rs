@@ -153,6 +153,7 @@ pub fn formulario(
         constructor.acceso(agente_no_disponible);
         constructor.al_conectar();
         constructor.verificaciones(deliberacion);
+        constructor.terminal();
     }
     constructor.vacia();
     let Constructor {
@@ -761,6 +762,50 @@ impl Constructor<'_> {
         self.multiplexar();
         self.mantener();
         self.vacia();
+    }
+
+    /// Bloque TERMINAL (Fase 15): los tres ajustes propios de este equipo.
+    /// No viajan con la sincronización y solo tienen sentido en hosts SSH.
+    fn terminal(&mut self) {
+        let ficha = self.ficha;
+        self.cabecera("TERMINAL (solo en este equipo)");
+        let filas = [
+            (
+                CampoFicha::Reconectar,
+                ficha.reconectar,
+                "Reconectar solo si se cae la red",
+            ),
+            (
+                CampoFicha::Tmux,
+                ficha.tmux_persistente,
+                "Sesión persistente con tmux",
+            ),
+            (
+                CampoFicha::PortapapelesRemoto,
+                ficha.portapapeles_remoto,
+                "Permitir que el host copie al portapapeles",
+            ),
+        ];
+        for (campo, marcada, etiqueta) in filas {
+            let mut spans = inicio_verificacion(
+                ficha,
+                self.tema,
+                campo,
+                marcada,
+                etiqueta,
+                self.activo(campo),
+            );
+            if campo == CampoFicha::PortapapelesRemoto {
+                spans.push(self.pista("  (OSC 52; leerlo, nunca)".to_string()));
+            }
+            let linea = self.siguiente();
+            self.lineas.push(Line::from(spans));
+            self.anotar(campo, linea, linea, SANGRIA);
+        }
+        let mut pie = vec![Span::raw(" ".repeat(SANGRIA))];
+        pie.push(self.pista("Espacio marca · Tab siguiente · Ctrl+S guardar".to_string()));
+        let _linea = self.siguiente();
+        self.lineas.push(Line::from(pie));
     }
 
     /// `Multiplexar [x] ControlMaster auto al exportar`.
@@ -2029,7 +2074,7 @@ mod pruebas {
     use crate::app::ORDEN_CAMPOS;
 
     /// Alto del formulario en modo normal: los campos y sus cabeceras.
-    const ALTO_NORMAL: u16 = 23;
+    const ALTO_NORMAL: u16 = 28;
 
     fn construir(ficha: &Ficha, ancho: u16, estrecho: bool, tema: &Tema) -> Formulario {
         formulario(
@@ -2207,7 +2252,7 @@ mod pruebas {
         assert_eq!(desplazamiento(CampoFicha::Snippet), 5);
         assert_eq!(desplazamiento(CampoFicha::BackupRuta), 11);
         assert_eq!(desplazamiento(CampoFicha::TestsComando), 13);
-        assert_eq!(desplazamiento(CampoFicha::Tuneles), 13);
+        assert_eq!(desplazamiento(CampoFicha::Tuneles), 18);
         for campo in ORDEN_CAMPOS {
             let desde = desplazamiento(campo);
             assert!(desde + 10 <= ALTO_NORMAL);

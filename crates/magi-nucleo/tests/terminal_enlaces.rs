@@ -249,3 +249,25 @@ fn la_url_del_tunel_no_lleva_credenciales_ni_acepta_lo_que_no_es_tunel() {
     assert!(url_por_tunel("ftp://localhost/x", 5555).is_none());
     assert!(url_por_tunel("http://localhost:8000/x", 65535).is_some());
 }
+
+#[test]
+fn conserva_el_corchete_de_una_ipv6_y_no_marca_mas_de_26() {
+    // `http://[::1]` acaba en `]`, pero no es puntuación de la frase.
+    let encontrados = enlaces(&[(0, "mira http://[::1]:8000/x".to_string())]);
+    assert_eq!(encontrados.len(), 1);
+    assert_eq!(encontrados[0].url, "http://[::1]:8000/x");
+    assert_eq!(
+        destino_tunel(&encontrados[0].url),
+        Some(("::1".to_string(), 8000))
+    );
+
+    // Con muchos enlaces se devuelven solo los 26 más cercanos al final.
+    let texto = (0..30)
+        .map(|indice| format!("http://ejemplo.org/{indice}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let muchos = enlaces(&[(0, texto)]);
+    assert_eq!(muchos.len(), 26);
+    assert!(muchos[0].url.ends_with("/4"));
+    assert!(muchos[25].url.ends_with("/29"));
+}

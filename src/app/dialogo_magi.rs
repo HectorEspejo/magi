@@ -87,6 +87,13 @@ pub enum PlanDeliberado {
     Snippet(PlanEjecucion),
     Sincronizacion(Box<PlanSincronizacion>),
     Servicio(PlanServicio),
+    /// Escritura en varios paneles (Fase 15): las sesiones que la piden y sus
+    /// hosts. No ejecuta nada en el host al aprobar: entrega la deliberación
+    /// al flujo de `IniciarEscrituraVarios`.
+    EscrituraVarios {
+        sesiones: Vec<u32>,
+        hosts: Vec<(i64, String)>,
+    },
 }
 
 impl From<PlanServicio> for PlanDeliberado {
@@ -116,6 +123,9 @@ impl PlanDeliberado {
             PlanDeliberado::Snippet(plan) => plan.accion(),
             PlanDeliberado::Sincronizacion(plan) => plan.accion(false),
             PlanDeliberado::Servicio(plan) => plan.texto_accion(),
+            PlanDeliberado::EscrituraVarios { hosts, .. } => {
+                format!("escritura en varios: {}", nombres_unicos(hosts).join(" · "))
+            }
         }
     }
 
@@ -127,6 +137,9 @@ impl PlanDeliberado {
             PlanDeliberado::Servicio(plan) => {
                 vec![(plan.host_id, plan.host_nombre.clone())]
             }
+            // El servidor valida `hosts_json` como el conjunto de hosts de las
+            // pestañas, sin repetir y ordenado por id.
+            PlanDeliberado::EscrituraVarios { hosts, .. } => hosts_por_id(hosts),
         }
     }
 
@@ -134,7 +147,9 @@ impl PlanDeliberado {
     pub fn snippet_id(&self) -> Option<i64> {
         match self {
             PlanDeliberado::Snippet(plan) => Some(plan.snippet_id),
-            PlanDeliberado::Sincronizacion(_) | PlanDeliberado::Servicio(_) => None,
+            PlanDeliberado::Sincronizacion(_)
+            | PlanDeliberado::Servicio(_)
+            | PlanDeliberado::EscrituraVarios { .. } => None,
         }
     }
 
@@ -166,6 +181,12 @@ impl PlanDeliberado {
                 if ascii { "->" } else { "→" },
                 plan.host_nombre
             ),
+            PlanDeliberado::EscrituraVarios { sesiones, hosts } => format!(
+                "escribir en {} paneles {} {}",
+                sesiones.len(),
+                if ascii { "->" } else { "→" },
+                nombres_unicos(hosts).join(" · ")
+            ),
         }
     }
 
@@ -192,6 +213,11 @@ impl PlanDeliberado {
                 if ascii { "->" } else { "→" },
                 plan.host_nombre
             ),
+            PlanDeliberado::EscrituraVarios { sesiones, .. } => format!(
+                "escribir {} {} paneles",
+                if ascii { "->" } else { "→" },
+                sesiones.len()
+            ),
         }
     }
 
@@ -202,6 +228,31 @@ impl PlanDeliberado {
             _ => None,
         }
     }
+}
+
+/// Hosts sin repetir y ordenados por nombre, para el texto del plan.
+fn nombres_unicos(hosts: &[(i64, String)]) -> Vec<String> {
+    let mut nombres: Vec<String> = Vec::new();
+    for (_, nombre) in hosts {
+        if !nombres.contains(nombre) {
+            nombres.push(nombre.clone());
+        }
+    }
+    nombres.sort();
+    nombres
+}
+
+/// Hosts del plan sin repetir y ordenados por id (lo que valida el servidor
+/// para la escritura en varios).
+fn hosts_por_id(hosts: &[(i64, String)]) -> Vec<(i64, String)> {
+    let mut unicos: Vec<(i64, String)> = Vec::new();
+    for (id, nombre) in hosts {
+        if !unicos.iter().any(|(otro, _)| otro == id) {
+            unicos.push((*id, nombre.clone()));
+        }
+    }
+    unicos.sort_by_key(|(id, _)| *id);
+    unicos
 }
 
 /// Una deliberación abierta.
@@ -578,6 +629,12 @@ impl App {
                             accion: plan.accion,
                         };
                         self.ejecutar_accion_servicio(pendiente, deliberacion);
+                    }
+                    PlanDeliberado::EscrituraVarios { sesiones, .. } => {
+                        self.iniciar_escritura_varios_desde_sesiones(
+                            sesiones,
+                            deliberacion.map(|deliberacion| deliberacion.id),
+                        );
                     }
                 }
             }

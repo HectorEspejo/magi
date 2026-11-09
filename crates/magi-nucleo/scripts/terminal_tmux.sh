@@ -85,7 +85,9 @@ case "$SUBORDEN" in
             exit 0
         fi
         printf 'MAGI_TMUX=%s\n' "$VERSION_TMUX"
-        if tmux has-session -t "$NOMBRE" 2>/dev/null; then
+        # Comparación exacta: `has-session -t` casa por prefijo en tmux y
+        # magi-x-1 también casaría con magi-x-10.
+        if tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -Fxq "$NOMBRE"; then
             printf '%s\n' 'MAGI_SESION=existe'
         else
             printf '%s\n' 'MAGI_SESION=nueva'
@@ -104,8 +106,11 @@ case "$SUBORDEN" in
             exit 0
         fi
         printf 'MAGI_TMUX=%s\n' "$VERSION_TMUX"
-        formato='#{session_name}|#{session_attached}|#{session_windows}|#{session_created_string}'
-        tmux list-sessions -F "$formato" 2>/dev/null | while IFS='|' read -r nombre adheridos ventanas creada; do
+        # Separador improbable (US, 0x1f): un nombre de sesión ajeno con «|»
+        # no desplaza los campos.
+        separador=$(printf '\037')
+        formato="#{session_name}${separador}#{session_attached}${separador}#{session_windows}${separador}#{session_created_string}"
+        tmux list-sessions -F "$formato" 2>/dev/null | while IFS="$separador" read -r nombre adheridos ventanas creada; do
             case "$adheridos" in
                 ''|*[!0-9]*) adheridos=0 ;;
             esac

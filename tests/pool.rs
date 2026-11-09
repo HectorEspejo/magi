@@ -251,8 +251,11 @@ async fn pestana_sftp_y_tunel_a_la_vez_comparten_una_conexion() {
 /// abre otra (y la caída no deja una entrada muerta que nadie recoja).
 #[tokio::test]
 async fn una_conexion_del_pool_caida_no_se_reutiliza() {
+    // Sin reconexión automática: la prueba quiere ver el estado «caída» de la
+    // Fase 3, no la reconexión de la Fase 15.
     let mut escenario = escenario(OpcionesEscenario {
         multiplexar: true,
+        reconectar: Some(false),
         ..Default::default()
     })
     .await;
@@ -277,8 +280,11 @@ async fn una_conexion_del_pool_caida_no_se_reutiliza() {
 /// La reconexión de una pestaña caída abre de nuevo por la vía única.
 #[tokio::test]
 async fn reconectar_una_pestana_caida_vuelve_a_abrirla() {
+    // La reconexión de esta prueba es la manual (prefijo r): se apaga la
+    // automática de la Fase 15 para ver el estado «caída».
     let mut escenario = escenario(OpcionesEscenario {
         multiplexar: true,
+        reconectar: Some(false),
         ..Default::default()
     })
     .await;

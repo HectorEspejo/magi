@@ -91,3 +91,13 @@ fn un_pegado_de_varias_lineas_con_2004_sale_como_un_solo_bloque() {
     let bytes = pegar(&texto, true).expect("no vacío");
     assert_eq!(bytes, b"\x1b[200~uno\rdos\rtres\rcuatro\rcinco\r\x1b[201~");
 }
+
+#[test]
+fn el_troceo_con_maximo_menor_que_un_caracter_no_lo_parte() {
+    // Aunque el máximo sea 1, un carácter UTF-8 de dos bytes sale entero.
+    let bytes = "é".as_bytes();
+    let trozos = trocear(bytes, 1);
+    assert_eq!(trozos.concat(), bytes);
+    assert_eq!(trozos.len(), 1);
+    assert_eq!(std::str::from_utf8(&trozos[0]).unwrap(), "é");
+}

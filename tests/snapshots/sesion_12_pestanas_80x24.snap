@@ -3,8 +3,9 @@ source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIÓN ─────────────────────────────────────────────── mac-mini-m1 (2) ─
 ‹ ● 4 │ ◐ 5 │ ● 6 │ ● 7 │ ◐ 8 │ ● 9 │ ● 10 │ ▸● 11 mac-mini-m1 (… │ ● 12 │ +
+▸● mac-mini-m1 (…───────────────────────────────────────────────────────────────
 root@hetzner-01:~# htop
-  (htop repintado a 80x20)
+  (htop repintado a 80x19)
 █
 
 
@@ -22,5 +23,4 @@ root@hetzner-01:~# htop
 
 
 
-
- ● 11/12 · mac-mini-m1 · 18 m · clave · 80×20 · carga 9.6 · 1 ventana · ^] ?
+ ● 11/12 · mac-mini-m1 · 18 m · clave · carga 9.6 · 80×19 · 1 ventana · ^] ?

@@ -9,11 +9,15 @@ pub mod conexiones;
 pub mod difusion;
 pub mod ejecuciones;
 pub mod escritorios;
+pub mod escritura_varios;
+pub mod historial;
 pub mod servicios;
 pub mod sesiones;
 pub mod sftp;
+pub mod tmux;
 pub mod transferencias;
 pub mod tuneles;
+pub mod tuneles_temporales;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -147,6 +151,18 @@ pub struct EstadoServidor {
     /// Acciones y suscripciones de log de la vista Servicios (Fase 13): las
     /// acciones son trabajo del servidor y las suscripciones no.
     pub servicios: servicios::Servicios,
+    /// Escrituras en varios concedidas (Fase 15): mueren con su ventana y no
+    /// son trabajo custodiado.
+    pub escrituras: escritura_varios::Escrituras,
+    /// Túneles temporales abiertos (Fase 15), uno por enlace local de una
+    /// pestaña.
+    pub tuneles_temporales: tuneles_temporales::Temporales,
+    /// Capturas de historial en vuelo, por (ventana, pestaña): una a la vez,
+    /// para que una petición repetida no acumule capturas de 10 000 líneas.
+    pub capturas_en_vuelo: std::collections::HashSet<(u32, u32)>,
+    /// Difusión cosmética de la lista de sesiones (título o aviso), coalescida
+    /// a una por segundo para no hacer tormenta de listas completas.
+    pub difusion_sesiones: difusion::DifusionSesiones,
     /// Cola serial por cliente de los mensajes de la vista Servicios. Cada
     /// ventana tiene su worker y los procesa en orden: sin esto, dos mensajes
     /// del mismo cliente podían ejecutarse a la vez y dejar una suscripción de
@@ -180,7 +196,7 @@ impl EstadoServidor {
                 .count() as u32,
             escritorios: self.escritorios.cuenta(),
             acciones_servicio: self.servicios.cuantas_acciones(),
-            tuneles_temporales: 0,
+            tuneles_temporales: tuneles_temporales::cuenta(self),
         }
     }
 }
@@ -288,6 +304,10 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         escritorios: escritorios::Escritorios::nuevo(),
         servicios: servicios::Servicios::default(),
         servicios_tx: HashMap::new(),
+        escrituras: escritura_varios::Escrituras::default(),
+        tuneles_temporales: tuneles_temporales::Temporales::default(),
+        capturas_en_vuelo: std::collections::HashSet::new(),
+        difusion_sesiones: difusion::DifusionSesiones::default(),
     }));
 
     let (tx_cola, rx_cola) = mpsc::unbounded_channel::<()>();
@@ -315,6 +335,9 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(revisar_cola(estado.clone()));
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
+    tokio::spawn(escritura_varios::revisar(estado.clone()));
+    tokio::spawn(tuneles_temporales::revisar(estado.clone()));
+    tokio::spawn(revisar_sesiones(estado.clone()));
     tokio::spawn(ejecuciones::revisar(estado.clone()));
     tokio::spawn(escritorios::revisar(estado.clone()));
     if let Some(avisos) = estado.lock().await.escritorios.tomar_avisos() {
@@ -597,6 +620,22 @@ async fn revisar_cola(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     }
 }
 
+/// Difunde la lista de sesiones cuando hay cambios cosméticos pendientes
+/// (título o aviso), como mucho una vez por segundo: un programa que cambia el
+/// título a menudo no puede provocar una tormenta de listas completas.
+async fn revisar_sesiones(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
+    loop {
+        tokio::time::sleep(difusion::RITMO_SESIONES / 4).await;
+        let mut estado_bloqueado = estado.lock().await;
+        if estado_bloqueado
+            .difusion_sesiones
+            .toca(std::time::Instant::now())
+        {
+            sesiones::difundir_lista(&mut estado_bloqueado);
+        }
+    }
+}
+
 /// Cierra las conexiones del pool que agotaron su gracia sin canales.
 async fn revisar_pool(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     loop {
@@ -635,6 +674,10 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
     // Fase 1: anotaciones y estado, sin red.
     ejecuciones::cancelar_todas_al_apagar(estado).await;
     servicios::apagar(estado).await;
+    // La escritura en varios muere con las ventanas; los túneles temporales,
+    // con el servidor (§3.7). Los dos se anotan antes de soltar la red.
+    escritura_varios::apagar(estado).await;
+    tuneles_temporales::apagar(estado).await;
     let tuneles = tuneles::retirar_todos(estado, "el servidor se apaga").await;
     let (conexiones, rutas, recursos_escritorios) = {
         let mut estado_bloqueado = estado.lock().await;
@@ -880,7 +923,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         tuneles: tuneles::lista(&estado_bloqueado),
         ejecuciones: estado_bloqueado.ejecuciones.info(),
         acciones_servicio: estado_bloqueado.servicios.acciones(),
-        tuneles_temporales: Vec::new(),
+        tuneles_temporales: tuneles_temporales::lista(&estado_bloqueado),
     };
     difusion::enviar(cliente, mensaje);
     // La lista de escritorios va detrás de la Bienvenida cuando hay alguna
@@ -905,7 +948,7 @@ async fn manejar_mensaje(
             filas,
             comandos_iniciales,
             orden,
-            tmux: _,
+            tmux,
         } => {
             abrir_sesion(
                 estado,
@@ -915,6 +958,7 @@ async fn manejar_mensaje(
                 filas,
                 comandos_iniciales,
                 orden,
+                tmux,
             )
             .await;
         }
@@ -922,9 +966,16 @@ async fn manejar_mensaje(
             sesion_id,
             cols,
             filas,
-            colores: _,
+            colores,
         } => {
-            adjuntar(estado, cliente_id, sesion_id, Tamano { cols, filas }).await;
+            adjuntar(
+                estado,
+                cliente_id,
+                sesion_id,
+                Tamano { cols, filas },
+                colores,
+            )
+            .await;
         }
         MensajeCliente::Desadjuntar { sesion_id } => {
             desadjuntar(estado, cliente_id, sesion_id).await;
@@ -1351,21 +1402,100 @@ async fn manejar_mensaje(
         | MensajeCliente::PararLog { .. } => {
             encolar_servicios(estado, cliente_id, mensaje).await;
         }
-        // Fase 15: la pista del servidor los implementa. Mientras tanto, no
-        // se hace nada (nunca se responde con un mensaje desconocido).
-        MensajeCliente::CapturarHistorial { .. }
-        | MensajeCliente::Foco { .. }
-        | MensajeCliente::IniciarEscrituraVarios { .. }
-        | MensajeCliente::EscribirVarios { .. }
-        | MensajeCliente::TerminarEscrituraVarios { .. }
-        | MensajeCliente::AbrirTunelTemporal { .. }
-        | MensajeCliente::CerrarTunelTemporal { .. }
-        | MensajeCliente::ListarTmux { .. }
-        | MensajeCliente::TerminarTmux { .. }
-        | MensajeCliente::PortapapelesPermitido { .. }
-        | MensajeCliente::RenombrarSesion { .. }
-        | MensajeCliente::MoverSesion { .. } => {
-            warn!(cliente = cliente_id, "mensaje del terminal sin implementar");
+        // ------------------------------------------------------- terminal (v9)
+        // Las capturas y lo que habla con el host van a su propia tarea: el
+        // bucle de lectura de este cliente no puede quedarse esperando.
+        MensajeCliente::CapturarHistorial {
+            peticion_id,
+            sesion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                historial::manejar(&estado_tarea, cliente_id, peticion_id, sesion_id).await;
+            });
+        }
+        MensajeCliente::Foco {
+            sesion_id,
+            enfocada,
+        } => {
+            sesiones::foco(estado, cliente_id, sesion_id, enfocada).await;
+        }
+        MensajeCliente::IniciarEscrituraVarios {
+            peticion_id,
+            sesiones: sesiones_pedidas,
+            deliberacion_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                escritura_varios::iniciar(
+                    &estado_tarea,
+                    cliente_id,
+                    peticion_id,
+                    sesiones_pedidas,
+                    deliberacion_id,
+                )
+                .await;
+            });
+        }
+        MensajeCliente::EscribirVarios { id, pestanas } => {
+            escritura_varios::escribir(estado, cliente_id, id, pestanas).await;
+        }
+        MensajeCliente::TerminarEscrituraVarios { id, motivo } => {
+            escritura_varios::terminar_cliente(estado, cliente_id, id, &motivo).await;
+        }
+        MensajeCliente::AbrirTunelTemporal {
+            peticion_id,
+            sesion_id,
+            destino,
+            puerto,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                tuneles_temporales::manejar_abrir(
+                    &estado_tarea,
+                    cliente_id,
+                    peticion_id,
+                    sesion_id,
+                    destino,
+                    puerto,
+                )
+                .await;
+            });
+        }
+        MensajeCliente::CerrarTunelTemporal { id } => {
+            tuneles_temporales::cerrar(estado, cliente_id, id).await;
+        }
+        MensajeCliente::ListarTmux {
+            peticion_id,
+            host_id,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                tmux::manejar_listar(&estado_tarea, cliente_id, peticion_id, host_id).await;
+            });
+        }
+        MensajeCliente::TerminarTmux {
+            peticion_id,
+            host_id,
+            nombre,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                tmux::manejar_terminar(&estado_tarea, cliente_id, peticion_id, host_id, &nombre)
+                    .await;
+            });
+        }
+        MensajeCliente::PortapapelesPermitido { sesion_id } => {
+            sesiones::permitir_portapapeles(estado, cliente_id, sesion_id).await;
+        }
+        MensajeCliente::RenombrarSesion { sesion_id, nombre } => {
+            sesiones::renombrar(estado, sesion_id, &nombre).await;
+        }
+        MensajeCliente::MoverSesion {
+            sesion_id,
+            posicion,
+        } => {
+            sesiones::mover(estado, sesion_id, posicion).await;
         }
         // El saludo ya se consumió en `tarea_conexion`.
         MensajeCliente::Hola { .. } => {
@@ -1411,6 +1541,7 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
         .filter(|(_, sesion)| {
             sesion.solicitante == cliente_id
                 && sesion.estado == crate::protocolo::EstadoSesionRemota::Abriendo
+                && !sesion.reconectando
         })
         .map(|(id, _)| *id)
         .collect();
@@ -1448,6 +1579,10 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
     estado_bloqueado.clientes.remove(&cliente_id);
     difundir_lista(&mut estado_bloqueado);
     drop(estado_bloqueado);
+    // Su foco deja de contar en las pestañas (y se avisa al remoto si el foco
+    // agregado cambia) y sus escrituras en varios terminan: son suyas.
+    sesiones::olvidar_foco(estado, cliente_id).await;
+    escritura_varios::cliente_acabo(estado, cliente_id).await;
     // Los diálogos de escritorio que solo podía contestar esta ventana se
     // sueltan y sus aperturas fallan en vez de esperar al plazo.
     escritorios::cliente_desconectado(estado, cliente_id).await;
@@ -1468,6 +1603,7 @@ async fn limpiar_cliente(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, clien
 // ---------------------------------------------------------------- sesiones
 
 /// Crea la sesión en estado «abriendo» y lanza su tarea de conexión.
+#[allow(clippy::too_many_arguments)]
 async fn abrir_sesion(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
@@ -1476,7 +1612,25 @@ async fn abrir_sesion(
     filas: u16,
     comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     orden: Option<crate::protocolo::OrdenPestana>,
+    tmux: Option<String>,
 ) {
+    // El nombre de tmux se valida antes de crear nada: un nombre raro no
+    // llega ni a la shell ni al script (§7.10).
+    if let Some(nombre) = &tmux {
+        if !magi_nucleo::terminal::tmux::nombre_valido(nombre) {
+            let estado_bloqueado = estado.lock().await;
+            if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+                difusion::enviar(
+                    cliente,
+                    MensajeServidor::Error {
+                        mensaje: format!("nombre de tmux no admitido: «{nombre}»"),
+                        peticion_id: None,
+                    },
+                );
+            }
+            return;
+        }
+    }
     // Lo que se escribe en la shell viene del cliente: se acota.
     let comandos_iniciales: Vec<crate::protocolo::ComandoInicial> = comandos_iniciales
         .into_iter()
@@ -1563,14 +1717,27 @@ async fn abrir_sesion(
     let sesion_id = estado_bloqueado.siguiente_sesion_id;
     estado_bloqueado.siguiente_sesion_id += 1;
     let nombre = sesiones::nombre_de_pestaña(&estado_bloqueado.sesiones, &host);
+    // El nombre que sale de la regla puede repetir el de una pestaña
+    // renombrada a mano: se hace único con « (n)».
+    let nombre = sesiones::nombre_renombrado(&estado_bloqueado.sesiones, sesion_id, &nombre)
+        .unwrap_or(nombre);
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
-    // Tamaños degenerados (un terminal sin tamaño aún) paniquean al parser.
-    let tamano = Tamano {
-        cols: cols.max(2),
-        filas: filas.max(1),
-    };
+    // Tamaños degenerados (un terminal sin tamaño aún) paniquean al parser y
+    // uno desmedido hincharía el historial y el códec: se sanean aquí.
+    let tamano = sesiones::sanear_tamano(Tamano { cols, filas });
     let (cols, filas) = (tamano.cols, tamano.filas);
-    let pantalla = crate::conexion::terminal::nuevo(filas, cols);
+    let config_terminal = estado_bloqueado.config.terminal.clone();
+    let historial_lineas = config_terminal.historial_lineas_efectivo() as u64;
+    let historial_mib = config_terminal.historial_mib_efectivo();
+    let historial = sesiones::tope_historial(historial_lineas, historial_mib, cols);
+    let pantalla = sesiones::pantalla_nueva(filas, cols, historial);
+    let orden = estado_bloqueado
+        .sesiones
+        .values()
+        .map(|sesion| sesion.orden)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
     let cancelar = tokio_util::sync::CancellationToken::new();
     estado_bloqueado.sesiones.insert(
         sesion_id,
@@ -1582,6 +1749,7 @@ async fn abrir_sesion(
             estado: crate::protocolo::EstadoSesionRemota::Abriendo,
             motivo: Some("abriendo".to_string()),
             identidad: String::new(),
+            orden,
             adjuntos: HashMap::new(),
             solicitante: cliente_id,
             abierta_en: chrono::Utc::now().timestamp(),
@@ -1595,6 +1763,17 @@ async fn abrir_sesion(
             ventana_minima: HashMap::new(),
             pantalla: pantalla.clone(),
             tx_comandos,
+            titulo: None,
+            aviso: None,
+            ultimo_aviso_en: 0,
+            tmux: None,
+            reconexion: None,
+            enfocadas: std::collections::HashSet::new(),
+            ventana_enfocada: None,
+            colores: None,
+            portapapeles_pendiente: None,
+            adelantar: None,
+            escritura_varios: false,
         },
     );
     estado_bloqueado.vacio_desde = None;
@@ -1605,14 +1784,14 @@ async fn abrir_sesion(
         pantalla: pantalla.clone(),
         cols,
         filas,
+        historial_lineas,
+        historial_mib,
         sesion_id,
         solicitante: cliente_id,
         reconexion: false,
+        tmux,
         cancelar,
-        comandos: comandos_iniciales
-            .into_iter()
-            .map(|comando| comando.texto)
-            .collect(),
+        comandos: comandos_iniciales,
     };
     // Los túneles automáticos del host se levantan cuando la pestaña queda
     // abierta (lo hace su tarea), no mientras sus diálogos esperan.
@@ -1630,6 +1809,7 @@ async fn aplicar_tamano(
     sesion_id: u32,
     avisar_a: Option<u32>,
 ) {
+    let config_terminal = estado_bloqueado.config.terminal.clone();
     let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
         return;
     };
@@ -1637,9 +1817,18 @@ async fn aplicar_tamano(
     let cambia_tamano = nuevo != sesion.tamano;
     if cambia_tamano {
         sesion.tamano = nuevo;
-        let _ = sesion
-            .tx_comandos
-            .send(ComandoSesion::AplicarTamano(nuevo.cols, nuevo.filas));
+        // El tope de historial se recalcula con las columnas nuevas (§7.1); si
+        // baja, el parser se rehace y se pierden las líneas más viejas.
+        let historial = sesiones::tope_historial(
+            config_terminal.historial_lineas_efectivo() as u64,
+            config_terminal.historial_mib_efectivo(),
+            nuevo.cols,
+        );
+        let _ = sesion.tx_comandos.send(ComandoSesion::AplicarTamano {
+            cols: nuevo.cols,
+            filas: nuevo.filas,
+            historial,
+        });
     }
     // Cada adjunto recibe quién explica su relleno: con el tamaño nuevo todos;
     // si no, los que cambian de ventana mínima y la que se acaba de adjuntar.
@@ -1674,11 +1863,9 @@ async fn adjuntar(
     cliente_id: u32,
     sesion_id: u32,
     tamano: Tamano,
+    colores: Option<crate::protocolo::ColoresTema>,
 ) {
-    let tamano = Tamano {
-        cols: tamano.cols.max(2),
-        filas: tamano.filas.max(1),
-    };
+    let tamano = sesiones::sanear_tamano(tamano);
     let mut estado_bloqueado = estado.lock().await;
     let volcado = {
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
@@ -1686,6 +1873,16 @@ async fn adjuntar(
         };
         sesion.adjuntos.insert(cliente_id, tamano);
         sesion.actividad_no_vista = false;
+        // El primer adjunto que manda los colores del tema los fija: el
+        // emulador los usa para responder a OSC 10, 11 y 12.
+        if sesion.colores.is_none() {
+            if let Some(colores) = colores {
+                sesion.colores = Some(colores);
+                if let Ok(mut pantalla) = sesion.pantalla.lock() {
+                    pantalla.emulador_mut().fijar_colores(colores);
+                }
+            }
+        }
         // El volcado declara el tamaño del parser del que sale, no el de la
         // sesión: pueden diferir (sesión caída, o un AplicarTamano aún en
         // cola) y el cliente partiría las líneas. El Redimensionada que va
@@ -1694,9 +1891,30 @@ async fn adjuntar(
         sesion
             .pantalla
             .lock()
-            .map(|parser| {
-                let (filas, cols) = parser.screen().size();
-                (parser.screen().contents_formatted(), (cols, filas))
+            .map(|pantalla| {
+                let (filas, cols) = pantalla.screen().size();
+                let alternativa = pantalla.screen().alternate_screen();
+                let mut bytes = Vec::new();
+                // `state_formatted` es el contenido visible más los modos de
+                // entrada (2004, ratón, cursor de aplicación…), que
+                // `contents_formatted` no lleva. Si la pestaña está en la
+                // pantalla alternativa hay que cambiarse a ella ANTES de
+                // volcar el contenido: el parser nuevo del cliente está en la
+                // principal y, al revés, lo pintado se perdería.
+                if alternativa {
+                    bytes.extend_from_slice(b"\x1b[?1049h");
+                }
+                bytes.extend_from_slice(&pantalla.screen().state_formatted());
+                // La bandera del teclado de kitty no va dentro del volcado de
+                // vt100 (vive en los callbacks del emulador): si está puesta,
+                // se le da al emulador del cliente un push sintético para que
+                // codifique igual las teclas. 2026 no se manda: su pintado no
+                // debe esperar a un cierre que ya pasó.
+                let banderas = pantalla.emulador().banderas_kitty(alternativa);
+                if banderas != 0 {
+                    bytes.extend_from_slice(format!("\x1b[>{banderas}u").as_bytes());
+                }
+                (bytes, (cols, filas))
             })
             .unwrap_or((Vec::new(), tamano_sesion))
     };
@@ -1735,10 +1953,7 @@ async fn redimensionar_adjunto(
     sesion_id: u32,
     tamano: Tamano,
 ) {
-    let tamano = Tamano {
-        cols: tamano.cols.max(2),
-        filas: tamano.filas.max(1),
-    };
+    let tamano = sesiones::sanear_tamano(tamano);
     let mut estado_bloqueado = estado.lock().await;
     if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
         if sesion.adjuntos.contains_key(&cliente_id) {
@@ -1764,9 +1979,26 @@ async fn cerrar_sesion(
         return;
     };
     match sesion.estado {
-        crate::protocolo::EstadoSesionRemota::Abriendo
-        | crate::protocolo::EstadoSesionRemota::Caida => {
-            let fallida_apertura = sesion.estado == crate::protocolo::EstadoSesionRemota::Abriendo;
+        crate::protocolo::EstadoSesionRemota::Abriendo if sesion.reconectando => {
+            // Estaba reconectando: es un cierre normal, no una apertura
+            // fallida. Cancelar la espera saca a su tarea.
+            let host_id = sesion.host_id;
+            sesion.cancelar_apertura.cancel();
+            estado_bloqueado.pendientes.remove(&sesion_id);
+            estado_bloqueado.sesiones.remove(&sesion_id);
+            let bd = estado_bloqueado.bd.clone();
+            let _ = bd.send(OrdenBd::Anotar {
+                tipo: crate::registro::SESION_CERRADA.to_string(),
+                host_id: Some(host_id),
+                identidad_id: None,
+                detalle: "cerrada desde la ventana (reconectando)".to_string(),
+                resultado: ResultadoRegistro::Ok,
+            });
+            sesiones::difundir_lista(&mut estado_bloqueado);
+            drop(estado_bloqueado);
+            cerrar_recursos_de_pestana(estado, sesion_id, host_id).await;
+        }
+        crate::protocolo::EstadoSesionRemota::Abriendo => {
             let host_id = sesion.host_id;
             // La apertura en curso se abandona: suelta el cerrojo del host.
             sesion.cancelar_apertura.cancel();
@@ -1774,38 +2006,50 @@ async fn cerrar_sesion(
             estado_bloqueado.sesiones.remove(&sesion_id);
             let bd = estado_bloqueado.bd.clone();
             let _ = bd.send(OrdenBd::Anotar {
-                tipo: if fallida_apertura {
-                    crate::registro::CONEXION_FALLIDA.to_string()
-                } else {
-                    crate::registro::SESION_CERRADA.to_string()
-                },
+                tipo: crate::registro::CONEXION_FALLIDA.to_string(),
                 host_id: Some(host_id),
                 identidad_id: None,
-                detalle: if fallida_apertura {
-                    "ventana cerrada".to_string()
-                } else {
-                    "cerrada desde la ventana".to_string()
-                },
-                resultado: if fallida_apertura {
-                    ResultadoRegistro::Error
-                } else {
-                    ResultadoRegistro::Ok
-                },
+                detalle: "ventana cerrada".to_string(),
+                resultado: ResultadoRegistro::Error,
             });
             sesiones::difundir_lista(&mut estado_bloqueado);
             drop(estado_bloqueado);
-            // Se ha ido una pestaña: si era la última de ese host, sus túneles
-            // automáticos se paran.
-            let estado_tuneles = estado.clone();
-            tokio::spawn(async move {
-                tuneles::canales_cambiaron(&estado_tuneles, host_id).await;
+            cerrar_recursos_de_pestana(estado, sesion_id, host_id).await;
+        }
+        crate::protocolo::EstadoSesionRemota::Caida => {
+            let host_id = sesion.host_id;
+            sesion.cancelar_apertura.cancel();
+            estado_bloqueado.pendientes.remove(&sesion_id);
+            estado_bloqueado.sesiones.remove(&sesion_id);
+            let bd = estado_bloqueado.bd.clone();
+            let _ = bd.send(OrdenBd::Anotar {
+                tipo: crate::registro::SESION_CERRADA.to_string(),
+                host_id: Some(host_id),
+                identidad_id: None,
+                detalle: "cerrada desde la ventana".to_string(),
+                resultado: ResultadoRegistro::Ok,
             });
+            sesiones::difundir_lista(&mut estado_bloqueado);
+            drop(estado_bloqueado);
+            cerrar_recursos_de_pestana(estado, sesion_id, host_id).await;
         }
         crate::protocolo::EstadoSesionRemota::Abierta => {
             let _ = sesion.tx_comandos.send(ComandoSesion::Cerrar);
         }
         crate::protocolo::EstadoSesionRemota::Cerrada => {}
     }
+}
+
+/// Al quitar una pestaña desde el estado: termina su escritura en varios, sus
+/// túneles temporales y, si era la última del host, sus túneles automáticos.
+async fn cerrar_recursos_de_pestana(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+    host_id: i64,
+) {
+    escritura_varios::sesion_acabo(estado, sesion_id, "la pestaña se cerró").await;
+    tuneles_temporales::sesion_acabo(estado, sesion_id, "la pestaña se cerró").await;
+    tuneles::canales_cambiaron(estado, host_id).await;
 }
 
 /// Reconecta una sesión caída: conexión nueva, mismo id y nombre. Si el host
@@ -1815,17 +2059,31 @@ async fn reconectar(
     cliente_id: u32,
     sesion_id: u32,
 ) {
-    let (nombre_host, estado_actual, rutas) = {
+    let (nombre_host, estado_actual, reconectando_auto, rutas) = {
         let estado_bloqueado = estado.lock().await;
         match estado_bloqueado.sesiones.get(&sesion_id) {
             Some(sesion) => (
                 sesion.host_nombre.clone(),
                 sesion.estado,
+                sesion.reconectando,
                 estado_bloqueado.rutas.clone(),
             ),
             None => return,
         }
     };
+    // Durante una reconexión automática, prefijo r adelanta el intento ya y
+    // con diálogos al solicitante (§3.7).
+    if estado_actual == crate::protocolo::EstadoSesionRemota::Abriendo && reconectando_auto {
+        let mut estado_bloqueado = estado.lock().await;
+        if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
+            sesion.solicitante = cliente_id;
+            if let Some(adelanto) = &sesion.adelantar {
+                let siguiente = adelanto.borrow().wrapping_add(1);
+                let _ = adelanto.send(siguiente);
+            }
+        }
+        return;
+    }
     if estado_actual != crate::protocolo::EstadoSesionRemota::Caida {
         let estado_bloqueado = estado.lock().await;
         if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
@@ -1875,11 +2133,12 @@ async fn reconectar(
     // `Reconectar` seguidos no pueden lanzar dos aperturas.
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
     let cancelar = tokio_util::sync::CancellationToken::new();
-    let (cols, filas, pantalla, comandos) = {
+    let (cols, filas, pantalla, comandos, tmux, historial_lineas, historial_mib) = {
         let mut estado_bloqueado = estado.lock().await;
         if estado_bloqueado.apagando {
             return;
         }
+        let config_terminal = estado_bloqueado.config.terminal.clone();
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             return;
         };
@@ -1887,7 +2146,9 @@ async fn reconectar(
             return;
         }
         let (cols, filas) = (sesion.tamano.cols, sesion.tamano.filas);
-        let pantalla = crate::conexion::terminal::nuevo(filas, cols);
+        // El historial y los modos se conservan al reconectar (§7.1): no se
+        // rehace la pantalla, solo se reabre el canal.
+        let pantalla = sesion.pantalla.clone();
         sesion.estado = crate::protocolo::EstadoSesionRemota::Abriendo;
         sesion.reconectando = true;
         sesion.cancelar_apertura = cancelar.clone();
@@ -1895,15 +2156,15 @@ async fn reconectar(
         sesion.handle = None;
         sesion.solicitante = cliente_id;
         sesion.tx_comandos = tx_comandos;
-        sesion.pantalla = pantalla.clone();
-        // Al reconectar solo se repite lo que es «al conectar».
-        let comandos: Vec<String> = sesion
-            .comandos_iniciales
-            .iter()
-            .filter(|comando| comando.repetir)
-            .map(|comando| comando.texto.clone())
-            .collect();
-        (cols, filas, pantalla, comandos)
+        (
+            cols,
+            filas,
+            pantalla,
+            sesion.comandos_iniciales.clone(),
+            sesion.tmux.clone(),
+            config_terminal.historial_lineas_efectivo() as u64,
+            config_terminal.historial_mib_efectivo(),
+        )
     };
     let datos = sesiones::DatosApertura {
         host,
@@ -1912,9 +2173,12 @@ async fn reconectar(
         pantalla,
         cols,
         filas,
+        historial_lineas,
+        historial_mib,
         sesion_id,
         solicitante: cliente_id,
         reconexion: true,
+        tmux,
         cancelar,
         comandos,
     };
@@ -2778,11 +3042,12 @@ fn imprime_cabecera_servidor(
     }
     match trabajo {
         Some(trabajo) => println!(
-            "sesiones {} · clientes {} · transferencias {} · túneles {} · ejecuciones {} · acciones de servicio {}",
+            "sesiones {} · clientes {} · transferencias {} · túneles {} · túneles temporales {} · ejecuciones {} · acciones de servicio {}",
             trabajo.sesiones,
             clientes.unwrap_or(0),
             trabajo.transferencias,
             trabajo.tuneles,
+            trabajo.tuneles_temporales,
             trabajo.ejecuciones,
             trabajo.acciones_servicio,
         ),
@@ -2853,6 +3118,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             sesiones,
             transferencias,
             tuneles,
+            tuneles_temporales,
             ejecuciones,
             acciones_servicio,
             ..
@@ -2868,7 +3134,7 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
                     .filter(|tunel| tunel.estado.en_marcha())
                     .count() as u32,
                 escritorios: escritorios.len() as u32,
-                tuneles_temporales: 0,
+                tuneles_temporales: tuneles_temporales.len() as u32,
                 ejecuciones: ejecuciones
                     .iter()
                     .filter(|ejecucion| {
@@ -2974,6 +3240,7 @@ fn trabajo_que_se_pierde(
     escritorios: usize,
     transferencias: usize,
     tuneles: usize,
+    tuneles_temporales: usize,
     ejecuciones: usize,
     acciones_servicio: usize,
 ) -> Option<String> {
@@ -2981,6 +3248,7 @@ fn trabajo_que_se_pierde(
         && escritorios == 0
         && transferencias == 0
         && tuneles == 0
+        && tuneles_temporales == 0
         && ejecuciones == 0
         && acciones_servicio == 0
     {
@@ -3000,6 +3268,11 @@ fn trabajo_que_se_pierde(
     }
     if tuneles > 0 {
         partes.push(format!("{tuneles} túnel(es) levantado(s)"));
+    }
+    if tuneles_temporales > 0 {
+        partes.push(format!(
+            "{tuneles_temporales} túnel(es) temporal(es) abierto(s)"
+        ));
     }
     if ejecuciones > 0 {
         partes.push(format!(
@@ -3050,6 +3323,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
         escritorios_vivos,
         transferencias_vivas,
         tuneles_vivos,
+        tuneles_temporales_vivos,
         ejecuciones_vivas,
         acciones_vivas,
     ) = match respuesta {
@@ -3057,6 +3331,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             sesiones,
             transferencias,
             tuneles,
+            tuneles_temporales,
             ejecuciones,
             acciones_servicio,
             ..
@@ -3071,6 +3346,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
                 .iter()
                 .filter(|tunel| tunel.estado != crate::protocolo::EstadoTunelRemoto::Inactivo)
                 .count(),
+            tuneles_temporales.len(),
             ejecuciones
                 .iter()
                 .filter(|ejecucion| ejecucion.estado == crate::protocolo::EstadoEjecucion::EnCurso)
@@ -3107,6 +3383,7 @@ pub async fn parar_cli(rutas: &Rutas, si: bool) -> Result<i32> {
             escritorios_vivos,
             transferencias_vivas,
             tuneles_vivos,
+            tuneles_temporales_vivos,
             ejecuciones_vivas,
             acciones_vivas,
         ) {
@@ -3292,16 +3569,19 @@ mod pruebas {
     #[test]
     fn el_aviso_de_parada_cuenta_las_transferencias() {
         // Solo transferencias: es trabajo que se pierde y hay que preguntar.
-        let aviso = trabajo_que_se_pierde(0, 0, 2, 0, 0, 0).expect("hay trabajo");
+        let aviso = trabajo_que_se_pierde(0, 0, 2, 0, 0, 0, 0).expect("hay trabajo");
         assert!(aviso.contains("2 transferencia(s)"), "{aviso}");
         assert!(aviso.contains("se cancelarán"), "{aviso}");
         // Un escritorio abierto también es trabajo que se pierde.
-        let aviso = trabajo_que_se_pierde(0, 1, 0, 0, 0, 0).expect("hay trabajo");
+        let aviso = trabajo_que_se_pierde(0, 1, 0, 0, 0, 0, 0).expect("hay trabajo");
         assert!(aviso.contains("1 escritorio(s)"), "{aviso}");
         // Sin trabajo no hay aviso.
-        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0, 0, 0), None);
+        assert_eq!(trabajo_que_se_pierde(0, 0, 0, 0, 0, 0, 0), None);
+        // Un túnel temporal también cuenta.
+        let aviso = trabajo_que_se_pierde(0, 0, 0, 0, 1, 0, 0).expect("hay trabajo");
+        assert!(aviso.contains("túnel(es) temporal(es)"), "{aviso}");
         // Todo junto se une con comas y «y».
-        let aviso = trabajo_que_se_pierde(1, 1, 1, 1, 1, 1).expect("hay trabajo");
+        let aviso = trabajo_que_se_pierde(1, 1, 1, 1, 1, 1, 1).expect("hay trabajo");
         assert!(aviso.contains("1 sesión(es)"), "{aviso}");
         assert!(aviso.contains("1 escritorio(s)"), "{aviso}");
         assert!(aviso.contains("1 transferencia(s)"), "{aviso}");

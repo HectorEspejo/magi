@@ -199,6 +199,9 @@ pub struct Observado {
     pub vivas: AtomicUsize,
     /// Todo lo que se ha escrito en las shells (pestañas).
     pub shell: Mutex<Vec<u8>>,
+    /// Lo que ha escrito por su salida estándar el programa de la shell
+    /// (`programa_shell`), para las pruebas de extremo a extremo.
+    pub programa: Mutex<Vec<u8>>,
     /// `exec` en marcha ahora y el máximo visto a la vez.
     pub exec_activos: AtomicUsize,
     pub exec_max: AtomicUsize,
@@ -223,6 +226,21 @@ impl Observado {
 
     pub fn shell(&self) -> String {
         String::from_utf8_lossy(&self.shell.lock().expect("shell")).to_string()
+    }
+
+    /// Lo que ha escrito por su salida estándar el programa de la shell.
+    pub fn programa_salida(&self) -> String {
+        String::from_utf8_lossy(&self.programa.lock().expect("programa")).to_string()
+    }
+
+    /// Los bytes crudos que ha escrito por su salida estándar el programa.
+    pub fn programa_bytes(&self) -> Vec<u8> {
+        self.programa.lock().expect("programa").clone()
+    }
+
+    /// Olvida lo que haya escrito el programa (para mirar solo lo nuevo).
+    pub fn limpiar_programa(&self) {
+        self.programa.lock().expect("programa").clear();
     }
 
     /// Los `window-change` recibidos, en orden, como (columnas, filas).
@@ -274,6 +292,15 @@ pub struct ServidorSesion {
     /// Directorio con binarios falsos que se antepone al `PATH` de los
     /// `exec` (Fase 13: systemctl, journalctl, docker, podman, sudo…).
     pub binarios: Option<PathBuf>,
+    /// Programa real que hace de shell de la pestaña (en vez de solo responder
+    /// `MARCA_CLIENTE`): argv completo. Su entrada y su salida van por el canal,
+    /// como en un PTY. Su salida estándar queda en `observado.programa`
+    /// (Fase 15: `tui_prueba`).
+    pub programa_shell: Option<Vec<String>>,
+    /// Variables de entorno extra para los procesos que lanza el host de
+    /// pruebas (programa de la shell y `exec`). Las pruebas de terminal la usan
+    /// para dar un directorio de estado a los binarios falsos.
+    pub entorno_extra: Vec<(String, String)>,
 }
 
 impl Default for ServidorSesion {
@@ -284,6 +311,8 @@ impl Default for ServidorSesion {
             estado: Arc::new(Reenvios::default()),
             observado: Arc::new(Observado::default()),
             binarios: None,
+            programa_shell: None,
+            entorno_extra: Vec::new(),
         }
     }
 }
@@ -299,6 +328,8 @@ impl russh::server::Server for ServidorSesion {
             estado: self.estado.clone(),
             observado: self.observado.clone(),
             binarios: self.binarios.clone(),
+            programa_shell: self.programa_shell.clone(),
+            entorno_extra: self.entorno_extra.clone(),
             entradas: Arc::new(Mutex::new(HashMap::new())),
             procesos: Arc::new(Mutex::new(HashMap::new())),
             shells: HashSet::new(),
@@ -325,6 +356,10 @@ pub struct HandlerSesion {
     mango_guardado: bool,
     /// Directorio de binarios falsos, si la prueba lo pide.
     binarios: Option<PathBuf>,
+    /// Programa real que hace de shell de la pestaña, si la prueba lo pide.
+    programa_shell: Option<Vec<String>>,
+    /// Variables de entorno extra para los procesos que lanza el host.
+    entorno_extra: Vec<(String, String)>,
 }
 
 impl Drop for HandlerSesion {
@@ -354,6 +389,24 @@ impl HandlerSesion {
                 .expect("mangos")
                 .push(sesion.handle());
         }
+    }
+
+    /// Un `Command` con el `PATH` de los binarios falsos y el entorno extra de
+    /// la prueba, igual para los `exec` y para el programa de la shell.
+    fn comando(&self, programa: &str) -> tokio::process::Command {
+        let mut orden = tokio::process::Command::new(programa);
+        if let Some(binarios) = &self.binarios {
+            // Los binarios falsos de la prueba van delante del PATH del host.
+            let actual = std::env::var_os("PATH").unwrap_or_default();
+            let mut path = binarios.clone().into_os_string();
+            path.push(":");
+            path.push(actual);
+            orden.env("PATH", path);
+        }
+        for (clave, valor) in &self.entorno_extra {
+            orden.env(clave, valor);
+        }
+        orden
     }
 }
 
@@ -439,10 +492,81 @@ impl russh::server::Handler for HandlerSesion {
         canal: russh::ChannelId,
         sesion: &mut russh::server::Session,
     ) -> Result<(), Self::Error> {
-        self.shells.insert(u32::from(canal));
+        let id = u32::from(canal);
+        self.shells.insert(id);
         let _ = sesion.channel_success(canal);
-        // Contenido inicial para que el volcado al adjuntar no esté vacío.
-        let _ = sesion.data(canal, &b"MARCA_CLIENTE\r\n"[..]);
+        let Some(programa) = self.programa_shell.clone() else {
+            // Contenido inicial para que el volcado al adjuntar no esté vacío.
+            let _ = sesion.data(canal, &b"MARCA_CLIENTE\r\n"[..]);
+            return Ok(());
+        };
+        let Some((ejecutable, argumentos)) = programa.split_first() else {
+            let _ = sesion.channel_failure(canal);
+            return Ok(());
+        };
+        let mut orden = self.comando(ejecutable);
+        let mut hijo = match orden
+            .args(argumentos)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(hijo) => hijo,
+            Err(_) => {
+                let _ = sesion.channel_failure(canal);
+                return Ok(());
+            }
+        };
+        if let Some(pid) = hijo.id() {
+            self.procesos.lock().expect("procesos").insert(id, pid);
+        }
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        self.entradas.lock().expect("entradas").insert(id, tx);
+        // Canal a stdin del programa.
+        let mut entrada = hijo.stdin.take().expect("stdin del programa");
+        tokio::spawn(async move {
+            while let Some(datos) = rx.recv().await {
+                if entrada.write_all(&datos).await.is_err() {
+                    break;
+                }
+            }
+            let _ = entrada.shutdown().await;
+        });
+        // stdout del programa al canal (y al búfer que mira la prueba).
+        let mut salida = hijo.stdout.take().expect("stdout del programa");
+        let mango = sesion.handle();
+        let observado = self.observado.clone();
+        let procesos = self.procesos.clone();
+        tokio::spawn(async move {
+            let mut bufer = vec![0u8; 32 * 1024];
+            loop {
+                match salida.read(&mut bufer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(leidos) => {
+                        observado
+                            .programa
+                            .lock()
+                            .expect("programa")
+                            .extend_from_slice(&bufer[..leidos]);
+                        if mango.data(canal, bufer[..leidos].to_vec()).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let terminado = hijo.wait().await;
+            procesos.lock().expect("procesos").remove(&id);
+            let codigo = terminado
+                .ok()
+                .and_then(|estado| estado.code())
+                .unwrap_or(255) as u32;
+            let _ = mango.eof(canal).await;
+            let _ = mango.exit_status_request(canal, codigo).await;
+            let _ = mango.close(canal).await;
+        });
         Ok(())
     }
 
@@ -535,19 +659,11 @@ impl russh::server::Handler for HandlerSesion {
             .lock()
             .expect("comandos")
             .push(comando.clone());
-        let mut orden = tokio::process::Command::new("sh");
+        let mut orden = self.comando("sh");
         orden
             .arg("-c")
             .arg(&comando)
             .env("MAGI_USUARIO", &self.usuario);
-        if let Some(binarios) = &self.binarios {
-            // Los binarios falsos de la prueba van delante del PATH del host.
-            let actual = std::env::var_os("PATH").unwrap_or_default();
-            let mut path = binarios.clone().into_os_string();
-            path.push(":");
-            path.push(actual);
-            orden.env("PATH", path);
-        }
         let mut hijo = match orden
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -651,8 +767,9 @@ impl russh::server::Handler for HandlerSesion {
                 .lock()
                 .expect("shell")
                 .extend_from_slice(datos);
-            return Ok(());
         }
+        // Una shell sin programa no tiene a quién entregarle los bytes; con
+        // `programa_shell`, van a su entrada estándar.
         if let Some(entrada) = self
             .entradas
             .lock()
@@ -904,6 +1021,16 @@ pub struct OpcionesEscenario {
     /// Directorio con binarios falsos que los `exec` del host de prueba ven
     /// en el `PATH` (Fase 13).
     pub binarios: Option<PathBuf>,
+    /// Programa real que hace de shell de la pestaña (Fase 15).
+    pub programa_shell: Option<Vec<String>>,
+    /// Variables de entorno extra para los procesos del host de pruebas.
+    pub entorno_extra: Vec<(String, String)>,
+    /// Reconexión automática de las pestañas del host (Fase 15). \`None\` deja
+    /// el valor por defecto de la base de datos (activada).
+    pub reconectar: Option<bool>,
+    /// Configuración con la que arranca el servidor de sesiones. `None` deja
+    /// la de las pruebas (sin tocar `[terminal]`).
+    pub config: Option<magi::config::Config>,
 }
 
 impl Default for OpcionesEscenario {
@@ -916,6 +1043,10 @@ impl Default for OpcionesEscenario {
             identidad: None,
             huella_conocida: true,
             binarios: None,
+            programa_shell: None,
+            entorno_extra: Vec::new(),
+            reconectar: None,
+            config: None,
         }
     }
 }
@@ -937,6 +1068,8 @@ pub struct Escenario {
     /// Últimas difusiones vistas.
     pub sesiones: Vec<magi::protocolo::InfoSesion>,
     pub tuneles: Vec<magi::protocolo::InfoTunel>,
+    /// Lista completa de túneles temporales del servidor (Fase 15).
+    pub tuneles_temporales: Vec<magi::protocolo::InfoTunelTemporal>,
     /// Todos los mensajes recibidos, en orden (para comprobar lo que no llegó).
     pub vistos: Vec<magi::protocolo::MensajeServidor>,
     tarea_ssh: tokio::task::JoinHandle<()>,
@@ -989,7 +1122,10 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
     use magi::protocolo::{MensajeServidor, VERSION_PROTOCOLO};
     use std::os::unix::fs::PermissionsExt as _;
 
-    let entorno = entorno();
+    let mut entorno = entorno();
+    if let Some(config) = opciones.config.clone() {
+        entorno.config = config;
+    }
     let rutas = entorno.rutas.clone();
 
     // 1. Servidor SSH de pruebas, con clave conocida de antemano.
@@ -1015,6 +1151,8 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
         estado: reenvios.clone(),
         observado: observado.clone(),
         binarios: opciones.binarios.clone(),
+        programa_shell: opciones.programa_shell.clone(),
+        entorno_extra: opciones.entorno_extra.clone(),
     };
     let tarea_ssh = tokio::spawn(async move {
         let _ = russh::server::Server::run_on_socket(&mut servidor_ssh, config, &escucha).await;
@@ -1068,6 +1206,9 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
                 Origen::Manual,
             )
             .unwrap();
+            if let Some(reconectar) = opciones.reconectar {
+                magi::almacen::hosts::fijar_reconectar(almacen.conexion(), id, reconectar).unwrap();
+            }
             ids.push(id);
         }
         almacen.cerrar().unwrap();
@@ -1108,6 +1249,7 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
         lector,
         sesiones: Vec::new(),
         tuneles: Vec::new(),
+        tuneles_temporales: Vec::new(),
         vistos: Vec::new(),
         tarea_ssh,
         tarea_magi,
@@ -1161,6 +1303,9 @@ impl Escenario {
                 match &mensaje {
                     MensajeServidor::Tuneles { lista } => self.tuneles = lista.clone(),
                     MensajeServidor::Sesiones { lista } => self.sesiones = lista.clone(),
+                    MensajeServidor::TunelesTemporales { lista } => {
+                        self.tuneles_temporales = lista.clone()
+                    }
                     _ => {}
                 }
                 self.vistos.push(mensaje.clone());
@@ -1201,6 +1346,9 @@ impl Escenario {
                     match &mensaje {
                         MensajeServidor::Tuneles { lista } => self.tuneles = lista.clone(),
                         MensajeServidor::Sesiones { lista } => self.sesiones = lista.clone(),
+                        MensajeServidor::TunelesTemporales { lista } => {
+                            self.tuneles_temporales = lista.clone()
+                        }
                         _ => {}
                     }
                     self.vistos.push(mensaje.clone());

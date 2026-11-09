@@ -3,6 +3,7 @@ source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIÓN ──────────── rincon-dev ─
  ● 1 │ ◐ 2 │ ▸✕ 3 rincon-dev │ +
+▸✕ rincon-dev───────────────────────────
    ┌ SESIÓN CAÍDA ──────────────────┐
    │                                │
    │ ✕ Sesión caída hace 2 h 00 m   │
@@ -10,5 +11,4 @@ source: tests/redimensionado/arnes.rs
    │                                │
    │ ^] r reconectar  ^] x cerrar   │
    └────────────────────────────────┘
-
  ✕ 3/3 · rincon-dev · 2 h 00 m · ^] ?

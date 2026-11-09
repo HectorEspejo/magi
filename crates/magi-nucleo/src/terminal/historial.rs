@@ -99,10 +99,55 @@ pub fn capturar(pantalla: &mut PantallaEmulada) -> Captura {
             envuelta,
         });
     }
-    Captura {
-        lineas,
-        historial: total_historial,
+    let descartadas = acotar_captura(&mut lineas);
+    let historial = total_historial.saturating_sub(descartadas.min(total_historial));
+    Captura { lineas, historial }
+}
+
+/// Tope de tramos por fila de una captura: con un cambio de estilo por celda
+/// el remoto podría generar cientos de MB de JSON.
+const TRAMOS_POR_FILA: usize = 64;
+
+/// Tope aproximado de bytes de una captura completa (texto y estilos).
+const BYTES_CAPTURA_MAX: usize = 8 * 1024 * 1024;
+
+/// Bytes aproximados de una fila (texto más un coste fijo por tramo).
+fn bytes_de_fila(linea: &LineaHistorial) -> usize {
+    linea
+        .tramos
+        .iter()
+        .map(|tramo| tramo.texto.len() + 24)
+        .sum()
+}
+
+/// Acota la captura: como mucho `TRAMOS_POR_FILA` tramos por fila (lo que
+/// sobra se funde en el último) y `BYTES_CAPTURA_MAX` en total, descartando
+/// las filas más viejas si hace falta. Devuelve cuántas filas del principio se
+/// descartaron.
+fn acotar_captura(lineas: &mut Vec<LineaHistorial>) -> usize {
+    for linea in lineas.iter_mut() {
+        if linea.tramos.len() <= TRAMOS_POR_FILA {
+            continue;
+        }
+        let resto = linea.tramos.split_off(TRAMOS_POR_FILA);
+        let mut texto = String::new();
+        for tramo in resto {
+            texto.push_str(&tramo.texto);
+        }
+        if let Some(ultimo) = linea.tramos.last_mut() {
+            ultimo.texto.push_str(&texto);
+        }
     }
+    let mut total: usize = lineas.iter().map(bytes_de_fila).sum();
+    let mut recortar = 0;
+    while total > BYTES_CAPTURA_MAX && recortar < lineas.len() {
+        total = total.saturating_sub(bytes_de_fila(&lineas[recortar]));
+        recortar += 1;
+    }
+    if recortar > 0 {
+        lineas.drain(..recortar);
+    }
+    recortar
 }
 
 /// ¿La fila visible `fila` continúa en la siguiente por el ancho?
@@ -321,4 +366,41 @@ pub fn texto_plano(lineas: &[LineaHistorial]) -> String {
         texto.push('\n');
     }
     texto
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn una_captura_con_un_estilo_por_celda_queda_acotada() {
+        let mut pantalla = PantallaEmulada::nueva(24, 200, 1000, false);
+        for fila in 0..24u16 {
+            for columna in 0..200u16 {
+                let rojo = (fila * 7) as u8;
+                let verde = (columna * 3) as u8;
+                let azul = (fila + columna) as u8;
+                pantalla.procesar(format!("\x1b[38;2;{rojo};{verde};{azul}mX\x1b[0m").as_bytes());
+            }
+            pantalla.procesar(b"\r\n");
+        }
+        let captura = capturar(&mut pantalla);
+        assert!(captura.historial > 0, "la prueba necesita historial");
+        for linea in &captura.lineas {
+            assert!(
+                linea.tramos.len() <= TRAMOS_POR_FILA,
+                "una fila lleva {} tramos",
+                linea.tramos.len()
+            );
+        }
+        let bytes: usize = captura.lineas.iter().map(bytes_de_fila).sum();
+        assert!(
+            bytes <= BYTES_CAPTURA_MAX,
+            "la captura pasa del tope: {bytes} bytes"
+        );
+        assert!(
+            bytes < 1_048_576,
+            "con 24 filas de estilos la captura debería quedar muy por debajo del tope: {bytes}"
+        );
+    }
 }

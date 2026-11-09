@@ -38,6 +38,10 @@ pub struct Enlace {
     pub url: String,
 }
 
+/// Tope de enlaces que se devuelven: los 26 más cercanos al final son los
+/// que se pueden marcar con letras y acota la memoria con entrada no fiable.
+const TOPE_ENLACES: usize = 26;
+
 /// Busca enlaces en las líneas lógicas (índice, texto).
 #[must_use]
 pub fn enlaces(lineas: &[(usize, String)]) -> Vec<Enlace> {
@@ -58,6 +62,8 @@ pub fn enlaces(lineas: &[(usize, String)]) -> Vec<Enlace> {
             }
         }
     }
+    let desde = encontrados.len().saturating_sub(TOPE_ENLACES);
+    encontrados.drain(..desde);
     encontrados
 }
 
@@ -69,7 +75,9 @@ fn recortar(url: &str) -> &str {
         if !FINAL.contains(&ultimo) {
             break;
         }
-        if ultimo == ')' && cierra_un_parentesis(recortada) {
+        if (ultimo == ')' && cierra_un_parentesis(recortada))
+            || (ultimo == ']' && cierra_un_corchete(recortada))
+        {
             break;
         }
         recortada = &recortada[..recortada.len() - ultimo.len_utf8()];
@@ -81,6 +89,14 @@ fn recortar(url: &str) -> &str {
 fn cierra_un_parentesis(url: &str) -> bool {
     let abiertos = url.chars().filter(|caracter| *caracter == '(').count();
     let cerrados = url.chars().filter(|caracter| *caracter == ')').count();
+    abiertos >= cerrados
+}
+
+/// ¿El `]` final cierra un corchete abierto dentro de la URL? (El de la
+/// dirección IPv6 de http://[::1] no es puntuación de la frase.)
+fn cierra_un_corchete(url: &str) -> bool {
+    let abiertos = url.chars().filter(|caracter| *caracter == '[').count();
+    let cerrados = url.chars().filter(|caracter| *caracter == ']').count();
     abiertos >= cerrados
 }
 

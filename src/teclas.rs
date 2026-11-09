@@ -77,10 +77,16 @@ pub fn es_prefijo(tecla: &KeyEvent, prefijo: (KeyCode, KeyModifiers)) -> bool {
 
 /// Traduce una tecla de crossterm a los bytes que espera un PTY remoto.
 ///
-/// La codificación es la del núcleo, la misma que usa la app móvil. El
-/// escritorio codifica en modo normal porque el parser de la sesión vive en el
-/// servidor; Ctrl, Alt y Mayús se traducen a la tabla de §7.6.
+/// La codificación es la del núcleo, la misma que usa la app móvil. Ctrl, Alt
+/// y Mayús se traducen a la tabla de §7.6.
 pub fn bytes_de_tecla(tecla: KeyEvent) -> Option<Vec<u8>> {
+    bytes_de_tecla_con_modo(tecla, ModoTerminal::default())
+}
+
+/// Igual, con los modos de la pestaña que recibe la tecla: cursor de
+/// aplicación, pegado entre corchetes y banderas del teclado de kitty (Fase
+/// 15).
+pub fn bytes_de_tecla_con_modo(tecla: KeyEvent, modo: ModoTerminal) -> Option<Vec<u8>> {
     let tecla_nucleo = match tecla.code {
         KeyCode::Char(caracter) => Tecla::Caracter(caracter),
         KeyCode::Enter => Tecla::Intro,
@@ -106,7 +112,7 @@ pub fn bytes_de_tecla(tecla: KeyEvent) -> Option<Vec<u8>> {
         alt: tecla.modifiers.contains(KeyModifiers::ALT),
         ctrl: tecla.modifiers.contains(KeyModifiers::CONTROL),
     };
-    codificar(tecla_nucleo, modificadores, ModoTerminal::default())
+    codificar(tecla_nucleo, modificadores, modo)
 }
 
 #[cfg(test)]

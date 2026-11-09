@@ -38,6 +38,42 @@ pub const PORTAPAPELES_MAX: usize = 1024 * 1024;
 /// Secuencia de ED 3 (borrar el historial guardado).
 const ED3: &[u8] = b"\x1b[3J";
 
+/// Tope de un OSC o DCS del remoto antes de descartarlo. Es el mismo tope que
+/// el del portapapeles (1 MiB): vte acumula el OSC entero en memoria y sin
+/// este corte un host podría agotarla con un solo OSC sin terminar.
+pub const OSC_MAX: usize = 1024 * 1024;
+
+/// Tamaño máximo de pantalla que se acepta. Un cliente roto o malicioso que
+/// pida 65535×65535 haría que vt100 reservara decenas de GB; por encima de
+/// esto se recorta.
+pub const MAX_FILAS: u16 = 1000;
+pub const MAX_COLUMNAS: u16 = 2000;
+
+/// Estado del filtro que acota los OSC/DCS antes de que vte los acumule.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FiltroOsc {
+    #[default]
+    Normal,
+    /// El byte anterior fue ESC.
+    Escape,
+    /// Dentro de un OSC/DCS, con los bytes vistos hasta ahora.
+    Dentro(usize),
+    /// Dentro de un OSC/DCS y el byte anterior fue ESC (posible ST).
+    DentroEscape {
+        bytes: usize,
+    },
+    /// OSC/DCS pasado de tope: se descarta hasta su terminador.
+    Descartando,
+    DescartandoEscape,
+}
+
+/// Posición del **último** ED 3 del flujo. Varios ED 3 en un lote solo dejan
+/// el historial vacío una vez: rehacer el parser por cada uno es un DoS de CPU
+/// con entrada no fiable.
+fn ultimo_ed3(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(ED3.len()).rposition(|ventana| ventana == ED3)
+}
+
 /// Colores del tema de la ventana, para responder a OSC 10, 11 y 12.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColoresTema {
@@ -146,6 +182,9 @@ pub struct Emulador {
     /// servidor (es el único que responde); el núcleo no conoce la versión de
     /// la app.
     version: String,
+    /// El siguiente OSC 52 llega truncado por el tope de memoria y hay que
+    /// descartarlo (vte despacha el OSC al cortarlo).
+    descartar_portapapeles: bool,
 }
 
 impl Default for Emulador {
@@ -163,7 +202,19 @@ impl Emulador {
             colores: ColoresTema::default(),
             modos: Modos::default(),
             version: "0.0.0".to_string(),
+            descartar_portapapeles: false,
         }
+    }
+
+    /// Marca que el siguiente OSC 52 está truncado y no debe guardarse.
+    pub fn descartar_siguiente_portapapeles(&mut self) {
+        self.descartar_portapapeles = true;
+    }
+
+    /// Consume la marca del OSC 52 truncado (la llaman los callbacks que
+    /// despachan el OSC cortado).
+    fn olvidar_portapapeles_truncado(&mut self) {
+        self.descartar_portapapeles = false;
     }
 
     /// Fija la versión del producto (p. ej. «1.4.0») que se responde en DA2 y
@@ -178,7 +229,10 @@ impl Emulador {
         let mayor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
         let menor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
         let parche: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        mayor * 10_000 + menor * 100 + parche
+        mayor
+            .saturating_mul(10_000)
+            .saturating_add(menor.saturating_mul(100))
+            .saturating_add(parche)
     }
 
     /// ¿Responde a las consultas del remoto?
@@ -210,6 +264,18 @@ impl Emulador {
     /// Se lleva las respuestas pendientes (una vez por lote).
     pub fn respuestas(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.modos.respuestas)
+    }
+
+    /// Vuelve a poner delante respuestas ya generadas antes de rehacer el
+    /// parser (si no, un lote con una consulta y un ED 3 perdería la
+    /// respuesta de la consulta).
+    pub fn anteponer_respuestas(&mut self, previas: Vec<u8>) {
+        if previas.is_empty() {
+            return;
+        }
+        let mut todas = previas;
+        todas.append(&mut self.modos.respuestas);
+        self.modos.respuestas = todas;
     }
 
     /// Se lleva el título pendiente de avisar a las ventanas.
@@ -306,7 +372,12 @@ impl vt100::Callbacks for Emulador {
         self.avisar("campana".to_string());
     }
 
+    fn set_window_icon_name(&mut self, _screen: &mut vt100::Screen, _icon_name: &[u8]) {
+        self.olvidar_portapapeles_truncado();
+    }
+
     fn set_window_title(&mut self, _screen: &mut vt100::Screen, titulo: &[u8]) {
+        self.olvidar_portapapeles_truncado();
         let texto = sanear(titulo);
         if !texto.is_empty() {
             self.modos.titulo = Some(texto);
@@ -314,6 +385,10 @@ impl vt100::Callbacks for Emulador {
     }
 
     fn copy_to_clipboard(&mut self, _screen: &mut vt100::Screen, _ty: &[u8], datos: &[u8]) {
+        if std::mem::take(&mut self.descartar_portapapeles) {
+            // OSC 52 cortado por el tope de memoria: no es una copia real.
+            return;
+        }
         // vt100 ya validó el alfabeto base64; aquí se decodifica, se acota a
         // 1 MiB y se descarta lo que no sea texto.
         let Ok(decodificado) = base64::engine::general_purpose::STANDARD.decode(datos) else {
@@ -329,6 +404,7 @@ impl vt100::Callbacks for Emulador {
     }
 
     fn paste_from_clipboard(&mut self, _screen: &mut vt100::Screen, _ty: &[u8]) {
+        self.olvidar_portapapeles_truncado();
         // Leer el portapapeles del usuario: nunca. Solo se apunta para las
         // pruebas.
         self.modos.portapapeles_pedido = true;
@@ -431,6 +507,7 @@ impl vt100::Callbacks for Emulador {
     }
 
     fn unhandled_osc(&mut self, _screen: &mut vt100::Screen, parametros: &[&[u8]]) {
+        self.olvidar_portapapeles_truncado();
         let mut partes = parametros
             .iter()
             .map(|parte| String::from_utf8_lossy(parte).to_string());
@@ -473,11 +550,6 @@ impl vt100::Callbacks for Emulador {
     }
 }
 
-/// Busca la primera aparición de ED 3 en `bytes`.
-fn buscar_ed3(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(ED3.len()).position(|ventana| ventana == ED3)
-}
-
 /// Si `bytes` acaba en un prefijo propio de ED 3, devuelve su longitud. El
 /// lote se retiene hasta el siguiente para no perder una secuencia partida.
 fn sufijo_parcial_ed3(bytes: &[u8]) -> Option<usize> {
@@ -498,6 +570,14 @@ pub struct PantallaEmulada {
     historial: usize,
     /// Resto de una posible secuencia ED 3 partida entre dos lotes.
     pendiente: Vec<u8>,
+    /// Estado del filtro que acota los OSC/DCS antes de vt100.
+    filtro: FiltroOsc,
+    /// Hay que rehacer el parser al volver a la pantalla principal (el tope
+    /// del historial bajó mientras estábamos en la alternativa).
+    rehacer_pendiente: bool,
+    /// Llegó ED 3 en la pantalla alternativa y hay que vaciar el historial de
+    /// la principal al volver.
+    ed3_pendiente: bool,
 }
 
 impl std::fmt::Debug for PantallaEmulada {
@@ -516,8 +596,8 @@ impl PantallaEmulada {
     /// guarda vt100 (0 = sin historial).
     #[must_use]
     pub fn nueva(filas: u16, columnas: u16, historial: usize, responder: bool) -> Self {
-        let filas = filas.max(1);
-        let columnas = columnas.max(1);
+        let filas = filas.clamp(1, MAX_FILAS);
+        let columnas = columnas.clamp(1, MAX_COLUMNAS);
         Self {
             parser: vt100::Parser::new_with_callbacks(
                 filas,
@@ -529,6 +609,9 @@ impl PantallaEmulada {
             columnas,
             historial,
             pendiente: Vec::new(),
+            filtro: FiltroOsc::Normal,
+            rehacer_pendiente: false,
+            ed3_pendiente: false,
         }
     }
 
@@ -584,25 +667,33 @@ impl PantallaEmulada {
     /// Procesa un lote del remoto y devuelve las respuestas que haya que
     /// escribirle (vacío en el cliente).
     ///
-    /// Parte el lote en ED 3: rehace el parser conservando su estado, que es
-    /// la única forma de vaciar el historial de vt100 0.16. Si la secuencia
-    /// viene partida entre lotes, retiene su prefijo hasta el siguiente.
+    /// Antes de llegar a vt100, los OSC/DCS se acotan a `OSC_MAX` para que un
+    /// host no pueda agotar la memoria con un OSC sin terminar. Del resto, se
+    /// procesa todo hasta el **último** ED 3 y se rehace el parser una sola
+    /// vez (el estado final es el mismo; rehacerlo por cada ED 3 sería un DoS
+    /// de CPU con entrada no fiable). Las respuestas ya generadas se
+    /// conservan. Si la secuencia viene partida entre lotes, se retiene su
+    /// prefijo hasta el siguiente.
     pub fn procesar(&mut self, datos: &[u8]) -> Vec<u8> {
+        self.aplicar_pendientes();
         let mut flujo = std::mem::take(&mut self.pendiente);
         flujo.extend_from_slice(datos);
+        let flujo = self.filtrar_osc(&flujo);
+        let mut respuestas_previas = Vec::new();
         let mut inicio = 0usize;
-        while let Some(relativo) = buscar_ed3(&flujo[inicio..]) {
-            let posicion = inicio + relativo;
-            if posicion > inicio {
-                self.parser.process(&flujo[inicio..posicion]);
+        if let Some(posicion) = ultimo_ed3(&flujo) {
+            self.parser.process(&flujo[..posicion]);
+            // Las respuestas de lo procesado antes del ED 3 no se pierden.
+            respuestas_previas = self.parser.callbacks_mut().respuestas();
+            let alternativa = self.parser.screen().alternate_screen();
+            if alternativa {
+                // vt100 no deja leer la pantalla principal desde la
+                // alternativa: el borrado se aplica al volver a ella.
+                self.ed3_pendiente = true;
+            } else if self.lineas_historial() > 0 {
+                self.rehacer_parser(false);
             }
             self.parser.callbacks_mut().modos.ed3 = true;
-            // En la pantalla alternativa no hay historial que vaciar y rehacer
-            // el parser perdería la pantalla principal, que vt100 no deja
-            // leer desde ahí: se ignora el borrado.
-            if !self.parser.screen().alternate_screen() {
-                self.rehacer_parser();
-            }
             inicio = posicion + ED3.len();
         }
         let resto = &flujo[inicio..];
@@ -620,22 +711,51 @@ impl PantallaEmulada {
                 }
             }
         }
-        self.parser.callbacks_mut().respuestas()
+        self.aplicar_pendientes();
+        let mut respuestas = self.parser.callbacks_mut().respuestas();
+        if !respuestas_previas.is_empty() {
+            let mut todas = respuestas_previas;
+            todas.append(&mut respuestas);
+            respuestas = todas;
+        }
+        respuestas
     }
 
     /// Redimensiona la pestaña. Si el tope de historial baja, se rehace el
-    /// parser con el tope nuevo (y se pierden las líneas más viejas); si sube
-    /// o no cambia, basta con redimensionar la pantalla.
+    /// parser con el tope nuevo conservando las líneas más nuevas; si sube o
+    /// no cambia, basta con redimensionar la pantalla. En la pantalla
+    /// alternativa el rehacer se aplaza para no perder la principal.
     pub fn redimensionar(&mut self, filas: u16, columnas: u16, historial: usize) {
-        let filas = filas.max(1);
-        let columnas = columnas.max(1);
+        let filas = filas.clamp(1, MAX_FILAS);
+        let columnas = columnas.clamp(1, MAX_COLUMNAS);
         self.filas = filas;
         self.columnas = columnas;
+        self.parser.screen_mut().set_size(filas, columnas);
         if historial < self.historial {
             self.historial = historial;
-            self.rehacer_parser();
-        } else {
-            self.parser.screen_mut().set_size(filas, columnas);
+            if self.parser.screen().alternate_screen() {
+                self.rehacer_pendiente = true;
+            } else {
+                self.rehacer_parser(true);
+            }
+        }
+    }
+
+    /// Aplica lo que quedó pendiente mientras estábamos en la pantalla
+    /// alternativa, ya de vuelta en la principal.
+    fn aplicar_pendientes(&mut self) {
+        if self.parser.screen().alternate_screen() {
+            return;
+        }
+        if self.ed3_pendiente {
+            self.ed3_pendiente = false;
+            if self.lineas_historial() > 0 {
+                self.rehacer_parser(false);
+            }
+        }
+        if self.rehacer_pendiente {
+            self.rehacer_pendiente = false;
+            self.rehacer_parser(true);
         }
     }
 
@@ -657,19 +777,46 @@ impl PantallaEmulada {
 
     /// Vacía el historial conservando la pantalla y los modos (ED 3).
     pub fn vaciar_historial(&mut self) {
-        self.rehacer_parser();
+        self.aplicar_pendientes();
+        if self.parser.screen().alternate_screen() {
+            self.ed3_pendiente = true;
+        } else if self.lineas_historial() > 0 {
+            self.rehacer_parser(false);
+        }
     }
 
     /// Rehace el parser con su estado. vt100 no permite vaciar su historial ni
     /// cambiar su capacidad, así que la pantalla, los modos de entrada y el
-    /// emulador se trasladan a un parser nuevo.
-    fn rehacer_parser(&mut self) {
+    /// emulador se trasladan a un parser nuevo. Con `conservar`, se reinyectan
+    /// las líneas más nuevas del historial (sin estilos) para no perderlas al
+    /// bajar su tope; sin él, el historial queda vacío (ED 3).
+    fn rehacer_parser(&mut self, conservar: bool) {
         let alternativa = self.parser.screen().alternate_screen();
         let estado = self.parser.screen().state_formatted();
         let responder = self.parser.callbacks().responder();
+        // Las respuestas ya generadas en este lote se conservan.
+        let previas = self.parser.callbacks_mut().respuestas();
+        let nuevas = if conservar && !alternativa {
+            let tope = self.historial;
+            self.leer_ultimas_historial(tope)
+        } else {
+            Vec::new()
+        };
         let emulador = std::mem::replace(self.parser.callbacks_mut(), Emulador::nuevo(responder));
         let mut nuevo =
             vt100::Parser::new_with_callbacks(self.filas, self.columnas, self.historial, emulador);
+        if !nuevas.is_empty() {
+            // Se reinyectan como texto (los estilos de las líneas más viejas
+            // no llegan a vt100 por su API) y se empujan fuera de la pantalla
+            // antes de restaurar la principal.
+            for linea in &nuevas {
+                nuevo.process(linea.as_bytes());
+                nuevo.process(b"\r\n");
+            }
+            for _ in 0..self.filas {
+                nuevo.process(b"\r\n");
+            }
+        }
         // `state_formatted` no lleva el modo de pantalla alternativa: se
         // restaura antes del volcado.
         if alternativa {
@@ -677,7 +824,106 @@ impl PantallaEmulada {
         }
         nuevo.process(&estado);
         let _ = nuevo.callbacks_mut().respuestas();
+        nuevo.callbacks_mut().anteponer_respuestas(previas);
         self.parser = nuevo;
+    }
+
+    /// Texto de las `tope` filas más nuevas del historial, de la más vieja a la
+    /// más nueva. Deja la vista al final.
+    fn leer_ultimas_historial(&mut self, tope: usize) -> Vec<String> {
+        let total = self.lineas_historial();
+        let desde = total.saturating_sub(tope);
+        let mut lineas = Vec::with_capacity(total - desde);
+        for indice in desde..total {
+            self.parser.screen_mut().set_scrollback(total - indice);
+            let texto = self.parser.screen().contents_between(0, 0, 1, 0);
+            let texto = texto.strip_suffix('\n').unwrap_or(&texto).trim_end();
+            lineas.push(texto.to_string());
+        }
+        self.parser.screen_mut().set_scrollback(0);
+        lineas
+    }
+
+    /// Acota los OSC/DCS antes de que vte los acumule. Un OSC/DCS que pase de
+    /// `OSC_MAX` se aborta con CAN y se descarta hasta su terminador.
+    fn filtrar_osc(&mut self, datos: &[u8]) -> Vec<u8> {
+        if self.filtro == FiltroOsc::Normal && !datos.contains(&0x1b) {
+            return datos.to_vec();
+        }
+        let mut salida = Vec::with_capacity(datos.len());
+        for &byte in datos {
+            match self.filtro {
+                FiltroOsc::Normal => {
+                    salida.push(byte);
+                    if byte == 0x1b {
+                        self.filtro = FiltroOsc::Escape;
+                    }
+                }
+                FiltroOsc::Escape => {
+                    salida.push(byte);
+                    match byte {
+                        b']' | b'P' => self.filtro = FiltroOsc::Dentro(0),
+                        0x1b => {}
+                        _ => self.filtro = FiltroOsc::Normal,
+                    }
+                }
+                FiltroOsc::Dentro(vistos) => {
+                    if byte == 0x07 {
+                        salida.push(byte);
+                        self.filtro = FiltroOsc::Normal;
+                    } else if byte == 0x1b {
+                        salida.push(byte);
+                        self.filtro = FiltroOsc::DentroEscape { bytes: vistos };
+                    } else {
+                        salida.push(byte);
+                        self.un_byte_de_osc(vistos + 1, &mut salida);
+                    }
+                }
+                FiltroOsc::DentroEscape { bytes } => {
+                    salida.push(byte);
+                    if byte == b'\\' {
+                        self.filtro = FiltroOsc::Normal;
+                    } else if byte == 0x1b {
+                        self.filtro = FiltroOsc::DentroEscape { bytes };
+                    } else if byte == 0x07 {
+                        self.filtro = FiltroOsc::Normal;
+                    } else {
+                        self.un_byte_de_osc(bytes + 1, &mut salida);
+                    }
+                }
+                FiltroOsc::Descartando => {
+                    if byte == 0x1b {
+                        self.filtro = FiltroOsc::DescartandoEscape;
+                    } else if byte == 0x07 {
+                        self.filtro = FiltroOsc::Normal;
+                    }
+                }
+                FiltroOsc::DescartandoEscape => {
+                    if byte == b'\\' {
+                        self.filtro = FiltroOsc::Normal;
+                    } else if byte != 0x1b {
+                        self.filtro = FiltroOsc::Descartando;
+                    }
+                }
+            }
+        }
+        salida
+    }
+
+    fn un_byte_de_osc(&mut self, vistos: usize, salida: &mut Vec<u8>) {
+        if vistos > OSC_MAX {
+            // vte despacha el OSC al terminarlo, aunque sea a trozos: se cierra
+            // aquí con BEL para que suelte el búfer y se descarta lo que
+            // venga hasta el terminador real. Si era un OSC 52, el callback
+            // lo ignora por la marca.
+            self.parser
+                .callbacks_mut()
+                .descartar_siguiente_portapapeles();
+            salida.push(0x07);
+            self.filtro = FiltroOsc::Descartando;
+        } else {
+            self.filtro = FiltroOsc::Dentro(vistos);
+        }
     }
 }
 
@@ -915,16 +1161,26 @@ mod pruebas {
     }
 
     #[test]
-    fn redimensionar_por_debajo_del_tope_rehace_el_historial() {
+    fn redimensionar_por_debajo_del_tope_conserva_las_lineas_nuevas() {
         let mut pantalla = pantalla(2, 10, 100, false);
-        for linea in 0..5 {
+        for linea in 0..8 {
             pantalla.procesar(format!("linea{linea}\r\n").as_bytes());
         }
-        assert!(pantalla.lineas_historial() > 0);
-        pantalla.redimensionar(2, 10, 50);
-        assert_eq!(pantalla.lineas_historial(), 0);
-        assert_eq!(pantalla.tope_historial(), 50);
-        assert!(pantalla.screen().contents().contains("linea4"));
+        let antes = pantalla.lineas_historial();
+        assert!(antes > 2);
+        pantalla.redimensionar(2, 10, 2);
+        assert_eq!(pantalla.tope_historial(), 2);
+        let despues = pantalla.lineas_historial();
+        assert!(despues > 0, "al bajar el tope no se pierde todo");
+        assert!(despues <= 2, "no se pasa del tope nuevo: {despues}");
+        assert!(
+            pantalla.screen().contents().contains("linea7"),
+            "la pantalla se conserva"
+        );
+        // Y el texto más nuevo reinyectado sigue estando en el historial.
+        let captura = crate::terminal::historial::capturar(&mut pantalla);
+        let textos: Vec<String> = captura.lineas.iter().map(|linea| linea.texto()).collect();
+        assert!(textos.iter().any(|texto| texto == "linea7"));
     }
 
     #[test]
@@ -932,5 +1188,113 @@ mod pruebas {
         let mut pantalla = pantalla(4, 10, 0, true);
         let respuestas = pantalla.procesar(b"hola\x1b[3;5H\x1b[6n\x1b[c");
         assert_eq!(respuestas, b"\x1b[3;5R\x1b[?62;22c");
+    }
+
+    #[test]
+    fn miles_de_ed_3_en_un_lote_no_bloquean() {
+        // Antes se rehacía el parser por cada ED 3: 5.000 ED3 tardaban segundos
+        // y bloqueaban el bucle de lectura (DoS de entrada no fiable).
+        let mut pantalla = pantalla(24, 80, 100, false);
+        for linea in 0..50 {
+            pantalla.procesar(format!("linea{linea}\r\n").as_bytes());
+        }
+        let ed3 = b"\x1b[3J";
+        let mut lote = Vec::with_capacity(ed3.len() * 5000);
+        for _ in 0..5000 {
+            lote.extend_from_slice(ed3);
+        }
+        let inicio = std::time::Instant::now();
+        pantalla.procesar(&lote);
+        let transcurrido = inicio.elapsed();
+        assert!(
+            transcurrido < std::time::Duration::from_millis(500),
+            "5.000 ED 3 tardaron {transcurrido:?}"
+        );
+        assert_eq!(pantalla.lineas_historial(), 0);
+    }
+
+    #[test]
+    fn un_ed_3_con_una_consulta_en_el_mismo_lote_conserva_la_respuesta() {
+        let mut pantalla = pantalla(24, 80, 100, true);
+        for linea in 0..10 {
+            pantalla.procesar(format!("linea{linea}\r\n").as_bytes());
+        }
+        let respuestas = pantalla.procesar(b"\x1b[c\x1b[3J");
+        assert_eq!(respuestas, b"\x1b[?62;22c");
+        assert_eq!(pantalla.lineas_historial(), 0);
+    }
+
+    #[test]
+    fn un_osc_gigante_se_descarta_sin_llegar_al_parser() {
+        let mut pantalla = pantalla(4, 20, 100, false);
+        pantalla.procesar(b"antes");
+        // Un OSC de 2 MiB que nunca termina: se aborta a 1 MiB y el resto se
+        // descarta hasta el terminador; la pantalla no cambia.
+        pantalla.procesar(b"\x1b]52;c;");
+        let trozo = vec![b'A'; 64 * 1024];
+        for _ in 0..32 {
+            pantalla.procesar(&trozo);
+        }
+        pantalla.procesar(b"\x07");
+        assert!(pantalla.screen().contents().contains("antes"));
+        pantalla.procesar(b"\r\ndespues");
+        assert!(pantalla.screen().contents().contains("despues"));
+    }
+
+    #[test]
+    fn ed_3_en_la_alternativa_vacia_el_historial_al_volver() {
+        let mut pantalla = pantalla(2, 10, 100, false);
+        for linea in 0..8 {
+            pantalla.procesar(format!("linea{linea}\r\n").as_bytes());
+        }
+        assert!(pantalla.lineas_historial() > 0);
+        pantalla.procesar(b"\x1b[?1049h");
+        pantalla.procesar(b"\x1b[3J");
+        pantalla.procesar(b"\x1b[?1049l");
+        pantalla.procesar(b"x");
+        assert_eq!(
+            pantalla.lineas_historial(),
+            0,
+            "el ED 3 se aplica al volver"
+        );
+        assert!(pantalla.screen().contents().contains("linea7"));
+    }
+
+    #[test]
+    fn el_resize_en_la_alternativa_conserva_la_principal() {
+        let mut pantalla = pantalla(4, 10, 100, false);
+        pantalla.procesar(b"principal");
+        pantalla.procesar(b"\x1b[?1049h");
+        // Texto corto: vt100 borra las marcas de envoltura en cualquier
+        // set_size y una línea partida se vería en dos filas.
+        pantalla.procesar(b"alt");
+        pantalla.redimensionar(4, 10, 2);
+        assert!(pantalla.screen().alternate_screen());
+        assert!(pantalla.screen().contents().contains("alt"));
+        pantalla.procesar(b"\x1b[?1049l");
+        pantalla.procesar(b"x");
+        assert!(
+            pantalla.screen().contents().contains("principal"),
+            "la pantalla principal no se pierde al redimensionar en la alternativa"
+        );
+    }
+
+    #[test]
+    fn las_pantallas_gigantes_se_recortan() {
+        let mut pantalla = pantalla(u16::MAX, u16::MAX, 0, false);
+        assert_eq!(pantalla.filas(), MAX_FILAS);
+        assert_eq!(pantalla.columnas(), MAX_COLUMNAS);
+        pantalla.procesar(b"hola");
+        assert!(pantalla.screen().contents().contains("hola"));
+    }
+
+    #[test]
+    fn la_version_de_da2_no_desborda() {
+        let mut pantalla = pantalla(4, 10, 0, true);
+        pantalla
+            .emulador_mut()
+            .fijar_version("4294967295.4294967295.4294967295");
+        let respuestas = pantalla.procesar(b"\x1b[>c");
+        assert!(!respuestas.is_empty());
     }
 }

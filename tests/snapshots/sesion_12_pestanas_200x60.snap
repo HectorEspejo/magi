@@ -3,8 +3,9 @@ source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIÓN ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── mac-mini-m1 (2) ─
 ‹ ● mac-mini-m1 │ ◐ dgx-spark │ ● rincon-dev │ ● backup-nas │ ◐ hetzner-01 (2) │ ● hetzner-02 (2) │ ● vps-openclaw… │ ▸● mac-mini-m1 (… │ ● dgx-spark (2) │ + nueva  · 12 sesiones: usa ‹ › o la lista
+▸● mac-mini-m1 (…───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 root@hetzner-01:~# htop
-  (htop repintado a 200x56)
+  (htop repintado a 200x55)
 █
 
 
@@ -58,5 +59,4 @@ root@hetzner-01:~# htop
 
 
 
-
- ● 11/12 · mac-mini-m1 · conectado 18 m · clave · 200×56 · carga 9.6 · 1 ventana · Ctrl+] ? ayuda
+ ● 11/12 · mac-mini-m1 · conectado 18 m · clave · carga 9.6 · 200×55 · 1 ventana · Ctrl+] ? ayuda

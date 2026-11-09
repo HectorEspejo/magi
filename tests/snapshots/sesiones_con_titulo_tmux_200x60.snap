@@ -1,0 +1,63 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIONES · 1 sesiones · 1 ventanas ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ESTADO PESTAÑA            TIPO  HOST             TIEMPO     TÍTULO                                                                                                              IDENTIDAD        VENT.
+▸ ● !    web-01             SSH   web-01           2 h 03 m   Claude Code                                                                                                         clave            1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  web-01 · clave
+  servidor pid N · protocolo 9 · desde hace NN s
+
+
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use magi::protocolo::MensajeCliente;
+use magi::protocolo::{MensajeCliente, MensajeServidor};
 use magi_nucleo::terminal::pegado::{pegar, sanear};
 use magi_nucleo::terminal::raton::{
     codificar as codificar_raton, Accion, Boton, Codificacion, Evento, Modo, ModoRaton,
@@ -84,6 +84,23 @@ fn tui_prueba_recibe_respuestas_pegado_y_mayus_intro() {
         .await;
         let host_id = escenario.hosts[0];
         let sesion_id = escenario.abrir_sesion(host_id).await;
+        // El servidor solo reenvía las teclas de una ventana adjunta.
+        escenario
+            .enviar(&MensajeCliente::Adjuntar {
+                sesion_id,
+                cols: 80,
+                filas: 24,
+                colores: None,
+            })
+            .await;
+        escenario
+            .esperar(|mensaje| {
+                matches!(
+                    mensaje,
+                    MensajeServidor::PantallaCompleta { sesion_id: id, .. } if *id == sesion_id
+                )
+            })
+            .await;
 
         // 1. Las consultas del programa al arrancar: el servidor responde.
         esperar_programa(&escenario, "LISTO").await;
@@ -99,9 +116,12 @@ fn tui_prueba_recibe_respuestas_pegado_y_mayus_intro() {
         }
         // Una respuesta por consulta, aunque la pestaña esté adjunta a una
         // ventana: DA1 solo aparece una vez en lo recibido.
+        // Las consultas se escriben sin salto, así que la línea de RECIBIDO
+        // puede ir pegada a ellas: se busca el texto, no el principio de línea.
         let recibido = salida
-            .lines()
-            .find(|linea| linea.starts_with("RECIBIDO "))
+            .split("RECIBIDO ")
+            .nth(1)
+            .and_then(|resto| resto.split('\r').next())
             .unwrap_or_default();
         let da1 = "1b5b3f36323b323263"; // ESC [ ? 6 2 ; 2 2 c
         assert_eq!(

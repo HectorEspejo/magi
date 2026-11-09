@@ -121,11 +121,11 @@ impl Extremo {
 #[test]
 fn una_ventana_cada_tamano_llega_al_remoto() {
     let mut e = Extremo::con_pestana(100, 30);
-    assert_eq!(e.observado.ptys(), vec![(100, 26)]);
+    assert_eq!(e.observado.ptys(), vec![(100, 25)]);
 
     e.redimensionar(80, 24);
     assert!(
-        e.hasta(|_, o| o.tamanos().last() == Some(&(80, 20))),
+        e.hasta(|_, o| o.tamanos().last() == Some(&(80, 19))),
         "{:?}",
         e.observado.tamanos()
     );
@@ -133,7 +133,7 @@ fn una_ventana_cada_tamano_llega_al_remoto() {
     // Crecer también llega (antes el remoto se quedaba en el tamaño menor).
     e.redimensionar(120, 40);
     assert!(
-        e.hasta(|_, o| o.tamanos().last() == Some(&(120, 36))),
+        e.hasta(|_, o| o.tamanos().last() == Some(&(120, 35))),
         "{:?}",
         e.observado.tamanos()
     );
@@ -141,13 +141,13 @@ fn una_ventana_cada_tamano_llega_al_remoto() {
         e.hasta(|app, _| {
             app.pantallas
                 .contenido(app.pestanas[0].sesion_id)
-                .is_some_and(|contenido| contenido.contains("TAM 120x36"))
+                .is_some_and(|contenido| contenido.contains("TAM 120x35"))
         }),
         "la pestaña no muestra el tamaño nuevo"
     );
     e.bombear(100);
-    assert!(e.texto().contains("TAM 120x36"), "{}", e.texto());
-    assert_eq!(e.observado.tamanos(), vec![(80, 20), (120, 36)]);
+    assert!(e.texto().contains("TAM 120x35"), "{}", e.texto());
+    assert_eq!(e.observado.tamanos(), vec![(80, 19), (120, 35)]);
 }
 
 /// Dos ventanas en la misma pestaña: manda la menor, la mayor rellena con `░`
@@ -156,7 +156,7 @@ fn una_ventana_cada_tamano_llega_al_remoto() {
 #[test]
 fn dos_ventanas_manda_la_menor_y_al_cerrarse_vuelve_la_mayor() {
     let mut e = Extremo::con_pestana(200, 50);
-    assert_eq!(e.observado.ptys(), vec![(200, 46)]);
+    assert_eq!(e.observado.ptys(), vec![(200, 45)]);
     let sesion_id = e.sesion_id();
 
     let mut segunda = e.rt.block_on(e.esc.otra_ventana());
@@ -189,7 +189,7 @@ fn dos_ventanas_manda_la_menor_y_al_cerrarse_vuelve_la_mayor() {
 
     drop(segunda);
     assert!(
-        e.hasta(|_, o| o.tamanos().last() == Some(&(180, 40))),
+        e.hasta(|_, o| o.tamanos().last() == Some(&(180, 39))),
         "{:?}",
         e.observado.tamanos()
     );

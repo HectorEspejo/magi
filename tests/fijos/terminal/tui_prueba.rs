@@ -4,9 +4,10 @@
 //! visto, para que las pruebas de extremo a extremo lo comprueben.
 //!
 //! Se compila en la propia prueba con rustc y se ejecuta en el servidor SSH de
-//! pruebas como programa de la sesión. Solo usa la biblioteca estándar: deja el
-//! terminal en modo no canónico y sin eco con stty (stdin es el PTY) y escribe
-//! por stdout. Por stdout salen líneas de la forma:
+//! pruebas como programa de la sesión. Solo usa la biblioteca estándar: un hilo
+//! lee la entrada estándar y el principal la consume con plazo, porque la
+//! entrada puede ser un tubo (no un PTY) y una lectura bloqueante no volvería.
+//! Por stdout salen líneas de la forma:
 //!   RECIBIDO <hex>          bytes que llegaron del terminal, hasta el momento
 //!   CHECK DA1=ok|no         respuesta a DA1
 //!   CHECK DA2=ok|no         respuesta a DA2
@@ -18,15 +19,15 @@
 //!   MAYUS_INTRO             llegó CSI 13;2u (Mayús+Intro del teclado de kitty)
 //!   RATON <hex>             llegó un evento de ratón SGR
 //!   FIN                     fin de la entrada estándar
-//!
-//! Comprobaciones de respaldo: el escenario escribe las secuencias que usa una
-//! TUI moderna; si el terminal contesta, se ve en CHECK.
 
 use std::io::{Read, Write};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn poner_modo_crudo() {
+    // Con un PTY de verdad, sin eco ni modo canónico. Con un tubo falla y no
+    // pasa nada: el hilo lector lee igual.
     let _ = Command::new("stty")
         .args(["-icanon", "-echo", "min", "0", "time", "5"])
         .status();
@@ -46,27 +47,35 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Lee lo que haya disponible hasta que el terminal deje de mandar (stty con
-/// min 0 y time 5 hace que read devuelva 0 al medio segundo sin datos).
-fn leer_disponible(espera_maxima: Duration) -> Vec<u8> {
-    let mut acumulado = Vec::new();
-    let inicio = Instant::now();
-    let mut buffer = [0u8; 1024];
-    loop {
-        match std::io::stdin().read(&mut buffer) {
-            Ok(0) => {
-                if inicio.elapsed() >= espera_maxima || !acumulado.is_empty() {
-                    break;
+/// Lanza el hilo que lee la entrada estándar y devuelve su receptor. El
+/// receptor se cierra cuando la entrada termina.
+fn lector_de_entrada() -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut entrada = std::io::stdin();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match entrada.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(leidos) => {
+                    if tx.send(buffer[..leidos].to_vec()).is_err() {
+                        break;
+                    }
                 }
             }
-            Ok(leidos) => acumulado.extend_from_slice(&buffer[..leidos]),
+        }
+    });
+    rx
+}
+
+/// Acumula lo que llegue hasta `silencio` sin datos nuevos.
+fn leer_hasta_silencio(rx: &mpsc::Receiver<Vec<u8>>, silencio: Duration, acumulado: &mut Vec<u8>) {
+    loop {
+        match rx.recv_timeout(silencio) {
+            Ok(nuevos) => acumulado.extend_from_slice(&nuevos),
             Err(_) => break,
         }
-        if inicio.elapsed() >= espera_maxima {
-            break;
-        }
     }
-    acumulado
 }
 
 fn check(nombre: &str, todo: &[u8], esperado: &[u8]) {
@@ -76,10 +85,11 @@ fn check(nombre: &str, todo: &[u8], esperado: &[u8]) {
 
 fn main() {
     poner_modo_crudo();
+    let rx = lector_de_entrada();
     // 1. Consultas: lo que Claude Code pregunta al arrancar.
     escribir(b"\x1b[c\x1b[>c\x1b[?u\x1b[?2026$p\x1b[?2004$p\x1b]11;?\x07");
-    std::thread::sleep(Duration::from_millis(300));
-    let respuestas = leer_disponible(Duration::from_millis(1500));
+    let mut respuestas = Vec::new();
+    leer_hasta_silencio(&rx, Duration::from_millis(700), &mut respuestas);
     informar(&format!("RECIBIDO {}", hex(&respuestas)));
     check("DA1", &respuestas, b"\x1b[?62;22c");
     check("DA2", &respuestas, b"\x1b[>0;10400;0c");
@@ -102,15 +112,11 @@ fn main() {
     // 3. Entrada: el pegado, Mayús+Intro y el ratón que manda el terminal.
     let mut todo = Vec::new();
     loop {
-        let antes = todo.len();
-        let nuevos = leer_disponible(Duration::from_millis(4000));
-        if nuevos.is_empty() {
-            if antes == 0 {
-                continue;
-            }
-            break;
+        match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(nuevos) => todo.extend_from_slice(&nuevos),
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        todo.extend_from_slice(&nuevos);
         if contiene(&todo, b"\x1b[200~") {
             let pegado = trozo_pegado(&todo);
             let lineas = pegado.iter().filter(|b| **b == b'\r').count();
@@ -130,8 +136,7 @@ fn main() {
                 .map(|p| desde + p + 1)
                 .unwrap_or(todo.len());
             informar(&format!("RATON {}", hex(&todo[desde..hasta])));
-            let sobrante = todo[hasta..].to_vec();
-            todo = sobrante;
+            todo = todo[hasta..].to_vec();
         }
     }
     informar("FIN");

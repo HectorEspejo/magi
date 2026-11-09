@@ -411,5 +411,6 @@ pub fn sesion(id: u32, host: &str) -> InfoSesion {
         titulo: None,
         aviso: None,
         tmux: None,
+        escritura_varios: false,
     }
 }

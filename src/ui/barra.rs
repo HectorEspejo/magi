@@ -418,18 +418,24 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             atajos.push(Atajo::new("esc", "descartar", 1));
             atajos
         }
-        Vista::Tuneles => vec![
-            Atajo::new(mover, "mover", 4),
-            Atajo::new("espacio", "activar/parar", 1),
-            Atajo::new("n", "nuevo", 2),
-            Atajo::new("e", "editar", 2),
-            Atajo::new("x", "borrar", 3),
-            Atajo::new("a", "auto", 3),
-            Atajo::new("r", "relanzar", 3),
-            Atajo::new(intro, "detalle", 1),
-            Atajo::new("/", "filtrar", 2),
-            Atajo::new("q", "volver", 3),
-        ],
+        Vista::Tuneles => {
+            let mut atajos = vec![
+                Atajo::new(mover, "mover", 4),
+                Atajo::new("espacio", "activar/parar", 1),
+                Atajo::new("n", "nuevo", 2),
+                Atajo::new("e", "editar", 2),
+                Atajo::new("x", "borrar", 3),
+                Atajo::new("a", "auto", 3),
+                Atajo::new("r", "relanzar", 3),
+                Atajo::new(intro, "detalle", 1),
+                Atajo::new("/", "filtrar", 2),
+                Atajo::new("q", "volver", 3),
+            ];
+            if !app.tuneles_temporales.is_empty() {
+                atajos.push(Atajo::new("temporal", "se cierra con su pestaña", 1));
+            }
+            atajos
+        }
         Vista::Snippets => vec![
             Atajo::new(intro, "ejecutar", 1),
             Atajo::new("a", "en todos", 2),

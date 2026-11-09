@@ -1,0 +1,63 @@
+---
+source: tests/terminal_ui.rs
+---
+┌ MAGI · HOST · web-01 · editar · #1 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│                                        IDENTIFICACIÓN                                                                                                                                                │
+│                                         Nombre       [ web-01 ]                                                                                                                                      │
+│                                         Dirección    [ 192.0.2.10 ]                                                                                                                                  │
+│                                         Puerto       [ 22 ]     Grupo sin grupo                  ▾                                                                                                   │
+│                                         Etiquetas    [  ]                                                                                                                                            │
+│                                                                                                                                                                                                      │
+│                                        ACCESO                                                                                                                                                        │
+│                                         Usuario      [  ]                                                                                                                                            │
+│                                         Identidad    [ auto                                     ▾ ]                                                                                                  │
+│                                         Salto vía    [ ninguno                                  ▾ ]                                                                                                  │
+│                                                                                                                                                                                                      │
+│                                        AL CONECTAR                                                                                                                                                   │
+│                                         Snippet      [ ninguno                                  ▾ ]                                                                                                  │
+│                                         Multiplexar   [ ] ControlMaster auto al exportar                                                                                                             │
+│                                         Mantener      [x] keepalive cada [ 30 ] s                                                                                                                    │
+│                                                                                                                                                                                                      │
+│                                        VERIFICACIONES PREVIAS (deliberación MAGI)                                                                                                                    │
+│                                         [ ] salud del host (último sondeo NOMINAL < 5 min)                                                                                                           │
+│                                         [ ] backup reciente   ruta [  ]                                                                                                                              │
+│                                                               patrón [  ]  (< 24 h)                                                                                                                  │
+│                                         [ ] tests en verde    [  ]                                                                                                                                   │
+│                                        TERMINAL (solo en este equipo)                                                                                                                                │
+│                                         [x] Reconectar solo si se cae la red                                                                                                                         │
+│                                         [ ] Sesión persistente con tmux                                                                                                                              │
+│                                         [ ] Permitir que el host copie al portapapeles  (OSC 52; leerlo, nunca)                                                                                      │
+│                                         Espacio marca · Tab siguiente · Ctrl+S guardar                                                                                                               │
+│                                                                                                                                                                                                      │
+│                                         TÚNELES                                                                                                       n nuevo                                        │
+│                                           aún no hay túneles: n para crear uno                                                                                                                       │
+│                                         COMPROBACIONES                                                                                                n nueva                                        │
+│                                           aún no hay comprobaciones propias: n para crear una                                                                                                        │
+│                                       ┌ SERVICIOS (systemd, una por línea) ──────────────────────┐┌ OPCIONES EXTRA (ssh_config, una por línea) ──────────────┐                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       │                                                          ││                                                          │                                       │
+│                                       └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  ^t probar conexión  u servicios  esc descartar

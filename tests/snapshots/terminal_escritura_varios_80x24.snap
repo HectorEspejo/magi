@@ -1,0 +1,27 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN · LADO A LADO ────────────────────────────────────────── web-01 ─
+▸● 1 web-01 │ ● 2 │ +
+ » ESCRIBIENDO EN 2 PANELES · prefijo E para parar  2 sesiones
+▸● web-01 »─────────────────────────────  ● web-02 »────────────────────────────
+█                                        █
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ● 1/2 · » escribiendo en 2 paneles · ^] E parar · ^] ?
+ escribiendo en 2 paneles · prefijo E para parar

@@ -802,7 +802,13 @@ async fn un_host_borrado_durante_la_ejecucion_anota_con_host_nulo() {
 /// que repite (el snippet al conectar), no el de «abrir en pestaña».
 #[tokio::test]
 async fn el_comando_inicial_se_escribe_y_solo_el_que_repite_al_reconectar() {
-    let mut escenario = escenario(OpcionesEscenario::default()).await;
+    // La reconexión que prueba es la manual (prefijo r): sin la automática de
+    // la Fase 15, que reabriría sola antes de que la prueba la pida.
+    let mut escenario = escenario(OpcionesEscenario {
+        reconectar: Some(false),
+        ..Default::default()
+    })
+    .await;
     let host = escenario.hosts[0];
     let conocidas: HashSet<u32> = HashSet::new();
     escenario

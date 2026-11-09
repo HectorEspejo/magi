@@ -1,0 +1,27 @@
+---
+source: tests/terminal_ui.rs
+---
+┌ TÚNELES · 0 · 0 activos · 1 temporales ──────────────────────────────────────┐
+│  (sin túneles definidos)                                                     │
+│ ── TEMPORALES (1) · se cierran con su pestaña                                │
+│  ⇅ temporal · web-01 · 127.0.0.1:54321 → localhost:8000 · 2 conex. · sesión …│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└ temporales 1 ────────────────────────────────────────────────────────────────┘
+ espacio activar/parar  ↵ detalle  temporal se cierra con su pestaña  ? más

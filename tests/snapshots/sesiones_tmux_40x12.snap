@@ -1,0 +1,15 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · TMUX · web-01 ─────────────────
+  SESIÓN                       ENGANCHAD
+▸ magi-portatil-1              sí
+  despliegue                   no
+
+
+
+
+
+
+  ↵ abrir · T terminar · r refrescar · …
+ ↵ entrar  n nueva  r reconectar  ? más

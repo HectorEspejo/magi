@@ -839,13 +839,18 @@ impl App {
             estado,
             motivo: info.motivo.clone(),
             identidad: String::new(),
-            pantalla: crate::conexion::terminal::nuevo(1, 1),
+            pantalla: crate::cliente::pantallas::nuevo(1, 1),
             actividad_no_vista: false,
             abierta_en: info.desde,
             ventanas: 0,
             cols_remoto: 0,
             filas_remoto: 0,
             ventana_minima: None,
+            reconexion: None,
+            titulo: None,
+            aviso: None,
+            tmux: None,
+            escritura_varios: false,
         });
         if activar {
             let indice = self.pestanas.len() - 1;
@@ -856,6 +861,7 @@ impl App {
             }
             self.pestana_activa = Some(indice);
             self.vista = Vista::Sesion;
+            self.adjuntar_pestaña_activa();
             self.mensaje(format!("escritorio «{}» abriéndose", info.nombre), false);
         }
     }

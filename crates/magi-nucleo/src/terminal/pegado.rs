@@ -57,10 +57,25 @@ pub fn trocear(bytes: &[u8], maximo: usize) -> Vec<Vec<u8>> {
         while fin > inicio + 1 && fin < bytes.len() && (bytes[fin] & 0xc0) == 0x80 {
             fin -= 1;
         }
+        if fin == inicio + 1 && inicio + 1 < bytes.len() && (bytes[inicio] & 0xc0) == 0xc0 {
+            // El carácter UTF-8 no cabe en maximo: sale entero en este trozo
+            // (el tamaño del códec real es de MiB, pero así nunca se parte).
+            fin = inicio + largo_utf8(bytes[inicio]);
+        }
         trozos.push(bytes[inicio..fin].to_vec());
         inicio = fin;
     }
     trozos
+}
+
+/// Longitud en bytes de un carácter UTF-8 por su primer byte.
+fn largo_utf8(primero: u8) -> usize {
+    match primero {
+        0xf0..=0xff => 4,
+        0xe0..=0xef => 3,
+        0xc0..=0xdf => 2,
+        _ => 1,
+    }
 }
 
 #[cfg(test)]

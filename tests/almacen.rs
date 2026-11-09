@@ -2518,8 +2518,8 @@ fn la_version_crece_de_forma_monotona_y_el_reloj_la_acompana() {
 // --------------------------------------- Fase 13: comprobaciones y fallos
 
 /// La migración 9 estrena COMPROBACIONES_SERVICIO y la columna
-/// SONDEOS.fallos_json, y una base de la fase 9 (user_version 6) sube a 9 sin
-/// perder sus hosts.
+/// SONDEOS.fallos_json, y una base de la fase 9 (user_version 6) sube hasta la
+/// versión actual sin perder sus hosts.
 #[test]
 fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
     let almacen = magi::almacen::abrir_en_memoria().unwrap();
@@ -2527,7 +2527,7 @@ fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let tablas: Vec<String> = almacen
         .conexion()
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -2574,7 +2574,7 @@ fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     assert_eq!(
         almacen.listar_hosts().unwrap().len(),
         1,

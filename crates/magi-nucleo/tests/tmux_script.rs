@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use magi_nucleo::terminal::tmux::{
     etiqueta_equipo, leer_listado, leer_terminar, nombre_nuevo, nombre_valido, orden, Listado,
@@ -42,13 +43,21 @@ struct Entorno {
 impl Entorno {
     fn nuevo(tmux: Option<&str>) -> Self {
         let temporal = tempfile::tempdir().expect("temporal de la prueba");
-        let bin = temporal.path().join("bin");
+        // El tmux falso compartido se escribe una sola vez: reescribirlo en
+        // cada prueba lo deja abierto para escritura mientras otra prueba lo
+        // ejecuta y el núcleo devuelve ETXTBSY ("text file busy").
+        let bin = if tmux == Some(FAKE_TMUX) {
+            binarios_compartidos().clone()
+        } else {
+            let bin = temporal.path().join("bin");
+            fs::create_dir_all(&bin).expect("directorio de binarios falsos");
+            if let Some(guion) = tmux {
+                instalar(&bin.join("tmux"), guion);
+            }
+            instalar(&bin.join("shell"), FAKE_SHELL);
+            bin
+        };
         let estado = temporal.path().join("estado");
-        fs::create_dir_all(&bin).expect("directorio de binarios falsos");
-        if let Some(guion) = tmux {
-            instalar(&bin.join("tmux"), guion);
-        }
-        instalar(&bin.join("shell"), FAKE_SHELL);
         let llamadas = temporal.path().join("llamadas");
         let shell_estado = temporal.path().join("shell.txt");
         Self {
@@ -121,6 +130,19 @@ impl Entorno {
     }
 }
 
+/// Binarios falsos compartidos por todas las pruebas: se escriben una sola
+/// vez, al principio, y nunca se vuelven a abrir para escritura.
+fn binarios_compartidos() -> &'static PathBuf {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("magi-falsos-tmux-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("directorio de binarios falsos compartidos");
+        instalar(&dir.join("tmux"), FAKE_TMUX);
+        instalar(&dir.join("shell"), FAKE_SHELL);
+        dir
+    })
+}
+
 fn instalar(destino: &Path, contenido: &str) {
     fs::write(destino, contenido).expect("escribir el binario falso");
     use std::os::unix::fs::PermissionsExt as _;
@@ -129,7 +151,7 @@ fn instalar(destino: &Path, contenido: &str) {
 }
 
 #[test]
-fn listar_pasa_las_barras_a_tabuladores_y_normaliza_enganchada() {
+fn listar_pasa_el_separador_a_tabuladores_y_normaliza_enganchada() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_sesiones(&[
         ("magi-portatil-1", 2, 2, "Mon Nov  9 19:20:00 2026"),
@@ -147,9 +169,10 @@ fn listar_pasa_las_barras_a_tabuladores_y_normaliza_enganchada() {
         )
     );
     let llamadas = entorno.llamadas();
-    assert!(llamadas.contains(
-        "list-sessions -F #{session_name}|#{session_attached}|#{session_windows}|#{session_created_string}"
-    ));
+    let sep = '\u{1f}';
+    assert!(llamadas.contains(&format!(
+        "list-sessions -F #{{session_name}}{sep}#{{session_attached}}{sep}#{{session_windows}}{sep}#{{session_created_string}}"
+    )));
 
     // Lo que imprime el script es lo que entiende el lector del núcleo.
     let listado = leer_listado(&salida.stdout);
@@ -213,7 +236,7 @@ fn un_tmux_anterior_a_1_8_se_trata_como_sin_tmux() {
 }
 
 #[test]
-fn comprobar_dice_si_la_sesion_existe_con_has_session() {
+fn comprobar_dice_si_la_sesion_existe_por_nombre_exacto() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_sesiones(&[("magi-portatil-1", 0, 1, "2026-11-09 19:00:00")]);
     let existe = entorno.ejecutar(&["comprobar", "magi-portatil-1"]);
@@ -222,8 +245,8 @@ fn comprobar_dice_si_la_sesion_existe_con_has_session() {
     let nueva = entorno.ejecutar(&["comprobar", "magi-portatil-2"]);
     assert_eq!(nueva.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=nueva\n");
     let llamadas = entorno.llamadas();
-    assert!(llamadas.contains("has-session -t magi-portatil-1"));
-    assert!(llamadas.contains("has-session -t magi-portatil-2"));
+    // Comparación exacta por nombre (no `has-session -t`, que casa prefijos).
+    assert!(llamadas.contains("list-sessions -F #{session_name}"));
 }
 
 #[test]
@@ -331,7 +354,7 @@ fn los_nombres_validos_de_64_caracteres_pasan() {
     assert_eq!(salida.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=nueva\n");
     assert!(entorno
         .llamadas()
-        .contains(&format!("has-session -t {nombre}")));
+        .contains("list-sessions -F #{session_name}"));
 }
 
 #[test]
