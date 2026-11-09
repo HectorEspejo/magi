@@ -1,5 +1,8 @@
-pub mod estado;
-pub mod parser;
+//! Orquestación del sondeo en el escritorio: la conexión (por el servidor o
+//! efímera) y el lote con semáforo. La lectura, los estados y el script viven
+//! en el núcleo desde la Fase 14 (D274).
+
+pub use magi_nucleo::flota::{estado, lectura as parser};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,16 +18,9 @@ use crate::conexion::salto::{conectar_cadena, construir_cadena};
 use crate::conexion::RegistroSesiones;
 use crate::modelo::{Host, ResultadoSondeo, Sondeo};
 
-/// Script ejecutado en el host remoto. Solo depende de `sh` y coreutils;
-/// sin `systemctl` los servicios quedan como `unknown`. Desde la Fase 13
-/// incluye el bloque de fallos del sondeo ampliado (unidades fallidas y
-/// contenedores caídos), siempre sin sudo.
-pub const SCRIPT: &str = include_str!("sondeo.sh");
-
-/// Sondeos simultáneos y tiempo máximo por host (DNS, TCP, autenticación y
-/// comando incluidos).
-pub const CONCURRENTES: usize = 8;
-pub const TIMEOUT_SEG: u64 = 5;
+/// Script, sondeos simultáneos y tiempo máximo por host (DNS, TCP,
+/// autenticación y comando incluidos): los pone el núcleo.
+pub use magi_nucleo::flota::{CONCURRENTES, SCRIPT, TIMEOUT_SEG};
 
 /// Todo lo necesario para sondear un host, calculado en el hilo de la UI.
 pub struct PeticionSondeo {
@@ -35,6 +31,9 @@ pub struct PeticionSondeo {
     pub hogar: PathBuf,
     pub usuario_local: String,
     pub servicios: Vec<String>,
+    /// Motores de contenedores de `[servicios] contenedores` (R125): el
+    /// sondeo los recibe como `<motores>`.
+    pub motores: Vec<String>,
 }
 
 /// Sondea un host y devuelve su `Sondeo` (nunca falla: los errores van dentro).
@@ -73,7 +72,7 @@ pub async fn sondear_via_servidor(
 ) -> Sondeo {
     let inicio = Instant::now();
     let mut sondeo = Sondeo::vacio(peticion.host.id);
-    let comando = comando_de_sondeo(&peticion.servicios);
+    let comando = magi_nucleo::flota::comando_de_sondeo(&peticion.servicios, &peticion.motores);
     let respuesta = tokio::time::timeout(
         Duration::from_secs(TIMEOUT_SEG),
         cliente.ejecutar(peticion.host.id, &comando),
@@ -127,7 +126,7 @@ async fn intento(
     peticion: &PeticionSondeo,
     registro: &RegistroSesiones,
 ) -> Result<parser::Metricas, String> {
-    let comando = comando_de_sondeo(&peticion.servicios);
+    let comando = magi_nucleo::flota::comando_de_sondeo(&peticion.servicios, &peticion.motores);
     let viva = registro.lock().await.get(&peticion.host.id).cloned();
     if let Some(handle) = viva {
         match ejecutar_en_handle(&handle, &comando).await {
@@ -229,39 +228,5 @@ pub fn lanzar_lote(
             };
             let _ = tx.send(sondeo);
         });
-    }
-}
-
-/// Comando `exec`: el script embebido viaja entrecomillado y las unidades del
-/// inventario se pasan como argumentos validados, nunca interpolados.
-pub fn comando_de_sondeo(servicios: &[String]) -> String {
-    let mut comando = format!("sh -c {} magi", entrecomillar(SCRIPT));
-    for servicio in servicios {
-        comando.push(' ');
-        comando.push_str(&entrecomillar(servicio));
-    }
-    comando
-}
-
-fn entrecomillar(texto: &str) -> String {
-    format!("'{}'", texto.replace('\'', "'\\''"))
-}
-
-#[cfg(test)]
-mod pruebas {
-    use super::*;
-
-    #[test]
-    fn el_comando_entrecomilla_el_script_y_los_servicios() {
-        let comando = comando_de_sondeo(&["nginx".to_string(), "magi@.service".to_string()]);
-        assert!(comando.starts_with("sh -c '#!/bin/sh"));
-        assert!(comando.contains(" magi 'nginx' 'magi@.service'"));
-    }
-
-    #[test]
-    fn las_comillas_simples_del_script_se_escapan() {
-        let comando = comando_de_sondeo(&[]);
-        assert!(comando.contains("'\\''"));
-        assert!(comando.starts_with("sh -c '"));
     }
 }

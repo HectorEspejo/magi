@@ -60,9 +60,9 @@ mod pruebas {
             },
             Veredicto::Pendiente,
         ];
-        let consenso = consenso(celdas.iter());
+        let cuenta = consenso(celdas.iter());
         assert_eq!(
-            consenso,
+            cuenta,
             Consenso {
                 aprobadas: 1,
                 activas: 3,
@@ -70,7 +70,7 @@ mod pruebas {
                 pendientes: 1
             }
         );
-        assert!(!consenso.unanime());
+        assert!(!cuenta.unanime());
         assert!(consenso([Veredicto::NoActiva].iter()).unanime());
     }
 }
