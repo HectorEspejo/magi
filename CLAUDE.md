@@ -9,6 +9,7 @@ Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (c
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
 Desde la Fase 12 abre escritorios remotos: RDP con IronRDP, VNC con un cliente RFB propio y voxl arrancado por SSH. Se ven en un visor web servido por `magi --servidor` solo en `127.0.0.1`: el cliente web de voxl adaptado, en `visor/` (TypeScript, generado a `visor/dist/` con esbuild).
 Desde la Fase 13 maneja los servicios y timers de systemd, sus logs y los contenedores de Docker o Podman (con Compose) en la vista Servicios (`F9`): todo lo remoto va por el servidor con el script embebido `servicios.sh`.
+Desde la Fase 14 la app Android es también el móvil de guardia: Flota con sondeo (su pantalla de inicio), Servicios, snippets con deliberación y Registro, con la lógica del núcleo; sigue siendo lectora de la sincronización.
 
 ## Documentación del proyecto
 
@@ -66,7 +67,8 @@ coméntalo con el desarrollador.
   `cargo fmt --all --check` y `cargo deny check`. Si tocas workflows o
   empaquetado: `actionlint`, `dist plan --tag vX.Y.Z` y
   `desktop-file-validate assets/magi.desktop`. Si tocas scripts: `shellcheck
-  scripts/*.sh crates/magi-nucleo/scripts/*.sh src/flota/sondeo.sh`. Para pruebas aisladas usa
+  scripts/*.sh crates/magi-nucleo/scripts/*.sh` (y `src/flota/sondeo.sh`
+  mientras siga ahí: la Fase 14 lo mueve a `crates/magi-nucleo/scripts/`). Para pruebas aisladas usa
   `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
   `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
@@ -129,7 +131,8 @@ coméntalo con el desarrollador.
 - Toda espera de red en el servidor lleva plazo (10 s DNS/TCP/saludos de
   subsistema, 60 s por bloque de transferencia); solo los diálogos con el
   usuario esperan 5 min. `request_subsystem` devuelve `Ok` aunque el host
-  diga que no: envuélvelo en el plazo.
+  diga que no: envuélvelo en el plazo. El plazo de una operación cubre la red
+  y el canal, nunca el tiempo de sus diálogos (desde la Fase 13).
 - Un diálogo lleva fijados los datos sobre los que actúa (rutas, ids) y no
   relee el estado al confirmar; descarta respuestas de peticiones que ya no
   están en vuelo. Libera cada recurso del pool por identidad y en todas las
@@ -248,10 +251,11 @@ coméntalo con el desarrollador.
   `secrets: inherit`); las herramientas que se descargan van fijadas por
   SHA-256. `dist` no pasa `--locked`: el `cargo metadata --locked` del plan es
   el que lo garantiza.
-- La única excepción de `cargo deny` (RUSTSEC-2023-0071, `rsa`) tiene fecha
-  límite comprobada en CI: si el job `deny` falla por la fecha, revisa el aviso
-  antes de prorrogarla. La fecha de la página man es la de la versión:
-  cámbiala al cambiar `version` y regenera `assets/`.
+- La excepción de `cargo deny` RUSTSEC-2023-0071 (`rsa`) tiene fecha límite
+  comprobada en CI: si el job `deny` falla por la fecha, revisa el aviso antes
+  de prorrogarla. La fecha de la página man es la de la versión (la constante
+  `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
+  `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
   mensaje, siempre validado (1 < pid ≤ i32::MAX y distinto del propio). Nunca
   señales a un servidor más nuevo, tampoco desde `magi servidor parar`.
@@ -329,8 +333,10 @@ coméntalo con el desarrollador.
 - La app Android es lectora de la sincronización: llama siempre a la pasada en
   modo lector, nunca escribe en la carpeta ni exporta, y su inventario es de
   solo lectura. Solo escribe campos propios (`plegado`, `ultimo_estado`,
-  `ultima_conexion_en`), huellas en su `known_hosts`, REGISTRO y conflictos de
-  huella y de borrado.
+  `ultima_conexion_en` y, desde la Fase 14, `SNIPPETS.usado_veces` y
+  `ultimo_uso_en`), huellas en su `known_hosts`, REGISTRO, SONDEOS,
+  DELIBERACIONES y conflictos de huella y de borrado. Nunca crea ni edita
+  snippets, comprobaciones propias ni verificaciones.
 - Secretos en Android solo por `LlaveroMovil` (AES-GCM con una clave del
   Keystore). La clave del móvil nunca sale del Keystore: el núcleo firma a
   través de `Firmante`. Nada secreto en logcat, DataStore, `magi.db` ni
@@ -350,8 +356,10 @@ coméntalo con el desarrollador.
   emulador, sin red externa) antes de marcarse en el checklist.
 - Toda conexión del móvil tiene su vigilante en el gestor de `magi-movil`,
   también cuando solo la usan túneles: si el host la cierra, todo lo que la usa
-  pasa a caído con el motivo. Lo que llegue en adelante (SFTP, ejecuciones) se
-  engancha al mismo vigilante.
+  pasa a caído con el motivo. Desde la Fase 14 hay una sola conexión por host
+  para todo (sesiones, túneles, sondeo, servicios, logs, ejecuciones y el SFTP
+  de BALTHASAR-2), con el mismo vigilante y 60 s de gracia sin usos; cada uso
+  se suelta por identidad.
 - Los servidores de pruebas (SSH, eco, canales de control) escuchan en
   `127.0.0.1`, nunca en `0.0.0.0`: el emulador llega al anfitrión por
   `10.0.2.2`, que es su loopback. Su SSH solo reenvía a los servicios de la
@@ -376,9 +384,10 @@ coméntalo con el desarrollador.
   keystore y sus secretos (`ANDROID_KEYSTORE_BASE64`, contraseñas y alias) los
   crea el desarrollador, no tú.
 - Pruebas del móvil: el Keystore, SAF, la cámara y la biometría se sustituyen
-  por dobles en la JVM; en el emulador corren la prueba de humo y, desde la
-  corrección 11b, la de extremo a extremo de los túneles (necesita el servidor
-  de pruebas del anfitrión; en CI se omite). Lo que solo se puede
+  por dobles en la JVM; en el emulador corren la prueba de humo, la de extremo
+  a extremo de los túneles (desde la corrección 11b) y las de Flota, Servicios
+  y Snippets (desde la Fase 14). Necesitan el servidor de pruebas del
+  anfitrión, que desde la Fase 14 arranca también el job `humo` de CI. Lo que solo se puede
   comprobar en un móvil real va al guion de validación del informe de
   implementación.
 - La codificación de teclas es una sola tabla, en
@@ -394,12 +403,16 @@ coméntalo con el desarrollador.
   `android-release.yml` a partir de sus secretos. Una release compilada en local
   sale sin firmar y nunca se publica.
 - La fixture `.age` de la prueba de humo se regenera con `cargo test -p
-  magi-nucleo --test generar_fixture_android -- --ignored`, y la del túnel, con
+  magi-nucleo --test generar_fixture_android -- --ignored` (también la del
+  `formato` 3, en `android/app/src/androidTest/assets/`), y la del túnel, con
   `cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored`.
-- Prueba de extremo a extremo del túnel: en Rust, `cargo test -p magi-movil
-  --test tunel_local_e2e`; en el emulador, arranca antes `cargo run -p
-  magi-movil --example servidor_pruebas_tunel` y ejecuta `./gradlew
-  connectedDebugAndroidTest` (sin ese servidor, la prueba se omite sola).
+- Pruebas de extremo a extremo del móvil: en Rust, `cargo test -p magi-movil
+  --test tunel_local_e2e` y, desde la Fase 14, `--test flota_e2e --test
+  servicios_movil_e2e --test snippets_movil_e2e --test deliberacion_movil_e2e`;
+  en el emulador, arranca antes `cargo run -p magi-movil --example
+  servidor_pruebas` (se llamaba `servidor_pruebas_tunel` hasta la Fase 14) y
+  ejecuta `./gradlew connectedDebugAndroidTest` (sin ese servidor, esas pruebas
+  se omiten solas).
 - Antes de usar Gradle o cargo-ndk, exporta `ANDROID_HOME`, `ANDROID_SDK_ROOT`
   y `ANDROID_NDK_HOME` (NDK r30). Si lo haces con un script de entorno, que viva
   fuera de `/tmp` (se vacía al reiniciar). En documentos del repositorio, nunca
@@ -439,8 +452,11 @@ coméntalo con el desarrollador.
   adaptación anotadas. Al subir russh o IronRDP, mira si sus versiones de
   `sspi`, `picky` y `ecdsa` ya coinciden y quita el vendor; mientras exista,
   revisa a mano las correcciones de seguridad de IronRDP, `sspi` y `picky`
-  (RustSec no avisa de una copia local). No subas nada de esto sin repetir las
-  pruebas de RDP y el paso 1 del guion de validación de la Fase 12.
+  (RustSec no avisa de una copia local). `deny.toml` lleva la excepción
+  RUSTSEC-2026-0441 (`pin-utils` sin mantener, transitiva de `sspi` en el
+  `ironrdp-connector` vendorizado, desde la Fase 13): revísala al subir IronRDP
+  o `sspi`. No subas nada de esto sin repetir las pruebas de RDP y el paso 1 del
+  guion de validación de la Fase 12.
 - El `ActiveStage` de IronRDP no es `Send`: cada sesión de escritorio corre en
   un hilo con runtime propio (`lanzar_en_hilo_con`) y el resto del servidor
   solo ve canales. El AVC420 sale por el `DvcProcessor` propio de
@@ -488,14 +504,18 @@ coméntalo con el desarrollador.
   (`include_str!`), con argumentos validados en Rust y en el script, por un canal
   del pool (`UsoCanal::Servicios`). Las propiedades se leen con `systemctl show`
   (clave=valor) y los JSON de Docker, Podman y `journalctl`; de `list-units` solo
-  se toma el nombre (primera columna, con `--plain --no-legend`).
+  se toma el nombre (primera columna, con `--plain --no-legend`). En el host solo
+  usa `sh` POSIX, coreutils (`timeout`, `mktemp`), `mkfifo` y `awk`; si falta
+  algo, el script sale con su `ERROR` y su código (70: sin temporales).
 - sudo orden a orden, nunca `sudo sh`, con `timeout` por fuera de sudo y
-  `LC_ALL=C` para leer sus mensajes. Con Podman nunca se usa sudo. La contraseña
-  la pide el cliente, la comprueba con `ComprobarSudo` antes de confirmar o
-  deliberar y la guarda solo en memoria (`Zeroizing`, `[servicios]
-  sudo_memoria_min`); viaja dentro de cada petición y llega al host por la
-  primera línea de la entrada estándar. Nunca va a disco, al llavero, al log ni a
-  REGISTRO.
+  `LC_ALL=C` para leer sus mensajes. La única excepción es la comprobación
+  propia, la única orden libre: va con `sh -c` bajo los privilegios de la acción.
+  Con Podman nunca se usa sudo, y un usuario del grupo `docker` gestiona Docker
+  sin sudo. La contraseña la pide el cliente, la comprueba con `ComprobarSudo`
+  antes de confirmar o deliberar y la guarda solo en memoria (`Zeroizing`,
+  `[servicios] sudo_memoria_min`; solo las acciones cuentan como uso); viaja
+  dentro de cada petición y llega al host por la primera línea de la entrada
+  estándar. Nunca va a disco, al llavero, al log ni a REGISTRO.
 - Lo que deja algo parado (parar, reiniciar, desactivar, y parar o reiniciar un
   contenedor o un proyecto) pasa por la deliberación (`PlanDeliberado::Servicio`)
   y el servidor lo recomprueba; MELCHIOR-1 no cuenta el estado del propio
@@ -504,11 +524,13 @@ coméntalo con el desarrollador.
 - La comprobación de configuración (Nginx, Caddy, Apache, HAProxy, Compose o la
   propia de COMPROBACIONES_SERVICIO) va dentro de la acción, en el mismo canal y
   justo antes; si falla, da 127 o pasa su plazo (20 s), no se ejecuta nada.
-- Logs: el servidor manda lotes cada 100 ms (hasta 500 líneas), descarta las más
-  viejas con recuento si la cola de una suscripción pasa de 4 MiB y corta el
-  seguimiento al cerrarse el panel (fin de la entrada estándar del script). El
-  cliente los guarda solo en un anillo en memoria. Ni logs, ni unidades, ni
-  `inspect`, ni la salida de las comprobaciones van al log o a REGISTRO.
+- Logs: el servidor manda lotes cada 100 ms (hasta 500 líneas y 2 MiB
+  codificados), descarta las más viejas con recuento si la cola de una
+  suscripción pasa de 4 MiB y corta el seguimiento al cerrarse el panel (fin de
+  la entrada estándar del script, que manda TERM al proceso real y no a su
+  envoltorio). El cliente los guarda solo en un anillo en memoria (10 000
+  líneas y 8 MiB). Ni logs, ni unidades, ni `inspect`, ni la salida de las
+  comprobaciones van al log o a REGISTRO.
 - Lo que llega del host es entrada no fiable, con los límites del informe de la
   Fase 13 (§8); nunca pánico.
 - Las pestañas con orden (shell de un contenedor, seguimiento de logs) las arma el
@@ -516,14 +538,64 @@ coméntalo con el desarrollador.
 - Las acciones de servicio en curso son trabajo del servidor
   (`TrabajoServidor.acciones_servicio`, `AccionesServicio{lista}`); los logs no.
   Una sola acción a la vez por objetivo.
+- Lo que el servidor guarda por petición (acciones, suscripciones de log,
+  escritorios) se indexa por `(cliente_id, peticion_id)`: dos ventanas pueden
+  repetir ids. Los mensajes de cada ventana se atienden en orden y, antes de
+  abrir algo para un cliente, el servidor comprueba que sigue conectado.
+- Lo que mantiene un canal abierto (túneles, escritorios, seguimientos de logs)
+  conserva su `ConexionTomada` mientras dura y la suelta al terminar, en todas
+  las ramas: si la suelta antes, el pool recicla la conexión al acabar su gracia.
+- Ningún mensaje del protocolo pasa del tamaño máximo del códec: corta los lotes
+  por tamaño codificado, no solo por número; y todo lo que se acumula en memoria
+  (anillos, colas) lleva tope de bytes.
 - El sondeo sigue sin sudo y sin diálogos; sus fallos (`SONDEOS.fallos_json`) no
   cambian el estado del host: solo los vigilados lo hacen.
 - Las pruebas de servicios no usan red externa (servidor SSH de prueba con
   `systemctl`, `journalctl`, `docker`, `podman`, `sudo` y `nginx` falsos, y
-  salidas grabadas en `tests/fijos/servicios/`): `cargo test -p magi-nucleo
+  salidas grabadas en `tests/fijos/servicios/`, que la Fase 14 mueve a
+  `crates/magi-nucleo/tests/fijos/` para compartirlas con el móvil): `cargo test -p magi-nucleo
   --test servicios_lectura --test servicios_script --test
   sincronizacion_comprobaciones` y `TZ=UTC cargo test -p magi-ssh --test
-  servicios_servidor --test servicios_ui --test redimensionado`.
+  servicios_servidor --test servicios_ui --test servicios_e2e --test
+  redimensionado` (la prueba de logs que pasa la gracia del pool tarda ~40 s a
+  propósito).
+- Móvil de guardia (desde la Fase 14): `magi-movil` hace en el móvil lo que el
+  servidor hace en el escritorio para servicios, ejecuciones de snippets, logs y
+  deliberaciones, con la lógica del núcleo (`flota/`, `servicios/`, `snippets/` y
+  `deliberacion/`). Kotlin no decide qué acción se permite, qué exige deliberación
+  ni cómo se lee lo que llega de un host, y `magi-movil` recomprueba la acción y
+  la deliberación antes de ejecutar.
+- El sondeo vive en `crates/magi-nucleo/src/flota/` y `scripts/sondeo.sh`, y las
+  comprobaciones de la deliberación en `crates/magi-nucleo/src/deliberacion/`, con
+  proveedores por plataforma (desde la Fase 14). En `src/flota/` y
+  `src/deliberacion/` el escritorio solo guarda su orquestación, su diálogo y sus
+  proveedores. Una comprobación activa que no puede hacerse en una plataforma
+  rechaza («solo en el escritorio»); nunca se omite.
+- Lo automático del móvil (sondeo, refrescos, consumo, comprobaciones de la
+  deliberación y ejecuciones) abre conexiones sin diálogos: una huella sin aceptar
+  o la falta de credenciales dan un error con instrucción. Solo lo que pide el
+  usuario (conectar, activar un túnel, abrir los servicios de un host, una acción,
+  los logs) puede dialogar.
+- En el móvil, el sondeo, los refrescos de Servicios y los logs solo corren con
+  su pantalla a la vista (ciclo de vida de Android), nunca con la app en segundo
+  plano. Las acciones y las ejecuciones sí siguen y cuentan para el servicio en
+  primer plano.
+- En el móvil, lo deliberado solo se ejecuta manteniendo pulsado el botón 1 s (el
+  `Ctrl+K` del móvil); ningún toque simple ejecuta desde el diálogo MAGI. Lo que no
+  delibera pide una confirmación que nombra la acción, el objetivo y el host.
+- En el móvil, la contraseña de sudo vive solo en `magi-movil` (`Zeroizing`), por
+  host, hasta `sudo_memoria_min` sin uso, hasta que se bloquea MAGI o hasta que el
+  host la rechaza. Nunca va a `LlaveroMovil`, DataStore, logcat ni REGISTRO, y su
+  diálogo lleva `FLAG_SECURE`.
+- El anillo de logs del móvil vive en `magi-movil` (10 000 líneas y 8 MiB) y la app
+  pide ventanas filtradas de hasta 500 líneas: por la FFI no cruzan listas sin
+  acotar. La salida de un snippet y los logs nunca van a logcat, a REGISTRO ni a
+  disco.
+- Los ajustes del móvil que en el escritorio están en `config.toml` (umbrales y
+  refresco de Flota; refresco, espera, motores y sudo de Servicios; horas del
+  backup y minutos de salud) viven en DataStore, con los valores por defecto y los
+  rangos del escritorio, y llegan al núcleo con `aplicar_ajustes`.
+  `DELIBERACIONES.usuario` en el móvil es «móvil (<nombre del equipo>)».
 
 ## Al terminar una fase (o al pausar la sesión)
 
