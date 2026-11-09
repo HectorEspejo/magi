@@ -5,7 +5,7 @@
 //! coordenadas van desde 1 y son relativas al contenido del panel (sin su
 //! cabecera).
 
-use crate::terminal::teclas::Modificadores;
+pub use crate::terminal::teclas::Modificadores;
 
 /// Botón del ratón.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

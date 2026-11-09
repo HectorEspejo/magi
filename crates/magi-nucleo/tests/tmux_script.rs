@@ -1,10 +1,12 @@
 //! Pruebas de caja de `terminal_tmux.sh` (Fase 15): se ejecuta de verdad con
-//! `sh` y un `tmux` falso en el `PATH` (nunca el tmux del sistema), y se
-//! comprueba la salida exacta que lee el núcleo. Sin red.
+//! `sh` y el tmux falso compartido de `tests/fijos/terminal/tmux` en el
+//! `PATH` (nunca el tmux del sistema), y se comprueba la salida exacta que lee
+//! el núcleo. Sin red.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use magi_nucleo::terminal::tmux::{
     etiqueta_equipo, leer_listado, leer_terminar, nombre_nuevo, nombre_valido, orden, Listado,
@@ -18,40 +20,9 @@ struct Salida {
     codigo: i32,
 }
 
-/// tmux falso: registra cada llamada, contesta -V, has-session, list-sessions,
-/// kill-session y new-session según los ficheros de estado del temporal.
-const FAKE_TMUX: &str = r#"#!/bin/sh
-printf '%s\n' "$*" >> "$MAGI_TMUX_LLAMADAS"
-case "$1" in
-    -V)
-        printf '%s\n' 'tmux 3.4'
-        ;;
-    has-session)
-        if [ -f "$MAGI_TMUX_ESTADO/existe-$3" ]; then
-            exit 0
-        fi
-        exit 1
-        ;;
-    list-sessions)
-        if [ -f "$MAGI_TMUX_ESTADO/listar" ]; then
-            while IFS= read -r linea; do
-                printf '%s\n' "$linea"
-            done < "$MAGI_TMUX_ESTADO/listar"
-        else
-            exit 1
-        fi
-        ;;
-    kill-session)
-        if [ -f "$MAGI_TMUX_ESTADO/viva-$3" ]; then
-            exit 0
-        fi
-        exit 1
-        ;;
-    new-session)
-        exit 0
-        ;;
-esac
-"#;
+/// El tmux falso compartido con las pruebas del escritorio; su contrato está
+/// en `tests/fijos/terminal/README.md`.
+const FAKE_TMUX: &str = include_str!("../../../tests/fijos/terminal/tmux");
 
 /// Shell de acceso falso: copia sus argumentos al fichero de estado.
 const FAKE_SHELL: &str = r#"#!/bin/sh
@@ -62,6 +33,7 @@ printf '%s\n' "$*" > "$MAGI_SHELL_ESTADO"
 struct Entorno {
     _temporal: tempfile::TempDir,
     bin: PathBuf,
+    con_tmux: bool,
     estado: PathBuf,
     llamadas: PathBuf,
     shell_estado: PathBuf,
@@ -73,7 +45,6 @@ impl Entorno {
         let bin = temporal.path().join("bin");
         let estado = temporal.path().join("estado");
         fs::create_dir_all(&bin).expect("directorio de binarios falsos");
-        fs::create_dir_all(&estado).expect("directorio de estado");
         if let Some(guion) = tmux {
             instalar(&bin.join("tmux"), guion);
         }
@@ -83,18 +54,31 @@ impl Entorno {
         Self {
             _temporal: temporal,
             bin,
+            con_tmux: tmux.is_some(),
             estado,
             llamadas,
             shell_estado,
         }
     }
 
-    fn escribir_estado(&self, nombre: &str, contenido: &str) {
-        fs::write(self.estado.join(nombre), contenido).expect("escribir el estado");
+    /// Siembra el fichero de estado del tmux falso con estas sesiones
+    /// (nombre, adheridos, ventanas, creada), una por línea y con tabuladores.
+    fn sembrar_sesiones(&self, sesiones: &[(&str, u32, u16, &str)]) {
+        let mut contenido = String::new();
+        for (nombre, adheridos, ventanas, creada) in sesiones {
+            contenido.push_str(&format!("{nombre}\t{adheridos}\t{ventanas}\t{creada}\n"));
+        }
+        fs::write(&self.estado, contenido).expect("escribir el estado del tmux falso");
     }
 
-    fn marcar(&self, nombre: &str) {
-        self.escribir_estado(nombre, "");
+    fn estado(&self) -> String {
+        fs::read_to_string(&self.estado).unwrap_or_default()
+    }
+
+    fn tiene_sesion(&self, nombre: &str) -> bool {
+        self.estado()
+            .lines()
+            .any(|linea| linea.split('\t').next() == Some(nombre))
     }
 
     fn llamadas(&self) -> String {
@@ -113,8 +97,16 @@ impl Entorno {
         for argumento in argumentos {
             comando.arg(argumento);
         }
+        // Con tmux falso, el PATH lleva además los directorios del sistema
+        // para que el falso encuentre awk/sed/mkdir; el falso va primero, así
+        // que nunca se usa un tmux real. Sin tmux, el PATH no ve ninguno.
+        let path = if self.con_tmux {
+            format!("{}:/usr/bin:/bin", self.bin.display())
+        } else {
+            self.bin.display().to_string()
+        };
         let salida = comando
-            .env("PATH", &self.bin)
+            .env("PATH", path)
             .env("SHELL", self.bin.join("shell"))
             .env("MAGI_TMUX_ESTADO", &self.estado)
             .env("MAGI_TMUX_LLAMADAS", &self.llamadas)
@@ -139,10 +131,10 @@ fn instalar(destino: &Path, contenido: &str) {
 #[test]
 fn listar_pasa_las_barras_a_tabuladores_y_normaliza_enganchada() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.escribir_estado(
-        "listar",
-        "magi-portatil-1|2|2|Mon Nov  9 19:20:00 2026\nmagi-portatil-2|0|1|Tue Nov 10 08:00:00 2026\n",
-    );
+    entorno.sembrar_sesiones(&[
+        ("magi-portatil-1", 2, 2, "Mon Nov  9 19:20:00 2026"),
+        ("magi-portatil-2", 0, 1, "Tue Nov 10 08:00:00 2026"),
+    ]);
     let salida = entorno.ejecutar(&["listar"]);
     assert_eq!(salida.codigo, 0);
     assert!(salida.stderr.is_empty());
@@ -223,7 +215,7 @@ fn un_tmux_anterior_a_1_8_se_trata_como_sin_tmux() {
 #[test]
 fn comprobar_dice_si_la_sesion_existe_con_has_session() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.marcar("existe-magi-portatil-1");
+    entorno.sembrar_sesiones(&[("magi-portatil-1", 0, 1, "2026-11-09 19:00:00")]);
     let existe = entorno.ejecutar(&["comprobar", "magi-portatil-1"]);
     assert_eq!(existe.codigo, 0);
     assert_eq!(existe.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=existe\n");
@@ -237,9 +229,12 @@ fn comprobar_dice_si_la_sesion_existe_con_has_session() {
 #[test]
 fn abrir_sustituye_el_proceso_por_new_session() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    // Sin estado previo: el tmux falso crea la sesión y se queda enganchado
+    // leyendo la entrada; con la entrada cerrada sale y deja su marca.
     let salida = entorno.ejecutar(&["abrir", "magi-portatil-1"]);
     assert_eq!(salida.codigo, 0);
-    assert!(salida.stdout.is_empty());
+    assert_eq!(salida.stdout, "MAGI_TMUX_SESION=magi-portatil-1\n");
+    assert!(entorno.tiene_sesion("magi-portatil-1"));
     let llamadas = entorno.llamadas();
     assert!(llamadas.contains("-V"));
     assert!(llamadas.contains("new-session -A -s magi-portatil-1"));
@@ -258,11 +253,13 @@ fn abrir_sin_tmux_abre_el_shell_de_acceso() {
 #[test]
 fn terminar_usa_kill_session_y_dice_el_resultado() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.marcar("viva-magi-portatil-1");
+    entorno.sembrar_sesiones(&[("magi-portatil-1", 0, 1, "2026-11-09 19:00:00")]);
     let terminada = entorno.ejecutar(&["terminar", "magi-portatil-1"]);
     assert_eq!(terminada.codigo, 0);
     assert_eq!(terminada.stdout, "MAGI_RESULTADO=ok\n");
     assert_eq!(leer_terminar(&terminada.stdout), ResultadoTerminar::Ok);
+    // El tmux falso quita la sesión de su estado.
+    assert!(!entorno.tiene_sesion("magi-portatil-1"));
 
     let perdida = entorno.ejecutar(&["terminar", "magi-portatil-9"]);
     assert_eq!(perdida.codigo, 0);
@@ -514,4 +511,60 @@ fn leer_terminar_solo_da_ok_con_la_marca_exacta() {
         leer_terminar("MAGI_RESULTADO=ok de mas\n"),
         ResultadoTerminar::NoExiste
     );
+}
+
+#[test]
+fn el_tmux_falso_engancha_y_devuelve_la_entrada() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    let mut hijo = Command::new(entorno.bin.join("tmux"))
+        .args(["new-session", "-A", "-s", "magi-portatil-1"])
+        .env("MAGI_TMUX_ESTADO", &entorno.estado)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("arrancar el tmux falso");
+    hijo.stdin
+        .as_mut()
+        .expect("entrada del tmux falso")
+        .write_all(b"hola\n")
+        .expect("escribir en el PTY falso");
+    let salida = hijo.wait_with_output().expect("esperar al tmux falso");
+    assert_eq!(
+        String::from_utf8_lossy(&salida.stdout),
+        "MAGI_TMUX_SESION=magi-portatil-1\nMAGI_TMUX_ENTRADA=hola\n"
+    );
+    assert_eq!(salida.status.code(), Some(0));
+    assert!(entorno.tiene_sesion("magi-portatil-1"));
+}
+
+#[test]
+fn el_tmux_falso_sustituye_los_campos_del_formato() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_sesiones(&[("magi-portatil-1", 1, 3, "lun 9 nov")]);
+    let salida = Command::new(entorno.bin.join("tmux"))
+        .args([
+            "list-sessions",
+            "-F",
+            "#{session_name}:#{session_attached}:#{session_windows}:#{session_created_string}",
+        ])
+        .env("MAGI_TMUX_ESTADO", &entorno.estado)
+        .output()
+        .expect("ejecutar el tmux falso");
+    assert_eq!(salida.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&salida.stdout).trim_end(),
+        "magi-portatil-1:1:3:lun 9 nov"
+    );
+}
+
+#[test]
+fn el_tmux_falso_avisa_si_no_hay_sesiones() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    let salida = Command::new(entorno.bin.join("tmux"))
+        .args(["list-sessions", "-F", "#{session_name}"])
+        .env("MAGI_TMUX_ESTADO", &entorno.estado)
+        .output()
+        .expect("ejecutar el tmux falso");
+    assert_eq!(salida.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&salida.stderr).contains("no server running"));
 }
