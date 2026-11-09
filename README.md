@@ -298,6 +298,122 @@ real. Con menos de 20×3 solo se pinta `MAGI cols×filas`.
 El modo ASCII (`MAGI_ASCII=1` o `terminal_ascii = true`) degrada todos los
 glifos en todos los modos, también en el aviso.
 
+## Terminal: paneles, historial y Claude Code
+
+Desde la 1.4.0 la vista Sesión es un terminal de verdad para lo que corre
+dentro, con **Claude Code** como referencia, y el trabajo se reparte en
+paneles.
+
+### Paneles
+
+Cada ventana tiene una disposición (no se guarda): **completa**, **lado a
+lado**, **apilados**, **1 grande + 2** y **rejilla de 4**. `prefijo Espacio`
+pasa a la siguiente; `prefijo` + flechas cambia de panel y `prefijo z` amplía
+el enfocado. Cada panel tiene su cabecera con el glifo y el nombre de su
+pestaña: `▸` marca el enfocado y `»` los que reciben la escritura en varios.
+`prefijo 1`-`9`, `n` y `p` ponen una pestaña en el panel enfocado (si ya está
+en otro, se intercambian). La paleta tiene «abrir en rejilla…» para abrir
+hasta cuatro hosts de una vez. Por debajo del mínimo de la disposición solo se
+ve el panel enfocado con «disposición en espera: ventana pequeña».
+
+### Historial, búsqueda y copia
+
+El servidor guarda por pestaña hasta `[terminal] historial_lineas` líneas
+(10 000 por defecto) con el tope de memoria `historial_mib` (64 MiB). `prefijo
+[` o `Shift+RePág` (con la pantalla principal) abren el modo historial del
+panel:
+
+| Tecla | Acción |
+|---|---|
+| `↑` `↓` · `j` `k` | una línea |
+| `RePág` `AvPág` · `Ctrl+U` `Ctrl+D` | una página · media página |
+| `g` · `G` | principio · final |
+| `/` | buscar hacia arriba (texto; `Tab` cambia a expresión regular) |
+| `n` · `N` | coincidencia siguiente · anterior |
+| `v` · `V` | seleccionar por caracteres · por líneas |
+| `y` · `↵` | copiar la selección al portapapeles |
+| `w` | guardar la captura en un fichero |
+| `o` | enlaces de lo visible |
+| `q` · `Esc` | volver al vivo |
+
+La salida nueva no mueve la vista (se avisa con «↓ salida nueva»). La copia
+usa `wl-copy` o `pbcopy` y, si no hay o MAGI corre por SSH, OSC 52; lo que
+pasa de 1 MiB no se copia y se propone guardarlo. `w` nunca sobrescribe y deja
+el fichero con permisos 600.
+
+### Enlaces y túneles temporales
+
+`prefijo o` (u `o` en el modo historial) marca con letras los enlaces visibles
+y abre un diálogo con la URL entera: `↵` la abre con `[terminal]
+abrir_enlaces` (sin shell), `c` la copia y, si apunta a `localhost`,
+`127.0.0.1`, `::1` o `0.0.0.0` del host, `t` levanta un túnel temporal en
+`127.0.0.1` y abre la misma URL con ese puerto. El túnel vive lo que la
+pestaña y se ve en Túneles como «temporal».
+
+### Escritura en varios
+
+`prefijo E` escribe a la vez en todos los paneles visibles. Con más de un host
+o con comprobaciones activas pasa por la deliberación MAGI (`Ctrl+K`); si no,
+una confirmación. Mientras dura hay un aviso rojo fijo y `»` en cada panel; se
+apaga con `prefijo E`, al cambiar de disposición o de pestaña en un panel, si
+cae una pestaña, al salir de la vista o a los 10 minutos sin escribir. Cada
+pestaña recibe sus bytes (teclado de kitty, pegado) y lo tecleado no va a
+REGISTRO.
+
+### Reconexión y tmux
+
+Si la red cae, el **servidor** reintenta solo (2, 5, 10 y 30 s y luego cada
+minuto durante `[terminal] reconexion_max_min` minutos, 15 por defecto), sin
+diálogos: solo contraseñas del llavero y huellas ya aceptadas. La pestaña
+enseña `↻` con la cuenta atrás y `prefijo r` reintenta a mano; `prefijo x`
+cierra. Tras `exit`, credenciales rechazadas, huella nueva o frase pendiente
+no se reintenta y se dice por qué.
+
+En la ficha, «sesión persistente con tmux» hace que la pestaña abra o recupere
+`magi-<equipo>-<n>` en el host; cerrar la pestaña la deja viva y la vista
+Sesiones (`prefijo l`, `t`) lista las sesiones de tmux para volver a
+engancharse (`↵`) o terminarlas (`T`). MAGI no instala tmux.
+
+### Claude Code y el terminal exterior
+
+MAGI pide al terminal exterior el pegado entre corchetes y los eventos de
+foco y, con `teclado_mejorado` (y si el terminal lo admite), la
+desambiguación del teclado de kitty: **Mayús+Intro** llega distinto de Intro
+y Claude Code inserta un salto de línea en vez de enviar. Pegar varias líneas
+llega como un solo pegado, nunca como teclas sueltas: sin el modo 2004, MAGI
+avisa antes con las primeras líneas (`↵` pega, `Esc` cancela). El ratón se le
+pasa al programa que lo pide (rueda y clic en Claude Code a pantalla completa,
+htop o Vim con `set mouse=a`); con `raton = true`, la rueda en la pantalla
+principal abre el historial y el clic elige panel. La selección del terminal
+exterior sigue con Mayús+arrastre. La salida sincronizada evita el parpadeo, y
+los avisos del remoto (campana, OSC 9 y OSC 777) marcan la pestaña con `!` y
+su texto en la barra. El título del programa se ve en Sesiones.
+
+El portapapeles del remoto (OSC 52) está apagado por host: la primera vez que
+un host quiere copiar, la barra avisa «<host> quiere copiar al portapapeles ·
+^] P permitir»; `prefijo P` lo permite para ese host y entrega esa copia si no
+han pasado 60 s. Leer el portapapeles, nunca. Al salir, al ceder la terminal
+(visor, paginador) y tras un pánico, MAGI deja el terminal exterior como
+estaba.
+
+### Configuración
+
+Además de `comando`, la sección `[terminal]` admite:
+
+| Clave | Por defecto | Uso |
+|---|---|---|
+| `historial_lineas` | `10000` | líneas de historial por pestaña (0-100 000; 0 = sin historial) |
+| `historial_mib` | `64` | tope de memoria del historial de una pestaña (8-512); manda sobre las líneas |
+| `raton` | `false` | usos propios del ratón: rueda en el historial, clic para elegir panel y arrastre |
+| `teclado_mejorado` | `true` | pide la desambiguación de kitty si el terminal la admite |
+| `avisar_pegado` | `true` | aviso al pegar varias líneas en un remoto sin pegado entre corchetes |
+| `abrir_enlaces` | `"xdg-open"` (macOS: `"open"`) | programa que abre un enlace, sin shell |
+| `reconexion_max_min` | `15` | minutos de reconexión automática antes de rendirse (1-120) |
+
+Un valor fuera de rango no impide arrancar: se acota y MAGI avisa al
+empezar. Los tres ajustes del host del bloque **TERMINAL** de la ficha
+(reconectar, tmux y portapapeles del remoto) son de este equipo: no viajan
+con la sincronización.
 ## Archivos
 
 `F4` (o `s` en Hosts y Flota, o el prefijo `f` en Sesión, o `sftp · <host>` en
@@ -615,6 +731,13 @@ disco_pct = 90.0            # CARGA si el uso de disco supera el %
 
 [terminal]
 comando = "alacritty -e magi"   # ventana nueva (prefijo w); macOS: open -a Terminal magi
+historial_lineas = 10000        # líneas de historial por pestaña (0-100000)
+historial_mib = 64              # tope de memoria del historial (8-512)
+raton = false                   # rueda en el historial y clic para elegir panel
+teclado_mejorado = true         # desambiguación de kitty si el terminal la admite
+avisar_pegado = true            # aviso al pegar varias líneas sin modo 2004
+abrir_enlaces = "xdg-open"      # macOS: open
+reconexion_max_min = 15         # minutos de reconexión automática (1-120)
 
 [servidor]
 gracia_apagado_seg = 10     # sin clientes ni sesiones, el servidor se apaga

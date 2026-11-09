@@ -34,9 +34,9 @@ pub const COMMIT: &str = match option_env!("MAGI_COMMIT") {
     None => "desconocido",
 };
 
-/// Fecha de la versión 1.3.0 (Fase 13). Fija la cabecera de la página man: la
+/// Fecha de la versión 1.4.0 (Fase 15). Fija la cabecera de la página man: la
 /// generación de recursos no puede cambiar en cada compilación.
-pub const FECHA_DE_VERSION: &str = "2026-11-08";
+pub const FECHA_DE_VERSION: &str = "2026-11-09";
 
 /// Versión larga como la imprime magi --version: versión, protocolo y commit.
 /// Se calcula una sola vez y se devuelve como cadena estática porque clap la

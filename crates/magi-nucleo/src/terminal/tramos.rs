@@ -186,8 +186,14 @@ impl GeneradorTramos {
     }
 }
 
-/// Convierte una fila del parser en tramos del mismo estilo.
-fn tramos_de_fila(pantalla: &vt100::Screen, fila: u16, columnas: u16) -> Vec<Tramo> {
+/// Convierte una fila de la vista del parser en tramos del mismo estilo.
+///
+/// La fila es la visible con el desplazamiento de historial que tenga la
+/// pantalla en ese momento. El texto cubre todo el ancho: las celdas vacías son
+/// espacios (el llamador que quiera el texto recortado usa
+/// [`LineaHistorial::texto`](crate::terminal::historial::LineaHistorial::texto)).
+#[must_use]
+pub fn tramos_de_fila(pantalla: &vt100::Screen, fila: u16, columnas: u16) -> Vec<Tramo> {
     let mut tramos: Vec<Tramo> = Vec::new();
     let mut anterior_ancho = false;
     for columna in 0..columnas {

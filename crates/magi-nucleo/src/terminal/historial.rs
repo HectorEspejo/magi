@@ -9,20 +9,32 @@
 use serde::{Deserialize, Serialize};
 
 use crate::terminal::emulador::PantallaEmulada;
-use crate::terminal::tramos::Tramo;
+use crate::terminal::tramos::{tramos_de_fila, Tramo};
 
 /// Bytes que ocupa cada celda de la pantalla de vt100 0.16. La prueba
 /// `terminal_historial` lo mide y falla si cambia.
 pub const BYTES_POR_CELDA: usize = 40;
 
+/// Longitud máxima (en caracteres) de un patrón de búsqueda.
+const PATRON_MAX: usize = 256;
+
+/// Coincidencias que se devuelven como mucho en una búsqueda.
+const TOPE_COINCIDENCIAS: usize = 10_000;
+
 /// Número de líneas de historial que caben con los topes configurados.
+///
+/// Manda el tope de memoria: con los valores por defecto (10 000 líneas y
+/// 64 MiB) caben 10 000 líneas hasta 167 columnas, 8 388 con 200 y 5 592 con
+/// 300. Con `historial_lineas` a 0 no hay historial.
 #[must_use]
 pub fn lineas_de_historial(historial_lineas: usize, historial_mib: u64, columnas: u16) -> usize {
     if historial_lineas == 0 {
         return 0;
     }
-    let por_bytes =
-        (historial_mib as usize * 1024 * 1024) / (usize::from(columnas.max(2)) * BYTES_POR_CELDA);
+    let bytes = usize::try_from(historial_mib)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(1024 * 1024);
+    let por_bytes = bytes / (usize::from(columnas.max(2)) * BYTES_POR_CELDA);
     historial_lineas.min(por_bytes)
 }
 
@@ -55,8 +67,53 @@ pub struct Captura {
 }
 
 /// Captura el historial y la pantalla principal de una pestaña.
+///
+/// Las primeras `captura.historial` filas son el historial de vt100 (de la más
+/// vieja a la más nueva) y las siguientes, las filas de la pantalla tal como
+/// están ahora. La pantalla alternativa no tiene historial: si el remoto está
+/// en ella, la captura solo lleva sus filas visibles. Deja la vista al final,
+/// sin desplazamiento.
 pub fn capturar(pantalla: &mut PantallaEmulada) -> Captura {
-    unimplemented!("historial: lo implementa la pista del núcleo")
+    let (filas, columnas) = pantalla.screen().size();
+    let total_historial = pantalla.lineas_historial();
+    let mut lineas = Vec::with_capacity(total_historial + usize::from(filas));
+    // Cada fila del historial se ve como la primera de la pantalla con su
+    // desplazamiento: vt100 no deja leer el historial de otra forma.
+    for indice in 0..total_historial {
+        pantalla.desplazar_historial(total_historial - indice);
+        let pantalla_vt100 = pantalla.screen();
+        lineas.push(LineaHistorial {
+            tramos: tramos_de_fila(pantalla_vt100, 0, columnas),
+            envuelta: fila_envuelta(pantalla_vt100, 0),
+        });
+    }
+    pantalla.desplazar_historial(0);
+    let pantalla_vt100 = pantalla.screen();
+    let total_lineas = lineas.len() + usize::from(filas);
+    for fila in 0..filas {
+        // La última fila capturada no puede continuar en ninguna otra.
+        let es_ultima = lineas.len() + 1 == total_lineas;
+        let envuelta = !es_ultima && fila_envuelta(pantalla_vt100, fila);
+        lineas.push(LineaHistorial {
+            tramos: tramos_de_fila(pantalla_vt100, fila, columnas),
+            envuelta,
+        });
+    }
+    Captura {
+        lineas,
+        historial: total_historial,
+    }
+}
+
+/// ¿La fila visible `fila` continúa en la siguiente por el ancho?
+///
+/// `contents_between` termina en salto de línea cuando la fila no está
+/// envuelta; la última fila de la pantalla también lo hace, porque el
+/// recorrido se acaba antes de llegar a la fila siguiente.
+fn fila_envuelta(pantalla: &vt100::Screen, fila: u16) -> bool {
+    !pantalla
+        .contents_between(fila, 0, fila.saturating_add(1), 0)
+        .ends_with('\n')
 }
 
 /// Cómo se interpreta el patrón de búsqueda.
@@ -69,8 +126,11 @@ pub enum ClaseBusqueda {
 /// Una coincidencia: línea lógica y rango de caracteres.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Coincidencia {
+    /// Fila de la captura en la que empieza la línea lógica coincidente.
     pub linea: usize,
+    /// Primer carácter de la coincidencia dentro de la línea lógica.
     pub inicio: usize,
+    /// Carácter siguiente al último de la coincidencia.
     pub fin: usize,
 }
 
@@ -85,18 +145,106 @@ pub enum ErrorBusqueda {
 /// Busca el patrón desde `desde` hacia arriba. La búsqueda es insensible a
 /// mayúsculas salvo que el patrón tenga alguna (como `less -i`), y trabaja
 /// sobre líneas lógicas.
+///
+/// `desde` es la fila de la captura donde está la vista (se acota a la
+/// captura); si cae dentro de una línea envuelta, se busca la línea lógica
+/// entera. Las coincidencias llegan de la más cercana a `desde` a la más vieja
+/// y, dentro de una línea, de izquierda a derecha. `Coincidencia::linea` es la
+/// fila donde empieza la línea lógica y `inicio`/`fin` cuentan caracteres
+/// dentro de ella. Se devuelven como mucho 10 000 coincidencias.
 pub fn buscar(
     lineas: &[LineaHistorial],
     patron: &str,
     clase: ClaseBusqueda,
     desde: usize,
 ) -> Result<Vec<Coincidencia>, ErrorBusqueda> {
-    let _ = (lineas, patron, clase, desde);
-    unimplemented!("historial: lo implementa la pista del núcleo")
+    let caracteres = patron.chars().count();
+    if caracteres == 0 {
+        return Err(ErrorBusqueda::Vacio);
+    }
+    if caracteres > PATRON_MAX {
+        return Err(ErrorBusqueda::DemasiadoLargo);
+    }
+    let sensible = patron.chars().any(char::is_uppercase);
+    let expresion = match clase {
+        ClaseBusqueda::Texto => regex::escape(patron),
+        ClaseBusqueda::Expresion => patron.to_string(),
+    };
+    let regex = regex::RegexBuilder::new(&expresion)
+        .case_insensitive(!sensible)
+        .size_limit(1 << 20)
+        .build()
+        .map_err(|error| ErrorBusqueda::Invalida(texto_de_error(&error)))?;
+    let mut coincidencias = Vec::new();
+    if lineas.is_empty() {
+        return Ok(coincidencias);
+    }
+    let desde = desde.min(lineas.len() - 1);
+    // Si `desde` cae dentro de una línea envuelta, se empieza por su principio.
+    let mut fila = desde;
+    while fila > 0 && lineas[fila - 1].envuelta {
+        fila -= 1;
+    }
+    loop {
+        let texto = texto_de_linea_logica(lineas, fila);
+        for encontrada in regex.find_iter(&texto) {
+            let inicio = texto[..encontrada.start()].chars().count();
+            let fin = inicio + texto[encontrada.start()..encontrada.end()].chars().count();
+            coincidencias.push(Coincidencia {
+                linea: fila,
+                inicio,
+                fin,
+            });
+            if coincidencias.len() >= TOPE_COINCIDENCIAS {
+                return Ok(coincidencias);
+            }
+        }
+        if fila == 0 {
+            break;
+        }
+        // La fila anterior es el final de la línea lógica anterior.
+        fila -= 1;
+        while fila > 0 && lineas[fila - 1].envuelta {
+            fila -= 1;
+        }
+    }
+    Ok(coincidencias)
+}
+
+/// Mensaje legible y de una sola línea para una expresión regular inválida.
+fn texto_de_error(error: &regex::Error) -> String {
+    error
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Fila siguiente a la última de la línea lógica que empieza en `inicio`.
+fn fin_de_linea_logica(lineas: &[LineaHistorial], inicio: usize) -> usize {
+    let mut fin = inicio + 1;
+    while fin < lineas.len() && lineas[fin - 1].envuelta {
+        fin += 1;
+    }
+    fin
+}
+
+/// Texto de la línea lógica que empieza en `inicio`, con las envueltas unidas.
+fn texto_de_linea_logica(lineas: &[LineaHistorial], inicio: usize) -> String {
+    let fin = fin_de_linea_logica(lineas, inicio);
+    let mut texto = String::new();
+    for linea in &lineas[inicio..fin] {
+        texto.push_str(&linea.texto());
+    }
+    texto
 }
 
 /// Texto de una selección entre dos celdas (línea, columna), uniendo las
 /// líneas envueltas y sin espacios finales.
+///
+/// Las columnas cuentan caracteres dentro del texto de la fila. Si la
+/// selección viene del revés, se ordena; con `por_lineas` se cogen las filas
+/// enteras (también la última, aunque `fin` caiga a mitad).
 #[must_use]
 pub fn texto_seleccion(
     lineas: &[LineaHistorial],
@@ -104,13 +252,73 @@ pub fn texto_seleccion(
     fin: (usize, usize),
     por_lineas: bool,
 ) -> String {
-    let _ = (lineas, inicio, fin, por_lineas);
-    unimplemented!("historial: lo implementa la pista del núcleo")
+    if lineas.is_empty() {
+        return String::new();
+    }
+    let (inicio, fin) = if inicio <= fin {
+        (inicio, fin)
+    } else {
+        (fin, inicio)
+    };
+    let ultima = lineas.len() - 1;
+    if inicio.0 > ultima {
+        return String::new();
+    }
+    let fin_linea = fin.0.min(ultima);
+    let mut texto = String::new();
+    let seleccionadas = lineas.iter().enumerate().take(fin_linea + 1).skip(inicio.0);
+    for (indice, linea) in seleccionadas {
+        let fila = linea.texto();
+        let caracteres = fila.chars().count();
+        let desde = if por_lineas || indice > inicio.0 {
+            0
+        } else {
+            inicio.1.min(caracteres)
+        };
+        let hasta = if por_lineas || indice < fin.0 {
+            caracteres
+        } else {
+            fin.1.saturating_add(1).min(caracteres)
+        };
+        let trozo: String = if hasta > desde {
+            fila.chars().skip(desde).take(hasta - desde).collect()
+        } else {
+            String::new()
+        };
+        // Las envueltas se unen con la siguiente salvo la última seleccionada.
+        if linea.envuelta && indice < fin_linea {
+            texto.push_str(&trozo);
+        } else {
+            texto.push_str(trozo.trim_end());
+            texto.push('\n');
+        }
+    }
+    while texto.ends_with('\n') {
+        texto.pop();
+    }
+    texto
 }
 
 /// Texto plano de una captura, una línea lógica por renglón.
+///
+/// Une las líneas envueltas, quita los espacios finales de cada renglón y
+/// termina cada uno en salto de línea.
 #[must_use]
 pub fn texto_plano(lineas: &[LineaHistorial]) -> String {
-    let _ = lineas;
-    unimplemented!("historial: lo implementa la pista del núcleo")
+    let mut texto = String::new();
+    let mut indice = 0;
+    while indice < lineas.len() {
+        let mut renglon = String::new();
+        loop {
+            renglon.push_str(&lineas[indice].texto());
+            let envuelta = lineas[indice].envuelta;
+            indice += 1;
+            if !envuelta || indice >= lineas.len() {
+                break;
+            }
+        }
+        texto.push_str(renglon.trim_end());
+        texto.push('\n');
+    }
+    texto
 }

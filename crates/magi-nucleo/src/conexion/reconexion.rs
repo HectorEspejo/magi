@@ -2,7 +2,7 @@
 //!
 //! La hace el servidor, sin diálogos: solo se reintenta una caída de red, con
 //! las esperas de 2, 5, 10 y 30 s y luego cada minuto hasta
-//! `reconexion_max_min`. La vuelta de una suspensión del equipo adelanta el
+//! reconexion_max_min. La vuelta de una suspensión del equipo adelanta el
 //! siguiente intento.
 
 use std::time::Instant;
@@ -26,7 +26,7 @@ pub enum Causa {
     ConexionRechazada,
     SinRuta,
     DnsSinRespuesta,
-    /// El remoto terminó (`exit` o `exit-signal`): no se reintenta.
+    /// El remoto terminó (exit o exit-signal): no se reintenta.
     Exit,
     Credenciales,
     HuellaNueva,
@@ -73,11 +73,21 @@ impl Causa {
 }
 
 /// Clasifica el motivo que da una conexión o su caída.
+///
+/// Los textos de Causa::texto vuelven a caer en su misma causa; el orden de
+/// las comprobaciones va de las frases más específicas a las más generales
+/// (el DNS antes que el plazo, por ejemplo).
 #[must_use]
 pub fn clasificar(motivo: &str) -> Causa {
     let texto = motivo.to_lowercase();
     if texto.contains("exit") || texto.contains("cerró") || texto.contains("terminó") {
         return Causa::Exit;
+    }
+    if texto.contains("no existe") || texto.contains("borrado") {
+        return Causa::HostBorrado;
+    }
+    if texto.contains("desde la ventana") {
+        return Causa::CerradaPorElUsuario;
     }
     if texto.contains("huella") {
         return if texto.contains("cambi") {
@@ -101,7 +111,11 @@ pub fn clasificar(motivo: &str) -> Causa {
     if texto.contains("dns") || texto.contains("resolv") || texto.contains("nombre") {
         return Causa::DnsSinRespuesta;
     }
-    if texto.contains("plazo") || texto.contains("timeout") || texto.contains("tiempo") {
+    if texto.contains("plazo")
+        || texto.contains("timeout")
+        || texto.contains("tiempo")
+        || texto.contains("no responde")
+    {
         return Causa::PlazoAgotado;
     }
     if texto.contains("keepalive") {

@@ -727,13 +727,13 @@ fn borrar_el_host_deja_lapida_de_sus_comprobaciones() {
 
 #[test]
 fn la_migracion_9_estrena_comprobaciones_y_fallos_json() {
-    // Base nueva: user_version 9, tabla y columna.
+    // Base nueva: la versión actual de la base (10), tabla y columna.
     let almacen = almacen();
     let version: i64 = almacen
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .expect("user_version");
-    assert_eq!(version, 9);
+    assert_eq!(version, magi_nucleo::almacen::migraciones::VERSION_BD);
     let tablas: Vec<String> = almacen
         .conexion()
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -756,7 +756,7 @@ fn la_migracion_9_estrena_comprobaciones_y_fallos_json() {
         "SONDEOS gana fallos_json: {columnas:?}"
     );
 
-    // Base de la fase 9 (user_version 6) que sube a 9 sin perder nada.
+    // Base de la fase 9 (user_version 6) que sube hasta la actual sin perder nada.
     let temporal = tempfile::tempdir().expect("directorio temporal");
     let ruta = temporal.path().join("magi.db");
     {
@@ -785,7 +785,7 @@ fn la_migracion_9_estrena_comprobaciones_y_fallos_json() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .expect("user_version migrada");
-    assert_eq!(version, 9);
+    assert_eq!(version, magi_nucleo::almacen::migraciones::VERSION_BD);
     assert_eq!(almacen.listar_hosts().expect("hosts").len(), 1);
     // Las filas antiguas de SONDEOS se leen sin fallos (la columna queda nula).
     let host = almacen.listar_hosts().expect("hosts")[0].id;

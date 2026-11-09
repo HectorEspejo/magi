@@ -9,6 +9,40 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **Terminal, segunda vuelta (Fase 15).** La vista Sesión gana **paneles**
+  (completa, lado a lado, apilados, 1 grande + 2 y rejilla de 4; `prefijo
+  Espacio` para cambiar, flechas para mover el foco, `z` para ampliar y
+  «abrir en rejilla…» en la paleta), **historial** de 10 000 líneas guardado en
+  el servidor con modo historial (`prefijo [` o `Shift+RePág`: navegación,
+  búsqueda de texto o expresión regular, selección, copia con el teclado y
+  guardado en un fichero), **enlaces** `http`/`https` con letras y diálogo
+  (abrir con el navegador del sistema, copiar, o túnel temporal para los de
+  `localhost` del host), **escritura en varios** paneles con deliberación MAGI
+  y concesión del servidor (aviso rojo fijo, `»` en cada panel, apagado a los
+  10 minutos), **reconexión automática** sin diálogos (2, 5, 10 y 30 s y luego
+  cada minuto hasta `reconexion_max_min`, cuenta atrás, `prefijo r` para
+  reintentar a mano) y **sesión persistente con tmux** por host (la pestaña
+  abre o recupera `magi-<equipo>-<n>`; la vista Sesiones lista, engancha y
+  termina sesiones de tmux). Se pueden renombrar (`prefijo ,`) y mover
+  (`prefijo <` `>`) pestañas, y el título y los avisos del remoto (campana,
+  OSC 9 y OSC 777) se ven en la pestaña y en Sesiones.
+  MAGI se comporta como un terminal de verdad para lo que corre dentro
+  (Claude Code como referencia): pegado entre corchetes de punta a punta (un
+  solo bloque, nunca como teclas sueltas), respuestas a DA1, DA2, DSR,
+  DECRQM, XTVERSION, XTWINOPS y OSC 10-12 solo desde el servidor, teclado de
+  kitty con la bandera 1 (Mayús+Intro es `CSI 13;2u`), salida sincronizada
+  (2026), ED 3, eventos de foco (1004), ratón transparente para el programa
+  que lo pide y portapapeles del remoto (OSC 52) con permiso por host
+  (`prefijo P`); leer el portapapeles, nunca. El terminal exterior queda como
+  estaba al salir, al ceder la terminal y tras un pánico. Migración 10
+  (columnas propias del equipo `reconectar`, `tmux_persistente` y
+  `portapapeles_remoto` en `HOSTS`, que no viajan), protocolo v9 y sección
+  `[terminal]` en `config.toml`; el móvil no cambia.
+
+- **Móvil de guardia (Fase 14).** La app Android añade Flota con sondeo como
+  pantalla de inicio, Servicios con logs y acciones, snippets con deliberación
+  y Registro, con la lógica compartida en `magi-nucleo`; sigue siendo lectora
+  de la sincronización y no cambia en esta fase.
 - **Servicios, contenedores y logs (Fase 13).** Vista **Servicios** (`F9`, y `u`
   desde Flota, Hosts y la ficha) con los hosts SSH a la izquierda y, a la
   derecha, los servicios y timers de systemd y los contenedores de Docker o
@@ -77,6 +111,9 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   Android.
 
 ### Cambiado
+
+- Versión 1.4.0 (MINOR: funcionalidad nueva, migración de esquema 10 y
+  protocolo 9; `formato` de sincronización sin cambios).
 
 - Versión 1.3.0 (MINOR: funcionalidad nueva, migración de esquema 9,
   protocolo 8 y `formato` 3 de sincronización).

@@ -142,6 +142,10 @@ pub struct Emulador {
     responder: bool,
     colores: ColoresTema,
     modos: Modos,
+    /// Versión del producto que se informa en DA2 y XTVERSION. La fija el
+    /// servidor (es el único que responde); el núcleo no conoce la versión de
+    /// la app.
+    version: String,
 }
 
 impl Default for Emulador {
@@ -158,7 +162,23 @@ impl Emulador {
             responder,
             colores: ColoresTema::default(),
             modos: Modos::default(),
+            version: "0.0.0".to_string(),
         }
+    }
+
+    /// Fija la versión del producto (p. ej. «1.4.0») que se responde en DA2 y
+    /// XTVERSION. Solo la usa el servidor.
+    pub fn fijar_version(&mut self, version: impl Into<String>) {
+        self.version = version.into();
+    }
+
+    /// Valor de DA2 a partir de la versión del producto (1.4.0 → 10400).
+    fn valor_da2(&self) -> u32 {
+        let mut partes = self.version.split('.');
+        let mayor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let menor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let parche: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        mayor * 10_000 + menor * 100 + parche
     }
 
     /// ¿Responde a las consultas del remoto?
@@ -256,15 +276,6 @@ fn color_a_rgb(color: (u8, u8, u8)) -> String {
 }
 
 /// Valor de DA2 a partir de la versión del producto (`1.4.0` → 10400).
-fn version_da2() -> u32 {
-    let texto = env!("CARGO_PKG_VERSION");
-    let mut partes = texto.split('.');
-    let mayor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let menor: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let parche: u32 = partes.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    mayor * 10_000 + menor * 100 + parche
-}
-
 /// Estado de un modo numérico para DECRQM: 1 activo, 2 inactivo, 0 no
 /// reconocido.
 fn estado_de_modo(screen: &vt100::Screen, emulador: &Emulador, modo: u16) -> u8 {
@@ -364,7 +375,7 @@ impl vt100::Callbacks for Emulador {
             }
             // DA2.
             (Some(b'>'), None, 'c') => {
-                let version = version_da2();
+                let version = self.valor_da2();
                 self.escribir(format!("\x1b[>0;{version};0c").as_bytes());
             }
             // DSR 5 y 6.
@@ -386,9 +397,7 @@ impl vt100::Callbacks for Emulador {
             // XTVERSION.
             (Some(b'>'), None, 'q') => {
                 if primero.is_none() || primero == Some(0) {
-                    self.escribir(
-                        format!("\x1bP>|MAGI {}\x1b\\", env!("CARGO_PKG_VERSION")).as_bytes(),
-                    );
+                    self.escribir(format!("\x1bP>|MAGI {}\x1b\\", self.version).as_bytes());
                 }
             }
             // XTWINOPS 18: tamaño de la ventana.
@@ -414,10 +423,8 @@ impl vt100::Callbacks for Emulador {
                 self.pila(alternativa).fijar(primero.unwrap_or(0));
             }
             // ED 3: borrar el historial guardado.
-            (None, None, 'J') => {
-                if primero == Some(3) {
-                    self.modos.ed3 = true;
-                }
+            (None, None, 'J') if primero == Some(3) => {
+                self.modos.ed3 = true;
             }
             _ => {}
         }
@@ -735,13 +742,11 @@ mod pruebas {
     #[test]
     fn da1_da2_dsr_xtversion_y_xtwinops_se_responden() {
         let mut pantalla = pantalla(24, 80, 0, true);
+        pantalla.emulador_mut().fijar_version("1.4.0");
         let respuestas = pantalla.procesar(b"\x1b[c");
         assert_eq!(respuestas, b"\x1b[?62;22c");
         let respuestas = pantalla.procesar(b"\x1b[>c");
-        assert_eq!(
-            String::from_utf8(respuestas).unwrap(),
-            format!("\x1b[>0;{};0c", version_da2())
-        );
+        assert_eq!(respuestas, b"\x1b[>0;10400;0c");
         let respuestas = pantalla.procesar(b"\x1b[5n");
         assert_eq!(respuestas, b"\x1b[0n");
         let respuestas = pantalla.procesar(b"\x1b[>0q");

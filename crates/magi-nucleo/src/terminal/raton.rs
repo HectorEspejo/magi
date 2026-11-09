@@ -167,10 +167,14 @@ pub fn codificar(evento: &Evento, modo: ModoRaton) -> Option<Vec<u8>> {
             )
         }
         Codificacion::PorDefecto | Codificacion::Utf8 => {
-            // La codificación por defecto llega a la columna o fila 223.
-            if modo.codificacion == Codificacion::PorDefecto
-                && (evento.columna > 223 || evento.fila > 223)
-            {
+            // En la codificación por defecto el byte es 32 + coordenada: llega
+            // a la columna o fila 223. En UTF-8 (1005) el límite es 2015.
+            let limite = if modo.codificacion == Codificacion::Utf8 {
+                2015
+            } else {
+                223
+            };
+            if evento.columna > limite || evento.fila > limite {
                 return None;
             }
             // En la codificación por defecto, soltar es siempre el código 3.
@@ -182,13 +186,15 @@ pub fn codificar(evento: &Evento, modo: ModoRaton) -> Option<Vec<u8>> {
             let mut bytes = vec![0x1b, b'[', b'M', 32 + base + mods];
             if modo.codificacion == Codificacion::Utf8 {
                 let mut buffer = [0u8; 4];
-                for valor in [33 + evento.columna, 33 + evento.fila] {
-                    let caracter = char::from_u32(u32::from(valor)).unwrap_or(' ');
+                for valor in [32 + u32::from(evento.columna), 32 + u32::from(evento.fila)] {
+                    let caracter = char::from_u32(valor).unwrap_or(' ');
                     bytes.extend_from_slice(caracter.encode_utf8(&mut buffer).as_bytes());
                 }
             } else {
-                bytes.push(33 + evento.columna as u8);
-                bytes.push(33 + evento.fila as u8);
+                // Las coordenadas llevan el mismo desplazamiento de 32 que el
+                // botón, sobre valores desde 1 (xterm).
+                bytes.push(32 + evento.columna as u8);
+                bytes.push(32 + evento.fila as u8);
             }
             Some(bytes)
         }
@@ -263,9 +269,19 @@ mod pruebas {
             por_defecto
         )
         .is_none());
+        // El máximo 223 no desborda: 32 + 223 = 255.
+        assert_eq!(
+            codificar(
+                &evento(Accion::Pulsar, Boton::Izquierda, 223, 223),
+                por_defecto
+            )
+            .unwrap(),
+            b"\x1b[M \xff\xff"
+        );
         assert_eq!(
             codificar(&evento(Accion::Pulsar, Boton::Izquierda, 3, 4), por_defecto).unwrap(),
-            b"\x1b[M $%"
+            // Botón 32, columna 32+3 = 35 ('#') y fila 32+4 = 36 ('$').
+            b"\x1b[M #$"
         );
         let utf8 = ModoRaton {
             modo: Modo::PulsarSoltar,
@@ -273,6 +289,7 @@ mod pruebas {
         };
         let bytes = codificar(&evento(Accion::Pulsar, Boton::Izquierda, 300, 4), utf8).unwrap();
         assert_eq!(bytes[..4], [0x1b, b'[', b'M', 32]);
+        assert!(codificar(&evento(Accion::Pulsar, Boton::Izquierda, 2016, 4), utf8).is_none());
         let texto = std::str::from_utf8(&bytes[4..]).unwrap();
         assert_eq!(texto.chars().count(), 2);
     }
