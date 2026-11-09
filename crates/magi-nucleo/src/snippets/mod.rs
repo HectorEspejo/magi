@@ -3,6 +3,8 @@
 //! pura: validación, resolución de destinos y cuándo hace falta deliberar.
 //! El CRUD está en `almacen::snippets`; la ejecución, en el servidor.
 
+pub mod destinos;
+pub mod ejecucion;
 pub mod salida;
 pub mod variables;
 

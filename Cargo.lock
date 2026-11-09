@@ -3206,6 +3206,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "russh",
+ "russh-sftp",
  "rustls",
  "serde",
  "serde_json",

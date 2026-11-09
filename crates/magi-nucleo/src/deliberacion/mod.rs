@@ -2,8 +2,25 @@
 //! móvil: lo que exige cada host, veredictos, la fila de DELIBERACIONES y el
 //! texto del detalle que va a REGISTRO y a la vista.
 //!
-//! Las comprobaciones y su orquestación (que necesitan el cliente del
-//! escritorio) se quedan en el crate magi-ssh.
+//! Desde la Fase 14 las comprobaciones (MELCHIOR-1, BALTHASAR-2 y CASPER-3),
+//! su orquestación con plazo y el consenso viven aquí, con proveedores que
+//! pone cada plataforma: el escritorio, con su servidor de sesiones y su
+//! SFTP; el móvil, con su conexión, `sftp_lectura` y «no disponible» en
+//! CASPER-3. El escritorio solo guarda su máquina de estados del diálogo y
+//! sus proveedores.
+
+pub mod backup;
+pub mod comprobaciones;
+pub mod consenso;
+pub mod plan;
+pub mod salud;
+pub mod tests;
+
+pub use comprobaciones::{
+    lanzar, Limites, NoDisponible, Proveedores, ResultadoComprobacion, Trabajo,
+};
+pub use consenso::{consenso, Consenso};
+pub use plan::{PlanDeliberado, PlanEjecucion, PlanServicio};
 
 use serde::{Deserialize, Serialize};
 
