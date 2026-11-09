@@ -1,6 +1,7 @@
 package org.cuatrodetres.magi.ui.dobles
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -149,7 +150,13 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
         return inventarioRespuesta
     }
 
-    override suspend fun fichaHost(uuid: String): FichaHostVista? = fichas[uuid]
+    /** Puerta de prueba: si no es null, fichaHost espera a que se complete. */
+    var puertaFichaHost: CompletableDeferred<Unit>? = null
+
+    override suspend fun fichaHost(uuid: String): FichaHostVista? {
+        puertaFichaHost?.await()
+        return fichas[uuid]
+    }
 
     override suspend fun plegarGrupo(uuid: String, plegado: Boolean): ResultadoAccion {
         llamadas.add("plegar:" + uuid + ":" + plegado)
@@ -358,6 +365,9 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
     val sondas: MutableList<List<String>> = mutableListOf()
     val accionesSolicitadas: MutableList<Triple<String, ObjetivoVista, AccionServicioVista>> =
         mutableListOf()
+
+    /** Deliberación con la que se pidió cada acción (null si no hacía falta). */
+    val deliberacionesSolicitadas: MutableList<Long?> = mutableListOf()
     val ventanasPedidas: MutableList<Pair<Long, FiltroLogsVista>> = mutableListOf()
     val deliberacionesPedidas: MutableList<PlanDeliberacionVista> = mutableListOf()
     val decisionesDeliberacion: MutableList<Pair<Long, DecisionDeliberacionVista>> =
@@ -459,6 +469,7 @@ class FuenteNucleoFalsa : FuenteNucleo by FuenteNucleoVacia {
         deliberacion: Long?,
     ): ResultadoNucleoVista<ResultadoServicioVista> {
         accionesSolicitadas.add(Triple(hostUuid, objetivo, accion))
+        deliberacionesSolicitadas.add(deliberacion)
         llamadas.add("servicioAccion:" + hostUuid + ":" + objetivo.nombre + ":" + accion)
         return lectura(resultadoServicioRespuesta)
     }

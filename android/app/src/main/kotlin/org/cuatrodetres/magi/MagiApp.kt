@@ -132,7 +132,9 @@ class MagiApp : Application() {
         }
         alcance.launch {
             fuente.ejecuciones.collect { ejecuciones ->
-                ejecucionesVivas = ejecuciones.size
+                // La lista conserva 1 h las ejecuciones terminadas: para el
+                // servicio en primer plano solo cuentan las que siguen vivas.
+                ejecucionesVivas = ejecuciones.count { ejecucion -> !ejecucion.terminada }
                 actualizarServicioSesiones()
             }
         }

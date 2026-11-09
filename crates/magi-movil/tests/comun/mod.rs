@@ -32,8 +32,10 @@ use magi_nucleo::almacen::hosts as almacen_hosts;
 use magi_nucleo::almacen::movil as movil_bd;
 use magi_nucleo::almacen::versiones::Tabla;
 use magi_nucleo::almacen::Almacen;
+use magi_nucleo::deliberacion::DatosVerificaciones;
 use magi_nucleo::modelo::{DatosHost, Origen};
 use magi_nucleo::rutas::{Equipo, Rutas};
+use magi_nucleo::snippets::DatosSnippet;
 
 // ---------------------------------------------------------------------------
 // Retrollamadas de plataforma
@@ -489,6 +491,29 @@ pub fn crear_host(prueba: &PruebaNucleo, datos: DatosHost) -> (i64, String) {
             .cloned()
             .expect("uuid del host");
         (id, uuid)
+    })
+}
+
+/// Guarda las verificaciones previas de un host (se crean antes de arrancar
+/// el núcleo, con `PruebaNucleo::preparar_bd`).
+pub fn guardar_verificaciones(prueba: &PruebaNucleo, host_id: i64, datos: DatosVerificaciones) {
+    prueba.preparar_bd(|almacen| {
+        almacen
+            .guardar_verificaciones(host_id, &datos)
+            .expect("guardando las verificaciones del host");
+    });
+}
+
+/// Crea un snippet en la base de datos de la prueba y devuelve su uuid de
+/// sincronización (el que usa la API).
+pub fn crear_snippet(prueba: &PruebaNucleo, datos: DatosSnippet) -> String {
+    prueba.preparar_bd(|almacen| {
+        let id = almacen.crear_snippet(&datos).expect("creando el snippet");
+        movil_bd::uuid_por_id(almacen.conexion(), Tabla::Snippets)
+            .expect("uuid de los snippets")
+            .get(&id)
+            .cloned()
+            .expect("uuid del snippet")
     })
 }
 

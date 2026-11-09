@@ -69,14 +69,6 @@ pub enum ErrorNucleo {
     General { detalle: String },
 }
 
-/// Error de las funciones de la Fase 14 cuyo cuerpo todavía es un esbozo: la
-/// lógica que abre conexiones aún no está implementada en este contrato.
-pub(crate) fn pendiente(operacion: &str) -> ErrorNucleo {
-    ErrorNucleo::General {
-        detalle: format!("pendiente: {operacion}"),
-    }
-}
-
 // ===========================================================================
 // Arranque
 // ===========================================================================
@@ -757,6 +749,19 @@ pub enum TipoObjetivoMovil {
     Proyecto,
 }
 
+impl TipoObjetivoMovil {
+    /// Texto del tipo de objetivo, el mismo del núcleo. Es un método Rust: no
+    /// cruza UniFFI.
+    pub fn texto(self) -> &'static str {
+        match self {
+            TipoObjetivoMovil::Unidad => "unidad",
+            TipoObjetivoMovil::Timer => "timer",
+            TipoObjetivoMovil::Contenedor => "contenedor",
+            TipoObjetivoMovil::Proyecto => "proyecto",
+        }
+    }
+}
+
 /// Objetivo concreto: tipo y nombre (unidad, timer, contenedor o proyecto).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ObjetivoMovil {
@@ -777,6 +782,34 @@ pub enum AccionMovil {
     Desactivar,
     /// Lanzar ahora el servicio de un timer.
     Lanzar,
+}
+
+impl AccionMovil {
+    /// Texto de la acción en infinitivo, el mismo del núcleo. No cruza UniFFI.
+    pub fn texto(self) -> &'static str {
+        match self {
+            AccionMovil::Arrancar => "arrancar",
+            AccionMovil::Parar => "parar",
+            AccionMovil::Reiniciar => "reiniciar",
+            AccionMovil::Recargar => "recargar",
+            AccionMovil::Activar => "activar",
+            AccionMovil::Desactivar => "desactivar",
+            AccionMovil::Lanzar => "lanzar",
+        }
+    }
+
+    /// Texto en pasado, para el registro y los mensajes («reiniciado»).
+    pub fn participio(self) -> &'static str {
+        match self {
+            AccionMovil::Arrancar => "arrancado",
+            AccionMovil::Parar => "parado",
+            AccionMovil::Reiniciar => "reiniciado",
+            AccionMovil::Recargar => "recargado",
+            AccionMovil::Activar => "activado",
+            AccionMovil::Desactivar => "desactivado",
+            AccionMovil::Lanzar => "lanzado",
+        }
+    }
 }
 
 /// Privilegio del usuario SSH en el host (informe §7.3 de la Fase 13).
@@ -1065,6 +1098,20 @@ pub enum ResultadoAccionMovil {
     RechazadaConfiguracion,
     /// Error del host o de la conexión.
     Error,
+}
+
+impl ResultadoAccionMovil {
+    /// Texto del resultado, el mismo que se guarda en el núcleo. No cruza
+    /// UniFFI.
+    pub fn texto(self) -> &'static str {
+        match self {
+            ResultadoAccionMovil::Hecho => "hecho",
+            ResultadoAccionMovil::Fallido => "fallido",
+            ResultadoAccionMovil::SinConfirmar => "sin_confirmar",
+            ResultadoAccionMovil::RechazadaConfiguracion => "rechazada_configuracion",
+            ResultadoAccionMovil::Error => "error",
+        }
+    }
 }
 
 /// Fase de una acción de servicio en curso (informe §3.1).
@@ -1635,6 +1682,15 @@ impl Nucleo {
         let equipo_nucleo = magi_nucleo::rutas::Equipo::nuevo(equipo.nombre, equipo.plataforma);
         let estado =
             crate::estado::EstadoNucleo::nuevo(rutas_nucleo, equipo_nucleo, retrollamadas)?;
+        // La purga del registro de más de 90 días sigue como en la F11 y se
+        // hace al arrancar (informe §7.10). Un fallo de la purga no impide
+        // arrancar: el registro se queda como estaba y se reintenta al volver.
+        let corte = (chrono::Local::now() - chrono::Duration::days(90))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string();
+        let _ = estado
+            .escritor
+            .con_almacen(move |almacen| almacen.purgar_registro(&corte));
         let ya_anotada = estado
             .escritor
             .con_almacen(|almacen| {
@@ -1837,6 +1893,13 @@ impl Nucleo {
     /// Olvida la contraseña de sudo en memoria de un host (informe §7.5).
     pub fn sudo_olvidar(&self, host: String) -> Result<(), ErrorNucleo> {
         crate::servicios::sudo_olvidar(&self.estado, &host)
+    }
+
+    /// Olvida todas las contraseñas de sudo en memoria: la app lo llama al
+    /// bloquearse MAGI (informe §7.5 y D268).
+    pub fn olvidar_sudo_al_bloquear(&self) -> Result<(), ErrorNucleo> {
+        crate::servicios::olvidar_sudo_al_bloquear(&self.estado);
+        Ok(())
     }
 
     /// Hasta 500 líneas ya filtradas de una suscripción, desde un número de

@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +91,7 @@ private val ALTURA_FILA = 48.dp
  */
 @Composable
 fun PantallaServicios(
+    modifier: Modifier = Modifier,
     fuente: FuenteNucleo = FuenteNucleoVacia,
     hostInicial: String? = null,
     ajustes: AjustesMovilVista = AjustesMovilVista.POR_DEFECTO,
@@ -99,7 +101,6 @@ fun PantallaServicios(
     alVolver: () -> Unit = {},
     /** Diálogo de deliberación MAGI (otra pista): plan y resolutor. */
     alDeliberar: ((org.cuatrodetres.magi.ui.modelos.PlanDeliberacionVista, (Long?) -> Unit) -> Unit)? = null,
-    modifier: Modifier = Modifier,
     vistaModelo: VistaModeloServicios = viewModel(
         key = "magi-servicios",
         factory = viewModelFactory {
@@ -376,7 +377,7 @@ private fun FilaFallo(nombre: String, estado: String, host: String, hora: Long?)
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("✕", color = Paleta.ROJO)
+        Glifo("✕", Paleta.ROJO)
         Column(modifier = Modifier.weight(1f)) {
             Text(nombre, style = MaterialTheme.typography.bodyMedium, color = Paleta.TEXTO)
             Text(
@@ -409,7 +410,7 @@ private fun FilaHostFlota(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(host.estado.glifo, color = color)
+        Glifo(host.estado.glifo, color)
         Column(modifier = Modifier.weight(1f)) {
             Text(host.hostNombre, style = MaterialTheme.typography.bodyMedium, color = Paleta.TEXTO)
             if (!host.motivo.isNullOrEmpty()) {
@@ -649,7 +650,7 @@ private fun FilaUnidad(unidad: UnidadVista, accion: org.cuatrodetres.magi.ui.mod
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(if (unidad.fallida) "✕" else if (unidad.vigilada) "★" else "·", color = color)
+        Glifo(if (unidad.fallida) "✕" else if (unidad.vigilada) "★" else "·", color)
         Column(modifier = Modifier.weight(1f)) {
             Text(unidad.nombre, style = MaterialTheme.typography.bodyMedium, color = Paleta.TEXTO)
             Text(
@@ -678,7 +679,7 @@ private fun FilaTimer(timer: TimerVista, accion: org.cuatrodetres.magi.ui.modelo
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(if (fallido) "✕" else "◷", color = if (fallido) Paleta.ROJO else Paleta.AMBAR)
+        Glifo(if (fallido) "✕" else "◷", if (fallido) Paleta.ROJO else Paleta.AMBAR)
         Column(modifier = Modifier.weight(1f)) {
             Text(timer.nombre, style = MaterialTheme.typography.bodyMedium, color = Paleta.TEXTO)
             Text(
@@ -716,7 +717,7 @@ private fun FilaContenedor(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(if (contenedor.caido) "✕" else "▣", color = color)
+        Glifo(if (contenedor.caido) "✕" else "▣", color)
         Column(modifier = Modifier.weight(1f)) {
             Text(contenedor.nombre, style = MaterialTheme.typography.bodyMedium, color = Paleta.TEXTO)
             val segunda = listOfNotNull(
@@ -1066,6 +1067,13 @@ private fun DialogoSudo(
 }
 
 // ------------------------------------------------------------------ ayudas
+
+/// Glifo decorativo de una fila: TalkBack no lo lee porque la fila ya dice el
+/// estado con palabras (T5).
+@Composable
+private fun Glifo(texto: String, color: Color) {
+    Text(texto, color = color, modifier = Modifier.clearAndSetSemantics {})
+}
 
 private fun colorEstadoFlota(estado: EstadoFlotaVista): Color = when (estado) {
     EstadoFlotaVista.NOMINAL, EstadoFlotaVista.ALCANZABLE -> Paleta.VERDE

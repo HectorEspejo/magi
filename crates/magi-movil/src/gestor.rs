@@ -603,7 +603,11 @@ pub async fn reconectar(estado: &Arc<EstadoNucleo>, id: u64) -> Result<(), Error
             detalle: "solo se reconecta una sesión caída".to_string(),
         });
     }
-    estado.conexiones.forzar_cierre(&sesion.host_uuid);
+    // D277: hay una sola conexión por host para todo. No se fuerza su cierre al
+    // reconectar: si sigue viva (o en gracia) se reutiliza, y si el host la
+    // cerró, el vigilante ya la retiró. Cerrarla aquí tiraría las sesiones y
+    // los túneles de otros que comparten la conexión (aviso de revisión
+    // adversarial de la F14).
     if let Ok(mut sesiones) = estado.sesiones.lock() {
         sesiones.remove(&id);
     }

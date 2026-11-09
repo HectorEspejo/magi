@@ -77,7 +77,13 @@ class PruebaSnippets {
         assertEquals("limpiar journald", journald.nombre)
         val variable = journald.variables.firstOrNull { it.nombre == "dias" }
         assertNotNull("limpiar journald debería tener la variable dias: " + journald.variables, variable)
-        assertEquals("7", variable!!.valorDefecto)
+        // El comando de la fixture es journalctl --vacuum-time={{dias:7}}d: la
+        // variable debe existir con su valor por defecto 7 (la prueba pasa luego
+        // un valor explícito al preparar la ejecución).
+        val dias = requireNotNull(variable) {
+            "limpiar journald debería tener la variable dias: " + journald.variables
+        }
+        assertEquals("el valor por defecto de dias", "7", dias.valorDefecto)
 
         // 2. Preparar con la variable sustituida (y escapada) y ejecutar en web-01.
         val preparada = nucleo.prepararEjecucion(
@@ -129,11 +135,10 @@ class PruebaSnippets {
             "el snippet ejecutado debe contar como uso: " + nucleo.snippet(UUID_SNIPPET_JOURNALD).usadoVeces,
             nucleo.snippet(UUID_SNIPPET_JOURNALD).usadoVeces >= 1u,
         )
-        assertTrue(
-            "no hay anotación snippet_ejecutado en el registro",
+        esperarHasta("el snippet ejecutado queda anotado en el registro") {
             entradasDelRegistro(nucleo, UUID_WEB, TipoRegistroFiltro.SNIPPETS)
-                .any { it.tipo == "snippet_ejecutado" },
-        )
+                .any { it.tipo == "snippet_ejecutado" }
+        }
 
         // 3. «reiniciar nginx» en dos hosts: crítico y en dos hosts -> delibera;
         // CASPER-3 rechaza en db-01 («solo en el escritorio»).
@@ -197,7 +202,12 @@ class PruebaSnippets {
         val salidaDb = nucleo.salidaEjecucion(ejecucionNginx, UUID_DB)
         assertEquals(0, salidaDb.codigo)
 
-        // 5. REGISTRO: la deliberación forzada queda anotada con su motivo.
+        // 5. REGISTRO: la deliberación forzada queda anotada con su motivo (se
+        // escribe al registrar el resultado de la ejecución).
+        esperarHasta("la deliberación forzada queda anotada en el registro") {
+            entradasDelRegistro(nucleo, null, TipoRegistroFiltro.DELIBERACIONES)
+                .any { it.tipo == "deliberacion_forzada" && it.detalle.contains("prueba instrumentada") }
+        }
         val forzadas = entradasDelRegistro(nucleo, null, TipoRegistroFiltro.DELIBERACIONES)
             .filter { it.tipo == "deliberacion_forzada" }
         assertTrue("no hay deliberacion_forzada en el registro", forzadas.isNotEmpty())
@@ -205,10 +215,9 @@ class PruebaSnippets {
             "la anotación forzada no lleva el motivo: " + forzadas.map { it.detalle },
             forzadas.any { it.detalle.contains("prueba instrumentada") },
         )
-        assertTrue(
-            "no hay anotación snippet_ejecutado de db-01",
+        esperarHasta("el snippet de db-01 queda anotado en el registro") {
             entradasDelRegistro(nucleo, UUID_DB, TipoRegistroFiltro.SNIPPETS)
-                .any { it.tipo == "snippet_ejecutado" },
-        )
+                .any { it.tipo == "snippet_ejecutado" }
+        }
     }
 }

@@ -268,8 +268,20 @@ pub fn snippet_al_conectar(
     })
 }
 
+/// Cerrojo de las emisiones de Flota: la foto de la base de datos y la
+/// entrega al oyente van juntas, para que dos sondeos que terminan a la vez no
+/// entreguen sus listas completas en orden inverso y la app se quede con una
+/// foto vieja (aviso de revisión adversarial: la lista siempre es completa,
+/// pero una entrega tardía de una foto anterior perdía la última actualización
+/// en la vista hasta el refresco siguiente).
+fn emision() -> &'static tokio::sync::Mutex<()> {
+    static EMISION: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    EMISION.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// Difunde la lista completa de Flota por `OyenteNucleo::flota` (informe §5.2).
 pub async fn emitir_flota(estado: &std::sync::Arc<EstadoNucleo>) {
+    let _guardia = emision().lock().await;
     let Ok(resultado) = con_almacen_async(estado, recoger_filas).await else {
         return;
     };
@@ -378,8 +390,12 @@ async fn guardar_sondeo(
     umbrales: Umbrales,
 ) -> Result<Sondeo, ErrorNucleo> {
     con_almacen_async(estado, move |almacen| -> anyhow::Result<Sondeo> {
-        registrar_transiciones(almacen, &sondeo, &umbrales)?;
+        // El sondeo es el dato: se guarda primero (el efecto) y la transición
+        // se anota después. Si la anotación fallara, el sondeo no se pierde
+        // (aviso de revisión adversarial).
+        let previo = almacen.ultimo_sondeo(sondeo.host_id)?;
         almacen.guardar_sondeo(&sondeo)?;
+        registrar_transiciones(almacen, previo.as_ref(), &sondeo, &umbrales);
         Ok(sondeo)
     })
     .await
@@ -393,39 +409,39 @@ async fn guardar_sondeo(
 
 /// Anota `sondeo_fallido` al pasar a CAÍDA y `sondeo_recuperado` al volver,
 /// nunca un aviso por cada refresco de un host ya caído. `HOSTS.ultimo_estado`
-/// no se toca.
+/// no se toca. Se llama después de guardar el sondeo, con el anterior: un fallo
+/// de la anotación no se propaga (el sondeo ya está guardado).
 fn registrar_transiciones(
     almacen: &mut Almacen,
+    previo: Option<&Sondeo>,
     sondeo: &Sondeo,
     umbrales: &Umbrales,
-) -> anyhow::Result<()> {
-    let previo = almacen.ultimo_sondeo(sondeo.host_id)?;
-    let (estado_previo, _) = evaluar(previo.as_ref(), umbrales);
+) {
+    let (estado_previo, _) = evaluar(previo, umbrales);
     let (estado_nuevo, _) = evaluar(Some(sondeo), umbrales);
     if estado_nuevo == EstadoFlota::Caida && estado_previo != EstadoFlota::Caida {
         let motivo = sondeo
             .error
             .clone()
             .unwrap_or_else(|| "error de sondeo".to_string());
-        registro::anotar(
+        let _ = registro::anotar(
             almacen.conexion(),
             registro::SONDEO_FALLIDO,
             Some(sondeo.host_id),
             None,
             &motivo,
             ResultadoRegistro::Error,
-        )?;
+        );
     } else if estado_previo == EstadoFlota::Caida && estado_nuevo != EstadoFlota::Caida {
-        registro::anotar(
+        let _ = registro::anotar(
             almacen.conexion(),
             registro::SONDEO_RECUPERADO,
             Some(sondeo.host_id),
             None,
             "el host responde de nuevo",
             ResultadoRegistro::Ok,
-        )?;
+        );
     }
-    Ok(())
 }
 
 /// Hosts que hay que sondear: los pedidos (o todos), solo `ssh` y solo si

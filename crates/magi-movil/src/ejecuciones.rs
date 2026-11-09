@@ -36,13 +36,11 @@ fn ahora_epoca() -> i64 {
     magi_nucleo::modelo::fecha_ahora_epoca()
 }
 
-// ------------------------------------------------------- deliberación (task-9)
+// ------------------------------------------------------------- deliberación
 
-/// Punto aislado mientras la deliberación del móvil no está implementada
-/// (task-9). Lo definitivo es crate::deliberacion::consumir: valida la fila de
-/// DELIBERACIONES, comprueba que autoriza esta ejecución y la marca como usada
-/// para que no autorice otra (una deliberación, una acción). Mientras tanto
-/// solo se exige el id cuando la ejecución delibera.
+/// Una ejecución que delibera exige el id de su deliberación; el id se valida
+/// y se consume después con crate::deliberacion::consumir (una deliberación
+/// autoriza una sola acción, T62).
 fn comprobar_deliberacion(
     _estado: &EstadoNucleo,
     requerida: bool,
@@ -861,13 +859,17 @@ fn cerrar_ejecucion(estado: &Arc<EstadoNucleo>, id: u64) {
             en_memoria.forzada,
         )
     };
-    emitir(estado);
+    // El efecto ya se produjo: el cierre de la deliberación (ejecucion_resultado
+    // y anotación deliberacion_*) se guarda antes de difundir la lista, para
+    // que una retrollamada que fallara no se lleve por delante el resultado
+    // (aviso de revisión adversarial: pérdida de datos del cierre). Si la fila
+    // ya no está o ya se cerró, no hay nada que hacer.
     if let (Some(deliberacion), Some(resultado)) = (cierre.0, cierre.1) {
         if let Ok(deliberacion) = u64::try_from(deliberacion) {
-            // No hay nada que hacer si la fila ya no está o ya se cerró.
             let _ = crate::deliberacion::registrar_resultado(estado, deliberacion, resultado);
         }
     }
+    emitir(estado);
 }
 
 /// Espera a que la cancelación pase a true, también si ya lo estaba al

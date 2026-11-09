@@ -203,25 +203,6 @@ async fn ejecutar_en_handle(
     Ok(String::from_utf8_lossy(&salida).to_string())
 }
 
-#[cfg(test)]
-mod pruebas {
-    use super::*;
-
-    #[test]
-    fn la_salida_del_sondeo_se_corta_al_tope() {
-        let mut salida = Vec::new();
-        acumular_salida(&mut salida, &vec![b'a'; TOPE_SALIDA_SONDEO + 100]);
-        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
-        // Lo que llega después del tope no se acumula, pero no falla.
-        acumular_salida(&mut salida, b"mas");
-        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
-        // Y cabe justo: no se pierde nada.
-        let mut justa = Vec::new();
-        acumular_salida(&mut justa, &[b'x'; 10]);
-        assert_eq!(justa, vec![b'x'; 10]);
-    }
-}
-
 /// Lanza un sondeo por host respetando el semáforo de 8 concurrentes. Los
 /// hosts con sesión viva van por el servidor (`Ejecutar`); el resto, por
 /// conexión efímera.
@@ -247,5 +228,24 @@ pub fn lanzar_lote(
             };
             let _ = tx.send(sondeo);
         });
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn la_salida_del_sondeo_se_corta_al_tope() {
+        let mut salida = Vec::new();
+        acumular_salida(&mut salida, &vec![b'a'; TOPE_SALIDA_SONDEO + 100]);
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Lo que llega después del tope no se acumula, pero no falla.
+        acumular_salida(&mut salida, b"mas");
+        assert_eq!(salida.len(), TOPE_SALIDA_SONDEO);
+        // Y cabe justo: no se pierde nada.
+        let mut justa = Vec::new();
+        acumular_salida(&mut justa, &[b'x'; 10]);
+        assert_eq!(justa, vec![b'x'; 10]);
     }
 }

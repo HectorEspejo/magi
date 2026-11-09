@@ -60,6 +60,7 @@ fn elemento(tipo: &str, uuid: &str, datos: serde_json::Value) -> ElementoDocumen
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn host(
     uuid: &str,
     nombre: &str,
@@ -224,7 +225,7 @@ fn generar_fixture_flota_android() {
     elementos.push(snippet(
         UUID_SNIPPET_JOURNALD,
         "limpiar journald",
-        "journalctl --vacuum-time={{dias}}d",
+        "journalctl --vacuum-time={{dias:7}}d",
         "Recorta el diario",
         false,
         vec![DestinoSnippet {

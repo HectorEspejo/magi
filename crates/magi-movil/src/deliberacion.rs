@@ -647,9 +647,12 @@ fn guardar_en_memoria(
 /// que ya se usaron y luego las más viejas que nadie usó.
 fn podar(memorias: &mut HashMap<u64, DeliberacionViva>) {
     let mut claves: Vec<u64> = memorias.keys().copied().collect();
+    // Ascendente por (no usada, antigüedad): las usadas (que ya no valen
+    // para nadie) caen antes que las sin usar y, dentro de cada grupo, las más
+    // viejas primero.
     claves.sort_by_key(|clave| {
         let deliberacion = &memorias[clave];
-        (deliberacion.usada, deliberacion.creada)
+        (!deliberacion.usada, deliberacion.creada)
     });
     let sobran = memorias.len().saturating_sub(MAXIMO_EN_MEMORIA / 2);
     for clave in claves.into_iter().take(sobran) {
@@ -893,14 +896,17 @@ pub fn registrar_resultado(
     let escrito = estado
         .escritor
         .con_almacen(move |almacen| -> anyhow::Result<()> {
+            let registro = almacen.obtener_deliberacion(id)?;
+            // Una cancelada no se ejecuta: no se toca su fila ni el registro.
+            if registro.resultado == ResultadoDeliberacion::Cancelada {
+                return Ok(());
+            }
             if !almacen.fijar_resultado_deliberacion(id, resultado)? {
                 return Ok(());
             }
-            let registro = almacen.obtener_deliberacion(id)?;
             let tipo = match registro.resultado {
                 ResultadoDeliberacion::Forzada => registro::DELIBERACION_FORZADA,
                 ResultadoDeliberacion::Aprobada => registro::DELIBERACION_APROBADA,
-                // Una cancelada no se ejecuta: no hay nada que anotar aquí.
                 ResultadoDeliberacion::Cancelada => return Ok(()),
             };
             let detalle = magi_nucleo::deliberacion::detalle_registro(&registro, Some(resultado));
@@ -1171,6 +1177,31 @@ mod pruebas {
         assert_ne!(
             huella_movil(&plan),
             huella_movil(&plan_servicio(AccionMovil::Parar))
+        );
+    }
+
+    #[test]
+    fn la_poda_se_lleva_antes_las_deliberaciones_ya_usadas() {
+        let mut memorias: HashMap<u64, DeliberacionViva> = HashMap::new();
+        // Una usada, vieja, y varias sin usar más nuevas que ella.
+        for id in 0..MAXIMO_EN_MEMORIA as u64 {
+            let mut deliberacion = viva(1, 0);
+            deliberacion.bd_id = Some(id as i64);
+            deliberacion.resultado = Some(ResultadoDeliberacion::Aprobada);
+            deliberacion.usada = id == 0;
+            deliberacion.creada = Instant::now() + Duration::from_millis(id);
+            memorias.insert(id, deliberacion);
+        }
+        let antes = memorias.len();
+        podar(&mut memorias);
+        assert!(memorias.len() < antes, "la poda deja hueco");
+        assert!(
+            !memorias.contains_key(&0),
+            "la usada se va antes que las que aún se pueden consumir"
+        );
+        assert!(
+            memorias.contains_key(&(MAXIMO_EN_MEMORIA as u64 - 1)),
+            "la más nueva sin usar se queda"
         );
     }
 

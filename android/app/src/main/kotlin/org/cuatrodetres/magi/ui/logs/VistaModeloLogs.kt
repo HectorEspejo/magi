@@ -1,7 +1,9 @@
 package org.cuatrodetres.magi.ui.logs
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +48,12 @@ data class EstadoLogsUi(
     /** Se puede parar la suscripción: hay canal abierto. */
     val sePuedeParar: Boolean get() = suscripcion != null && !estado.esFinal
 
+    /** Se puede volver a seguir tras una parada o un fin (SEGUIR OTRA VEZ). */
+    val sePuedeReanudar: Boolean
+        get() = hostUuid.isNotEmpty() &&
+            (estado == EstadoSuscripcionLogVista.PARADA ||
+                estado == EstadoSuscripcionLogVista.TERMINADA)
+
     /** Cabecera: «siguiendo · 1 214 líneas · 14 omitidas». */
     val cabecera: String
         get() {
@@ -63,6 +71,10 @@ private const val MAXIMO_LINEAS_EN_VISTA = 2_000
  * filtradas y las pinta. La vista en pausa se ancla al último número recibido,
  * así las líneas nuevas no la mueven; al volver al final se pide otra ventana.
  * El anillo y los límites viven en el núcleo.
+ *
+ * El seguimiento solo vive con la pantalla a la vista (informe §7.4): al pasar
+ * MAGI a segundo plano se cierra el canal del host y las líneas se quedan; al
+ * volver, SEGUIR OTRA VEZ abre una suscripción nueva con el anillo vacío.
  */
 class VistaModeloLogs(
     private val fuente: FuenteNucleo = FuenteNucleoVacia,
@@ -76,11 +88,57 @@ class VistaModeloLogs(
     private var trabajoVentana: Job? = null
     private var iniciado = false
 
+    /**
+     * Cierre que no puede morir con el ViewModel: si la pantalla se destruye
+     * justo al salir, el canal del host se cierra igual (fin de la entrada
+     * estándar del script) y no queda un journalctl siguiendo en el host.
+     */
+    private val cierre = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     /** Abre la suscripción de logs del objetivo. Idempotente. */
     fun iniciar(hostUuid: String, hostNombre: String, objetivo: ObjetivoVista) {
         if (iniciado) return
         iniciado = true
-        _estado.value = EstadoLogsUi(hostUuid = hostUuid, hostNombre = hostNombre, objetivo = objetivo)
+        _estado.value = EstadoLogsUi(
+            hostUuid = hostUuid,
+            hostNombre = hostNombre,
+            objetivo = objetivo,
+        )
+        abrirSuscripcion()
+    }
+
+    /**
+     * SEGUIR OTRA VEZ: tras una parada o un fin, abre una suscripción nueva con
+     * el anillo vacío y otras 200 líneas (informe §6.5 y §7.4).
+     */
+    fun reanudar() {
+        val actual = _estado.value
+        if (actual.hostUuid.isEmpty()) return
+        if (actual.suscripcion != null && !actual.estado.esFinal) return
+        trabajoAvisos?.cancel()
+        trabajoAvisos = null
+        trabajoVentana?.cancel()
+        trabajoVentana = null
+        _estado.value = EstadoLogsUi(
+            hostUuid = actual.hostUuid,
+            hostNombre = actual.hostNombre,
+            objetivo = actual.objetivo,
+            filtroTexto = actual.filtroTexto,
+            nivel = actual.nivel,
+            soloStderr = actual.soloStderr,
+        )
+        abrirSuscripcion()
+    }
+
+    /** MAGI pasa a segundo plano: se corta el seguimiento y se quedan las líneas. */
+    fun alPasarASegundoPlano() {
+        if (!_estado.value.sePuedeParar) return
+        pararInterno(MotivoFinLogVista.CERRADO)
+    }
+
+    private fun abrirSuscripcion() {
+        val hostUuid = _estado.value.hostUuid
+        val objetivo = _estado.value.objetivo
         alcance.launch {
             val resultado = runCatching {
                 fuente.logsSeguir(hostUuid, objetivo, FiltroLogsVista.LINEAS_INICIALES)
@@ -115,7 +173,7 @@ class VistaModeloLogs(
                 if (aviso.suscripcion != suscripcion) return@collect
                 when {
                     aviso.estado.esFinal -> _estado.update {
-                        it.copy(estado = aviso.estado, cargando = false)
+                        it.copy(estado = aviso.estado, cargando = false, pausada = false)
                     }
                     _estado.value.pausada -> _estado.update {
                         it.copy(nuevas = it.nuevas + aviso.nuevas, total = aviso.total, omitidas = aviso.omitidas)
@@ -138,7 +196,7 @@ class VistaModeloLogs(
                 nivel = _estado.value.nivel,
                 soloStderr = _estado.value.soloStderr,
                 desde = desde,
-                cuantas = if (desde == null) 200 else 200,
+                cuantas = 200,
             )
             val resultado = runCatching { fuente.logsVentana(suscripcion, filtro) }
             when (val leido = resultado.getOrNull()) {
@@ -193,7 +251,13 @@ class VistaModeloLogs(
         recargar()
     }
 
+    /**
+     * Cambia el filtro: descarta la ventana en vuelo (si no, un filtro nuevo se
+     * quedaría sin cargar hasta que llegara otra línea) y pide la primera.
+     */
     private fun recargar() {
+        trabajoVentana?.cancel()
+        trabajoVentana = null
         _estado.update { it.copy(lineas = emptyList(), cargando = true) }
         cargarVentana(desde = null)
     }
@@ -216,26 +280,50 @@ class VistaModeloLogs(
 
     /** Cierra el canal (fin de la entrada estándar); las líneas se quedan. */
     fun parar() {
+        pararInterno(MotivoFinLogVista.CERRADO)
+    }
+
+    private fun pararInterno(motivo: MotivoFinLogVista) {
         val suscripcion = _estado.value.suscripcion ?: return
+        trabajoAvisos?.cancel()
+        trabajoAvisos = null
+        _estado.update { actual ->
+            actual.copy(
+                estado = EstadoSuscripcionLogVista.PARADA,
+                motivo = motivo,
+                pausada = false,
+                cargando = false,
+            )
+        }
         alcance.launch {
             val resultado = runCatching { fuente.logsParar(suscripcion) }
             val aviso = (resultado.getOrNull() as? ResultadoAccion.Error)?.mensaje
-            _estado.update {
-                it.copy(
-                    estado = EstadoSuscripcionLogVista.PARADA,
-                    motivo = MotivoFinLogVista.CERRADO,
-                    pausada = false,
-                    aviso = aviso,
-                )
-            }
+            if (aviso != null) _estado.update { it.copy(aviso = aviso) }
         }
     }
 
-    /** Para la suscripción y suelta sus tareas al salir de la pantalla. */
+    /**
+     * Para la suscripción y suelta sus tareas al salir de la pantalla. El cierre
+     * del canal va por un ámbito que no muere con el ViewModel: si la pantalla
+     * se destruye en el mismo instante, el journalctl del host termina igual.
+     */
     fun cerrar() {
-        if (_estado.value.sePuedeParar) parar()
+        val suscripcion = _estado.value.suscripcion
         trabajoAvisos?.cancel()
+        trabajoAvisos = null
         trabajoVentana?.cancel()
+        trabajoVentana = null
+        if (suscripcion == null || _estado.value.estado.esFinal) return
+        _estado.update {
+            it.copy(
+                estado = EstadoSuscripcionLogVista.PARADA,
+                motivo = MotivoFinLogVista.CERRADO,
+                pausada = false,
+            )
+        }
+        cierre.launch {
+            runCatching { fuente.logsParar(suscripcion) }
+        }
     }
 
     fun descartarAviso() {

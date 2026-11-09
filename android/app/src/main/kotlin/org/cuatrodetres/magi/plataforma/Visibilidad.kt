@@ -1,5 +1,7 @@
 package org.cuatrodetres.magi.plataforma
 
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -21,6 +23,10 @@ import kotlinx.coroutines.flow.asStateFlow
  * (la app está en segundo plano, aunque el proceso siga vivo por el servicio).
  * Las pantallas pueden usar además repeatOnLifecycle(RESUMED), que es lo que
  * corta un temporizador al taparla con otra Activity.
+ *
+ * LifecycleRegistry exige registrar y quitar observadores en el hilo principal:
+ * si se construye desde otro hilo (pruebas instrumentadas, por ejemplo), el
+ * registro se difiere al hilo principal y el resto de la clase no cambia.
  */
 class Visibilidad(
     private val propietario: LifecycleOwner = ProcessLifecycleOwner.get(),
@@ -42,7 +48,9 @@ class Visibilidad(
     }
 
     init {
-        propietario.lifecycle.addObserver(observador)
+        enHiloPrincipal {
+            propietario.lifecycle.addObserver(observador)
+        }
     }
 
     /** Consulta puntual, sin observar el flujo. */
@@ -50,12 +58,23 @@ class Visibilidad(
 
     /** Deja de observar el ciclo de vida (al cerrar la app o al liberar el contenedor). */
     fun soltar() {
-        propietario.lifecycle.removeObserver(observador)
+        enHiloPrincipal {
+            propietario.lifecycle.removeObserver(observador)
+        }
     }
 
     companion object {
         /** Consulta directa al ciclo de vida del proceso (sin flujo ni observador). */
         fun estaLaAppALaVista(): Boolean =
             ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+        /** Ejecuta [bloque] en el hilo principal, ya sea ahora o en el próximo turno. */
+        private fun enHiloPrincipal(bloque: () -> Unit) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                bloque()
+            } else {
+                Handler(Looper.getMainLooper()).post { bloque() }
+            }
+        }
     }
 }

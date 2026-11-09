@@ -95,8 +95,10 @@ pub fn tasa_red(actual: &Sondeo, anterior: &Sondeo) -> Option<(f64, f64)> {
     if segundos <= 0.0 || segundos > 3600.0 {
         return None;
     }
-    let rx = actual.red_rx_bytes? - anterior.red_rx_bytes?;
-    let tx = actual.red_tx_bytes? - anterior.red_tx_bytes?;
+    // Los contadores vienen del host (entrada no fiable): una resta que se
+    // salga de i64 no puede tumbar el proceso.
+    let rx = actual.red_rx_bytes?.checked_sub(anterior.red_rx_bytes?)?;
+    let tx = actual.red_tx_bytes?.checked_sub(anterior.red_tx_bytes?)?;
     if rx < 0 || tx < 0 {
         return None;
     }
@@ -264,6 +266,21 @@ mod pruebas {
 
         actual.fecha = "2026-09-15T10:00:10+02:00".to_string();
         actual.red_rx_bytes = Some(500);
+        assert!(tasa_red(&actual, &anterior).is_none());
+    }
+
+    #[test]
+    fn una_resta_de_contadores_desbordada_no_es_tasa_ni_panico() {
+        // El host es entrada no fiable: contadores en los extremos de i64 no
+        // pueden provocar una resta desbordada al calcular la tasa.
+        let mut anterior = sondeo_ok();
+        anterior.fecha = "2026-09-15T10:00:00+02:00".to_string();
+        anterior.red_rx_bytes = Some(i64::MAX);
+        anterior.red_tx_bytes = Some(i64::MAX);
+        let mut actual = sondeo_ok();
+        actual.fecha = "2026-09-15T10:00:10+02:00".to_string();
+        actual.red_rx_bytes = Some(i64::MIN);
+        actual.red_tx_bytes = Some(i64::MIN);
         assert!(tasa_red(&actual, &anterior).is_none());
     }
 

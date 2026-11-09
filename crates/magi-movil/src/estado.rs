@@ -9,10 +9,12 @@ use magi_nucleo::almacen::Almacen;
 use magi_nucleo::conexion::reenvios::Contadores;
 use magi_nucleo::modelo::TipoTunel;
 use magi_nucleo::rutas::{Equipo as EquipoNucleo, Rutas as RutasNucleo};
+use magi_nucleo::servicios::Privilegio;
 use magi_nucleo::trabajo_vivo::TrabajoVivo;
 use magi_nucleo::tuneles::escucha::EscuchaMovil;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::api::ListadoServicios;
 use crate::api::{
     ClavePublicaMovil, ErrorNucleo, EstadoSesion, PeticionDialogo, Retrollamadas, Sesion,
 };
@@ -22,6 +24,8 @@ use crate::deliberacion::DeliberacionViva;
 use crate::dialogos::Dialogos;
 use crate::ejecuciones::MotorEjecuciones;
 use crate::escritor::Escritor;
+use crate::logs::SuscripcionLog;
+use crate::servicios::{AccionEnCurso, SolicitudListado, SudoEnMemoria};
 
 /// Una conexión viva de un host, compartida por todo lo que la usa (F14, D277).
 /// La estructura y su contabilidad viven en el módulo de conexiones; se
@@ -227,6 +231,24 @@ pub struct EstadoNucleo {
     /// Deliberaciones abiertas del móvil (F14): la tabla viva, el plan fijado al
     /// abrir y si ya se usaron. La lleva el módulo de deliberación.
     pub deliberaciones: Mutex<HashMap<u64, DeliberacionViva>>,
+    // ------------------------------------------------------------------
+    // Bloque de la Fase 14 a cargo de task-7 (Servicios y logs). No tocar
+    // desde otras pistas sin avisar.
+    // ------------------------------------------------------------------
+    /// Contraseñas de sudo en memoria, por host (§7.5, Zeroizing).
+    pub sudo_en_memoria: Mutex<SudoEnMemoria>,
+    /// Privilegio ya averiguado de cada host (root, sudo con o sin clave...).
+    pub privilegios_servicios: Mutex<HashMap<String, Privilegio>>,
+    /// Último listado de servicios de cada host, para conservarlo si deja de
+    /// responder y para pintarlo al volver.
+    pub listados_servicios: Mutex<HashMap<String, ListadoServicios>>,
+    /// Listados en vuelo por host: los refrescos que solapan esperan al mismo.
+    pub solicitudes_listado: Mutex<HashMap<String, Arc<SolicitudListado>>>,
+    /// Acciones de servicio en curso, para difundirlas y para no repetirlas.
+    pub acciones_servicio_en_curso: Mutex<HashMap<u64, AccionEnCurso>>,
+    /// Suscripciones de logs vivas del móvil: una por objetivo, con su anillo.
+    pub suscripciones_logs: Mutex<HashMap<u64, Arc<SuscripcionLog>>>,
+    // --------------------- fin del bloque de task-7 -------------------
     pub tuneles: Mutex<HashMap<String, Arc<TunelActivo>>>,
     pub sincro: tokio::sync::Mutex<EstadoSincro>,
     pub clave_publica: Mutex<Option<ClavePublicaMovil>>,
@@ -283,6 +305,12 @@ impl EstadoNucleo {
             oyentes_conexion: Mutex::new(Vec::new()),
             ejecuciones: Mutex::new(MotorEjecuciones::nuevo()),
             deliberaciones: Mutex::new(HashMap::new()),
+            sudo_en_memoria: Mutex::new(SudoEnMemoria::nuevo()),
+            privilegios_servicios: Mutex::new(HashMap::new()),
+            listados_servicios: Mutex::new(HashMap::new()),
+            solicitudes_listado: Mutex::new(HashMap::new()),
+            acciones_servicio_en_curso: Mutex::new(HashMap::new()),
+            suscripciones_logs: Mutex::new(HashMap::new()),
             tuneles: Mutex::new(HashMap::new()),
             sincro: tokio::sync::Mutex::new(EstadoSincro::default()),
             clave_publica: Mutex::new(None),

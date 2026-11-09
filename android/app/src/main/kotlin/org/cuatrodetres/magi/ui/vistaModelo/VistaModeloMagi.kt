@@ -129,7 +129,13 @@ class VistaModeloMagi(
                 fuente.accionesServicio,
                 fuente.ejecuciones,
             ) { sesiones, acciones, ejecuciones ->
-                Triple(sesiones.size, acciones.size, ejecuciones.size)
+                Triple(
+                    sesiones.size,
+                    acciones.size,
+                    // La lista conserva 1 h las ejecuciones terminadas: para el
+                    // aviso de «Android cerró MAGI» solo cuentan las vivas.
+                    ejecuciones.count { ejecucion -> !ejecucion.terminada },
+                )
             }.collect { (sesiones, acciones, ejecuciones) ->
                 if (!persistirTrabajo) return@collect
                 try {
@@ -340,7 +346,9 @@ class VistaModeloMagi(
                 avisosPlataforma.guardarTrabajoAbierto(
                     sesiones = fuente.sesiones.value.size,
                     acciones = fuente.accionesServicio.value.size,
-                    ejecuciones = fuente.ejecuciones.value.size,
+                    ejecuciones = fuente.ejecuciones.value.count { ejecucion ->
+                        !ejecucion.terminada
+                    },
                 )
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -543,11 +551,7 @@ class VistaModeloMagi(
                 } else {
                     null
                 },
-                ejecucionInicial = if (seccion == SeccionMas.RESULTADOS) {
-                    it.ejecucionInicial
-                } else {
-                    null
-                },
+                ejecucionInicial = null,
             )
         }
         when (seccion) {

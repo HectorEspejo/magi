@@ -261,6 +261,15 @@ private fun FilaSnippet(snippet: SnippetVista, alAbrir: () -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (snippet.descripcion.isNotEmpty()) {
+            Text(
+                text = snippet.descripcion,
+                style = MaterialTheme.typography.bodySmall,
+                color = Paleta.GRIS,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Text(
             text = snippet.comando.replace('\n', ' '),
             style = MaterialTheme.typography.bodySmall,

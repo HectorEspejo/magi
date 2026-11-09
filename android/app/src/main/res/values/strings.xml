@@ -560,7 +560,6 @@
     <string name="servicio_hace_dias">%1$s d</string>
     <string name="servicios_fallos_aviso">advertencia: %1$d fallos</string>
     <string name="servicios_sin_hora">—</string>
-    <string name="accion_ver_detalle">Ver el detalle de %1$s</string>
     <string name="accion_ver_seccion">Ver la sección %1$s</string>
     <string name="accion_ver_pestana">Ver la pestaña %1$s</string>
     <string name="logs_accion_nivel">Cambiar el filtro de nivel</string>

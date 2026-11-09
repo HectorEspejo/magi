@@ -50,11 +50,17 @@ class VistaModeloDeliberacion(
         alcance.launch {
             try {
                 when (val leido = fuente.deliberar(plan)) {
-                    is ResultadoNucleoVista.Listo -> _estado.update {
-                        it.copy(tabla = leido.valor, cargando = false, error = null)
+                    // Si el diálogo ya se cerró o se abrió otro plan, la tabla
+                    // ya no vale: no se pinta la deliberación de otra acción.
+                    is ResultadoNucleoVista.Listo -> if (planActual == plan) {
+                        _estado.update {
+                            it.copy(tabla = leido.valor, cargando = false, error = null)
+                        }
                     }
-                    is ResultadoNucleoVista.Error -> _estado.update {
-                        it.copy(cargando = false, error = leido.mensaje)
+                    is ResultadoNucleoVista.Error -> if (planActual == plan) {
+                        _estado.update {
+                            it.copy(cargando = false, error = leido.mensaje)
+                        }
                     }
                 }
             } catch (error: Throwable) {

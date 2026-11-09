@@ -5,6 +5,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -68,6 +69,7 @@ class VistaModeloRegistro(
     val estado: StateFlow<EstadoRegistroUi> = _estado.asStateFlow()
 
     private var iniciado = false
+    private var trabajoPagina: Job? = null
 
     /** Carga los hosts del filtro y la primera página. */
     fun iniciar() {
@@ -96,16 +98,20 @@ class VistaModeloRegistro(
                 error = null,
             )
         }
-        alcance.launch { cargarPrimeraPagina() }
+        trabajoPagina?.cancel()
+        trabajoPagina = alcance.launch { cargarPrimeraPagina() }
     }
 
     private suspend fun cargarPrimeraPagina() {
+        val filtro = _estado.value.filtro
         try {
             val pagina = fuente.registro(
-                filtro = _estado.value.filtro,
+                filtro = filtro,
                 desde = null,
                 cuantas = TAMANO_PAGINA_REGISTRO,
             )
+            // Si el filtro cambió mientras se leía, esta página ya no vale.
+            if (_estado.value.filtro != filtro) return
             _estado.update {
                 it.copy(
                     entradas = pagina,
@@ -128,14 +134,23 @@ class VistaModeloRegistro(
     fun cargarMas() {
         if (!_estado.value.hayMas || _estado.value.cargandoMas) return
         val desde = _estado.value.entradas.lastOrNull()?.id ?: return
+        val filtro = _estado.value.filtro
         _estado.update { it.copy(cargandoMas = true) }
         alcance.launch {
             try {
                 val pagina = fuente.registro(
-                    filtro = _estado.value.filtro,
+                    filtro = filtro,
                     desde = desde,
                     cuantas = TAMANO_PAGINA_REGISTRO,
                 )
+                // La página se une solo si es la misma lista y el mismo filtro;
+                // si entretanto se recargó otra cosa, se descarta.
+                if (_estado.value.filtro != filtro ||
+                    _estado.value.entradas.lastOrNull()?.id != desde
+                ) {
+                    _estado.update { it.copy(cargandoMas = false) }
+                    return@launch
+                }
                 _estado.update {
                     it.copy(
                         entradas = it.entradas + pagina,
@@ -202,6 +217,9 @@ class VistaModeloRegistro(
         alcance.launch {
             try {
                 val detalle = fuente.registroDetalle(id)
+                // Si se abrió otra entrada mientras se leía, este detalle ya no
+                // vale (enseñaría la deliberación de otra entrada).
+                if (_estado.value.seleccionadaId != id) return@launch
                 _estado.update {
                     if (detalle == null) {
                         it.copy(
@@ -213,6 +231,7 @@ class VistaModeloRegistro(
                     }
                 }
             } catch (error: Throwable) {
+                if (_estado.value.seleccionadaId != id) return@launch
                 _estado.update {
                     it.copy(
                         cargandoDetalle = false,

@@ -61,6 +61,14 @@ pub const VIGILANTE_MS: u64 = 500;
 
 /// Plazo para abrir un canal exec y para escribir en su entrada estándar.
 const PLAZO_CANAL: Duration = Duration::from_secs(10);
+/// Plazo de una apertura automática (aviso de revisión adversarial): el saludo
+/// SSH y el canal de un salto ya llevan su propio plazo de 10 s, pero la
+/// autenticación y la apertura del salto pueden quedarse esperando a un host
+/// que no contesta. Lo automático nunca dialoga, así que la apertura entera
+/// lleva plazo o un host colgado dejaría la operación y su uso de conexión
+/// para siempre. Las aperturas interactivas no lo llevan: sus diálogos con el
+/// usuario no tienen plazo.
+const PLAZO_APERTURA_AUTOMATICA: Duration = Duration::from_secs(30);
 
 /// Motivo con el que se marcan las sesiones y los túneles cuando el host cierra
 /// la conexión sin que nadie la soltara.
@@ -592,17 +600,31 @@ impl GestorConexiones {
         let reenvios = Arc::new(Reenvios::default());
         let contexto = contexto(estado, &host, politica, tx.clone(), Some(reenvios.clone()));
         let clave = clave_movil(estado)?;
-        let transporte = conectar_cadena_movil(&cadena, &contexto, &clave)
-            .await
-            .map_err(|error| {
-                let motivo = error.to_string();
-                let traducido = traducir_error(&motivo, politica);
-                // El último error de la lista enseña la instrucción de la
-                // política automática, no el texto crudo del núcleo.
-                estado.anotar_error(host_uuid, &traducido.to_string());
-                registrar_fallo(estado, host.id, &motivo);
-                traducido
-            })?;
+        // Lo automático (sondeo, comprobaciones, listados, acciones y
+        // ejecuciones) no dialoga: si el host se queda a medias del saludo o de
+        // la autenticación, se corta con plazo y se dice. Lo interactivo puede
+        // estar esperando a un diálogo del usuario: sin plazo.
+        let apertura = conectar_cadena_movil(&cadena, &contexto, &clave);
+        let transporte = match politica {
+            Politica::Automatica => {
+                match tokio::time::timeout(PLAZO_APERTURA_AUTOMATICA, apertura).await {
+                    Ok(resultado) => resultado.map_err(|error| error.to_string()),
+                    Err(_) => Err(format!(
+                        "el host no responde al conectar ({} s)",
+                        PLAZO_APERTURA_AUTOMATICA.as_secs()
+                    )),
+                }
+            }
+            Politica::Interactiva => apertura.await.map_err(|error| error.to_string()),
+        }
+        .map_err(|motivo| {
+            let traducido = traducir_error(&motivo, politica);
+            // El último error de la lista enseña la instrucción de la
+            // política automática, no el texto crudo del núcleo.
+            estado.anotar_error(host_uuid, &traducido.to_string());
+            registrar_fallo(estado, host.id, &motivo);
+            traducido
+        })?;
         estado.limpiar_error(host_uuid);
         let identidad = transporte.identidad.descripcion.clone();
         let host_id = host.id;

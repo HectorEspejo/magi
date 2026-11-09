@@ -1,8 +1,8 @@
 //! Lectura de la salida de `sondeo.sh`: las líneas `MAGI_*` del host.
 //!
-//! Todo lo que llega del host es entrada no fiable: los nombres de fallos se
-//! recortan a los límites de la Fase 13 y se les quitan los caracteres de
-//! control; las líneas desconocidas se ignoran.
+//! Todo lo que llega del host es entrada no fiable: los nombres de fallos y los
+//! servicios vigilados se recortan a los límites de la Fase 13 y se les quitan
+//! los caracteres de control; las líneas desconocidas se ignoran.
 
 use std::collections::BTreeMap;
 
@@ -10,6 +10,14 @@ use crate::servicios::{FallosContenedores, FallosSondeo, FallosUnidades, MotorNo
 
 /// Nombres de fallos que se guardan por el sondeo (§3.2: hasta 20).
 const MAX_NOMBRES_FALLO: usize = 20;
+
+/// Servicios vigilados que se guardan por el sondeo: los mismos que un listado
+/// de unidades (2000). Un host que repita `MAGI_SVC=` sin fin no puede inflar
+/// la fila en memoria ni en la base de datos.
+const MAX_SERVICIOS: usize = crate::servicios::limites::MAX_UNIDADES;
+
+/// Largo máximo del estado de un servicio (`active`, `failed`, `unknown`…).
+const MAX_ESTADO: usize = 32;
 
 /// Métricas extraídas de la salida de `sondeo.sh`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -85,13 +93,14 @@ pub fn parsear(salida: &str) -> Metricas {
                 .next()
                 .and_then(|entero| entero.parse::<i64>().ok());
         } else if let Some(valor) = linea.strip_prefix("MAGI_SVC=") {
+            if metricas.servicios.len() >= MAX_SERVICIOS {
+                continue;
+            }
             if let Some((unidad, estado)) = valor.split_once('=') {
-                let estado = if estado.trim().is_empty() {
-                    "unknown".to_string()
-                } else {
-                    estado.trim().to_string()
-                };
-                metricas.servicios.insert(unidad.trim().to_string(), estado);
+                let estado = estado_servicio(estado);
+                if let Some(unidad) = nombre_de_servicio(unidad) {
+                    metricas.servicios.insert(unidad, estado);
+                }
             }
         } else if let Some(valor) = linea.strip_prefix("MAGI_FALLO_UNIDAD=") {
             if fallos_unidades.nombres.len() < MAX_NOMBRES_FALLO {
@@ -139,6 +148,38 @@ pub fn parsear(salida: &str) -> Metricas {
         });
     }
     metricas
+}
+
+/// Nombre de un servicio vigilado (`MAGI_SVC=`), saneado y acotado como los
+/// fallos: viene del host y se pinta y se guarda. `None` si queda vacío.
+fn nombre_de_servicio(unidad: &str) -> Option<String> {
+    let unidad: String = unidad
+        .trim()
+        .chars()
+        .filter(|caracter| !es_caracter_invisible(*caracter))
+        .take(crate::servicios::limites::MAX_NOMBRE)
+        .collect();
+    if unidad.is_empty() {
+        None
+    } else {
+        Some(unidad)
+    }
+}
+
+/// Estado de un servicio vigilado: saneado y acotado. Un estado vacío (o solo
+/// con caracteres de control) es `unknown`, como sin systemd.
+fn estado_servicio(estado: &str) -> String {
+    let estado: String = estado
+        .trim()
+        .chars()
+        .filter(|caracter| !es_caracter_invisible(*caracter))
+        .take(MAX_ESTADO)
+        .collect();
+    if estado.is_empty() {
+        "unknown".to_string()
+    } else {
+        estado
+    }
 }
 
 /// Nombre de una unidad o un contenedor fallido, recortado a los límites de la
@@ -332,5 +373,61 @@ mod pruebas {
             parsear("Welcome to Ubuntu\nMAGI_UPTIME=10.5\nMAGI_LOADAVG=1.0 2.0 3.0 1/1 1\n");
         assert_eq!(metricas.uptime_seg, Some(10));
         assert!(metricas.tiene_metricas());
+    }
+
+    #[test]
+    fn los_servicios_vigilados_se_sanean_y_se_acotan() {
+        // El host es entrada no fiable: puede mandar secuencias de escape,
+        // nombres larguísimos y estados con caracteres de control.
+        let mut salida = String::from("MAGI_SVC=nginx=active\n");
+        salida.push_str("MAGI_SVC=\u{1b}[31mapp.service=act\u{1b}ive\n");
+        salida.push_str("MAGI_SVC=db\u{202e}app=failed\n");
+        salida.push_str(&format!(
+            "MAGI_SVC={}={}\n",
+            "a".repeat(5_000),
+            "b".repeat(200)
+        ));
+        salida.push_str("MAGI_SVC==\n");
+        salida.push_str("MAGI_SVC=vacio=\n");
+        let metricas = parsear(&salida);
+        assert_eq!(
+            metricas.servicios.get("nginx").map(String::as_str),
+            Some("active")
+        );
+        assert_eq!(
+            metricas
+                .servicios
+                .get("[31mapp.service")
+                .map(String::as_str),
+            Some("active"),
+            "el ESC se cae y queda el texto y el estado saneados"
+        );
+        assert_eq!(
+            metricas.servicios.get("dbapp").map(String::as_str),
+            Some("failed"),
+            "los caracteres de dirección no llegan a la clave"
+        );
+        assert!(metricas
+            .servicios
+            .keys()
+            .all(|nombre| nombre.chars().count() <= crate::servicios::limites::MAX_NOMBRE));
+        assert!(metricas
+            .servicios
+            .values()
+            .all(|estado| estado.chars().count() <= MAX_ESTADO));
+        assert_eq!(
+            metricas.servicios.get("vacio").map(String::as_str),
+            Some("unknown")
+        );
+        assert!(!metricas.servicios.contains_key(""));
+
+        // Un host que mande más servicios de los que caben tampoco infla el
+        // mapa sin límite.
+        let mut muchas = String::new();
+        for indice in 0..(MAX_SERVICIOS + 50) {
+            muchas.push_str(&format!("MAGI_SVC=unidad-{indice}.service=active\n"));
+        }
+        let metricas = parsear(&muchas);
+        assert_eq!(metricas.servicios.len(), MAX_SERVICIOS);
     }
 }

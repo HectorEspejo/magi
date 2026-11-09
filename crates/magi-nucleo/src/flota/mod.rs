@@ -134,4 +134,15 @@ mod pruebas {
         assert!(SCRIPT.contains("MAGI_FALLOS_CONTENEDORES="));
         assert!(SCRIPT.contains("motores="));
     }
+
+    #[test]
+    fn el_script_revalida_los_argumentos_que_recibe() {
+        // El script no ejecuta más motores que docker o podman ni imprime
+        // unidades que no casen con el patrón de la F2, aunque Rust ya los
+        // valide antes (regla de la F13: validado en Rust y en el script).
+        assert!(SCRIPT.contains("docker|podman"));
+        assert!(SCRIPT.contains("set -f"));
+        assert!(SCRIPT.contains("[!A-Za-z0-9@._-]"));
+        assert!(SCRIPT.contains("es_unidad \"$u\" || continue"));
+    }
 }

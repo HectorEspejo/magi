@@ -89,6 +89,20 @@ fn leer_en(texto: &str, inicio: usize) -> Option<Aparicion> {
     })
 }
 
+/// ¿La marca `{{` de `inicio` va escapada con un número impar de barras
+/// invertidas? Entonces el shell la trata como texto literal (`\{{`), no es
+/// una variable y MAGI no la sustituye: si lo hiciera, la barra del usuario
+/// quedaría delante del valor escapado y podría romper su entrecomillado.
+fn escapada(texto: &str, inicio: usize) -> bool {
+    texto[..inicio]
+        .chars()
+        .rev()
+        .take_while(|caracter| *caracter == '\\')
+        .count()
+        % 2
+        == 1
+}
+
 /// Todas las apariciones de variables, en orden.
 fn apariciones(texto: &str) -> Vec<Aparicion> {
     let mut encontradas = Vec::new();
@@ -96,6 +110,10 @@ fn apariciones(texto: &str) -> Vec<Aparicion> {
     while let Some(relativa) = texto.get(posicion..).and_then(|resto| resto.find("{{")) {
         let inicio = posicion + relativa;
         match leer_en(texto, inicio) {
+            Some(_) if escapada(texto, inicio) => {
+                // Texto literal: se salta la marca y se sigue buscando.
+                posicion = inicio + 2;
+            }
             Some(aparicion) => {
                 posicion = aparicion.fin;
                 encontradas.push(aparicion);
@@ -532,5 +550,28 @@ mod pruebas {
         assert!(!nombre_valido("Dias"));
         assert!(!nombre_valido(""));
         assert!(!nombre_valido("a-b"));
+    }
+
+    #[test]
+    fn una_marca_escapada_es_texto_literal() {
+        // `\{\{` con una barra delante es literal del shell: no es una variable.
+        assert!(detectar(r"echo \{{x}}").is_empty());
+        assert_eq!(detectar(r"echo \\{{x}}").len(), 1);
+        assert!(validar_contexto(r"echo \{{x}}").is_ok());
+        let mut valores = BTreeMap::new();
+        valores.insert("x".to_string(), "uno".to_string());
+        assert_eq!(sustituir(r"echo \{{x}}", &valores).unwrap(), r"echo \{{x}}");
+    }
+
+    #[test]
+    fn la_marca_escapada_no_deja_inyectar_el_valor() {
+        // Regresión: antes se sustituía la marca pese a la barra del usuario;
+        // la barra anulaba la comilla del valor escapado y el shell ejecutaba
+        // lo que llevara dentro.
+        let mut valores = BTreeMap::new();
+        valores.insert("x".to_string(), "'; echo PWNED; #".to_string());
+        let comando = sustituir(r"echo \{{x}}", &valores).unwrap();
+        assert_eq!(comando, r"echo \{{x}}");
+        assert!(!comando.contains("PWNED"));
     }
 }

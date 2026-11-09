@@ -182,6 +182,7 @@ fun TablaDeliberacion(
                             Box(
                                 modifier = Modifier
                                     .weight(0.8f)
+                                    .heightIn(min = 48.dp)
                                     .clickable(onClickLabel = stringResource(R.string.delib_detalle_celda)) {
                                         apuntar(fila.hostNombre, comprobacion, veredicto)
                                     }

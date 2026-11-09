@@ -86,6 +86,8 @@ private fun colorEstadoHost(estado: EstadoHostEjecucionVista): Color = when (est
 fun PantallaResultados(
     fuente: FuenteNucleo = FuenteNucleoVacia,
     modifier: Modifier = Modifier,
+    /** Si no es null, abre esa ejecución al entrar (al lanzar un snippet). */
+    ejecucionInicial: Long? = null,
     vistaModelo: VistaModeloResultados = viewModel(
         key = "magi-resultados",
         factory = viewModelFactory { initializer { VistaModeloResultados(fuente) } },
@@ -95,6 +97,10 @@ fun PantallaResultados(
     var avisoLocal by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { vistaModelo.iniciar() }
+    LaunchedEffect(ejecucionInicial) {
+        val id = ejecucionInicial ?: return@LaunchedEffect
+        vistaModelo.seleccionar(id)
+    }
     LaunchedEffect(avisoLocal) {
         if (avisoLocal != null) {
             kotlinx.coroutines.delay(3_000)
@@ -374,6 +380,10 @@ private fun DetalleResultado(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }
+        // Recursos leídos como composables: lint no permite LocalContext.getString
+        // dentro de una lambda (no se reinvalida al cambiar la configuración).
+        val textoCopiado = stringResource(R.string.res_copiado)
+        val textoCopiadoError = stringResource(R.string.res_copiado_error)
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -382,13 +392,7 @@ private fun DetalleResultado(
                 texto = stringResource(R.string.res_copiar),
                 alPulsar = {
                     val copiada = copiarSensible(contexto, estado.textoSalida)
-                    alAvisar(
-                        if (copiada) {
-                            contexto.getString(R.string.res_copiado)
-                        } else {
-                            contexto.getString(R.string.res_copiado_error)
-                        },
-                    )
+                    alAvisar(if (copiada) textoCopiado else textoCopiadoError)
                 },
                 habilitado = estado.textoSalida.isNotEmpty(),
                 modifier = Modifier.weight(1f),

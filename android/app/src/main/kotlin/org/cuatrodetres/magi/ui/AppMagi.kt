@@ -676,6 +676,7 @@ private fun ContenidoDestino(
             )
             SeccionMas.RESULTADOS -> PantallaResultados(
                 fuente = fuente,
+                ejecucionInicial = estado.ejecucionInicial,
                 modifier = modifier,
             )
             SeccionMas.REGISTRO -> PantallaRegistro(

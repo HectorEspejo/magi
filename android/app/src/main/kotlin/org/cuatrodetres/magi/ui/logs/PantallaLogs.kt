@@ -30,6 +30,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -42,7 +45,6 @@ import org.cuatrodetres.magi.ui.componentes.CampoTextoMagi
 import org.cuatrodetres.magi.ui.componentes.Chiptexto
 import org.cuatrodetres.magi.ui.componentes.MensajeVacio
 import org.cuatrodetres.magi.ui.fuente.FuenteNucleo
-import org.cuatrodetres.magi.ui.fuente.FuenteNucleoVacia
 import org.cuatrodetres.magi.ui.modelos.EstadoSuscripcionLogVista
 import org.cuatrodetres.magi.ui.modelos.LineaLogVista
 import org.cuatrodetres.magi.ui.modelos.MotorNombreVista
@@ -65,16 +67,16 @@ private val HORA_LOG: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss"
  */
 @Composable
 fun PantallaLogs(
-    fuente: FuenteNucleo = FuenteNucleoVacia,
+    fuente: FuenteNucleo,
     hostUuid: String,
     hostNombre: String,
     objetivo: ObjetivoVista,
+    alVolver: () -> Unit,
+    modifier: Modifier = Modifier,
     motor: MotorNombreVista? = null,
     alAbrirSesionConOrden: (String, OrdenPestanaVista) -> Unit = { _, _ -> },
     alAbrirTerminal: (Long) -> Unit = {},
     alPedirSudo: () -> Unit = {},
-    alVolver: () -> Unit,
-    modifier: Modifier = Modifier,
     vistaModelo: VistaModeloLogs = viewModel(
         key = "magi-logs-" + hostUuid + "-" + objetivo.tipo.name + "-" + objetivo.nombre,
         factory = viewModelFactory {
@@ -88,6 +90,18 @@ fun PantallaLogs(
     LaunchedEffect(Unit) { vistaModelo.iniciar(hostUuid, hostNombre, objetivo) }
     DisposableEffect(Unit) {
         onDispose { vistaModelo.cerrar() }
+    }
+
+    // Los logs solo siguen con la pantalla a la vista (informe §7.4): al pasar
+    // MAGI a segundo plano se cierra el canal del host. Las líneas se quedan y
+    // SEGUIR OTRA VEZ abre una suscripción nueva.
+    val propietarioCiclo = LocalLifecycleOwner.current
+    DisposableEffect(propietarioCiclo) {
+        val observador = LifecycleEventObserver { _, evento ->
+            if (evento == Lifecycle.Event.ON_STOP) vistaModelo.alPasarASegundoPlano()
+        }
+        propietarioCiclo.lifecycle.addObserver(observador)
+        onDispose { propietarioCiclo.lifecycle.removeObserver(observador) }
     }
 
     // Al llegar líneas nuevas con el panel pegado al final, se baja solo.
@@ -234,6 +248,12 @@ fun PantallaLogs(
                     texto = stringResource(R.string.logs_parar),
                     alPulsar = vistaModelo::parar,
                     destructivo = true,
+                )
+            } else if (estado.sePuedeReanudar) {
+                // Tras una parada o un fin: el anillo nuevo lo abre el núcleo.
+                BotonCabina(
+                    texto = stringResource(R.string.logs_seguir),
+                    alPulsar = vistaModelo::reanudar,
                 )
             }
             when (objetivo.tipo) {

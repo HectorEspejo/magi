@@ -77,6 +77,12 @@ data class EstadoServiciosUi(
     val consumo: Map<String, ConsumoVista> = emptyMap(),
     val acciones: List<AccionEnCursoVista> = emptyList(),
     val confirmacion: ConfirmacionAccionUi? = null,
+    /**
+     * Deliberación con la que se confirmó una acción antes de pedir la
+     * contraseña de sudo: sin guardarla, al volver del sudo se ejecutaría sin
+     * autorización y el núcleo la rechazaría.
+     */
+    val deliberacionPendiente: Long? = null,
     val resultado: ResultadoServicioVista? = null,
     val sudo: EstadoSudoUi = EstadoSudoUi(),
     val cargando: Boolean = false,
@@ -465,16 +471,27 @@ class VistaModeloServicios(
     /** Confirma la acción pendiente, con la deliberación que la autoriza si la hay. */
     fun confirmarAccion(deliberacion: Long? = null) {
         val confirmacion = _estado.value.confirmacion ?: return
+        // Lo deliberado nunca se ejecuta sin su id: el núcleo lo rechazaría y
+        // se perdería la deliberación. La pantalla abre antes el diálogo MAGI.
+        if (confirmacion.info.delibera && deliberacion == null) {
+            _estado.update { it.copy(aviso = "esta acción necesita deliberación MAGI") }
+            return
+        }
         if (confirmacion.info.sudoConClave && !_estado.value.sudoEnMemoria) {
             _estado.update {
                 it.copy(
-                    sudo = EstadoSudoUi(visible = true, hostUuid = it.hostUuid.orEmpty(), hostNombre = it.hostNombre),
+                    sudo = EstadoSudoUi(
+                        visible = true,
+                        hostUuid = it.hostUuid.orEmpty(),
+                        hostNombre = it.hostNombre,
+                    ),
+                    deliberacionPendiente = deliberacion,
                 )
             }
             return
         }
         val hostUuid = _estado.value.hostUuid ?: return
-        _estado.update { it.copy(confirmacion = null) }
+        _estado.update { it.copy(confirmacion = null, deliberacionPendiente = null) }
         alcance.launch {
             val resultado = runCatching {
                 fuente.servicioAccion(hostUuid, confirmacion.objetivo, confirmacion.accion, deliberacion)
@@ -506,7 +523,7 @@ class VistaModeloServicios(
     }
 
     fun cancelarConfirmacion() {
-        _estado.update { it.copy(confirmacion = null) }
+        _estado.update { it.copy(confirmacion = null, deliberacionPendiente = null) }
     }
 
     fun descartarResultado() {
@@ -517,6 +534,9 @@ class VistaModeloServicios(
         if (_estado.value.hostUuid != hostUuid) return
         alcance.launch {
             delay(300)
+            // Si el usuario cambió de host mientras se esperaba, no se refresca
+            // el host nuevo con el resultado de la acción del anterior.
+            if (_estado.value.hostUuid != hostUuid) return@launch
             if (_estado.value.enHost) cargarListado(manual = true)
             if (_estado.value.enDetalle) cargarDetalle()
         }
@@ -544,6 +564,8 @@ class VistaModeloServicios(
         alcance.launch {
             val resultado = runCatching { fuente.sudoComprobar(hostUuid, bytes) }
             bytes.fill(0)
+            // Si mientras se comprobaba se cambió de host, el resultado no vale.
+            if (_estado.value.hostUuid != hostUuid) return@launch
             val estadoSudo = _estado.value.sudo
             when (val leido = resultado.getOrNull()) {
                 ResultadoSudoVista.OK -> {
@@ -553,18 +575,28 @@ class VistaModeloServicios(
                             listado = it.listado?.copy(sudoEnMemoria = true),
                         )
                     }
-                    if (_estado.value.confirmacion != null) confirmarAccion()
+                    if (_estado.value.confirmacion != null) {
+                        confirmarAccion(_estado.value.deliberacionPendiente)
+                    }
                 }
                 ResultadoSudoVista.RECHAZADA -> {
                     val intentos = (estadoSudo.intentosRestantes - 1).coerceAtLeast(0)
                     _estado.update {
-                        it.copy(
-                            sudo = estadoSudo.copy(
-                                comprobando = false,
-                                intentosRestantes = intentos,
-                                error = if (intentos > 0) "contraseña rechazada" else "contraseña rechazada; se cierra el diálogo",
-                            ),
-                        )
+                        if (intentos <= 0) {
+                            // Agotados los 3 intentos: se cierra y se olvida.
+                            it.copy(
+                                sudo = EstadoSudoUi(),
+                                aviso = "la contraseña de sudo se rechazó 3 veces",
+                            )
+                        } else {
+                            it.copy(
+                                sudo = estadoSudo.copy(
+                                    comprobando = false,
+                                    intentosRestantes = intentos,
+                                    error = "contraseña rechazada",
+                                ),
+                            )
+                        }
                     }
                 }
                 ResultadoSudoVista.SIN_SUDO -> _estado.update {

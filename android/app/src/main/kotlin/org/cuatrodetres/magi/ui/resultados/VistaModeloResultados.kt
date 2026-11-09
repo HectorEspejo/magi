@@ -116,7 +116,10 @@ class VistaModeloResultados(
         alcance.launch {
             try {
                 val lista = fuente.ejecucionesLista()
-                _estado.update { it.copy(ejecuciones = lista, cargando = false) }
+                // Si el flujo ya había entregado una lista más nueva, no se pisa.
+                _estado.update { actual ->
+                    if (actual.cargando) actual.copy(ejecuciones = lista, cargando = false) else actual
+                }
             } catch (error: Throwable) {
                 _estado.update {
                     it.copy(
@@ -171,21 +174,37 @@ class VistaModeloResultados(
             )
         }
         alcance.launch {
+            // Si mientras se leía se abrió otro host u otra ejecución, este
+            // resultado ya no vale: pintarlo enseñaría la salida equivocada.
+            fun sigueSiendoLaSeleccion(): Boolean =
+                _estado.value.seleccionadaId == id && _estado.value.hostSeleccionado == hostUuid
             try {
                 when (val leido = fuente.salidaEjecucion(id, hostUuid)) {
                     is ResultadoNucleoVista.Listo -> _estado.update {
-                        it.copy(salida = leido.valor, cargandoSalida = false)
+                        if (sigueSiendoLaSeleccion()) {
+                            it.copy(salida = leido.valor, cargandoSalida = false)
+                        } else {
+                            it
+                        }
                     }
                     is ResultadoNucleoVista.Error -> _estado.update {
-                        it.copy(cargandoSalida = false, error = leido.mensaje)
+                        if (sigueSiendoLaSeleccion()) {
+                            it.copy(cargandoSalida = false, error = leido.mensaje)
+                        } else {
+                            it
+                        }
                     }
                 }
             } catch (error: Throwable) {
                 _estado.update {
-                    it.copy(
-                        cargandoSalida = false,
-                        error = error.message ?: "no se pudo leer la salida",
-                    )
+                    if (sigueSiendoLaSeleccion()) {
+                        it.copy(
+                            cargandoSalida = false,
+                            error = error.message ?: "no se pudo leer la salida",
+                        )
+                    } else {
+                        it
+                    }
                 }
             }
         }

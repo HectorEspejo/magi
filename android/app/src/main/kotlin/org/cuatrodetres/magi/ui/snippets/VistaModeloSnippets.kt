@@ -209,14 +209,19 @@ class VistaModeloSnippets(
     fun continuar() {
         val snippet = _estado.value.seleccionado ?: return
         if (!_estado.value.puedeContinuar) return
+        val hosts = _estado.value.hostsMarcados.toList()
+        val variables = _estado.value.variables
+        val uuid = snippet.uuid
         _estado.update { it.copy(preparando = true, error = null, preparacion = null) }
         alcance.launch {
             try {
-                val pedido = fuente.prepararEjecucion(
-                    snippet.uuid,
-                    _estado.value.hostsMarcados.toList(),
-                    _estado.value.variables,
-                )
+                val pedido = fuente.prepararEjecucion(uuid, hosts, variables)
+                // Si el usuario abrió otro snippet mientras se preparaba, la
+                // preparación anterior no se aplica ni se ejecuta.
+                if (_estado.value.seleccionado?.uuid != uuid) {
+                    _estado.update { it.copy(preparando = false) }
+                    return@launch
+                }
                 when (pedido) {
                     is ResultadoNucleoVista.Listo -> {
                         val preparacion = pedido.valor

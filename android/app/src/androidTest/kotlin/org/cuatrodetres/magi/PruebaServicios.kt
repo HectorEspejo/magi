@@ -185,11 +185,10 @@ class PruebaServicios {
                     it.resultado == ResultadoAccionMovil.HECHO
             },
         )
-        assertTrue(
-            "no hay anotación servicio_accion en el registro",
+        esperarHasta("la acción queda anotada en el registro") {
             entradasDelRegistro(nucleo, web, org.cuatrodetres.magi.nucleo.TipoRegistroFiltro.SERVICIOS)
-                .any { it.tipo == "servicio_accion" },
-        )
+                .any { it.tipo == "servicio_accion" }
+        }
 
         // 8. Logs en vivo del diario de app.service: dos líneas iniciales, la
         // ventana filtrada y la parada de la suscripción.

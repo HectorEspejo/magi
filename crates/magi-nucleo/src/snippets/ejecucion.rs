@@ -26,10 +26,27 @@ pub fn contar_bytes(bytes: &[u8]) -> u64 {
 /// como texto plano, sin secuencias de escape (nunca se interpretan al
 /// pintar). El `bool` dice si hubo que descartar algo por el tope: es el
 /// «… truncada» de la vista Resultados y del fichero de salida.
+///
+/// Si el tope cae en mitad de un carácter UTF-8 se recorta hasta su inicio
+/// para no dejar un carácter de reemplazo al final (la salida se enseña y se
+/// guarda tal cual).
 pub fn recortar_flujo(bytes: &[u8]) -> (String, bool) {
-    let truncada = bytes.len() > MAXIMO_SALIDA;
-    let guardados = bytes.get(..MAXIMO_SALIDA).unwrap_or(bytes);
-    (salida::texto_limpio(guardados), truncada)
+    let fin = fin_en_limite_utf8(bytes, MAXIMO_SALIDA);
+    (salida::texto_limpio(&bytes[..fin]), fin < bytes.len())
+}
+
+/// Primer byte de un carácter UTF-8 completo que cabe en `maximo`, o el
+/// total si cabe entero.
+fn fin_en_limite_utf8(bytes: &[u8], maximo: usize) -> usize {
+    let mut fin = maximo.min(bytes.len());
+    if fin < bytes.len() {
+        // Si el byte del tope es una continuación, se retrocede al byte que
+        // empieza el carácter para no partirlo.
+        while fin > 0 && bytes[fin] & 0b1100_0000 == 0b1000_0000 {
+            fin -= 1;
+        }
+    }
+    fin
 }
 
 /// Estado de un host dentro de una ejecución (diagrama de §3.3).
@@ -314,5 +331,25 @@ mod pruebas {
         assert!(!truncada);
         assert_eq!(contar_bytes(b""), 0);
         assert_eq!(contar_bytes(b"hola"), 4);
+    }
+
+    #[test]
+    fn el_tope_no_parte_un_caracter_utf8() {
+        // «ñ» ocupa dos bytes y cae justo en el tope: se descarta entera y no
+        // queda un carácter de reemplazo al final de la salida.
+        let mut bytes = vec![b'a'; MAXIMO_SALIDA - 1];
+        bytes.extend_from_slice("ñ".as_bytes());
+        assert_eq!(bytes.len(), MAXIMO_SALIDA + 1);
+        let (texto, truncada) = recortar_flujo(&bytes);
+        assert!(truncada);
+        assert!(!texto.contains('\u{fffd}'));
+        assert_eq!(texto.len(), MAXIMO_SALIDA - 1);
+
+        // Un carácter ASCII exactamente en el límite sí cabe.
+        let mut justo = vec![b'a'; MAXIMO_SALIDA - 1];
+        justo.push(b'b');
+        let (texto, truncada) = recortar_flujo(&justo);
+        assert_eq!(texto.len(), MAXIMO_SALIDA);
+        assert!(!truncada);
     }
 }

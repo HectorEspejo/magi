@@ -127,7 +127,11 @@ class VistaModeloFlota(
                 avisoNucleo(e.message.orEmpty())
                 emptyList()
             }
-            _estado.update { it.copy(hosts = lista, cargando = false) }
+            // Si el flujo ya trajo una lista más nueva mientras se leía la
+            // instantánea, no se pisa con datos viejos.
+            if (_estado.value.cargando) {
+                _estado.update { it.copy(hosts = lista, cargando = false) }
+            }
             sondearTodos()
         }
     }
@@ -209,7 +213,10 @@ class VistaModeloFlota(
                 null
             }
             if (ficha == null) {
-                _estado.update { it.copy(hostSeleccionado = null) }
+                // Solo se cierra la selección si sigue siendo esta ficha.
+                if (_estado.value.hostSeleccionado == hostUuid) {
+                    _estado.update { it.copy(hostSeleccionado = null) }
+                }
                 avisoNucleo("el host ya no existe")
                 return@launch
             }
@@ -225,6 +232,9 @@ class VistaModeloFlota(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 emptyList()
             }
+            // Si entretanto se abrió otra ficha o se cerró, este resultado ya no
+            // vale: aplicarlo dejaría el panel con datos de otro host.
+            if (_estado.value.hostSeleccionado != hostUuid) return@launch
             _estado.update {
                 it.copy(
                     ficha = ficha,
@@ -248,6 +258,7 @@ class VistaModeloFlota(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 return@launch
             }
+            if (_estado.value.hostSeleccionado != hostUuid) return@launch
             _estado.update { it.copy(tunelesFicha = tuneles) }
         }
     }
@@ -298,7 +309,7 @@ class VistaModeloFlota(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 return@launch
             }
-            if (ficha != null) {
+            if (ficha != null && _estado.value.hostSeleccionado == hostUuid) {
                 _estado.update { it.copy(ficha = ficha) }
             }
         }

@@ -24,6 +24,7 @@ import org.cuatrodetres.magi.ui.modelos.EstadoSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FaseSincronizacionVista
 import org.cuatrodetres.magi.ui.modelos.FichaHostVista
 import org.cuatrodetres.magi.ui.modelos.GrupoVista
+import org.cuatrodetres.magi.ui.modelos.HostEjecucionVista
 import org.cuatrodetres.magi.ui.modelos.HostVista
 import org.cuatrodetres.magi.ui.modelos.InventarioVista
 import org.cuatrodetres.magi.ui.modelos.PasoAsistente
@@ -499,7 +500,18 @@ class PruebaVistaModeloMagi {
         val avisos = AvisosPlataformaFalso()
         val vm = VistaModeloMagi(fuente, ControlBloqueoPrueba(), ambito(), avisos)
         vm.iniciar()
-        fuente.emitirEjecuciones(listOf(EjecucionVista(id = 1)))
+        // Una ejecución con un host en cola: la lista conserva 1 h las
+        // terminadas, pero solo las vivas cuentan para el aviso de §7.12.
+        fuente.emitirEjecuciones(
+            listOf(
+                EjecucionVista(
+                    id = 1,
+                    hosts = listOf(
+                        HostEjecucionVista(hostUuid = "h1", hostNombre = "web-01"),
+                    ),
+                ),
+            ),
+        )
         assertEquals(Triple(0, 0, 1), avisos.trabajoGuardado)
     }
 
