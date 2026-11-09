@@ -6,7 +6,7 @@
 //! El host apunta a 10.0.2.2:12222 (el anfitrión visto desde el emulador) con el
 //! usuario usuario; el túnel es 127.0.0.1:9090 → 127.0.0.1:19091. Los puertos
 //! son fijos porque también lo son los del servidor de pruebas
-//! (crates/magi-movil/examples/servidor_pruebas_tunel.rs).
+//! (crates/magi-movil/examples/servidor_pruebas.rs).
 
 use std::collections::BTreeMap;
 

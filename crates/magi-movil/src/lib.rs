@@ -13,12 +13,21 @@
 
 uniffi::setup_scaffolding!();
 
+pub mod ajustes;
 pub mod api;
 pub mod clave;
+pub mod conexiones;
+pub mod deliberacion;
 pub mod dialogos;
+pub mod ejecuciones;
 pub mod escritor;
 pub mod estado;
+pub mod flota;
 pub mod gestor;
 pub mod inventario;
+pub mod logs;
+pub mod registro;
 pub mod retrollamadas;
+pub mod servicios;
 pub mod sincro;
+pub mod snippets;

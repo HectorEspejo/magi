@@ -6,33 +6,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use magi_nucleo::almacen::Almacen;
-use magi_nucleo::conexion::cliente::Cliente;
-use magi_nucleo::conexion::reenvios::{Contadores, Reenvios};
+use magi_nucleo::conexion::reenvios::Contadores;
 use magi_nucleo::modelo::TipoTunel;
 use magi_nucleo::rutas::{Equipo as EquipoNucleo, Rutas as RutasNucleo};
 use magi_nucleo::trabajo_vivo::TrabajoVivo;
 use magi_nucleo::tuneles::escucha::EscuchaMovil;
-use russh::client::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::api::{
     ClavePublicaMovil, ErrorNucleo, EstadoSesion, PeticionDialogo, Retrollamadas, Sesion,
 };
 use crate::clave::{FirmanteNucleo, LlaveroNucleo};
+use crate::conexiones::{GestorConexiones, OyenteConexion, UsoConexion};
+use crate::deliberacion::DeliberacionViva;
 use crate::dialogos::Dialogos;
+use crate::ejecuciones::MotorEjecuciones;
 use crate::escritor::Escritor;
 
-/// Una conexión viva de un host, compartida por sus sesiones y túneles.
-pub struct ConexionHost {
-    pub handle: Arc<Handle<Cliente>>,
-    pub saltos: Vec<Handle<Cliente>>,
-    pub reenvios: Arc<Reenvios>,
-    /// Canal de eventos de la conexión: mantenerlo vivo conserva el bucle que
-    /// traduce huellas y contraseñas a diálogos de la app.
-    pub tx: mpsc::UnboundedSender<magi_nucleo::conexion::EventoConexion>,
-    /// uuid de los hosts de salto de la cadena (cuentan como trabajo vivo).
-    pub saltos_uuids: Vec<String>,
-}
+/// Una conexión viva de un host, compartida por todo lo que la usa (F14, D277).
+/// La estructura y su contabilidad viven en el módulo de conexiones; se
+/// reexporta aquí porque es el tipo que usan las sesiones y los túneles.
+pub use crate::conexiones::{ConexionHost, Politica};
 
 /// Órdenes de la app hacia una sesión viva.
 pub enum ComandoSesion {
@@ -56,6 +50,10 @@ pub struct SesionViva {
     pub receptor: Mutex<Option<mpsc::UnboundedReceiver<ComandoSesion>>>,
     pub pantalla: Arc<Mutex<vt100::Parser>>,
     pub abierta_en: Option<i64>,
+    /// Comando que se escribe al abrir el PTY en las sesiones ordenadas de
+    /// Servicios (shell de un contenedor, seguimiento de logs; D286). También
+    /// se reescribe al reconectar.
+    pub comando_inicial: Option<String>,
 }
 
 impl SesionViva {
@@ -150,6 +148,9 @@ pub struct TunelActivo {
     pub puerto_efectivo: Mutex<Option<u16>>,
     /// Identificador numérico para el registro de reenvíos del host.
     pub id_numerico: i64,
+    /// Uso de la conexión del host mientras el túnel está activo o
+    /// activándose (F14, D277): se suelta al pararse o caerse.
+    pub uso: Mutex<Option<UsoConexion>>,
 }
 
 impl TunelActivo {
@@ -215,13 +216,31 @@ pub struct EstadoNucleo {
     pub firmante: Arc<FirmanteNucleo>,
     pub dialogos: Dialogos,
     pub sesiones: Mutex<HashMap<u64, Arc<SesionViva>>>,
-    pub conexiones: tokio::sync::Mutex<HashMap<String, Arc<ConexionHost>>>,
-    pub cerrojos: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Gestor de conexiones del móvil: una por host para todo (F14, D277).
+    pub conexiones: Arc<GestorConexiones>,
+    /// Oyentes a los que avisar de la caída de una conexión (acciones, logs y
+    /// ejecuciones se suscriben; las sesiones y los túneles se marcan aparte).
+    pub oyentes_conexion: Mutex<Vec<Arc<dyn OyenteConexion>>>,
+    /// Ejecuciones de snippets del móvil (F14): en curso y terminadas, que se
+    /// olvidan una hora después de terminar. Lo lleva el motor de ejecuciones.
+    pub ejecuciones: Mutex<MotorEjecuciones>,
+    /// Deliberaciones abiertas del móvil (F14): la tabla viva, el plan fijado al
+    /// abrir y si ya se usaron. La lleva el módulo de deliberación.
+    pub deliberaciones: Mutex<HashMap<u64, DeliberacionViva>>,
     pub tuneles: Mutex<HashMap<String, Arc<TunelActivo>>>,
     pub sincro: tokio::sync::Mutex<EstadoSincro>,
     pub clave_publica: Mutex<Option<ClavePublicaMovil>>,
     /// Último error legible por host (solo para la lista; no va a magi.db).
     pub ultimo_error: Mutex<HashMap<String, String>>,
+    // ------------------------------------------------------------------
+    // Bloque de la Fase 14 a cargo de task-6 (Flota y ajustes): ajustes del
+    // móvil normalizados. No tocar desde otras pistas sin avisar.
+    // ------------------------------------------------------------------
+    /// Ajustes normalizados del móvil (informe §5.4). Los escribe
+    /// `Nucleo::aplicar_ajustes`; el resto de la lógica los lee con
+    /// `crate::ajustes::actuales`.
+    pub ajustes: std::sync::RwLock<crate::ajustes::AjustesNucleo>,
+    // --------------------- fin del bloque de task-6 -------------------
     pub siguiente_id: AtomicU64,
 }
 
@@ -248,6 +267,7 @@ impl EstadoNucleo {
             escritor.clone(),
         ));
         let firmante = Arc::new(FirmanteNucleo::nuevo(retrollamadas.firmante.clone()));
+        let conexiones = Arc::new(GestorConexiones::nuevo(runtime.handle().clone()));
         Ok(Arc::new(Self {
             retrollamadas,
             rutas,
@@ -259,12 +279,15 @@ impl EstadoNucleo {
             firmante,
             dialogos: Dialogos::nuevo(),
             sesiones: Mutex::new(HashMap::new()),
-            conexiones: tokio::sync::Mutex::new(HashMap::new()),
-            cerrojos: Mutex::new(HashMap::new()),
+            conexiones,
+            oyentes_conexion: Mutex::new(Vec::new()),
+            ejecuciones: Mutex::new(MotorEjecuciones::nuevo()),
+            deliberaciones: Mutex::new(HashMap::new()),
             tuneles: Mutex::new(HashMap::new()),
             sincro: tokio::sync::Mutex::new(EstadoSincro::default()),
             clave_publica: Mutex::new(None),
             ultimo_error: Mutex::new(HashMap::new()),
+            ajustes: std::sync::RwLock::new(crate::ajustes::AjustesNucleo::por_defecto()),
             siguiente_id: AtomicU64::new(1),
         }))
     }
@@ -274,15 +297,31 @@ impl EstadoNucleo {
         self.siguiente_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Cerrojo por host para no abrir dos conexiones a la vez.
-    pub fn cerrojo_de_host(&self, host_uuid: &str) -> Arc<tokio::sync::Mutex<()>> {
-        if let Ok(mut cerrojos) = self.cerrojos.lock() {
-            return cerrojos
-                .entry(host_uuid.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone();
+    /// Suscribe un oyente a las caídas de conexión (pistas de servicios, logs
+    /// y ejecuciones). Los avisos llegan desde el vigilante, sin bloquear.
+    pub fn suscribir_oyente_conexion(&self, oyente: Arc<dyn OyenteConexion>) {
+        if let Ok(mut oyentes) = self.oyentes_conexion.lock() {
+            oyentes.push(oyente);
         }
-        Arc::new(tokio::sync::Mutex::new(()))
+    }
+
+    /// Da de baja un oyente por identidad, en todas las ramas de salida de lo
+    /// que lo suscribió.
+    pub fn quitar_oyente_conexion(&self, oyente: &Arc<dyn OyenteConexion>) {
+        if let Ok(mut oyentes) = self.oyentes_conexion.lock() {
+            oyentes.retain(|registrado| !Arc::ptr_eq(registrado, oyente));
+        }
+    }
+
+    /// Avisa a los oyentes de que la conexión del host ha caído.
+    pub fn avisar_conexion_caida(&self, host_uuid: &str, motivo: &str) {
+        let oyentes = match self.oyentes_conexion.lock() {
+            Ok(oyentes) => oyentes.clone(),
+            Err(_) => return,
+        };
+        for oyente in oyentes {
+            oyente.conexion_caida(host_uuid, motivo);
+        }
     }
 
     /// Clave pública del móvil, calculada una vez del Keystore.
@@ -384,12 +423,10 @@ impl EstadoNucleo {
                 }
             }
         }
-        if let Ok(conexiones) = self.conexiones.try_lock() {
-            for (host_uuid, conexion) in conexiones.iter() {
-                hosts.insert(host_uuid.clone());
-                for salto in &conexion.saltos_uuids {
-                    hosts.insert(salto.clone());
-                }
+        for (host_uuid, conexion) in self.conexiones.vivas() {
+            hosts.insert(host_uuid);
+            for salto in &conexion.saltos_uuids {
+                hosts.insert(salto.clone());
             }
         }
         InstantaneaTrabajoVivo { hosts, tuneles }

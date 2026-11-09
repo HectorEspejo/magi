@@ -3169,6 +3169,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "magi-nucleo",
+ "nix 0.29.0",
  "p256",
  "russh",
  "ssh-key",

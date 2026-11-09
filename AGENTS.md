@@ -387,9 +387,11 @@ coméntalo con el desarrollador.
   por dobles en la JVM; en el emulador corren la prueba de humo, la de extremo
   a extremo de los túneles (desde la corrección 11b) y las de Flota, Servicios
   y Snippets (desde la Fase 14). Necesitan el servidor de pruebas del
-  anfitrión, que desde la Fase 14 arranca también el job `humo` de CI. Lo que solo se puede
-  comprobar en un móvil real va al guion de validación del informe de
-  implementación.
+  anfitrión (`servidor_pruebas`: SSH en `127.0.0.1:12222`, eco en `:19091`,
+  control en `:12223` y backups en `/tmp/magi-pruebas/backups`; el emulador lo
+  ve en `10.0.2.2`), que desde la Fase 14 arranca también el job `humo` de CI.
+  Lo que solo se puede comprobar en un móvil real va al guion de validación del
+  informe de implementación.
 - La codificación de teclas es una sola tabla, en
   `crates/magi-nucleo/src/terminal/teclas.rs`: el escritorio (`src/teclas.rs`)
   solo traduce a ella los eventos de crossterm y la app Android la usa igual.
@@ -412,7 +414,8 @@ coméntalo con el desarrollador.
   en el emulador, arranca antes `cargo run -p magi-movil --example
   servidor_pruebas` (se llamaba `servidor_pruebas_tunel` hasta la Fase 14) y
   ejecuta `./gradlew connectedDebugAndroidTest` (sin ese servidor, esas pruebas
-  se omiten solas).
+  se omiten solas). El job `humo` de `android.yml` hace lo mismo: lo arranca
+  antes del emulador, espera su línea «listo:» y lo para al terminar.
 - Antes de usar Gradle o cargo-ndk, exporta `ANDROID_HOME`, `ANDROID_SDK_ROOT`
   y `ANDROID_NDK_HOME` (NDK r30). Si lo haces con un script de entorno, que viva
   fuera de `/tmp` (se vacía al reiniciar). En documentos del repositorio, nunca

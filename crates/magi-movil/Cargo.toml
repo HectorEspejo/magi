@@ -22,7 +22,10 @@ anyhow = "1"
 thiserror = "2"
 # Runtime propio del núcleo móvil (informe §2). El contrato aún no lo usa; lo
 # usará la lógica que integra el Lead.
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+# El ejemplo `servidor_pruebas` (host SSH de pruebas) usa red y procesos; el
+# núcleo ya trae esas features, pero se piden aquí para que compilar los
+# ejemplos no dependa de la unificación de features de sus dependencias.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util", "process"] }
 russh = "0.63"
 vt100 = "0.16"
 zeroize = "1"
@@ -39,3 +42,6 @@ tempfile = "3"
 ssh-key = { version = "=0.7.0-rc.11", features = ["ed25519", "getrandom"] }
 p256 = { version = "0.14", features = ["ecdsa"] }
 tokio = { version = "1", features = ["full"] }
+# Matar el grupo de procesos de los exec, shells y sftp-server del ejemplo
+# `servidor_pruebas` cuando el canal se cierra antes de que terminen.
+nix = { version = "0.29", features = ["process", "signal"] }

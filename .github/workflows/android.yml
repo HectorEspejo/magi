@@ -1,11 +1,14 @@
-# Integración continua de la app Android de MAGI — Fase 11.
+# Integración continua de la app Android de MAGI — Fases 11 y 14.
 #
 # Se ejecuta en cada pull request que toca el núcleo compartido o la app, en
 # cada push a main y en las etiquetas android-v*. Compila el núcleo con
 # cargo-ndk para las dos ABI que usa la app (arm64-v8a y x86_64), pasa lint y
 # las pruebas de Kotlin en la JVM, genera el APK de depuración y, en main y en
 # las etiquetas android-v*, corre la prueba de humo en un emulador API 30
-# x86_64 con KVM.
+# x86_64 con KVM. Desde la Fase 14 el job humo arranca antes el servidor de
+# pruebas del móvil en el anfitrión (solo en 127.0.0.1; el emulador lo ve en
+# 10.0.2.2), de modo que las pruebas instrumentadas de extremo a extremo dejan
+# de omitirse (R106) y el servidor se para siempre al terminar (R107).
 #
 # La publicación de la app va aparte, en android-release.yml, y solo con una
 # etiqueta android-vX.Y.Z[-rc.N]. Este workflow no recibe secretos, no publica
@@ -171,7 +174,9 @@ jobs:
     # alargar la validación de cada cambio.
     if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # El servidor de pruebas del móvil se compila en el anfitrión antes del
+    # emulador; con la caché fría, el margen de 60 min se queda justo.
+    timeout-minutes: 75
     steps:
       - name: Descargar el repositorio
         uses: actions/checkout@v6
@@ -264,6 +269,46 @@ jobs:
           fi
           "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
 
+      - name: Instalar el sftp-server de OpenSSH
+        # El host SSH de pruebas sirve el subsistema SFTP con el sftp-server
+        # real de OpenSSH (lo usa BALTHASAR-2 en el móvil). El ejemplo lo busca
+        # en MAGI_SFTP_SERVER y en las rutas habituales.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          test -x /usr/lib/openssh/sftp-server
+          echo "MAGI_SFTP_SERVER=/usr/lib/openssh/sftp-server" >> "$GITHUB_ENV"
+
+      - name: Arrancar el servidor de pruebas del móvil
+        # Escucha solo en 127.0.0.1 del anfitrión (el emulador lo ve en
+        # 10.0.2.2) y las pruebas instrumentadas lo usan; sin él se omiten
+        # solas. Se compila y se arranca su binario (no `cargo run`) para que
+        # el pid que se para sea el del servidor y no el de Cargo.
+        run: |
+          set -euo pipefail
+          cargo build -p magi-movil --example servidor_pruebas --locked
+          log="$RUNNER_TEMP/servidor-pruebas.log"
+          pid_file="$RUNNER_TEMP/servidor-pruebas.pid"
+          # nohup: el servidor tiene que sobrevivir al shell de este paso.
+          nohup ./target/debug/examples/servidor_pruebas > "$log" 2>&1 &
+          echo "$!" > "$pid_file"
+          for _ in $(seq 1 120); do
+            if grep -q '^listo:' "$log"; then
+              cat "$log"
+              exit 0
+            fi
+            if ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+              echo "ERROR: el servidor de pruebas no arrancó:" >&2
+              cat "$log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "ERROR: el servidor de pruebas no dijo «listo:» en 120 s:" >&2
+          cat "$log" >&2
+          exit 1
+
       - name: Prueba de humo en el emulador (API 30, x86_64)
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -278,5 +323,50 @@ jobs:
           working-directory: android
           script: |
             set -euo pipefail
+            # El servidor de pruebas se arranca en el paso anterior y se para
+            # siempre al terminar el job: aquí con el trap (camine bien o mal
+            # Gradle) y, si el emulador ni siquiera llegara a arrancar, en el
+            # paso final `if: always()`.
+            parar_servidor_de_pruebas() {
+              local pid_file="$RUNNER_TEMP/servidor-pruebas.pid"
+              [ -f "$pid_file" ] || return 0
+              local pid
+              pid=$(cat "$pid_file")
+              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                kill "$pid" 2>/dev/null || true
+                for _ in $(seq 1 20); do
+                  kill -0 "$pid" 2>/dev/null || break
+                  sleep 0.2
+                done
+                kill -9 "$pid" 2>/dev/null || true
+              fi
+              rm -f "$pid_file"
+            }
+            trap parar_servidor_de_pruebas EXIT
             chmod +x ./gradlew
             ./gradlew connectedDebugAndroidTest
+
+      - name: Parar el servidor de pruebas del móvil
+        if: always()
+        # Backstop del trap del paso anterior: si el emulador falla antes de
+        # ejecutar su script, o se cancela el job, el servidor no se queda
+        # vivo. Deja también su registro a la vista.
+        run: |
+          set -uo pipefail
+          pid_file="$RUNNER_TEMP/servidor-pruebas.pid"
+          if [ -f "$pid_file" ]; then
+            pid=$(cat "$pid_file")
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              kill "$pid" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.2
+              done
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+            rm -f "$pid_file"
+          fi
+          if [ -f "$RUNNER_TEMP/servidor-pruebas.log" ]; then
+            echo "--- servidor de pruebas del móvil (últimas 200 líneas) ---"
+            tail -n 200 "$RUNNER_TEMP/servidor-pruebas.log"
+          fi
