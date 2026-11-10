@@ -17,7 +17,7 @@ use ratatui::Terminal;
 
 use magi::app::escritura_varios::{EstadoEscritura, MotivoFin};
 use magi::app::paneles::DisposicionPaneles;
-use magi::app::{App, CampoFicha, Dialogo, Evento};
+use magi::app::{App, CampoFicha, Dialogo, EntradaTextoAccion, Evento};
 use magi::config::{Config, Rutas};
 use magi::modelo::{DatosHost, Origen};
 use magi::protocolo::{
@@ -25,6 +25,7 @@ use magi::protocolo::{
     InfoTunelTemporal, MensajeCliente, MensajeServidor, ResultadoTmux,
 };
 use magi::tema::Tema;
+use magi::ui::componentes::CampoTexto;
 use magi::ui::Vista;
 
 struct Entorno {
@@ -1389,4 +1390,51 @@ fn la_vista_tuneles_muestra_los_temporales_de_los_enlaces() {
     assert!(texto.contains("se cierran con su pestaña"), "{texto}");
     // No hay acción de gestión: la barra no ofrece activar/parar para ellos.
     prueba.instantanea("terminal_tuneles_temporales_80x24");
+}
+
+#[test]
+fn el_pegado_va_al_campo_del_dialogo() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    prueba.app.dialogo = Some(Dialogo::EntradaTexto {
+        titulo: "NUEVO GRUPO".to_string(),
+        etiqueta: "Nombre".to_string(),
+        campo: CampoTexto::default(),
+        accion: EntradaTextoAccion::CrearGrupo,
+    });
+    prueba.evento(Evento::Pegado("mi-grupo\nnuevo".to_string()));
+    match &prueba.app.dialogo {
+        Some(Dialogo::EntradaTexto { campo, .. }) => {
+            // Los saltos de línea de un pegado se juntan en un campo de una línea.
+            assert_eq!(campo.texto, "mi-gruponuevo");
+        }
+        _ => panic!("se esperaba el diálogo de entrada de texto"),
+    }
+    assert!(
+        prueba.teclas_enviadas().is_empty(),
+        "el pegado de un campo no va al remoto"
+    );
+}
+
+#[test]
+fn el_pegado_va_a_la_busqueda_del_historial() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    prueba.entrar_en_sesion(vec![sesion_de(1, host, "web-01")]);
+    prueba.prefijo(KeyCode::Char('['));
+    responder_historial(
+        &mut prueba,
+        &[("error de conexion", false), ("otra linea", false)],
+    );
+    prueba.tecla(KeyCode::Char('/'));
+    prueba.evento(Evento::Pegado("conexion\nperdida".to_string()));
+    let estado = prueba.app.historial.as_ref().expect("modo historial");
+    assert!(estado.editando);
+    assert_eq!(
+        estado
+            .busqueda
+            .as_ref()
+            .map(|busqueda| busqueda.patron.as_str()),
+        Some("conexionperdida")
+    );
+    assert!(prueba.teclas_enviadas().is_empty());
 }

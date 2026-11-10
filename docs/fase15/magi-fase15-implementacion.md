@@ -67,6 +67,19 @@ terminar) y al cerrar una pestaña persistente; ficha con el bloque TERMINAL;
 ayuda y paleta con las teclas nuevas; aviso al pegar varias líneas; e
 instantáneas de todas las disposiciones y modos a 40×12, 80×24 y 200×60.
 
+
+**Corrección posterior al cierre (10 de noviembre de 2026, rama
+`correccion-seleccion-copiar-pegar`).** La validación manual del desarrollador
+destapó que pegar, seleccionar con el ratón y el foco exterior no funcionaban:
+el hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained` y
+`FocusLost` de crossterm (las pruebas inyectaban `Evento::Pegado` y
+`Evento::Raton` directamente, así que no lo veían). Se reenvían ya al bucle de
+la UI con test de regresión del hilo, y pegar fuera de una sesión en vivo va al
+campo con foco (diálogos, búsqueda del historial, paleta, filtros, ficha y
+Servicios) como pide §4.3; al ceder la terminal al visor o al editor se
+deshacen otra vez pegado, foco, kitty y ratón (D314). Con esto, el checklist de
+la fase queda igualmente en 95/96 (sigue pendiente solo la ejecución de las
+pruebas instrumentadas de Android).
 ## Desviaciones respecto a la especificación
 
 - **`DatosHost` no lleva los ajustes nuevos del host.** La ficha guarda
@@ -387,9 +400,9 @@ este informe.
 - Migrar: la migración 10 se aplica sola al abrir MAGI (user_version 10); una
   base anterior se actualiza y una futura no se abre.
 - Pruebas sin red externa: `TZ=UTC cargo test --workspace --locked` → **64
-  binarios de pruebas en verde y 1.904 pruebas pasadas, 0 fallos** (incluye
-  las 492 unitarias del escritorio, las 500+ del núcleo, `terminal_servidor`
-  18/18, `terminal_ui` 35/35, `terminal_e2e` 1/1, `redimensionado` 303/303,
+  binarios de pruebas en verde y 1.907 pruebas pasadas, 0 fallos** (incluye
+  las 493 unitarias del escritorio, las 500+ del núcleo, `terminal_servidor`
+  18/18, `terminal_ui` 37/37, `terminal_e2e` 1/1, `redimensionado` 303/303,
   `escritorio_*`, `servicios_*`, `sincronizacion_*` y las del móvil).
 - Núcleo del terminal: `cargo test -p magi-nucleo --test terminal_emulador`...
   (las suites listadas en `CLAUDE.md`, todas en verde).

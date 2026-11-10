@@ -75,12 +75,18 @@ fn version_de_cabecera(ruta: &Path) -> Result<i64> {
 /// copia, sin tocar el original (abrir el original en lectura/escritura
 /// aplicaría el WAL y modificaría el fichero antes de poder rechazarlo).
 fn version_de_una_copia(ruta: &Path) -> Result<i64> {
+    // El reloj puede repetir los nanosegundos entre dos hilos de la misma
+    // prueba (los tests corren en paralelo): un contador asegura el nombre.
+    static CONTADOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let marca = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duracion| duracion.as_nanos())
         .unwrap_or(0);
-    let temporal =
-        std::env::temp_dir().join(format!("magi-version-{}-{marca}", std::process::id()));
+    let unico = CONTADOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporal = std::env::temp_dir().join(format!(
+        "magi-version-{}-{marca}-{unico}",
+        std::process::id()
+    ));
     std::fs::create_dir(&temporal)
         .with_context(|| format!("creando el directorio temporal {}", temporal.display()))?;
     let resultado = (|| -> Result<i64> {

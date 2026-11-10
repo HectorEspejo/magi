@@ -115,11 +115,18 @@ impl Falsos {
     }
 
     fn meter_clave(hijo: &mut Child, clave: &str) {
-        let stdin = hijo.stdin.as_mut().expect("stdin");
-        stdin
-            .write_all(format!("{clave}\n").as_bytes())
-            .expect("escribir clave");
-        stdin.flush().expect("vaciar clave");
+        let Some(stdin) = hijo.stdin.as_mut() else {
+            return;
+        };
+        // Con argumentos inválidos el script sale con 64 antes de leer la
+        // entrada estándar: el tubo roto es normal, no un fallo de la prueba.
+        match stdin.write_all(format!("{clave}\n").as_bytes()) {
+            Ok(()) => {
+                let _ = stdin.flush();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(error) => panic!("escribir clave: {error}"),
+        }
     }
 
     /// Lanza el script dejando la entrada estándar abierta (para los logs).

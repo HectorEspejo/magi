@@ -131,6 +131,25 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **Pegar, seleccionar con el ratón y el foco exterior no funcionaban** (Fase
+  15). El hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained`
+  y `FocusLost` del terminal exterior: pegar no hacía nada y, con el ratón
+  capturado (Claude Code u otros programas que lo piden), la rueda, el clic y
+  el arrastre se perdían; el remoto tampoco veía los cambios de foco. Ahora se
+  reenvían al bucle de la UI con test de regresión del hilo.
+
+- Dos aperturas simultáneas de una base de datos con WAL pendiente ya no
+  chocan al crear su copia temporal (los nombres llevan un contador además del
+  reloj): `magi.db` se valida igual y los tests dejan de fallar cuando corren
+  en paralelo.
+
+- **Pegar fuera de una pestaña va al campo con foco** (Fase 15). El texto
+  pegado en un diálogo, la búsqueda del historial, la paleta, un filtro, la
+  ficha o Servicios se inserta en su campo de texto (sin saltos de línea, que
+  se juntan) en vez de descartarse; los diálogos que no tienen campo lo
+  ignoran. Al ceder la terminal al visor o al editor se deshacen otra vez el
+  pegado entre corchetes, el foco, las banderas de kitty y el ratón (D314).
+
 - **Pantalla negra al abrir un escritorio RDP.** El visor recibía
   `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente
   RDP mandaba mapas de bits como rectángulos; el visor los pintaba en su búfer

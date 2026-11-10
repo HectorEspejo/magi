@@ -219,6 +219,19 @@ impl EstadoHistorial {
         }
     }
 
+    /// Pega texto en el patrón de búsqueda que se está escribiendo: los
+    /// controles del pegado se juntan y se respeta el tope de 256 caracteres.
+    pub fn pegar_en_patron(&mut self, texto: &str) {
+        let busqueda = self.busqueda.get_or_insert_with(Busqueda::default);
+        for caracter in texto.chars().filter(|caracter| !caracter.is_control()) {
+            if busqueda.patron.chars().count() >= 256 {
+                break;
+            }
+            busqueda.patron.push(caracter);
+        }
+        busqueda.error = None;
+    }
+
     /// Ejecuta la búsqueda desde la vista hacia arriba.
     pub fn buscar(&mut self) {
         let Some(busqueda) = &mut self.busqueda else {
