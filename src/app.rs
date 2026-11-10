@@ -2374,6 +2374,73 @@ pub enum Dialogo {
     Rejilla(rejilla::EstadoRejilla),
 }
 
+impl Dialogo {
+    /// Pega texto en el campo de texto con foco del diálogo, si lo tiene
+    /// (§4.3). Devuelve si el pegado lo ha consumido un campo.
+    pub fn pegar_texto(&mut self, texto: &str) -> bool {
+        if texto.is_empty() {
+            return false;
+        }
+        match self {
+            Dialogo::HuellaCambiadaServidor { campo, .. }
+            | Dialogo::FraseServidor { campo, .. }
+            | Dialogo::HuellaCambiada { campo, .. }
+            | Dialogo::Frase { campo, .. }
+            | Dialogo::EntradaTexto { campo, .. }
+            | Dialogo::FraseImportacion { campo, .. }
+            | Dialogo::UnirEquipo { campo, .. } => {
+                campo.insertar_texto(texto);
+                true
+            }
+            Dialogo::ContrasenaServidor {
+                campo,
+                foco_casilla,
+                ..
+            }
+            | Dialogo::Contrasena {
+                campo,
+                foco_casilla,
+                ..
+            } => {
+                if *foco_casilla {
+                    return false;
+                }
+                campo.insertar_texto(texto);
+                true
+            }
+            Dialogo::ExportarRegistro { estado } => {
+                estado.campo.insertar_texto(texto);
+                true
+            }
+            Dialogo::GenerarClave { estado } => {
+                let campo = match estado.campo {
+                    CampoGeneracion::Fichero => &mut estado.fichero,
+                    CampoGeneracion::Comentario => &mut estado.comentario,
+                    CampoGeneracion::Frase => &mut estado.frase,
+                    CampoGeneracion::Repetir => &mut estado.repetir,
+                    CampoGeneracion::Tipo | CampoGeneracion::Agente | CampoGeneracion::Copiar => {
+                        return false
+                    }
+                };
+                campo.insertar_texto(texto);
+                true
+            }
+            Dialogo::Tunel { estado } => {
+                let campo = match estado.foco {
+                    CampoTunel::Nombre => &mut estado.nombre,
+                    CampoTunel::EscuchaDireccion => &mut estado.escucha_direccion,
+                    CampoTunel::EscuchaPuerto => &mut estado.escucha_puerto,
+                    CampoTunel::DestinoDireccion => &mut estado.destino_direccion,
+                    CampoTunel::DestinoPuerto => &mut estado.destino_puerto,
+                    CampoTunel::Host | CampoTunel::Tipo | CampoTunel::Automatico => return false,
+                };
+                campo.insertar_texto(texto);
+                true
+            }
+            _ => false,
+        }
+    }
+}
 pub struct ImportacionPendiente {
     pub analisis: sshconfig::importar::Analisis,
     pub decisiones: HashMap<String, bool>,
@@ -3454,10 +3521,17 @@ impl App {
         terminal: &mut crate::ui::TerminalMagi,
         peticion: &crate::visor::Peticion,
     ) -> Result<()> {
-        // El hilo de teclas deja el tty antes de que el paginador lo tome.
+        // El hilo de teclas deja el tty antes de que el paginador lo tome y
+        // el terminal exterior queda como estaba mientras lo usa (D314).
         self.teclado.pausar_y_esperar(Duration::from_millis(200));
+        if self.efectos_externos {
+            crate::ui::desactivar_extras();
+        }
         let aviso = crate::ui::pager::suspender_y_ver(terminal, &self.tema, &self.config, peticion);
         self.teclado.reanudar();
+        if self.efectos_externos {
+            crate::ui::activar_extras(&self.config.terminal);
+        }
         if peticion.temporal {
             self.servidor
                 .enviar(protocolo::MensajeCliente::BorrarTemporal {

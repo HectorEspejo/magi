@@ -43,6 +43,16 @@ pub enum PeticionTerminal {
     TunelTemporal { sesion_id: u32, url: String },
 }
 
+/// Texto de un pegado para un campo de una línea: sin controles (los saltos
+/// de línea se juntan) y acotado para que un pegado enorme no infle el campo.
+fn texto_para_campo(texto: &str) -> String {
+    texto
+        .chars()
+        .filter(|caracter| !caracter.is_control())
+        .take(4096)
+        .collect()
+}
+
 impl App {
     // ------------------------------------------------------------ paneles
 
@@ -1841,12 +1851,70 @@ impl App {
     // ------------------------------------------------------------ pegado
 
     pub(crate) fn despachar_pegado(&mut self, texto: String) {
-        if self.vista != Vista::Sesion {
-            // Fuera de la vista Sesión el pegado va al campo con foco o se
-            // descarta: no hay campo de pegado genérico.
+        // Fuera de la vista Sesión en vivo, el pegado va al campo con foco
+        // (diálogo, búsqueda, filtro) si lo hay; si no, se descarta (§4.3).
+        if let Some(dialogo) = self.dialogo.as_mut() {
+            if dialogo.pegar_texto(&texto_para_campo(&texto)) {
+                self.sucio = true;
+            }
             return;
         }
-        if self.historial.is_some() || self.enlaces.activo {
+        if let Some(paleta) = self.paleta.as_mut() {
+            let limpio = texto_para_campo(&texto);
+            if !limpio.is_empty() {
+                paleta.consulta.insertar_texto(&limpio);
+                paleta.recalcular();
+                self.sucio = true;
+            }
+            return;
+        }
+        if let Some(estado) = self.historial.as_mut() {
+            if estado.editando {
+                estado.pegar_en_patron(&texto_para_campo(&texto));
+                self.sucio = true;
+            }
+            return;
+        }
+        if self.vista == Vista::Ficha {
+            if let Some(ficha) = self.ficha.as_mut() {
+                let campo = ficha.campo;
+                if let Some(texto_campo) = ficha.campo_texto_mut(campo) {
+                    texto_campo.insertar_texto(&texto_para_campo(&texto));
+                    self.sucio = true;
+                }
+            }
+            return;
+        }
+        if self.vista == Vista::Servicios {
+            if let Some(logs) = self.servicios.logs.as_mut() {
+                if logs.filtro_activo {
+                    logs.filtro.push_str(&texto_para_campo(&texto));
+                    self.sucio = true;
+                    return;
+                }
+            }
+            if self.servicios.filtro_activo {
+                self.servicios.filtro.push_str(&texto_para_campo(&texto));
+                self.sucio = true;
+            }
+            return;
+        }
+        if self.vista == Vista::Registro && self.registro.texto_activo {
+            self.registro
+                .campo
+                .insertar_texto(&texto_para_campo(&texto));
+            self.sucio = true;
+            return;
+        }
+        if self.filtro_activo {
+            self.filtro.push_str(&texto_para_campo(&texto));
+            self.sucio = true;
+            return;
+        }
+        if self.vista != Vista::Sesion {
+            return;
+        }
+        if self.enlaces.activo {
             return;
         }
         if self.escritura_varios.activa() {

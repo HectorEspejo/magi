@@ -1192,11 +1192,18 @@ impl App {
         terminal: &mut crate::ui::TerminalMagi,
         peticion: PeticionEditor,
     ) -> anyhow::Result<()> {
-        // El hilo de teclas deja el tty antes de que el editor lo tome (T52).
+        // El hilo de teclas deja el tty antes de que el editor lo tome (T52)
+        // y el terminal exterior queda como estaba mientras lo usa (D314).
         self.teclado
             .pausar_y_esperar(std::time::Duration::from_millis(200));
+        if self.efectos_externos {
+            crate::ui::desactivar_extras();
+        }
         let aviso = crate::ui::pager::suspender_y_editar(terminal, &self.config, &peticion.ruta);
         self.teclado.reanudar();
+        if self.efectos_externos {
+            crate::ui::activar_extras(&self.config.terminal);
+        }
         let real = terminal
             .size()
             .map(|area| (area.width, area.height))

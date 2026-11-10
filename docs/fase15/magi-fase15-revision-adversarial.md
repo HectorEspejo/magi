@@ -69,6 +69,15 @@ sin plazo, estado leído a destiempo y entrada no fiable, como manda
 
 ## Resultado
 
+La validación manual del desarrollador destapó después del cierre un fallo que
+las pruebas automáticas no veían: el hilo de teclas descartaba los eventos
+`Paste`, `Mouse` y `Focus*` del terminal exterior, de modo que pegar y
+seleccionar con el ratón no funcionaban. Se corrigió en la rama
+`correccion-seleccion-copiar-pegar` con test de regresión del hilo (y se
+completó el pegado en los campos con foco y la restauración del terminal al
+cederlo al visor o al editor). Es la clase de hueco que una revisión adversarial
+del cliente debería haber cubierto: se anota como lección para la próxima fase.
+
 Los hallazgos de gravedad alta y media se corrigieron con prueba de regresión
 (ver el detalle en el informe de implementación). Quedan como limitaciones
 documentadas la región de scroll al rehacer el parser (vt100 0.16), la región
