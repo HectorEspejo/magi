@@ -77,6 +77,9 @@ seleccionar con el ratón no funcionaban. Se corrigió en la rama
 completó el pegado en los campos con foco y la restauración del terminal al
 cederlo al visor o al editor). Es la clase de hueco que una revisión adversarial
 del cliente debería haber cubierto: se anota como lección para la próxima fase.
+La misma validación manual destapó después otro cuelgue: copiar con `wl-copy`
+en Wayland bloqueaba la interfaz al esperar el fin de un daemon que hereda la
+salida de error; corregido también con pruebas de regresión.
 
 Los hallazgos de gravedad alta y media se corrigieron con prueba de regresión
 (ver el detalle en el informe de implementación). Quedan como limitaciones

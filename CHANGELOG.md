@@ -131,6 +131,13 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **Copiar colgaba la aplicación en Wayland.** `wl-copy` se queda como daemon
+  sirviendo el portapapeles y hereda su salida de error; al esperar a leer su
+  fin la interfaz se quedaba bloqueada para siempre (parecía un cierre). Ahora
+  se espera un poco al proceso directo y, si sigue vivo sirviendo el
+  portapapeles, se recoge en segundo plano: copiar vuelve al instante. Con
+  pruebas de regresión, incluida la de `wl-copy` real cuando hay Wayland.
+
 - **Pegar, seleccionar con el ratón y el foco exterior no funcionaban** (Fase
   15). El hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained`
   y `FocusLost` del terminal exterior: pegar no hacía nada y, con el ratón
