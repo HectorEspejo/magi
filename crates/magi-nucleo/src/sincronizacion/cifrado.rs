@@ -17,6 +17,21 @@ use crate::sincronizacion::formato::{INFO_FIRMA, SAL_HKDF};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Comienzo del texto canónico de una identidad de age.
+const PREFIJO_CLAVE: &str = "AGE-SECRET-KEY-1";
+
+/// Normaliza el texto de una clave pegada o escaneada: sin espacios ni saltos
+/// de línea y en mayúsculas, su texto canónico. Copiada de una terminal suele
+/// llegar partida en dos líneas. Un solo búfer, en `Zeroizing`: es el secreto.
+pub fn normalizar_clave(texto: &str) -> Zeroizing<String> {
+    let mut normalizado = Zeroizing::new(String::with_capacity(texto.len()));
+    for caracter in texto.chars().filter(|caracter| !caracter.is_whitespace()) {
+        normalizado.push(caracter);
+    }
+    normalizado.make_ascii_uppercase();
+    normalizado
+}
+
 /// Identidad de sincronización: la clave privada X25519 que descifra y firma.
 pub struct ClaveSincronizacion {
     identidad: age::x25519::Identity,
@@ -31,12 +46,29 @@ impl ClaveSincronizacion {
     }
 
     /// Parsea una identidad del texto que se muestra al usuario
-    /// (AGE-SECRET-KEY-1...).
+    /// (AGE-SECRET-KEY-1...), pegada o escaneada: se normaliza antes (sin
+    /// espacios ni saltos de línea y en mayúsculas) y el error dice qué le pasa
+    /// en castellano, sin los textos de age.
     pub fn desde_texto(texto: &str) -> Result<Self> {
-        let identidad: age::x25519::Identity = texto
-            .trim()
-            .parse()
-            .map_err(|error| anyhow::anyhow!("clave de sincronización no válida: {error}"))?;
+        let normalizado = normalizar_clave(texto);
+        if normalizado.is_empty() {
+            anyhow::bail!("la clave de sincronización está vacía");
+        }
+        if normalizado.starts_with("AGE1") {
+            anyhow::bail!(
+                "la clave de sincronización no es válida: es una clave pública (age1…); copia la que empieza por {PREFIJO_CLAVE}"
+            );
+        }
+        if !normalizado.starts_with(PREFIJO_CLAVE) {
+            anyhow::bail!(
+                "la clave de sincronización no es válida: debe empezar por {PREFIJO_CLAVE}"
+            );
+        }
+        let identidad: age::x25519::Identity = normalizado.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "la clave de sincronización no es válida: está incompleta o tiene algún carácter cambiado"
+            )
+        })?;
         Ok(Self { identidad })
     }
 
@@ -208,6 +240,43 @@ mod pruebas {
         assert_eq!(clave.clave_publica(), otra.clave_publica());
         assert_eq!(clave.huella_corta(), otra.huella_corta());
         assert!(ClaveSincronizacion::desde_texto("no es una clave").is_err());
+    }
+
+    #[test]
+    fn la_clave_pegada_se_normaliza_y_sus_errores_dicen_que_pasa() {
+        let clave = ClaveSincronizacion::generar();
+        let texto = clave.texto();
+        // Partida en dos líneas, con espacios y en minúsculas, como al copiarla
+        // de una terminal.
+        let (principio, fin) = texto.split_at(40);
+        let pegada = format!("  {}\n  {} \t", principio.to_lowercase(), fin);
+        let leida = ClaveSincronizacion::desde_texto(&pegada).unwrap();
+        assert_eq!(leida.clave_publica(), clave.clave_publica());
+        assert_eq!(
+            normalizar_clave("  age-secret-key-1 abc \n  def\t").as_str(),
+            "AGE-SECRET-KEY-1ABCDEF"
+        );
+
+        let error = |texto: &str| {
+            ClaveSincronizacion::desde_texto(texto)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(error(" \n "), "la clave de sincronización está vacía");
+        assert!(
+            error(&clave.clave_publica()).contains("es una clave pública"),
+            "{}",
+            error(&clave.clave_publica())
+        );
+        assert!(error("no es una clave").contains("debe empezar por AGE-SECRET-KEY-1"));
+        let cortada = &texto[..texto.len() - 3];
+        assert!(
+            error(cortada).contains("está incompleta o tiene algún carácter cambiado"),
+            "{}",
+            error(cortada)
+        );
+        // Ningún error lleva el texto en inglés de age.
+        assert!(!error(cortada).contains("Bech32"));
     }
 
     #[test]
