@@ -80,6 +80,14 @@ del cliente debería haber cubierto: se anota como lección para la próxima fas
 La misma validación manual destapó después otro cuelgue: copiar con `wl-copy`
 en Wayland bloqueaba la interfaz al esperar el fin de un daemon que hereda la
 salida de error; corregido también con pruebas de regresión.
+Después, en el móvil, la APK debug fallaba al sincronizar con
+`LanguageNotAvailable`: `age` leía sus textos de error de la ruta donde se
+compiló y entraba en pánico al formatear el primer fallo de descifrado. El
+fallo venía de la Fase 11 (la primera APK), pero solo se ve en un móvil o en el
+emulador. Corregido en `correccion-age-android` con prueba instrumentada de
+regresión. Al ejecutar por fin las instrumentadas salieron también dos rotas por
+la migración 10. Lección: las instrumentadas se ejecutan antes de cerrar la
+fase, no se dejan para CI.
 
 Los hallazgos de gravedad alta y media se corrigieron con prueba de regresión
 (ver el detalle en el informe de implementación). Quedan como limitaciones

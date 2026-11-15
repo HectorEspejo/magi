@@ -261,7 +261,11 @@ coméntalo con el desarrollador.
   de prorrogarla. Desde la Fase 14 hay otra igual, RUSTSEC-2026-0459
   (`libsqlite3-sys` 0.38.2, con un SQLite embebido antiguo), que caduca el 9 may
   2027: el parche exige rusqlite 0.41; súbelo antes, con todas las pruebas del
-  almacén y la sincronización, y no la prorrogues sin revisar el aviso. La
+  almacén y la sincronización, y no la prorrogues sin revisar el aviso. Desde
+  la corrección posterior a la Fase 15 hay una tercera, RUSTSEC-2026-0495 (el
+  servidor de agente de `russh` 0.63), que caduca el 15 may 2027: MAGI solo usa
+  `russh::keys::agent::client`; el parche exige russh 0.65 (con todo su
+  conjunto). Si algún día usas `agent::server`, sube russh antes. La
   fecha de la página man es la de la versión (la constante
   `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
   `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`.
@@ -318,7 +322,12 @@ coméntalo con el desarrollador.
 - `age` está fijado en 0.11.5: la 0.12 no compila con el `ml-kem` que trae
   russh 0.63. No lo subas sin subir el conjunto russh, y al actualizar `age`
   revisa las excepciones RUSTSEC-2026-0173 y RUSTSEC-2026-0374 de
-  `deny.toml`.
+  `deny.toml`. `magi-nucleo` declara `rust-embed` solo para activar
+  `debug-embed`: sin él, una compilación debug lee los textos de `age` de la
+  ruta donde se compiló y, en el móvil, `age` entra en pánico
+  (`LanguageNotAvailable`) al formatear un error. No lo quites, y explica los
+  errores de `age` con textos propios (`sincronizacion/cifrado.rs`), nunca con
+  su `Display`.
 - Ejemplos, tests, instantáneas y mockups usan direcciones de documentación
   (`192.0.2.x`), dominios `ejemplo.org`, el usuario `usuario` y
   `/home/usuario`; nunca datos reales.
@@ -602,6 +611,10 @@ coméntalo con el desarrollador.
   su pantalla a la vista (ciclo de vida de Android), nunca con la app en segundo
   plano. Las acciones y las ejecuciones sí siguen y cuentan para el servicio en
   primer plano.
+- En el móvil, todo lo que cambia el inventario (la pasada de sincronización,
+  dejar de sincronizar, borrar datos) difunde la lista completa de Flota con
+  `flota::emitir_flota`; el sondeo no es la única fuente. Flota relee la lista
+  al volver a la vista.
 - En el móvil, lo deliberado solo se ejecuta manteniendo pulsado el botón 1 s (el
   `Ctrl+K` del móvil); ningún toque simple ejecuta desde el diálogo MAGI. Lo que no
   delibera pide una confirmación que nombra la acción, el objetivo y el host.
