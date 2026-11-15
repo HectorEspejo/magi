@@ -98,13 +98,14 @@ impl ClaveSincronizacion {
     pub fn cifrar(&self, plano: &[u8]) -> Result<Vec<u8>> {
         let recipiente = self.identidad.to_public();
         age::encrypt(&recipiente, plano)
-            .map_err(|error| anyhow::anyhow!("cifrando con age: {error}"))
+            .map_err(|error| anyhow::anyhow!("cifrando con age: {}", texto_error_cifrado(&error)))
     }
 
     /// Descifra un fichero age. El contenido en claro se devuelve en Zeroizing.
     pub fn descifrar(&self, cifrado: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        let plano = age::decrypt(&self.identidad, cifrado)
-            .map_err(|error| anyhow::anyhow!("descifrando con age: {error}"))?;
+        let plano = age::decrypt(&self.identidad, cifrado).map_err(|error| {
+            anyhow::anyhow!("descifrando con age: {}", texto_error_descifrado(&error))
+        })?;
         Ok(Zeroizing::new(plano))
     }
 }
@@ -115,6 +116,44 @@ impl std::fmt::Debug for ClaveSincronizacion {
             .debug_struct("ClaveSincronizacion")
             .field("huella_corta", &self.huella_corta())
             .finish()
+    }
+}
+
+/// Explica un error de descifrado de age sin pasar por su `Display`: ese carga
+/// los textos traducidos de age y, si no los encuentra (una compilación debug
+/// en el móvil), entra en pánico con `LanguageNotAvailable`. La pasada prueba
+/// cada clave y descarta el error, así que fallar aquí es el camino normal.
+fn texto_error_descifrado(error: &age::DecryptError) -> String {
+    use age::DecryptError;
+    match error {
+        DecryptError::NoMatchingKeys => {
+            "la clave no abre este fichero (está cifrado para otra)".to_string()
+        }
+        DecryptError::InvalidHeader => "la cabecera age no es válida".to_string(),
+        DecryptError::InvalidMac => "la cabecera age está alterada (MAC no válido)".to_string(),
+        DecryptError::UnknownFormat => "formato age desconocido".to_string(),
+        DecryptError::DecryptionFailed => "el contenido cifrado está dañado".to_string(),
+        DecryptError::KeyDecryptionFailed => "no se pudo descifrar la clave".to_string(),
+        DecryptError::ExcessiveWork { required, target } => format!(
+            "el fichero pide un factor de trabajo excesivo ({required}; el máximo es {target})"
+        ),
+        // Al descifrar de memoria, solo el flujo de age da errores de E/S, y su
+        // texto («decryption error») no añade nada.
+        DecryptError::Io(_) => "el contenido cifrado está dañado o incompleto".to_string(),
+    }
+}
+
+/// Explica un error de cifrado de age sin pasar por su `Display` (ver
+/// `texto_error_descifrado`).
+fn texto_error_cifrado(error: &age::EncryptError) -> String {
+    use age::EncryptError;
+    match error {
+        EncryptError::Io(error) => format!("error de escritura: {error}"),
+        EncryptError::EncryptedIdentities(error) => texto_error_descifrado(error),
+        EncryptError::IncompatibleRecipients { .. }
+        | EncryptError::InvalidRecipientLabels(_)
+        | EncryptError::MissingRecipients
+        | EncryptError::MixedRecipientAndPassphrase => "age rechazó el destinatario".to_string(),
     }
 }
 
@@ -179,6 +218,30 @@ mod pruebas {
         assert_ne!(cifrado, claro);
         assert_eq!(clave.descifrar(&cifrado).unwrap().as_slice(), claro);
         assert!(clave.descifrar(b"no es age").is_err());
+    }
+
+    #[test]
+    fn los_errores_de_age_se_explican_sin_sus_textos_traducidos() {
+        // El Display de age carga sus .ftl: en la APK debug no los encontraba y
+        // la pasada entraba en pánico (LanguageNotAvailable). El texto es el
+        // propio, en castellano, para cualquier fichero que no abre.
+        let clave = ClaveSincronizacion::generar();
+        let ajena = ClaveSincronizacion::generar();
+        let cifrado = ajena.cifrar(b"de otra clave").unwrap();
+        assert_eq!(
+            clave.descifrar(&cifrado).unwrap_err().to_string(),
+            "descifrando con age: la clave no abre este fichero (está cifrado para otra)"
+        );
+        assert_eq!(
+            clave.descifrar(b"no es age").unwrap_err().to_string(),
+            "descifrando con age: la cabecera age no es válida"
+        );
+        let propio = clave.cifrar(b"contenido que se corta").unwrap();
+        let cortado = &propio[..propio.len() - 8];
+        assert_eq!(
+            clave.descifrar(cortado).unwrap_err().to_string(),
+            "descifrando con age: el contenido cifrado está dañado o incompleto"
+        );
     }
 
     #[test]
