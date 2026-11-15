@@ -119,7 +119,8 @@ app. Ahora `pasada_en_segundo_plano`, `dejar_de_sincronizar` y `borrar_datos`
 llaman a `flota::emitir_flota` al terminar, y `VistaModeloFlota.alVolverALaVista`
 relee la lista (sin pisar una más nueva que llegue por el flujo). Hay prueba
 en Rust, `sincronizacion_flota_e2e` (falla sin el arreglo), y prueba JVM del
-ViewModel.
+ViewModel. Comprobado también en el móvil real del desarrollador con la APK de
+prueba: los dos arreglos (el de `age` y el de Flota) funcionan.
 
 **Mejoras posteriores (15 de noviembre de 2026, misma rama, aprobadas por el
 desarrollador).** Al unir un ordenador Ubuntu salieron dos avisos que no
