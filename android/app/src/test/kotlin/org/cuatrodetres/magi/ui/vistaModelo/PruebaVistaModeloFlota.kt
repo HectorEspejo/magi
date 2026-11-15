@@ -69,6 +69,23 @@ class PruebaVistaModeloFlota {
     }
 
     @Test
+    fun al_volver_relee_la_lista_aunque_el_nucleo_no_la_haya_difundido() {
+        // Flota se abre con el móvil aún sin sincronizar: lista vacía, sin sondeo.
+        val fuente = fuenteCon(emptyList())
+        val vm = VistaModeloFlota(fuente, ambito())
+        vm.iniciar()
+        assertTrue(vm.estado.value.hosts.isEmpty())
+        assertTrue(fuente.sondas.isEmpty())
+
+        // La sincronización (desde Ajustes) trae hosts sin que llegue la lista
+        // por el flujo; al volver, Flota la relee y sondea los nuevos.
+        fuente.flotaRespuesta = listOf(host("h1", "web-01"), host("h2", "db-01"))
+        vm.alVolverALaVista()
+        assertEquals(listOf("h1", "h2"), vm.estado.value.hosts.map { it.uuid })
+        assertEquals(listOf(listOf("h1", "h2")), fuente.sondas)
+    }
+
+    @Test
     fun el_filtro_y_el_plegado_deciden_lo_que_se_ve() {
         val fuente = fuenteCon(
             listOf(

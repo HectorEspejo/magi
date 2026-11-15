@@ -352,6 +352,10 @@ async fn pasada_en_segundo_plano(estado: Arc<EstadoNucleo>) -> Result<(), ErrorN
         };
     }
     estado.emitir_sincronizacion();
+    // La pasada puede haber traído, cambiado o quitado hosts: Flota recibe la
+    // lista completa. Sin esto, una Flota abierta con el inventario vacío no se
+    // enteraba nunca (solo el sondeo la difundía, y sin hosts no se sondea).
+    crate::flota::emitir_flota(&estado).await;
     Ok(())
 }
 
@@ -373,6 +377,8 @@ pub async fn dejar_de_sincronizar(estado: &Arc<EstadoNucleo>) -> Result<(), Erro
         *sincro = Default::default();
     }
     estado.emitir_sincronizacion();
+    // El inventario se ha vaciado: Flota recibe la lista (vacía).
+    crate::flota::emitir_flota(estado).await;
     Ok(())
 }
 
@@ -420,6 +426,8 @@ pub async fn borrar_datos(
         *sincro = Default::default();
     }
     estado.emitir_sincronizacion();
+    // El inventario se ha vaciado: Flota recibe la lista (vacía).
+    crate::flota::emitir_flota(estado).await;
     Ok(())
 }
 

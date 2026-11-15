@@ -56,6 +56,46 @@ impl CarpetaMovil for CarpetaVacia {
     }
 }
 
+/// Carpeta compartida con ficheros fijos en memoria (nombre y bytes), para las
+/// pruebas que sincronizan.
+pub struct CarpetaConFicheros {
+    ficheros: Vec<(String, Vec<u8>)>,
+}
+
+impl CarpetaConFicheros {
+    pub fn nueva(ficheros: Vec<(String, Vec<u8>)>) -> Self {
+        Self { ficheros }
+    }
+}
+
+impl CarpetaMovil for CarpetaConFicheros {
+    fn listar(&self) -> Result<Vec<FicheroCarpeta>, ErrorNucleo> {
+        Ok(self
+            .ficheros
+            .iter()
+            .map(|(nombre, datos)| FicheroCarpeta {
+                nombre: nombre.clone(),
+                tamano: datos.len() as u64,
+                modificado_en: 1_700_000_000,
+            })
+            .collect())
+    }
+
+    fn leer(&self, nombre: String, maximo: u64) -> Result<Vec<u8>, ErrorNucleo> {
+        let Some((_, datos)) = self.ficheros.iter().find(|(otro, _)| *otro == nombre) else {
+            return Err(ErrorNucleo::Carpeta {
+                detalle: format!("no existe {nombre}"),
+            });
+        };
+        if datos.len() as u64 > maximo {
+            return Err(ErrorNucleo::Carpeta {
+                detalle: format!("{nombre} supera el máximo"),
+            });
+        }
+        Ok(datos.clone())
+    }
+}
+
 /// Llavero del móvil en memoria, con la misma forma que el de verdad: por
 /// cuenta (p. ej. `contrasena:<uuid>`).
 #[derive(Clone, Default)]
@@ -360,6 +400,7 @@ pub struct PruebaNucleo {
     nucleo: Option<Arc<Nucleo>>,
     oyente: Arc<OyenteGuardado>,
     llavero: LlaveroMemoria,
+    carpeta: Arc<dyn CarpetaMovil>,
 }
 
 impl PruebaNucleo {
@@ -404,7 +445,18 @@ impl PruebaNucleo {
             nucleo: None,
             oyente: Arc::new(OyenteGuardado::default()),
             llavero: LlaveroMemoria::default(),
+            carpeta: Arc::new(CarpetaVacia),
         }
+    }
+
+    /// Sustituye la carpeta compartida (vacía por defecto). Va antes de
+    /// `arrancar`, como en la app.
+    pub fn usar_carpeta(&mut self, carpeta: Arc<dyn CarpetaMovil>) {
+        assert!(
+            self.nucleo.is_none(),
+            "la carpeta se fija antes de arrancar"
+        );
+        self.carpeta = carpeta;
     }
 
     /// Prepara la base de datos antes de arrancar el núcleo (hosts, snippets,
@@ -423,7 +475,7 @@ impl PruebaNucleo {
     pub fn arrancar(&mut self) {
         assert!(self.nucleo.is_none(), "el núcleo ya está arrancado");
         let retrollamadas = RetrollamadasApi {
-            carpeta: Arc::new(CarpetaVacia),
+            carpeta: self.carpeta.clone(),
             llavero: Arc::new(self.llavero.clone()),
             firmante: Arc::new(FirmantePrueba::nuevo()),
             oyente: self.oyente.clone(),
