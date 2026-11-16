@@ -87,6 +87,7 @@ fn generar_fixture_android() {
             etiquetas: vec!["web".to_string()],
             verificaciones: None,
             snippet_al_conectar: None,
+            sesiones_persistentes: false,
         };
         elementos.push(elemento("host", uuid, datos_host_formato_1(datos)));
     }
@@ -188,6 +189,7 @@ fn generar_fixture_android_formato3() {
             etiquetas: vec!["web".to_string()],
             verificaciones: None,
             snippet_al_conectar: None,
+            sesiones_persistentes: false,
         })
         .unwrap(),
     ));

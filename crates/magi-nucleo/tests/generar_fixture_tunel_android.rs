@@ -73,6 +73,7 @@ fn generar_fixture_tunel_android() {
                 etiquetas: Vec::new(),
                 verificaciones: None,
                 snippet_al_conectar: None,
+                sesiones_persistentes: false,
             }),
         ),
         elemento(

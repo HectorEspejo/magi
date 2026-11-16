@@ -74,6 +74,16 @@ pub struct DatosHost {
     pub etiquetas: Vec<String>,
     pub verificaciones: Option<DatosVerificaciones>,
     pub snippet_al_conectar: Option<String>,
+    /// Toda pestaña nueva del host es una sesión persistente (desde el
+    /// formato 4). Solo se escribe cuando es verdadero: así el JSON canónico
+    /// de un host sin la marca no cambia y la fusión no ve diferencias.
+    #[serde(default, skip_serializing_if = "no_es_verdadero")]
+    pub sesiones_persistentes: bool,
+}
+
+/// `skip_serializing_if` de los booleanos que solo viajan cuando valen `true`.
+fn no_es_verdadero(valor: &bool) -> bool {
+    !*valor
 }
 
 /// Tipo por defecto de un host que no lo trae: un fichero del formato 1 es
@@ -250,6 +260,9 @@ fn valor_de_fila(
         Tabla::Snippets => a_valor(datos_snippet(conexion, id)?),
         Tabla::SincronizacionesDir => a_valor(datos_sincronizacion(conexion, id, hogar)?),
         Tabla::ComprobacionesServicio => a_valor(datos_comprobacion_servicio(conexion, id)?),
+        // CONTRATO-S1-C: los datos de una ficha los completa la pista C del
+        // Sprint 1.
+        Tabla::SesionesPersistentes => Ok(None),
     }
 }
 
@@ -295,6 +308,7 @@ struct FilaHost {
     tipo: String,
     escritorio_dominio: Option<String>,
     escritorio_opciones: Option<String>,
+    sesiones_persistentes: bool,
 }
 
 fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Option<DatosHost>> {
@@ -303,7 +317,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
             "SELECT nombre, grupo_id, direccion, puerto, usuario, identidad_ref,
                     salto_host_id, multiplexar, keepalive_seg, opciones_extra,
                     servicios, origen, snippet_al_conectar_id, tipo,
-                    escritorio_dominio, escritorio_opciones
+                    escritorio_dominio, escritorio_opciones, sesiones_persistentes
                FROM HOSTS WHERE id = ?1",
             params![id],
             |fila| {
@@ -324,6 +338,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
                     tipo: fila.get(13)?,
                     escritorio_dominio: fila.get(14)?,
                     escritorio_opciones: fila.get(15)?,
+                    sesiones_persistentes: fila.get::<_, i64>(16)? != 0,
                 })
             },
         )
@@ -373,6 +388,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
         etiquetas: crate::almacen::etiquetas::de_host(conexion, id)?,
         verificaciones: verificaciones_de_host(conexion, id)?,
         snippet_al_conectar: uuid_de(conexion, Tabla::Snippets, fila.snippet_al_conectar_id)?,
+        sesiones_persistentes: fila.sesiones_persistentes,
     }))
 }
 

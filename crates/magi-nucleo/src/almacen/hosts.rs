@@ -25,7 +25,8 @@ const SELECCION: &str = "
            h.creado_en, h.actualizado_en, g.nombre, s.nombre, h.servicios,
            h.sftp_dir_local, h.sftp_dir_remoto, h.snippet_al_conectar_id,
            h.tipo, h.escritorio_dominio, h.escritorio_opciones, h.huella_escritorio,
-           h.reconectar, h.tmux_persistente, h.portapapeles_remoto
+           h.reconectar, h.tmux_persistente, h.portapapeles_remoto,
+           h.sesiones_persistentes
       FROM HOSTS h
       LEFT JOIN GRUPOS g ON g.id = h.grupo_id
       LEFT JOIN HOSTS  s ON s.id = h.salto_host_id";
@@ -70,6 +71,7 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<Host> {
         reconectar: fila.get::<_, i64>(26)? != 0,
         tmux_persistente: fila.get::<_, i64>(27)? != 0,
         portapapeles_remoto: fila.get::<_, i64>(28)? != 0,
+        sesiones_persistentes: fila.get::<_, i64>(29)? != 0,
     })
 }
 

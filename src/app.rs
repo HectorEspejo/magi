@@ -6140,6 +6140,7 @@ impl App {
             reconectar: true,
             tmux_persistente: false,
             portapapeles_remoto: false,
+            sesiones_persistentes: false,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);

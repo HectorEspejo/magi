@@ -152,6 +152,9 @@ impl VivosPlan {
                 .comprobaciones
                 .get(uuid)
                 .map(|vivo| (vivo.version.as_str(), &vivo.vector)),
+            // CONTRATO-S1-C: las fichas de sesiones persistentes las completa
+            // la pista C del Sprint 1 (sin ellas en el plan, no hay metadatos).
+            Tabla::SesionesPersistentes => None,
         }
     }
 }
@@ -605,6 +608,13 @@ pub fn recuperar_version(conexion: &Connection, conflicto: &Conflicto, hogar: &P
             };
             escribir_comprobacion(&transaccion, &uuid, &version, &vector, &datos, host_id)?;
         }
+        // CONTRATO-S1-C: lo completa la pista C del Sprint 1.
+        Tabla::SesionesPersistentes => {
+            bail!(
+                "no se puede recuperar la ficha «{}»: aún no se admite",
+                conflicto.nombre
+            );
+        }
     }
 
     conflictos::resolver(
@@ -852,6 +862,9 @@ fn id_local_por_clave_natural(
                 )
                 .optional()?
         }
+        // CONTRATO-S1-C: la clave natural de una ficha es (host, nombre); la
+        // completa la pista C del Sprint 1.
+        Tabla::SesionesPersistentes => None,
     };
     Ok(consulta)
 }
@@ -983,6 +996,9 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
                     invalidos.push(conflicto_de_comprobacion_invalida(uuid, contenido));
                 }
             },
+            // CONTRATO-S1-C: las fichas del plan las completa la pista C del
+            // Sprint 1; hasta entonces no se aplican.
+            Tabla::SesionesPersistentes => {}
         }
     }
 
@@ -1277,7 +1293,8 @@ fn columna_nombre(tabla: Tabla) -> &'static str {
         | Tabla::Hosts
         | Tabla::Tuneles
         | Tabla::Snippets
-        | Tabla::SincronizacionesDir => "nombre",
+        | Tabla::SincronizacionesDir
+        | Tabla::SesionesPersistentes => "nombre",
     }
 }
 

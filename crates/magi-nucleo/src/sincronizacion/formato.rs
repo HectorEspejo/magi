@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 
 /// Formato más nuevo que entiende este binario. Un fichero con un formato
 /// mayor se rechaza como `formato_nuevo` (T74): nunca se malinterpreta.
-pub const FORMATO_MAXIMO: u32 = 3;
+pub const FORMATO_MAXIMO: u32 = 4;
 
 /// Formato 1: todos los hosts del fichero son SSH. Es el que lee MAGI 1.1.
 pub const FORMATO_1: u32 = 1;
@@ -50,6 +50,10 @@ pub const FORMATO_2: u32 = 2;
 /// Formato 3: viajan las comprobaciones propias de servicio o proyecto
 /// (`comprobacion_servicio`, Fase 13).
 pub const FORMATO_3: u32 = 3;
+
+/// Formato 4: viajan las fichas de sesiones persistentes
+/// (`sesion_persistente`) y la marca `sesiones_persistentes` del host (Fase 16).
+pub const FORMATO_4: u32 = 4;
 
 /// Primera línea del contenido en claro, antes del número de formato.
 pub const CABECERA: &str = "MAGI-SINCRONIZACION";

@@ -20,6 +20,7 @@ pub mod modelo;
 pub mod registro;
 pub mod rutas;
 pub mod servicios;
+pub mod sesiones_persistentes;
 pub mod sftp_lectura;
 pub mod sincronizacion;
 pub mod snippets;

@@ -120,6 +120,7 @@ fn datos_host_documento(nombre: &str, direccion: &str) -> serde_json::Value {
         etiquetas: Vec::new(),
         verificaciones: None,
         snippet_al_conectar: None,
+        sesiones_persistentes: false,
     })
     .expect("datos de host a JSON")
 }

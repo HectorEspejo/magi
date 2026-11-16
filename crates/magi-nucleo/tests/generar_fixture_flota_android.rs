@@ -96,6 +96,7 @@ fn host(
                 .collect(),
             verificaciones,
             snippet_al_conectar: snippet_al_conectar.map(str::to_string),
+            sesiones_persistentes: false,
         })
         .expect("datos del host a JSON"),
     )

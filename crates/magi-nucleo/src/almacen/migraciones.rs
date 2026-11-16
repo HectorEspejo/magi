@@ -23,8 +23,9 @@ pub const MIGRACIONES: &[&str] = &[
 
 /// Versión de esquema que conoce este binario (las migraciones SQL de la lista,
 /// más la 7, que necesita Rust para rellenar uuid, versión y vector, la 8 de
-/// los escritorios remotos y la 9 de los servicios de la Fase 13).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 4;
+/// los escritorios remotos, la 9 de los servicios de la Fase 13, la 10 del
+/// terminal de la Fase 15 y la 11 de las sesiones persistentes de la Fase 16).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 5;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -463,6 +464,37 @@ ALTER TABLE HOSTS ADD COLUMN tmux_persistente INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE HOSTS ADD COLUMN portapapeles_remoto INTEGER NOT NULL DEFAULT 0;
 "#;
 
+/// Fase 16: sesiones persistentes. La columna `HOSTS.sesiones_persistentes`
+/// viaja con el inventario y sustituye a `tmux_persistente` (que queda
+/// obsoleta y a 0), y SESIONES_PERSISTENTES guarda las fichas, que también
+/// viajan. El valor de `tmux_persistente` se copia en Rust al abrir (por el
+/// camino que sube la versión del host), no aquí. Sin `CHECK` sobre
+/// `origen`: se valida en código.
+const MIGRACION_11_SESIONES: &str = r#"
+ALTER TABLE HOSTS ADD COLUMN sesiones_persistentes INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE SESIONES_PERSISTENTES (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id          INTEGER NOT NULL REFERENCES HOSTS(id) ON DELETE CASCADE,
+    nombre           TEXT    NOT NULL,
+    carpeta          TEXT,
+    comando          TEXT,
+    comando_reanudar TEXT,
+    nota             TEXT,
+    origen           TEXT    NOT NULL,
+    creada_por       TEXT    NOT NULL,
+    creada_en        TEXT    NOT NULL,
+    actualizado_en   TEXT    NOT NULL,
+    uuid             TEXT,
+    version          TEXT,
+    vector           TEXT,
+    UNIQUE(host_id, nombre)
+);
+
+CREATE INDEX idx_sesiones_persistentes_host ON SESIONES_PERSISTENTES(host_id);
+CREATE UNIQUE INDEX idx_sesiones_persistentes_uuid ON SESIONES_PERSISTENTES(uuid);
+"#;
+
 /// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
@@ -560,6 +592,12 @@ pub fn aplicar(
         let transaccion = conexion.transaction()?;
         transaccion.execute_batch(MIGRACION_10_TERMINAL)?;
         transaccion.pragma_update(None, "user_version", 10)?;
+        transaccion.commit()?;
+    }
+    if version < 11 {
+        let transaccion = conexion.transaction()?;
+        transaccion.execute_batch(MIGRACION_11_SESIONES)?;
+        transaccion.pragma_update(None, "user_version", 11)?;
         transaccion.commit()?;
     }
     Ok(())
