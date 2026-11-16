@@ -649,6 +649,14 @@ pub struct Disposicion {
     listas: Vec<(Lista, VentanaLista)>,
     /// Columnas de la rejilla de hosts del diálogo EJECUTAR.
     pub columnas_rejilla: Option<usize>,
+    /// Paneles de la vista Sesión en el último pintado: índice del panel y su
+    /// zona de contenido (sin la cabecera). Es la única copia y la usan las
+    /// teclas, el ratón y `Geometria` (Fase 15).
+    pub panes: Vec<(usize, Rect)>,
+    /// Zona del modo historial o de enlaces en el último pintado (Fase 15).
+    pub modo_area: Option<Rect>,
+    /// Filas que caben en el modo historial en el último pintado (Fase 15).
+    pub historial_alto: Option<usize>,
 }
 
 impl Disposicion {
@@ -662,6 +670,9 @@ impl Disposicion {
             aviso: modo == ModoAncho::Minimo,
             listas: Vec::new(),
             columnas_rejilla: None,
+            panes: Vec::new(),
+            modo_area: None,
+            historial_alto: None,
         }
     }
 

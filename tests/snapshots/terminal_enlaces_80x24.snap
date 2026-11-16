@@ -1,0 +1,26 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN ──────────────────────────────────────────────────────── web-01 ─
+▸● 1 web-01 │ +
+▸● web-01───────────────────────────────────────────────────────────────────────
+Local: http://localhost:5173/
+Guia: https://ejemplo.org/guia#arranque
+█
+
+
+
+
+       ┌ ENLACES ───────────────────────────────────────────────────────┐
+       │[a] http://localhost:5173/                                      │
+       │[b] https://ejemplo.org/guia#arranque                           │
+       └────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+ ENLACES 2 pulsa la letra · Esc salir

@@ -152,19 +152,94 @@ impl Default for SeccionDeliberacion {
 }
 
 /// Sección `[terminal]` de `config.toml`: comando para lanzar una ventana
-/// nueva con MAGI.
+/// nueva con MAGI y los ajustes de la vista Sesión (Fase 15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SeccionTerminal {
     /// Ejemplo: «alacritty -e magi» (Linux) o «open -a Terminal magi» (macOS).
     pub comando: String,
+    /// Líneas de historial por pestaña (0-100 000; 0 = sin historial).
+    pub historial_lineas: u64,
+    /// Tope de memoria del historial de una pestaña, en MiB (8-512). Manda
+    /// sobre las líneas.
+    pub historial_mib: u64,
+    /// Usos del ratón propios de MAGI: rueda en el historial, clic para
+    /// elegir panel y arrastre en el modo historial. El ratón del remoto se
+    /// reenvía siempre que lo pida.
+    pub raton: bool,
+    /// Pedir al terminal exterior la desambiguación del teclado de kitty si la
+    /// admite (para distinguir Mayús+Intro).
+    pub teclado_mejorado: bool,
+    /// Avisar al pegar varias líneas en un remoto sin pegado entre corchetes.
+    pub avisar_pegado: bool,
+    /// Programa que abre un enlace, sin shell; recibe la URL como único
+    /// argumento.
+    pub abrir_enlaces: String,
+    /// Minutos que se reintenta la reconexión automática antes de rendirse
+    /// (1-120).
+    pub reconexion_max_min: u64,
 }
 
 impl Default for SeccionTerminal {
     fn default() -> Self {
         Self {
             comando: comando_terminal_por_defecto().to_string(),
+            historial_lineas: 10_000,
+            historial_mib: 64,
+            raton: false,
+            teclado_mejorado: true,
+            avisar_pegado: true,
+            abrir_enlaces: abrir_enlaces_por_defecto().to_string(),
+            reconexion_max_min: 15,
         }
+    }
+}
+
+fn abrir_enlaces_por_defecto() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    }
+}
+
+impl SeccionTerminal {
+    /// Avisos por valores fuera de rango: no impiden arrancar, se acotan donde
+    /// se usan y MAGI lo dice al arrancar (D261).
+    #[must_use]
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        if self.historial_lineas > 100_000 {
+            avisos.push("[terminal] historial_lineas debe estar entre 0 y 100000".to_string());
+        }
+        if !(8..=512).contains(&self.historial_mib) {
+            avisos.push("[terminal] historial_mib debe estar entre 8 y 512".to_string());
+        }
+        if !(1..=120).contains(&self.reconexion_max_min) {
+            avisos.push("[terminal] reconexion_max_min debe estar entre 1 y 120".to_string());
+        }
+        if self.abrir_enlaces.trim().is_empty() {
+            avisos.push("[terminal] abrir_enlaces no puede estar vacío".to_string());
+        }
+        avisos
+    }
+
+    /// Líneas de historial acotadas a su rango.
+    #[must_use]
+    pub fn historial_lineas_efectivo(&self) -> usize {
+        self.historial_lineas.min(100_000) as usize
+    }
+
+    /// MiB de historial acotados a su rango.
+    #[must_use]
+    pub fn historial_mib_efectivo(&self) -> u64 {
+        self.historial_mib.clamp(8, 512)
+    }
+
+    /// Minutos de reconexión acotados a su rango.
+    #[must_use]
+    pub fn reconexion_max_min_efectivo(&self) -> u64 {
+        self.reconexion_max_min.clamp(1, 120)
     }
 }
 
@@ -479,9 +554,11 @@ impl Config {
         match fs::read_to_string(ruta) {
             Ok(texto) => match toml::from_str::<Config>(&texto) {
                 Ok(config) => {
-                    // Los valores de [servicios] fuera de rango no impiden
-                    // arrancar: se usan acotados donde se leen y se avisa aquí.
-                    let avisos = config.servicios.validar();
+                    // Los valores de [servicios] y [terminal] fuera de rango
+                    // no impiden arrancar: se usan acotados donde se leen y se
+                    // avisa aquí.
+                    let mut avisos = config.servicios.validar();
+                    avisos.extend(config.terminal.validar());
                     let aviso = (!avisos.is_empty()).then(|| avisos.join(" · "));
                     (config, aviso)
                 }

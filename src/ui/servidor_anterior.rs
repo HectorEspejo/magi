@@ -240,6 +240,7 @@ mod pruebas {
             ejecuciones: 0,
             escritorios: 0,
             acciones_servicio: 0,
+            tuneles_temporales: 0,
         });
         rechazo
     }

@@ -24,17 +24,23 @@ use crate::ui::hosts::{anchos_tabla, celdas};
 /// Alto del panel inferior (separador, sesión seleccionada, servidor y aire).
 const ALTO_PANEL: u16 = 5;
 /// Cabeceras de las columnas, en orden.
-const CABECERAS: [&str; 7] = [
+const CABECERAS: [&str; 8] = [
     "ESTADO",
     "PESTAÑA",
     "TIPO",
     "HOST",
     "TIEMPO",
+    "TÍTULO",
     "IDENTIDAD",
     "VENT.",
 ];
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+    // La lista de sesiones de tmux del host manda sobre la de sesiones.
+    if let Some(tmux) = &app.tmux {
+        dibujar_tmux(marco, area, app, tmux);
+        return;
+    }
     let alto_panel = if disp.bajo { 0 } else { ALTO_PANEL };
     let trozos = Layout::default()
         .direction(Direction::Vertical)
@@ -116,7 +122,7 @@ fn titulo(app: &App, ancho: u16) -> String {
 }
 
 /// Columnas de la tabla para su ancho y el de la terminal.
-fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 7] {
+fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 8] {
     // Los umbrales son columnas de terminal: se trasladan al ancho de la tabla.
     let margen = ancho_vista.saturating_sub(ancho_tabla);
     let desde_secundarias = ANCHO_COLUMNAS_MINIMAS.saturating_sub(margen);
@@ -129,6 +135,9 @@ fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 7] {
         Columna::fija(16, 2).desde(desde_host),
         // «125 h 30 m»: sesiones de más de cuatro días sin recortar.
         Columna::fija(10, 3),
+        // El título que pone el programa remoto (OSC 0 y 2): solo en ventanas
+        // anchas, para no quitarle sitio a tiempo, identidad y ventanas.
+        Columna::flexible(20, 4).desde(100u16.saturating_sub(margen)),
         Columna::fija(16, 4).desde(desde_secundarias),
         Columna::fija(5, 5).desde(desde_secundarias),
     ]
@@ -169,11 +178,21 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     for (indice, pestaña) in app.pestanas.iter().enumerate().skip(inicio).take(visibles) {
         let elegida = indice == app.seleccion_sesiones;
         let marca = if elegida { tema.glifos.seleccion } else { " " };
-        let (glifo, color) = match pestaña.estado {
-            EstadoSesionRemota::Caida => (tema.glifos.error, tema.paleta.critico),
-            EstadoSesionRemota::Abierta => (tema.glifos.conectado, tema.paleta.correcto),
-            EstadoSesionRemota::Abriendo => (tema.glifos.conectando, tema.paleta.acento),
-            EstadoSesionRemota::Cerrada => (tema.glifos.desconectado, tema.paleta.inactivo),
+        let (glifo, color) = if pestaña.reconexion.is_some() {
+            (tema.glifos.reconectando, tema.paleta.acento)
+        } else {
+            match pestaña.estado {
+                EstadoSesionRemota::Caida => (tema.glifos.error, tema.paleta.critico),
+                EstadoSesionRemota::Abierta => (tema.glifos.conectado, tema.paleta.correcto),
+                EstadoSesionRemota::Abriendo => (tema.glifos.conectando, tema.paleta.acento),
+                EstadoSesionRemota::Cerrada => (tema.glifos.desconectado, tema.paleta.inactivo),
+            }
+        };
+        // Los avisos sin ver y la escritura en varios se marcan con texto.
+        let glifo = if pestaña.aviso.is_some() {
+            format!("{glifo} {}", tema.glifos.aviso)
+        } else {
+            glifo.to_string()
         };
         let estilo = if elegida {
             Style::default().add_modifier(Modifier::BOLD)
@@ -181,10 +200,21 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
             Style::default()
         };
         let texto = estilo.fg(tema.paleta.texto);
-        let tiempo = if pestaña.estado == EstadoSesionRemota::Caida {
+        let tiempo = if let Some(reconexion) = &pestaña.reconexion {
+            format!("intento {}", reconexion.intento)
+        } else if pestaña.estado == EstadoSesionRemota::Caida {
             "caída".to_string()
         } else {
             crate::ui::sesion::formatear_duracion(pestaña.segundos())
+        };
+        let titulo = pestaña
+            .titulo
+            .clone()
+            .unwrap_or_else(|| super::tecla(tema, "—", "-").to_string());
+        let nombre = if app.escritura_varios.incluye(pestaña.sesion_id) {
+            format!("{} {}", tema.glifos.escribiendo, pestaña.nombre)
+        } else {
+            pestaña.nombre.clone()
         };
         // El tipo se ve siempre (Fase 12): una terminal es SSH; un escritorio,
         // el suyo.
@@ -215,11 +245,12 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
         let mut spans = vec![Span::styled(format!("{marca} "), estilo)];
         spans.extend(celdas(
             vec![
-                (glifo.to_string(), estilo.fg(color)),
-                (pestaña.nombre.clone(), texto),
+                (glifo, estilo.fg(color)),
+                (nombre, texto),
                 (tipo, texto),
                 (pestaña.host_nombre.clone(), texto),
                 (tiempo, texto),
+                (titulo, texto),
                 (identidad, texto),
                 (ventanas, texto),
             ],
@@ -298,4 +329,109 @@ fn panel_inferior(marco: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(tema.paleta.inactivo),
     )));
     marco.render_widget(Paragraph::new(lineas), area);
+}
+
+/// La lista de sesiones de tmux del host (Fase 15): nombre, enganchada,
+/// ventanas y cuándo se creó. Se abre con \`t\` en Sesiones.
+fn dibujar_tmux(marco: &mut Frame, area: Rect, app: &App, tmux: &crate::app::sesion::EstadoTmux) {
+    let tema = &app.tema;
+    let punto = tema.glifos.punto_medio;
+    let trozos = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(2),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    marco.render_widget(
+        Paragraph::new(super::linea_marco(
+            &format!("MAGI {punto} TMUX {punto} {}", tmux.host_nombre),
+            area.width,
+            tema,
+        )),
+        trozos[0],
+    );
+    if tmux.cargando {
+        marco.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  listando las sesiones de tmux…",
+                Style::default().fg(tema.paleta.inactivo),
+            ))),
+            trozos[1],
+        );
+    } else if let Some(motivo) = &tmux.sin_tmux {
+        let lineas = vec![
+            Line::from(Span::styled(
+                "  no hay tmux en el host (o no se pudo listar)",
+                Style::default().fg(tema.paleta.critico),
+            )),
+            Line::from(Span::styled(
+                format!("  {motivo}"),
+                Style::default().fg(tema.paleta.inactivo),
+            )),
+        ];
+        marco.render_widget(Paragraph::new(lineas), trozos[1]);
+    } else if tmux.sesiones.is_empty() {
+        marco.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  el host no tiene sesiones de tmux",
+                Style::default().fg(tema.paleta.inactivo),
+            ))),
+            trozos[1],
+        );
+    } else {
+        let visibles = usize::from(trozos[1].height.saturating_sub(1));
+        let inicio = disposicion::ventana(
+            tmux.desplazamiento,
+            tmux.seleccion,
+            visibles,
+            tmux.sesiones.len(),
+        );
+        let inactivo = Style::default().fg(tema.paleta.inactivo);
+        let mut lineas = vec![Line::from(Span::styled(
+            format!(
+                "  {:<28} {:<12} {:<9} {}",
+                "SESIÓN", "ENGANCHADA", "VENTANAS", "CREADA"
+            ),
+            inactivo,
+        ))];
+        for (indice, sesion) in tmux.sesiones.iter().enumerate().skip(inicio).take(visibles) {
+            let elegida = indice == tmux.seleccion;
+            let marca = if elegida { tema.glifos.seleccion } else { " " };
+            let estilo = if elegida {
+                Style::default()
+                    .fg(tema.paleta.texto)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            };
+            let enganchada = if sesion.enganchada { "sí" } else { "no" };
+            lineas.push(Line::from(Span::styled(
+                format!(
+                    "{marca} {:<28} {:<12} {:<9} {}",
+                    disposicion::recortar(&sesion.nombre, 28, tema.ascii),
+                    enganchada,
+                    sesion.ventanas,
+                    sesion.creada
+                ),
+                estilo,
+            )));
+        }
+        marco.render_widget(Paragraph::new(lineas), trozos[1]);
+    }
+    marco.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            disposicion::recortar(
+                &format!(
+                    "  {}{} abrir · T terminar · r refrescar · Esc volver",
+                    tema.glifos.intro, ""
+                ),
+                usize::from(area.width),
+                tema.ascii,
+            ),
+            Style::default().fg(tema.paleta.inactivo),
+        ))),
+        trozos[2],
+    );
 }

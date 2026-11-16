@@ -147,8 +147,14 @@ fun entradasDelRegistro(
 /**
  * Entorno aislado de una prueba: raíz privada con sus rutas, known_hosts con la
  * clave del servidor de pruebas, dobles de plataforma y una instancia del núcleo.
+ * `ajenos` son ficheros de más en la carpeta (nombre y bytes), que se listan
+ * antes que la fixture.
  */
-class EntornoDePrueba(nombre: String, private val recurso: String?) {
+class EntornoDePrueba(
+    nombre: String,
+    private val recurso: String?,
+    private val ajenos: Map<String, ByteArray> = emptyMap(),
+) {
     val contexto = InstrumentationRegistry.getInstrumentation().targetContext
     val raiz = File(contexto.filesDir, "magi-prueba-" + nombre)
     val llavero = LlaveroEnMemoria()
@@ -174,7 +180,7 @@ class EntornoDePrueba(nombre: String, private val recurso: String?) {
             rutas = rutasPrivadas(),
             equipo = Equipo(nombre = "telefono-prueba", plataforma = "android"),
             retrollamadas = Retrollamadas(
-                carpeta = CarpetaDePrueba(recurso),
+                carpeta = CarpetaDePrueba(recurso, ajenos),
                 llavero = llavero,
                 firmante = FirmanteClaveBlanda(),
                 oyente = oyente,
@@ -213,8 +219,14 @@ class EntornoDePrueba(nombre: String, private val recurso: String?) {
     }
 }
 
-/** Carpeta SAF doble: un único fichero .age empaquetado en los assets. */
-class CarpetaDePrueba(private val recurso: String?) : CarpetaMovil {
+/**
+ * Carpeta SAF doble: el fichero .age empaquetado en los assets y, delante, los
+ * ficheros ajenos que pida la prueba.
+ */
+class CarpetaDePrueba(
+    private val recurso: String?,
+    private val ajenos: Map<String, ByteArray> = emptyMap(),
+) : CarpetaMovil {
 
     private fun contenido(): ByteArray {
         val ruta = recurso ?: error("esta prueba no usa fixture")
@@ -224,18 +236,24 @@ class CarpetaDePrueba(private val recurso: String?) : CarpetaMovil {
     }
 
     override fun listar(): List<FicheroCarpeta> {
-        if (recurso == null) return emptyList()
-        val datos = contenido()
-        return listOf(
+        val lista = ajenos.map { (nombre, datos) ->
             FicheroCarpeta(
-                nombre = recurso.substringAfterLast('/'),
+                nombre = nombre,
                 tamano = datos.size.toULong(),
                 modificadoEn = 1_700_000_000L,
-            ),
+            )
+        }
+        if (recurso == null) return lista
+        val datos = contenido()
+        return lista + FicheroCarpeta(
+            nombre = recurso.substringAfterLast('/'),
+            tamano = datos.size.toULong(),
+            modificadoEn = 1_700_000_000L,
         )
     }
 
     override fun leer(nombre: String, maximo: ULong): ByteArray {
+        ajenos[nombre]?.let { return it.copyOf() }
         check(nombre == recurso?.substringAfterLast('/')) { "nombre inesperado: " + nombre }
         val datos = contenido()
         check(datos.size.toULong() <= maximo) { "la fixture supera el máximo" }

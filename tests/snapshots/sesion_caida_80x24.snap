@@ -3,6 +3,7 @@ source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIÓN ──────────────────────────────────────────────────── rincon-dev ─
  ● 1 │ ◐ 2 │ ▸✕ 3 rincon-dev │ +
+▸✕ rincon-dev───────────────────────────────────────────────────────────────────
 
 
 
@@ -16,7 +17,6 @@ source: tests/redimensionado/arnes.rs
                 │                                              │
                 │ Ctrl+] r  reconectar        Ctrl+] x  cerrar │
                 └──────────────────────────────────────────────┘
-
 
 
 

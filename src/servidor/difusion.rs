@@ -66,6 +66,48 @@ pub fn toca_difundir(sucio: bool, inmediato: bool, desde: Option<Duration>) -> b
     }
 }
 
+/// Ritmo mínimo de la difusión de la lista de sesiones cuando solo cambian
+/// datos cosméticos (título o aviso): evita una tormenta de listas completas
+/// con un programa que cambia el título a menudo.
+pub const RITMO_SESIONES: Duration = Duration::from_secs(1);
+
+/// Coalesce de la difusión de `Sesiones` por cambios cosméticos. Los cambios
+/// de verdad (estado, nombre, orden, escritura en varios…) llaman a
+/// `difundir_lista` de inmediato y limpian esta marca.
+#[derive(Default)]
+pub struct DifusionSesiones {
+    sucio: bool,
+    ultimo_envio: Option<Instant>,
+}
+
+impl DifusionSesiones {
+    /// Hay título o aviso nuevo: la lista se difundirá como mucho una vez por
+    /// segundo.
+    pub fn marcar(&mut self) {
+        self.sucio = true;
+    }
+
+    /// Un cambio importante ya ha difundido la lista: no hace falta otra.
+    pub fn limpiar(&mut self) {
+        self.sucio = false;
+    }
+
+    /// ¿Toca difundir ahora? Consume la marca cuando dice que sí.
+    pub fn toca(&mut self, ahora: Instant) -> bool {
+        if !self.sucio {
+            return false;
+        }
+        let toca = self
+            .ultimo_envio
+            .is_none_or(|ultimo| ahora.duration_since(ultimo) >= RITMO_SESIONES);
+        if toca {
+            self.sucio = false;
+            self.ultimo_envio = Some(ahora);
+        }
+        toca
+    }
+}
+
 /// Envía un mensaje a un cliente concreto; si su cola ya no existe, se ignora.
 pub fn enviar(cliente: &ClienteRemoto, mensaje: MensajeServidor) {
     let _ = cliente.tx.send(mensaje);
@@ -110,6 +152,31 @@ mod pruebas {
             Some(Duration::from_millis(249))
         ));
         assert!(toca_difundir(true, false, Some(RITMO_COLA)));
+    }
+
+    #[test]
+    fn la_lista_de_sesiones_se_coalesce_por_cambios_cosmeticos() {
+        let mut difusion = DifusionSesiones::default();
+        let ahora = Instant::now();
+        assert!(!difusion.toca(ahora), "sin marca no se difunde");
+        difusion.marcar();
+        assert!(difusion.toca(ahora), "el primero sale");
+        assert!(!difusion.toca(ahora), "ya está difundido");
+        difusion.marcar();
+        assert!(
+            !difusion.toca(ahora + Duration::from_millis(500)),
+            "antes del ritmo, no"
+        );
+        assert!(
+            difusion.toca(ahora + RITMO_SESIONES),
+            "cumplido el ritmo, sí"
+        );
+        difusion.marcar();
+        difusion.limpiar();
+        assert!(
+            !difusion.toca(ahora + RITMO_SESIONES),
+            "otro cambio mandó la lista"
+        );
     }
 
     #[test]

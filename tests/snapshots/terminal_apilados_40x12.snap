@@ -1,0 +1,15 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN · APILADOS ───── web-01 ─
+▸● 1 web-01 │ ● 2 │ ● 3 │ ● 4 │ +
+▸● web-01───────────────────────────────
+█
+
+
+
+
+
+
+ ● 1/4 · web-01 · ventana pequeña · ^] ?
+ disposición apilados

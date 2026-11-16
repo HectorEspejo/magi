@@ -106,6 +106,10 @@ fn etiqueta(campo: CampoFicha, estrecho: bool) -> &'static str {
         CampoFicha::Opciones => "OPCIONES EXTRA",
         CampoFicha::Tuneles => "e editar",
         CampoFicha::Comprobaciones => "COMPROBACIONES",
+        // Fase 15: bloque TERMINAL.
+        CampoFicha::Reconectar => "Reconectar solo si se cae la red",
+        CampoFicha::Tmux => "Sesión persistente con tmux",
+        CampoFicha::PortapapelesRemoto => "Permitir que el host copie al portapapeles",
         // Fase 12: campos de escritorio (no salen en una ficha SSH).
         CampoFicha::Tipo => "Tipo",
         CampoFicha::Dominio => "Dominio",

@@ -1638,6 +1638,7 @@ async fn una_pestana_con_orden_la_arma_el_servidor() {
             orden: Some(OrdenPestana::SeguirDiario {
                 unidad: "app.service".to_string(),
             }),
+            tmux: None,
         })
         .await;
     let _sesion = escenario.esperar_sesion_nueva(&conocidas).await;

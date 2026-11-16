@@ -86,15 +86,21 @@ pub struct ModoTerminal {
     pub cursor_aplicacion: bool,
     /// Pegado entre corchetes activo (modo 2004).
     pub pegado_corchetes: bool,
+    /// Banderas del teclado de kitty de la pantalla activa (solo la 1). Con
+    /// la bandera 1, Intro, Tab, Retroceso, Esc y Ctrl o Alt más tecla se
+    /// codifican como `CSI ... u` (Fase 15).
+    pub banderas_kitty: u16,
 }
 
 impl ModoTerminal {
-    /// Lee el modo de la pantalla del parser vt100.
+    /// Lee el modo de la pantalla del parser vt100. Las banderas de kitty no
+    /// están en la pantalla: sin ellas, se codifica a la clásica.
     #[must_use]
     pub fn desde_pantalla(pantalla: &vt100::Screen) -> Self {
         Self {
             cursor_aplicacion: pantalla.application_cursor(),
             pegado_corchetes: pantalla.bracketed_paste(),
+            banderas_kitty: 0,
         }
     }
 
@@ -102,6 +108,17 @@ impl ModoTerminal {
     #[must_use]
     pub fn desde_parser(parser: &vt100::Parser) -> Self {
         Self::desde_pantalla(parser.screen())
+    }
+
+    /// Lee el modo de una pantalla del emulador, con las banderas de kitty de
+    /// la pantalla activa.
+    #[must_use]
+    pub fn desde_emulador(pantalla: &crate::terminal::emulador::PantallaEmulada) -> Self {
+        let mut modo = Self::desde_pantalla(pantalla.screen());
+        modo.banderas_kitty = pantalla
+            .emulador()
+            .banderas_kitty(pantalla.screen().alternate_screen());
+        modo
     }
 }
 
@@ -123,6 +140,35 @@ pub fn codificar(
             bytes.push(b'0' + modificadores.valor_xterm());
             bytes.push(final_flecha);
             return Some(bytes);
+        }
+    }
+    // Teclado de kitty con la bandera 1 (desambiguar). Solo cambia lo que la
+    // codificación clásica no puede distinguir: Intro, Tab, Retroceso y Esc
+    // con modificadores, Esc solo, y Ctrl o Alt con una tecla. Las flechas,
+    // Inicio/Fin y las teclas de función ya no son ambiguas.
+    if modo.banderas_kitty & 1 != 0 {
+        let valor = modificadores.valor_xterm();
+        match tecla {
+            Tecla::Intro if modificadores.hay() => {
+                return Some(format!("\x1b[13;{valor}u").into_bytes());
+            }
+            Tecla::Tabulador if modificadores.hay() => {
+                return Some(format!("\x1b[9;{valor}u").into_bytes());
+            }
+            Tecla::Retroceso if modificadores.hay() => {
+                return Some(format!("\x1b[127;{valor}u").into_bytes());
+            }
+            Tecla::Escape => {
+                return Some(if modificadores.hay() {
+                    format!("\x1b[27;{valor}u").into_bytes()
+                } else {
+                    b"\x1b[27u".to_vec()
+                });
+            }
+            Tecla::Caracter(caracter) if modificadores.ctrl || modificadores.alt => {
+                return Some(format!("\x1b[{};{valor}u", codigo_kitty(caracter)).into_bytes());
+            }
+            _ => {}
         }
     }
     let mut bytes = match tecla {
@@ -158,6 +204,16 @@ pub fn codificar(
         return Some(con_alt);
     }
     Some(bytes)
+}
+
+/// Código Unicode que el teclado de kitty usa para una tecla con Ctrl o Alt:
+/// el de la tecla sin Mayús (Mayús va en los modificadores).
+fn codigo_kitty(caracter: char) -> u32 {
+    if caracter.is_ascii_uppercase() {
+        caracter.to_ascii_lowercase() as u32
+    } else {
+        caracter as u32
+    }
 }
 
 /// Final `A`-`D` de una flecha, para la forma modificada.
@@ -245,6 +301,7 @@ mod pruebas {
         ModoTerminal {
             cursor_aplicacion: true,
             pegado_corchetes: false,
+            banderas_kitty: 0,
         }
     }
 
@@ -479,11 +536,99 @@ mod pruebas {
             ModoTerminal {
                 cursor_aplicacion: false,
                 pegado_corchetes: true,
+                banderas_kitty: 0,
             },
         );
         assert_eq!(
             entre_corchetes,
             format!("\x1b[200~{texto}\x1b[201~").as_bytes().to_vec()
+        );
+    }
+
+    fn kitty() -> ModoTerminal {
+        ModoTerminal {
+            banderas_kitty: 1,
+            ..normal()
+        }
+    }
+
+    #[test]
+    fn la_bandera_1_de_kitty_codifica_lo_ambiguo() {
+        // AC del checklist: con la bandera 1, Mayús+Intro es CSI 13;2u;
+        // después de quitarla, CR.
+        let mayus_entrar = mods(true, false, false);
+        assert_eq!(
+            codificar(Tecla::Intro, mayus_entrar, kitty()).unwrap(),
+            b"\x1b[13;2u".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::Intro, mayus_entrar, normal()).unwrap(),
+            b"\r"
+        );
+        // Ctrl+Intro y Alt+Intro.
+        assert_eq!(
+            codificar(Tecla::Intro, mods(false, false, true), kitty()).unwrap(),
+            b"\x1b[13;5u".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::Intro, mods(false, true, false), kitty()).unwrap(),
+            b"\x1b[13;3u".to_vec()
+        );
+        // Intro, Tab y Retroceso sin modificadores no cambian.
+        for (tecla, esperada) in [
+            (Tecla::Intro, b"\r".to_vec()),
+            (Tecla::Tabulador, b"\t".to_vec()),
+            (Tecla::Retroceso, vec![0x7f]),
+        ] {
+            assert_eq!(
+                codificar(tecla, sin_modificadores(), kitty()).unwrap(),
+                esperada
+            );
+        }
+        // Esc es CSI 27u con la bandera.
+        assert_eq!(
+            codificar(Tecla::Escape, sin_modificadores(), kitty()).unwrap(),
+            b"\x1b[27u".to_vec()
+        );
+        assert_eq!(codifica(Tecla::Escape), vec![0x1b]);
+    }
+
+    #[test]
+    fn la_bandera_1_de_kitty_codifica_ctrl_y_alt_en_csi_u() {
+        assert_eq!(
+            codificar(Tecla::Caracter('a'), mods(false, false, true), kitty()).unwrap(),
+            b"\x1b[97;5u".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::Caracter('C'), mods(false, true, false), kitty()).unwrap(),
+            b"\x1b[99;3u".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::Caracter('A'), mods(true, true, true), kitty()).unwrap(),
+            b"\x1b[97;8u".to_vec()
+        );
+        // Una tecla sin Ctrl ni Alt sigue yendo como carácter.
+        assert_eq!(
+            codificar(Tecla::Caracter('x'), mods(true, false, false), kitty()).unwrap(),
+            b"x".to_vec()
+        );
+        // Las flechas y las teclas de función no cambian con la bandera.
+        assert_eq!(
+            codificar(Tecla::Arriba, mods(false, false, true), kitty()).unwrap(),
+            b"\x1b[1;5A".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::F(5), sin_modificadores(), kitty()).unwrap(),
+            b"\x1b[15~".to_vec()
+        );
+        // Tab y Retroceso con modificadores también van en CSI u.
+        assert_eq!(
+            codificar(Tecla::Tabulador, mods(true, false, false), kitty()).unwrap(),
+            b"\x1b[9;2u".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::Retroceso, mods(false, false, true), kitty()).unwrap(),
+            b"\x1b[127;5u".to_vec()
         );
     }
 

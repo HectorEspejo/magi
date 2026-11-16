@@ -255,6 +255,7 @@ mod pruebas {
             ejecuciones,
             escritorios: 0,
             acciones_servicio: 0,
+            tuneles_temporales: 0,
         }
     }
 

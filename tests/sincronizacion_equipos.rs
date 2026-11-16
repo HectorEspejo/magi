@@ -283,6 +283,39 @@ fn unir_con_una_clave_equivocada_no_guarda_nada() {
 }
 
 #[test]
+fn unir_acepta_la_clave_pegada_en_dos_lineas_y_en_minusculas() {
+    // Copiada de la terminal, la clave suele llegar partida o con espacios:
+    // antes daba «invalid Bech32 encoding».
+    let mut entorno = entorno();
+    let carpeta = carpeta_de_prueba(&entorno, "magi-sync");
+    let clave = ClaveSincronizacion::generar();
+    escribir_fichero_ajeno(&carpeta, &clave);
+    let llavero = LlaveroEnMemoria::nuevo();
+
+    let texto = clave.texto();
+    let (principio, fin) = texto.split_at(40);
+    let pegada = format!("  {}\n{} \n", principio.to_lowercase(), fin);
+    equipos::unir(
+        entorno.almacen.conexion(),
+        &entorno.rutas,
+        &carpeta,
+        &pegada,
+        &mut entorno.config,
+        &llavero,
+    )
+    .unwrap();
+    // En el llavero queda el texto canónico.
+    assert_eq!(
+        llavero
+            .recuperar(CUENTA_SINCRONIZACION)
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        texto.as_str()
+    );
+}
+
+#[test]
 fn rotar_guarda_la_anterior_y_las_dos_claves_sirven_para_leer() {
     let mut entorno = entorno();
     let carpeta = carpeta_de_prueba(&entorno, "magi-sync");

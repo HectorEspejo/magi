@@ -1,0 +1,26 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN ──────────────────────────────────────────────────────── web-01 ─
+▸● 1 web-01 │ +
+ linea uno
+ error de conexion
+ linea tres
+▸otro error
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↻ HISTORIAL 4 líneas · /error · texto · 1 de 2 · líneas 1 × 4 de 4

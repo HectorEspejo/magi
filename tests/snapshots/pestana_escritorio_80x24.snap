@@ -1,8 +1,9 @@
 ---
 source: tests/redimensionado/vistas_n.rs
 ---
- MAGI · SESIÓN ────────────────────────────────────────────────── win-01 · RDP ─
+ MAGI · SESIÓN ──────────────────────────────────────────────────────── win-01 ─
 ▸▣ 1 win-01 │ +
+▸▣ win-01───────────────────────────────────────────────────────────────────────
 
   ▣ ESCRITORIO · win-01 · RDP
 
@@ -22,6 +23,5 @@ source: tests/redimensionado/vistas_n.rs
 
 
 
-
- ▣ 1/1 · abierto · sin visor · 58 fps · Ctrl+] ? ayuda
+ ▣ 1/1 · win-01 · 12 m · 0 ventanas · ^] ?
  escritorio «win-01» abriéndose

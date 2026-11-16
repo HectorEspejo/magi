@@ -2,11 +2,11 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────────────────────────┐
-│      patrón  (< 24 h)                                                       ↑│
-│      [  ]                                                                    │
-│  [ ] tests en verde                                                          │
-│      comando                                                                 │
-│      [  ]                                                                    │
+│ TERMINAL (solo en este equipo)                                              ↑│
+│  [x] Reconectar solo si se cae la red                                        │
+│  [ ] Sesión persistente con tmux                                             │
+│  [ ] Permitir que el host copie al portapapeles  (OSC 52; leerlo, nunca)     │
+│  Espacio marca · Tab siguiente · Ctrl+S guardar                              │
 │                                                                              │
 │  TÚNELES                        n nuevo · e editar · x borrar · a automático │
 │  ▸   [a] local    127.0.0.1:5432 → 127.0.0.1:5432                    postgres│

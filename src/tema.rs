@@ -69,6 +69,13 @@ pub struct Glifos {
     /// Indicador de «hay más arriba/abajo» en listas con desplazamiento.
     pub arriba: &'static str,
     pub abajo: &'static str,
+    // ------------------------------------------------ terminal (Fase 15)
+    /// Reconexión automática en curso (`↻`).
+    pub reconectando: &'static str,
+    /// Panel que recibe la escritura en varios (`»`).
+    pub escribiendo: &'static str,
+    /// Aviso del remoto sin ver (`!`).
+    pub aviso: &'static str,
 }
 
 impl Glifos {
@@ -94,6 +101,9 @@ impl Glifos {
             separador: "│",
             arriba: "↑",
             abajo: "↓",
+            reconectando: "↻",
+            escribiendo: "»",
+            aviso: "!",
         }
     }
 
@@ -120,6 +130,9 @@ impl Glifos {
             separador: "|",
             arriba: "^",
             abajo: "v",
+            reconectando: "@",
+            escribiendo: ">>",
+            aviso: "!",
         }
     }
 }

@@ -47,6 +47,27 @@ en [`docs/publicar.md`](../docs/publicar.md).
 - La contraseña de sudo se pide y se guarda solo en memoria 5 min sin uso
   (nunca en disco ni en el llavero) y se olvida al bloquear MAGI.
 
+### Corregido
+
+- **Sincronizar fallaba con `LanguageNotAvailable` en la APK debug.** La
+  biblioteca de cifrado (age) buscaba sus textos de error en la ruta del
+  ordenador donde se compiló la app, que en el móvil no existe. En cuanto un
+  fichero de la carpeta no se abría con la clave del móvil (de otra clave, a
+  medio descargar o que no es age), la unión o la pasada se interrumpían y el
+  motivo real quedaba tapado. Ahora esos textos van dentro de la app también en
+  debug, y los errores de cifrado se explican en castellano sin pasar por ellos:
+  un fichero que no se abre vuelve a ser un aviso. Con prueba de regresión en
+  el emulador.
+- **Flota se quedaba vacía después de sincronizar por primera vez.** Si Flota
+  se abría antes de tener inventario, la sincronización traía los hosts pero
+  no se lo decía. Sin hosts no se sondeaba nada que la refrescara, así que
+  seguía vacía hasta reiniciar la app. Ahora cada sincronización, dejar de
+  sincronizar y borrar datos actualizan Flota, y al volver a la pantalla se
+  vuelve a leer la lista. Con pruebas de regresión.
+- Al pegar una clave de sincronización que no vale, el aviso dice por qué en
+  castellano (vacía, clave pública, prefijo equivocado o incompleta), igual que
+  en el escritorio, en vez del texto en inglés de age.
+
 ## [0.2.0] - 2026-11-05
 
 ### Añadido

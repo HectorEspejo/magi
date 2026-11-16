@@ -107,16 +107,6 @@ pub fn claves_guardadas(estado: &EstadoNucleo) -> Vec<ClaveSincronizacion> {
     claves
 }
 
-/// Normaliza el texto de una clave pegada o escaneada: sin espacios ni saltos
-/// y en mayúsculas (texto canónico de la identidad).
-pub fn normalizar_clave(texto: &str) -> String {
-    texto
-        .chars()
-        .filter(|caracter| !caracter.is_whitespace())
-        .collect::<String>()
-        .to_uppercase()
-}
-
 fn nombre_de_uri(uri: &str) -> String {
     // La URI SAF viene codificada (primary%3ASync%2Fmagi): se decodifican los
     // separadores para quedarse con el nombre legible de la carpeta.
@@ -174,11 +164,11 @@ pub async fn elegir_carpeta(estado: &Arc<EstadoNucleo>, uri: String) -> Result<(
 
 /// Une el móvil con la clave de sincronización (pegada o escaneada).
 pub async fn unir_con_clave(estado: &Arc<EstadoNucleo>, texto: String) -> Result<(), ErrorNucleo> {
-    let normalizado = normalizar_clave(&texto);
-    let clave =
-        ClaveSincronizacion::desde_texto(&normalizado).map_err(|error| ErrorNucleo::General {
-            detalle: format!("la clave de sincronización no es válida: {error}"),
-        })?;
+    // El núcleo normaliza la clave (sin espacios y en mayúsculas) y explica el
+    // fallo, con el mismo texto que el escritorio.
+    let clave = ClaveSincronizacion::desde_texto(&texto).map_err(|error| ErrorNucleo::General {
+        detalle: error.to_string(),
+    })?;
     let carpeta = CarpetaRetrollamada::nueva(estado.retrollamadas.carpeta.clone());
     let entradas = carpeta.listar().map_err(|detalle| ErrorNucleo::Carpeta {
         detalle: format!("no se pudo leer la carpeta: {detalle}"),
@@ -352,6 +342,10 @@ async fn pasada_en_segundo_plano(estado: Arc<EstadoNucleo>) -> Result<(), ErrorN
         };
     }
     estado.emitir_sincronizacion();
+    // La pasada puede haber traído, cambiado o quitado hosts: Flota recibe la
+    // lista completa. Sin esto, una Flota abierta con el inventario vacío no se
+    // enteraba nunca (solo el sondeo la difundía, y sin hosts no se sondea).
+    crate::flota::emitir_flota(&estado).await;
     Ok(())
 }
 
@@ -373,6 +367,8 @@ pub async fn dejar_de_sincronizar(estado: &Arc<EstadoNucleo>) -> Result<(), Erro
         *sincro = Default::default();
     }
     estado.emitir_sincronizacion();
+    // El inventario se ha vaciado: Flota recibe la lista (vacía).
+    crate::flota::emitir_flota(estado).await;
     Ok(())
 }
 
@@ -420,6 +416,8 @@ pub async fn borrar_datos(
         *sincro = Default::default();
     }
     estado.emitir_sincronizacion();
+    // El inventario se ha vaciado: Flota recibe la lista (vacía).
+    crate::flota::emitir_flota(estado).await;
     Ok(())
 }
 
@@ -675,12 +673,6 @@ pub fn listar_carpeta(estado: &EstadoNucleo) -> Result<Vec<EntradaCarpeta>, Erro
 #[cfg(test)]
 mod pruebas {
     use super::*;
-
-    #[test]
-    fn la_clave_pegada_se_normaliza_sin_espacios_y_en_mayusculas() {
-        let texto = "  age-secret-key-1 abc \n  def\t";
-        assert_eq!(normalizar_clave(texto), "AGE-SECRET-KEY-1ABCDEF");
-    }
 
     #[test]
     fn la_clave_anterior_se_guarda_con_su_plazo() {

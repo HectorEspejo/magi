@@ -135,7 +135,14 @@ pub fn bucle_teclas<F: FuenteEventos>(
                 let evento = match fuente.leer() {
                     Ok(Event::Key(tecla)) => Evento::Tecla(tecla),
                     Ok(Event::Resize(cols, filas)) => Evento::Redimension(cols, filas),
-                    Ok(_) => continue,
+                    // Fase 15: el terminal exterior entrega el pegado entre
+                    // corchetes, el ratón y los eventos de foco. Si se
+                    // descartan aquí, pegar, seleccionar con el ratón y el
+                    // foco del remoto no hacen nada (era el bug de la 1.4.0).
+                    Ok(Event::Paste(texto)) => Evento::Pegado(texto),
+                    Ok(Event::Mouse(raton)) => Evento::Raton(raton),
+                    Ok(Event::FocusGained) => Evento::FocoExterior(true),
+                    Ok(Event::FocusLost) => Evento::FocoExterior(false),
                     Err(_) => break,
                 };
                 if tx.send(evento).is_err() {
@@ -220,6 +227,46 @@ mod pruebas {
             std::thread::sleep(Duration::from_millis(2));
         }
         None
+    }
+
+    /// Regresión de la 1.4.0: el hilo descartaba `Paste`, `Mouse` y `Focus`,
+    /// así que pegar y seleccionar con el ratón no hacían nada (y el remoto
+    /// no veía la rueda ni el foco).
+    #[test]
+    fn el_pegado_el_raton_y_el_foco_pasan_al_bucle() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let fuente = FuenteFalsa::default();
+        let (control, mut rx, hilo) = arrancar(&fuente);
+
+        fuente.meter(Event::Paste("uno\ndos\n".to_string()));
+        match recibir(&mut rx) {
+            Some(Evento::Pegado(texto)) => assert_eq!(texto, "uno\ndos\n"),
+            _ => panic!("se esperaba Pegado del terminal exterior"),
+        }
+
+        let raton = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 4,
+            modifiers: crossterm::event::KeyModifiers::SHIFT,
+        };
+        fuente.meter(Event::Mouse(raton));
+        match recibir(&mut rx) {
+            Some(Evento::Raton(evento)) => assert_eq!((evento.column, evento.row), (3, 4)),
+            _ => panic!("se esperaba Raton del terminal exterior"),
+        }
+
+        fuente.meter(Event::FocusGained);
+        assert!(matches!(recibir(&mut rx), Some(Evento::FocoExterior(true))));
+        fuente.meter(Event::FocusLost);
+        assert!(matches!(
+            recibir(&mut rx),
+            Some(Evento::FocoExterior(false))
+        ));
+
+        control.salir();
+        hilo.join().unwrap();
     }
 
     #[test]

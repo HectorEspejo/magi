@@ -1,0 +1,26 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · SESIÓN ──────────────────────────────────────────────────────── web-01 ─
+▸↻ 1 web-01 │ ● 2 │ +
+▸↻ web-01───────────────────────────────────────────────────────────────────────
+
+
+
+
+
+            ┌ RECONECTANDO ────────────────────────────────────────┐
+            │                                                      │
+            │ ↻ Reconectando con web-01 · intento 3 en NN s         │
+            │ caída hace NN s: conexión perdida                    │
+            │ tmux magi-portatil-1: lo que corría sigue en el host │
+            │                                                      │
+            │ Ctrl+] r  reintentar ya        Ctrl+] x  cerrar      │
+            └──────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ ↻ 1/2 · web-01 · 2 h 03 m · ↻ intento 3 en NN s · conexión perdida · ^] ?

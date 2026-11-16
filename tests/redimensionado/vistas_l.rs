@@ -33,6 +33,7 @@ fn rechazo_con_trabajo() -> RechazoVersion {
         ejecuciones: 0,
         escritorios: 0,
         acciones_servicio: 0,
+        tuneles_temporales: 0,
     });
     rechazo
 }

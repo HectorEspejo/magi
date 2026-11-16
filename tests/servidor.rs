@@ -384,6 +384,7 @@ async fn el_dialogo_de_contrasena_viaja_y_la_respuesta_abre_la_sesion() {
             cols: 80,
             filas: 24,
             orden: None,
+            tmux: None,
         },
     )
     .await;
@@ -575,6 +576,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
         cols: 80,
         filas: 24,
         orden: None,
+        tmux: None,
     });
 
     // 4. Espera la sesión abierta y adjunta.
@@ -612,6 +614,7 @@ async fn el_cliente_vuelca_los_datos_en_su_registro_de_pantallas() {
                 sesion_id: id,
                 cols: 80,
                 filas: 24,
+                colores: None,
             });
             adjuntado = true;
         }

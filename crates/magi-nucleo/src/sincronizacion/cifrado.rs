@@ -17,6 +17,21 @@ use crate::sincronizacion::formato::{INFO_FIRMA, SAL_HKDF};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Comienzo del texto canónico de una identidad de age.
+const PREFIJO_CLAVE: &str = "AGE-SECRET-KEY-1";
+
+/// Normaliza el texto de una clave pegada o escaneada: sin espacios ni saltos
+/// de línea y en mayúsculas, su texto canónico. Copiada de una terminal suele
+/// llegar partida en dos líneas. Un solo búfer, en `Zeroizing`: es el secreto.
+pub fn normalizar_clave(texto: &str) -> Zeroizing<String> {
+    let mut normalizado = Zeroizing::new(String::with_capacity(texto.len()));
+    for caracter in texto.chars().filter(|caracter| !caracter.is_whitespace()) {
+        normalizado.push(caracter);
+    }
+    normalizado.make_ascii_uppercase();
+    normalizado
+}
+
 /// Identidad de sincronización: la clave privada X25519 que descifra y firma.
 pub struct ClaveSincronizacion {
     identidad: age::x25519::Identity,
@@ -31,12 +46,29 @@ impl ClaveSincronizacion {
     }
 
     /// Parsea una identidad del texto que se muestra al usuario
-    /// (AGE-SECRET-KEY-1...).
+    /// (AGE-SECRET-KEY-1...), pegada o escaneada: se normaliza antes (sin
+    /// espacios ni saltos de línea y en mayúsculas) y el error dice qué le pasa
+    /// en castellano, sin los textos de age.
     pub fn desde_texto(texto: &str) -> Result<Self> {
-        let identidad: age::x25519::Identity = texto
-            .trim()
-            .parse()
-            .map_err(|error| anyhow::anyhow!("clave de sincronización no válida: {error}"))?;
+        let normalizado = normalizar_clave(texto);
+        if normalizado.is_empty() {
+            anyhow::bail!("la clave de sincronización está vacía");
+        }
+        if normalizado.starts_with("AGE1") {
+            anyhow::bail!(
+                "la clave de sincronización no es válida: es una clave pública (age1…); copia la que empieza por {PREFIJO_CLAVE}"
+            );
+        }
+        if !normalizado.starts_with(PREFIJO_CLAVE) {
+            anyhow::bail!(
+                "la clave de sincronización no es válida: debe empezar por {PREFIJO_CLAVE}"
+            );
+        }
+        let identidad: age::x25519::Identity = normalizado.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "la clave de sincronización no es válida: está incompleta o tiene algún carácter cambiado"
+            )
+        })?;
         Ok(Self { identidad })
     }
 
@@ -98,13 +130,14 @@ impl ClaveSincronizacion {
     pub fn cifrar(&self, plano: &[u8]) -> Result<Vec<u8>> {
         let recipiente = self.identidad.to_public();
         age::encrypt(&recipiente, plano)
-            .map_err(|error| anyhow::anyhow!("cifrando con age: {error}"))
+            .map_err(|error| anyhow::anyhow!("cifrando con age: {}", texto_error_cifrado(&error)))
     }
 
     /// Descifra un fichero age. El contenido en claro se devuelve en Zeroizing.
     pub fn descifrar(&self, cifrado: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        let plano = age::decrypt(&self.identidad, cifrado)
-            .map_err(|error| anyhow::anyhow!("descifrando con age: {error}"))?;
+        let plano = age::decrypt(&self.identidad, cifrado).map_err(|error| {
+            anyhow::anyhow!("descifrando con age: {}", texto_error_descifrado(&error))
+        })?;
         Ok(Zeroizing::new(plano))
     }
 }
@@ -115,6 +148,44 @@ impl std::fmt::Debug for ClaveSincronizacion {
             .debug_struct("ClaveSincronizacion")
             .field("huella_corta", &self.huella_corta())
             .finish()
+    }
+}
+
+/// Explica un error de descifrado de age sin pasar por su `Display`: ese carga
+/// los textos traducidos de age y, si no los encuentra (una compilación debug
+/// en el móvil), entra en pánico con `LanguageNotAvailable`. La pasada prueba
+/// cada clave y descarta el error, así que fallar aquí es el camino normal.
+fn texto_error_descifrado(error: &age::DecryptError) -> String {
+    use age::DecryptError;
+    match error {
+        DecryptError::NoMatchingKeys => {
+            "la clave no abre este fichero (está cifrado para otra)".to_string()
+        }
+        DecryptError::InvalidHeader => "la cabecera age no es válida".to_string(),
+        DecryptError::InvalidMac => "la cabecera age está alterada (MAC no válido)".to_string(),
+        DecryptError::UnknownFormat => "formato age desconocido".to_string(),
+        DecryptError::DecryptionFailed => "el contenido cifrado está dañado".to_string(),
+        DecryptError::KeyDecryptionFailed => "no se pudo descifrar la clave".to_string(),
+        DecryptError::ExcessiveWork { required, target } => format!(
+            "el fichero pide un factor de trabajo excesivo ({required}; el máximo es {target})"
+        ),
+        // Al descifrar de memoria, solo el flujo de age da errores de E/S, y su
+        // texto («decryption error») no añade nada.
+        DecryptError::Io(_) => "el contenido cifrado está dañado o incompleto".to_string(),
+    }
+}
+
+/// Explica un error de cifrado de age sin pasar por su `Display` (ver
+/// `texto_error_descifrado`).
+fn texto_error_cifrado(error: &age::EncryptError) -> String {
+    use age::EncryptError;
+    match error {
+        EncryptError::Io(error) => format!("error de escritura: {error}"),
+        EncryptError::EncryptedIdentities(error) => texto_error_descifrado(error),
+        EncryptError::IncompatibleRecipients { .. }
+        | EncryptError::InvalidRecipientLabels(_)
+        | EncryptError::MissingRecipients
+        | EncryptError::MixedRecipientAndPassphrase => "age rechazó el destinatario".to_string(),
     }
 }
 
@@ -172,6 +243,43 @@ mod pruebas {
     }
 
     #[test]
+    fn la_clave_pegada_se_normaliza_y_sus_errores_dicen_que_pasa() {
+        let clave = ClaveSincronizacion::generar();
+        let texto = clave.texto();
+        // Partida en dos líneas, con espacios y en minúsculas, como al copiarla
+        // de una terminal.
+        let (principio, fin) = texto.split_at(40);
+        let pegada = format!("  {}\n  {} \t", principio.to_lowercase(), fin);
+        let leida = ClaveSincronizacion::desde_texto(&pegada).unwrap();
+        assert_eq!(leida.clave_publica(), clave.clave_publica());
+        assert_eq!(
+            normalizar_clave("  age-secret-key-1 abc \n  def\t").as_str(),
+            "AGE-SECRET-KEY-1ABCDEF"
+        );
+
+        let error = |texto: &str| {
+            ClaveSincronizacion::desde_texto(texto)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(error(" \n "), "la clave de sincronización está vacía");
+        assert!(
+            error(&clave.clave_publica()).contains("es una clave pública"),
+            "{}",
+            error(&clave.clave_publica())
+        );
+        assert!(error("no es una clave").contains("debe empezar por AGE-SECRET-KEY-1"));
+        let cortada = &texto[..texto.len() - 3];
+        assert!(
+            error(cortada).contains("está incompleta o tiene algún carácter cambiado"),
+            "{}",
+            error(cortada)
+        );
+        // Ningún error lleva el texto en inglés de age.
+        assert!(!error(cortada).contains("Bech32"));
+    }
+
+    #[test]
     fn cifra_y_descifra_ida_y_vuelta() {
         let clave = ClaveSincronizacion::generar();
         let claro = b"MAGI-SINCRONIZACION 1\nfirma: x\n{}";
@@ -179,6 +287,30 @@ mod pruebas {
         assert_ne!(cifrado, claro);
         assert_eq!(clave.descifrar(&cifrado).unwrap().as_slice(), claro);
         assert!(clave.descifrar(b"no es age").is_err());
+    }
+
+    #[test]
+    fn los_errores_de_age_se_explican_sin_sus_textos_traducidos() {
+        // El Display de age carga sus .ftl: en la APK debug no los encontraba y
+        // la pasada entraba en pánico (LanguageNotAvailable). El texto es el
+        // propio, en castellano, para cualquier fichero que no abre.
+        let clave = ClaveSincronizacion::generar();
+        let ajena = ClaveSincronizacion::generar();
+        let cifrado = ajena.cifrar(b"de otra clave").unwrap();
+        assert_eq!(
+            clave.descifrar(&cifrado).unwrap_err().to_string(),
+            "descifrando con age: la clave no abre este fichero (está cifrado para otra)"
+        );
+        assert_eq!(
+            clave.descifrar(b"no es age").unwrap_err().to_string(),
+            "descifrando con age: la cabecera age no es válida"
+        );
+        let propio = clave.cifrar(b"contenido que se corta").unwrap();
+        let cortado = &propio[..propio.len() - 8];
+        assert_eq!(
+            clave.descifrar(cortado).unwrap_err().to_string(),
+            "descifrando con age: el contenido cifrado está dañado o incompleto"
+        );
     }
 
     #[test]

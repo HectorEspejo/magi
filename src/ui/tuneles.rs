@@ -42,15 +42,19 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         .iter()
         .filter(|tunel| app.estado_de(tunel.id).en_marcha())
         .count();
-    let titulo = format!(
+    let temporales = app.tuneles_temporales.len();
+    let mut titulo = format!(
         "TÚNELES {punto} {} {punto} {} activos",
         filas.len(),
         activos
     );
+    if temporales > 0 {
+        titulo.push_str(&format!(" {punto} {temporales} temporales"));
+    }
     let marco_bloque = bloque(&titulo, tema);
     let interior = marco_bloque.inner(area);
 
-    if filas.is_empty() {
+    if filas.is_empty() && temporales == 0 {
         let mensaje = if app.filtro_tuneles.trim().is_empty() {
             "Sin túneles: n para crear uno, o importa los reenvíos de tus hosts"
         } else {
@@ -82,7 +86,11 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
 
     let (zona, detalle) = repartir_vista(interior, ALTO_DETALLE, disp);
     let seleccionado = filas.get(app.seleccion_tunel).copied();
-    let mut pie = format!(" {} ", filas.len());
+    let mut pie = if filas.is_empty() && temporales > 0 {
+        format!(" temporales {temporales} ")
+    } else {
+        format!(" {} ", filas.len())
+    };
     if detalle.is_none() && seleccionado.is_some() {
         pie.push_str(&format!(
             "{punto} {} ",
@@ -170,9 +178,23 @@ fn dibujar_tabla(
             .add_modifier(Modifier::BOLD),
         ascii,
     );
-    let mut lineas = vec![cabecera];
-
-    let altura = usize::from(area.height.saturating_sub(1));
+    let mut lineas = if filas.is_empty() {
+        vec![Line::from(Span::styled(
+            "  (sin túneles definidos)",
+            Style::default().fg(tema.paleta.inactivo),
+        ))]
+    } else {
+        vec![cabecera]
+    };
+    let temporales = &app.tuneles_temporales;
+    // La sección de temporales se lleva su hueco: cabecera y una fila por
+    // túnel, como mucho la mitad de la tabla.
+    let reserva = if temporales.is_empty() {
+        0
+    } else {
+        (temporales.len() + 1).min(usize::from(area.height) / 2)
+    };
+    let altura = usize::from(area.height.saturating_sub(1)).saturating_sub(reserva);
     let inicio = disposicion::ventana(
         app.desplazamiento_tuneles,
         app.seleccion_tunel,
@@ -199,10 +221,66 @@ fn dibujar_tabla(
             &tabla,
         ));
     }
+    if !temporales.is_empty() {
+        let sep = tema.glifos.linea.to_string();
+        lineas.push(Line::from(Span::styled(
+            format!(
+                " {} TEMPORALES ({}) · se cierran con su pestaña",
+                sep.repeat(2),
+                temporales.len()
+            ),
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for info in temporales {
+            lineas.push(linea_temporal(info, app, area.width));
+        }
+    }
     marco.render_widget(
         Paragraph::new(lineas).style(Style::default().fg(tema.paleta.texto)),
         area,
     );
+}
+
+/// Una fila de la sección de túneles temporales: host, pestaña, escucha local,
+/// destino y conexiones. No se puede seleccionar ni gestionar desde aquí.
+fn linea_temporal(
+    info: &crate::protocolo::InfoTunelTemporal,
+    app: &App,
+    ancho: u16,
+) -> Line<'static> {
+    let tema = &app.tema;
+    let pestaña = app
+        .pestanas
+        .iter()
+        .find(|pestaña| pestaña.sesion_id == info.sesion_id)
+        .map(|pestaña| {
+            format!(
+                "{} {}",
+                super::tecla(tema, "pestaña", "pestana"),
+                pestaña.nombre
+            )
+        })
+        .unwrap_or_else(|| format!("sesión #{}", info.sesion_id));
+    let texto = format!(
+        "  {} temporal {punto} {} {punto} 127.0.0.1:{} → {}:{} {punto} {} conex. {punto} {pestaña}",
+        tema.glifos.tuneles,
+        info.host_nombre,
+        info.puerto_local,
+        info.destino,
+        info.puerto,
+        info.conexiones,
+        punto = tema.glifos.punto_medio,
+    );
+    Line::from(Span::styled(
+        disposicion::recortar(
+            &disposicion::adaptar(&texto, tema.ascii),
+            usize::from(ancho),
+            tema.ascii,
+        ),
+        Style::default().fg(tema.paleta.inactivo),
+    ))
 }
 
 fn linea_de(

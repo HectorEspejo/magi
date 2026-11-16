@@ -611,16 +611,19 @@ pub async fn lanzar(
 /// Motivo del rechazo de una deliberación que ya autorizó otra cosa.
 pub(crate) const YA_USADA: &str = "esa deliberación ya autorizó otra ejecución o transferencia";
 
-/// ¿Autorizó ya esta deliberación una ejecución o una transferencia de las que
-/// el servidor tiene en memoria? Una deliberación vale para una sola cosa: la
-/// guarda cubre las dos colas en los dos sentidos (Fase 8). Se mira con el
-/// estado bloqueado, en el mismo bloqueo que la inserción.
+/// ¿Autorizó ya esta deliberación una ejecución, una transferencia, una acción
+/// de servicio o una escritura en varios de las que el servidor tiene en
+/// memoria? Una deliberación vale para una sola cosa: la guarda cubre todas
+/// en los dos sentidos (Fase 8, Fase 13 y Fase 15). Se mira con el estado
+/// bloqueado, en el mismo bloqueo que la inserción.
 pub(crate) fn deliberacion_usada(estado: &EstadoServidor, deliberacion_id: i64) -> bool {
     estado.ejecuciones.deliberacion_usada(deliberacion_id)
         || estado.transferencias.deliberacion_usada(deliberacion_id)
         // Las acciones de servicio en curso también la consumen (Fase 13,
         // T62: «ya usada» vale en los dos sentidos).
         || super::servicios::deliberacion_usada(estado, deliberacion_id)
+        // Y una escritura en varios concedida (Fase 15, `7.7).
+        || super::escritura_varios::deliberacion_usada(estado, deliberacion_id)
 }
 
 /// Lee y valida la fila de la deliberación: la escribió otro proceso y lo que

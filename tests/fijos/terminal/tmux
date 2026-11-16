@@ -1,0 +1,178 @@
+#!/bin/sh
+# tmux falso de las pruebas de MAGI (Fase 15).
+#
+# Responde a las órdenes que usan magi_nucleo::terminal::tmux y
+# crates/magi-nucleo/scripts/terminal_tmux.sh: -V, has-session, list-sessions
+# -F, new-session -A -s y kill-session -t. No toca ningún tmux real, ni
+# sesiones del usuario, ni la red: solo lee y escribe el fichero de estado de
+# la prueba.
+#
+# El estado de las sesiones vive en el fichero que indique MAGI_TMUX_ESTADO,
+# una línea por sesión con cuatro campos separados por tabuladores:
+#   nombre<TAB>adheridos<TAB>ventanas<TAB>creada
+# Si el fichero no existe o está vacío, no hay sesiones (como un tmux sin
+# servidor). Si MAGI_TMUX_LLAMADAS apunta a un fichero, se anota ahí cada
+# invocación (una línea con la orden completa), para las pruebas que quieran
+# comprobar qué se ejecutó.
+#
+# Engancharse (new-session -A -s <nombre>) imprime MAGI_TMUX_SESION=<nombre> y
+# se queda leyendo la entrada estándar hasta su fin, devolviendo cada línea
+# como MAGI_TMUX_ENTRADA=<línea>: así una prueba puede comprobar que el PTY le
+# llegó y que el proceso sigue vivo.
+#
+# Uso desde una prueba:
+#   MAGI_TMUX_ESTADO=/tmp/estado MAGI_TMUX_LLAMADAS=/tmp/llamadas \
+#       PATH=/ruta/al/directorio/con/el/tmux:$PATH sh -c "$SCRIPT" magi-tmux listar
+#
+# Solo sh POSIX, awk y sed; pasa shellcheck.
+
+set -u
+
+FICHERO=${MAGI_TMUX_ESTADO:-}
+LLAMADAS=${MAGI_TMUX_LLAMADAS:-}
+
+if [ -n "$LLAMADAS" ]; then
+    printf '%s\n' "$*" >> "$LLAMADAS"
+fi
+
+# Exige estado y deja preparado el fichero (vacío = sin sesiones).
+preparar_estado() {
+    if [ -z "$FICHERO" ]; then
+        printf '%s\n' 'tmux falso: falta MAGI_TMUX_ESTADO' >&2
+        exit 2
+    fi
+    case "$FICHERO" in
+        */*) mkdir -p "${FICHERO%/*}" 2>/dev/null || exit 1 ;;
+    esac
+    [ -f "$FICHERO" ] || : > "$FICHERO" || exit 1
+}
+
+# ¿Existe la sesión con ese nombre exacto?
+existe_sesion() {
+    [ -s "$FICHERO" ] || return 1
+    awk -F '\t' -v buscada="$1" '$1 == buscada { encontrada = 1 } END { exit !encontrada }' "$FICHERO"
+}
+
+# Una sesión nueva empieza sin nadie enganchado y con una ventana.
+crear_sesion() {
+    if ! existe_sesion "$1"; then
+        printf '%s\t0\t1\t%s\n' "$1" '2026-11-09 19:00:00' >> "$FICHERO"
+    fi
+}
+
+# Simula el PTY: marca la sesión, devuelve lo que llega y termina con la
+# entrada estándar.
+enganchar() {
+    printf 'MAGI_TMUX_SESION=%s\n' "$1"
+    while IFS= read -r linea; do
+        printf 'MAGI_TMUX_ENTRADA=%s\n' "$linea"
+    done
+}
+
+# Un valor para sustituir en el formato de list-sessions, escapado para sed.
+escapar() {
+    printf '%s' "$1" | sed 's/[\\&@]/\\&/g'
+}
+
+# Sustituye los #{...} del formato con los campos de cada sesión.
+listar() {
+    formato=${1:-}
+    if [ ! -s "$FICHERO" ]; then
+        printf 'no server running on %s\n' "$FICHERO" >&2
+        return 1
+    fi
+    tabulador=$(printf '\t')
+    while IFS="$tabulador" read -r nombre adheridos ventanas creada; do
+        if [ -n "$formato" ]; then
+            linea=$formato
+            linea=$(printf '%s' "$linea" | sed \
+                -e "s@#{session_name}@$(escapar "$nombre")@g" \
+                -e "s@#{session_attached}@$(escapar "$adheridos")@g" \
+                -e "s@#{session_windows}@$(escapar "$ventanas")@g" \
+                -e "s@#{session_created_string}@$(escapar "$creada")@g")
+            printf '%s\n' "$linea"
+        else
+            printf '%s: %s windows (created %s)\n' "$nombre" "$ventanas" "$creada"
+        fi
+    done < "$FICHERO"
+}
+
+SUBORDEN=${1:-}
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+case "$SUBORDEN" in
+    -V|--version)
+        printf 'tmux 3.4\n'
+        ;;
+    has-session)
+        preparar_estado
+        nombre=''
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -t) nombre=${2:-}; shift ;;
+                -t*) nombre=${1#-t} ;;
+            esac
+            shift
+        done
+        existe_sesion "$nombre"
+        ;;
+    list-sessions|ls)
+        preparar_estado
+        formato=''
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -F) formato=${2:-}; shift ;;
+                -F*) formato=${1#-F} ;;
+            esac
+            shift
+        done
+        listar "$formato"
+        ;;
+    new-session|new)
+        preparar_estado
+        nombre=''
+        adjuntar=1
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -A) adjuntar=1 ;;
+                -d) adjuntar=0 ;;
+                -s) nombre=${2:-}; shift ;;
+                -s*) nombre=${1#-s} ;;
+            esac
+            shift
+        done
+        if [ -z "$nombre" ]; then
+            printf '%s\n' 'tmux falso: new-session sin nombre' >&2
+            exit 2
+        fi
+        crear_sesion "$nombre"
+        if [ "$adjuntar" -eq 1 ]; then
+            enganchar "$nombre"
+        fi
+        ;;
+    kill-session)
+        preparar_estado
+        nombre=''
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -t) nombre=${2:-}; shift ;;
+                -t*) nombre=${1#-t} ;;
+            esac
+            shift
+        done
+        if existe_sesion "$nombre"; then
+            temporal="${FICHERO}.tmp.$$"
+            awk -F '\t' -v quitada="$nombre" '$1 != quitada' "$FICHERO" > "$temporal"
+            mv "$temporal" "$FICHERO"
+            exit 0
+        fi
+        printf "can't find session: %s\n" "$nombre" >&2
+        exit 1
+        ;;
+    *)
+        printf 'tmux falso: suborden no soportado: %s\n' "$SUBORDEN" >&2
+        exit 2
+        ;;
+esac

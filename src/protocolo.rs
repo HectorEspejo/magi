@@ -54,6 +54,16 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// `Credenciales`; `EscritorioAbierto`, `Enlace`, `Escritorios{lista}`,
 /// `PideHuellaEscritorio` y `PideCredenciales`.
 ///
+/// v9 (Fase 15): terminal, segunda vuelta. `CapturarHistorial` → `HistorialLote`,
+/// `Foco`, `IniciarEscrituraVarios`/`EscribirVarios`/`TerminarEscrituraVarios` →
+/// `EscrituraVariosIniciada`/`EscrituraVariosTerminada`, `AbrirTunelTemporal` →
+/// `TunelTemporal` y `TunelesTemporales{lista}`, `ListarTmux` → `SesionesTmux`,
+/// `TerminarTmux` → `TmuxTerminada`, `Portapapeles`/`PortapapelesPedido`/
+/// `PortapapelesPermitido`, `RenombrarSesion` y `MoverSesion`. `Adjuntar` gana
+/// `colores`, `AbrirSesion` gana `tmux` y `Sesiones{lista}` gana
+/// `reconexion`, `titulo`, `aviso` y `tmux`. `TrabajoServidor` gana
+/// `tuneles_temporales`.
+///
 /// v8 (Fase 13): servicios, contenedores y logs. `ListarServicios`,
 /// `PedirConsumo`, `DetalleServicio`, `ComprobarSudo`, `AccionServicio`,
 /// `SeguirLog` y `PararLog`; `Servicios`, `Consumo`, `Detalle`,
@@ -61,7 +71,11 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// `LineasLog` y `FinLog`; `AbrirSesion` gana `orden` (pestañas con orden) y
 /// `TrabajoServidor.acciones_servicio`. Los `peticion_id` de servicios van
 /// desde 2^45.
-pub const VERSION_PROTOCOLO: u32 = 8;
+pub const VERSION_PROTOCOLO: u32 = 9;
+
+/// Los `peticion_id` del terminal (capturas, tmux y túneles temporales) viven
+/// desde 2^49, por encima de todo lo demás (Fase 15).
+pub const RANGO_TERMINAL: u64 = 1 << 49;
 
 /// Los `peticion_id` de escritorios que genera el cliente empiezan en 2^46
 /// (Fase 12); por debajo están los de archivos, túneles y ejecuciones
@@ -166,6 +180,62 @@ pub enum EstadoSesionRemota {
     Cerrada,
 }
 
+// --------------------------------------------------- terminal (v9)
+
+pub use magi_nucleo::terminal::emulador::ColoresTema;
+pub use magi_nucleo::terminal::historial::LineaHistorial;
+pub use magi_nucleo::terminal::tmux::SesionTmux as InfoSesionTmux;
+
+/// Estado de la reconexión automática de una pestaña.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InfoReconexion {
+    /// Intento en curso, desde 1.
+    pub intento: u32,
+    /// Época en segundos del próximo intento.
+    pub proximo_en: i64,
+    /// Época en segundos de la caída.
+    pub desde: i64,
+    pub causa: String,
+}
+
+/// Último aviso del remoto de una pestaña (campana, OSC 9 u OSC 777).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InfoAviso {
+    pub texto: String,
+    /// Época en segundos en la que llegó.
+    pub hora: i64,
+}
+
+/// Un túnel temporal de una pestaña: escucha en `127.0.0.1` del equipo y
+/// reenvía a un localhost del host mientras vive la pestaña.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InfoTunelTemporal {
+    pub id: u32,
+    pub sesion_id: u32,
+    pub host_id: i64,
+    pub host_nombre: String,
+    pub puerto_local: u16,
+    /// `localhost`, `127.0.0.1` o `::1`.
+    pub destino: String,
+    pub puerto: u16,
+    pub conexiones: u32,
+}
+
+/// Bytes ya codificados de una pestaña en la escritura en varios.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BytesPestana {
+    pub sesion_id: u32,
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+/// Resultado de `TerminarTmux`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResultadoTmux {
+    Ok,
+    NoExiste,
+}
+
 /// Resumen de una sesión para la lista que se difunde a los clientes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InfoSesion {
@@ -181,6 +251,22 @@ pub struct InfoSesion {
     pub ventanas: u32,
     /// Llegaron datos del remoto sin que nadie la estuviera viendo.
     pub actividad_no_vista: bool,
+    /// Estado de la reconexión automática, si está reconectando (Fase 15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconexion: Option<InfoReconexion>,
+    /// Título que puso el programa remoto (OSC 0 u OSC 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titulo: Option<String>,
+    /// Último aviso del remoto sin ver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aviso: Option<InfoAviso>,
+    /// Nombre de la sesión de tmux, si la pestaña es persistente.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux: Option<String>,
+    /// La pestaña está en una escritura en varios activa (la marca `»`). Lo
+    /// ve cualquier ventana, no solo la que la activó (§7.14).
+    #[serde(default)]
+    pub escritura_varios: bool,
 }
 
 // ---------------------------------------------------------------- archivos
@@ -684,11 +770,19 @@ pub enum MensajeCliente {
         /// nunca manda texto para ejecutar por esta vía.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orden: Option<OrdenPestana>,
+        /// Nombre de una sesión de tmux existente a la que enganchar la
+        /// pestaña (Fase 15). Debe cumplir la validación del nombre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tmux: Option<String>,
     },
     Adjuntar {
         sesion_id: u32,
         cols: u16,
         filas: u16,
+        /// Colores del tema de la ventana para responder a OSC 10, 11 y 12
+        /// (Fase 15). El servidor usa los del primer adjunto que los mande.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colores: Option<ColoresTema>,
     },
     Desadjuntar {
         sesion_id: u32,
@@ -946,6 +1040,81 @@ pub enum MensajeCliente {
     PararLog {
         peticion_id: u64,
     },
+    // ------------------------------------------------------ terminal (v9)
+    /// Captura el historial y la pantalla de una pestaña. El servidor
+    /// responde con uno o varios `HistorialLote` con el mismo `peticion_id`
+    /// (desde 2^49). Plazo de 5 s.
+    CapturarHistorial {
+        peticion_id: u64,
+        sesion_id: u32,
+    },
+    /// La ventana tiene o deja de tener la pestaña en el panel enfocado y el
+    /// terminal exterior enfocado: el servidor agrega el foco de todas y,
+    /// con 1004 activo, manda `CSI I` o `CSI O` al remoto cuando cambia.
+    Foco {
+        sesion_id: u32,
+        enfocada: bool,
+    },
+    /// Concede la escritura en varios sobre las pestañas dadas. El servidor
+    /// recomprueba que siguen abiertas y, si hace falta deliberación, que la
+    /// suya es válida y no se ha usado. Responde `EscrituraVariosIniciada`.
+    IniciarEscrituraVarios {
+        peticion_id: u64,
+        sesiones: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deliberacion_id: Option<i64>,
+    },
+    /// Escribe los bytes de cada pestaña concedida; si nombra una que no lo
+    /// está, se rechaza entero.
+    EscribirVarios {
+        id: u32,
+        pestanas: Vec<BytesPestana>,
+    },
+    /// Termina la escritura en varios con su motivo.
+    TerminarEscrituraVarios {
+        id: u32,
+        motivo: String,
+    },
+    /// Abre un túnel temporal a un localhost del host para una pestaña
+    /// (enlaces, Fase 15). Responde `TunelTemporal` o `Error`.
+    AbrirTunelTemporal {
+        peticion_id: u64,
+        sesion_id: u32,
+        /// `localhost`, `127.0.0.1` o `::1`.
+        destino: String,
+        puerto: u16,
+    },
+    CerrarTunelTemporal {
+        id: u32,
+    },
+    /// Lista las sesiones de tmux del host.
+    ListarTmux {
+        peticion_id: u64,
+        host_id: i64,
+    },
+    /// Termina una sesión de tmux del host (el cliente ya confirmó).
+    TerminarTmux {
+        peticion_id: u64,
+        host_id: i64,
+        nombre: String,
+    },
+    /// Permite el portapapeles del remoto a este host y entrega la petición
+    /// pendiente si sigue viva (60 s).
+    PortapapelesPermitido {
+        sesion_id: u32,
+    },
+    /// Renombra una pestaña para todas las ventanas (1-32 caracteres, sin
+    /// controles; si se repite, se añade « (n)»).
+    RenombrarSesion {
+        sesion_id: u32,
+        nombre: String,
+    },
+    /// Mueve una pestaña a otra posición (0 = la primera) para todas las
+    /// ventanas.
+    MoverSesion {
+        sesion_id: u32,
+        posicion: u32,
+    },
     Listar,
     /// Apaga el servidor cerrando las sesiones que queden.
     Parar,
@@ -1017,6 +1186,10 @@ pub struct TrabajoServidor {
     /// aunque se cierre la ventana que lo pidió (T67).
     #[serde(default = "uno")]
     pub acciones_servicio: u32,
+    /// Túneles temporales abiertos (Fase 15): mueren con su pestaña, pero un
+    /// servidor que los custodia no se sustituye sin preguntar (T67).
+    #[serde(default = "uno")]
+    pub tuneles_temporales: u32,
 }
 
 fn uno() -> u32 {
@@ -1024,13 +1197,14 @@ fn uno() -> u32 {
 }
 
 impl TrabajoServidor {
-    pub const CAMPOS: [&'static str; 6] = [
+    pub const CAMPOS: [&'static str; 7] = [
         "sesiones",
         "transferencias",
         "tuneles",
         "ejecuciones",
         "escritorios",
         "acciones_servicio",
+        "tuneles_temporales",
     ];
 
     /// No custodia nada de lo que hoy conoce MAGI.
@@ -1041,6 +1215,7 @@ impl TrabajoServidor {
             && self.ejecuciones == 0
             && self.escritorios == 0
             && self.acciones_servicio == 0
+            && self.tuneles_temporales == 0
     }
 
     /// Suma de todo lo que custodia (para decidir y para el resumen).
@@ -1051,6 +1226,7 @@ impl TrabajoServidor {
             + u64::from(self.ejecuciones)
             + u64::from(self.escritorios)
             + u64::from(self.acciones_servicio)
+            + u64::from(self.tuneles_temporales)
     }
 }
 
@@ -1079,6 +1255,9 @@ pub enum MensajeServidor {
         /// las vea al entrar (T27).
         #[serde(default)]
         acciones_servicio: Vec<InfoAccion>,
+        /// Túneles temporales abiertos, para que una ventana nueva los vea.
+        #[serde(default)]
+        tuneles_temporales: Vec<InfoTunelTemporal>,
     },
     /// Rechazo del saludo porque el servidor habla otra versión de
     /// protocolo. **Contrato estable** (Fase 9): no se quitan ni renombran
@@ -1326,6 +1505,64 @@ pub enum MensajeServidor {
         peticion_id: u64,
         motivo: MotivoFinLog,
     },
+    // ------------------------------------------------------ terminal (v9)
+    /// Un lote de la captura del historial. `lote` es el índice y `ultimo`
+    /// dice si es el último; los lotes se cortan por tamaño codificado.
+    HistorialLote {
+        peticion_id: u64,
+        sesion_id: u32,
+        lote: u32,
+        ultimo: bool,
+        /// Líneas totales de la captura (el historial más la pantalla).
+        total: u32,
+        lineas: Vec<LineaHistorial>,
+    },
+    /// La escritura en varios se ha concedido.
+    EscrituraVariosIniciada {
+        peticion_id: u64,
+        id: u32,
+    },
+    /// La escritura en varios ha terminado (por el cliente, por la caída de
+    /// una pestaña o por inactividad).
+    EscrituraVariosTerminada {
+        id: u32,
+        motivo: String,
+    },
+    /// Túnel temporal abierto.
+    TunelTemporal {
+        peticion_id: u64,
+        id: u32,
+        puerto_local: u16,
+    },
+    /// Difusión de los túneles temporales completos en cada cambio (T27).
+    TunelesTemporales {
+        lista: Vec<InfoTunelTemporal>,
+    },
+    /// Sesiones de tmux del host. `sin_tmux` lleva el motivo si no hay tmux.
+    SesionesTmux {
+        peticion_id: u64,
+        host_id: i64,
+        sesiones: Vec<InfoSesionTmux>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sin_tmux: Option<String>,
+    },
+    /// Resultado de terminar una sesión de tmux.
+    TmuxTerminada {
+        peticion_id: u64,
+        resultado: ResultadoTmux,
+    },
+    /// Copia del remoto por OSC 52 con permiso del host: al portapapeles del
+    /// sistema (u OSC 52 hacia fuera).
+    Portapapeles {
+        sesion_id: u32,
+        texto: String,
+    },
+    /// El remoto quiere copiar y este host no lo tiene permitido: aviso con el
+    /// tamaño y `prefijo P`.
+    PortapapelesPedido {
+        sesion_id: u32,
+        bytes: u64,
+    },
     Error {
         mensaje: String,
         /// Petición que provocó el error, si venía de una.
@@ -1352,6 +1589,8 @@ mod pruebas {
 
     use super::*;
 
+    use magi_nucleo::terminal::tramos::{Color, Tramo};
+
     fn ida_y_vuelta_cliente(mensaje: MensajeCliente) {
         let linea = codificar(&mensaje).unwrap();
         assert_eq!(decodificar::<MensajeCliente>(&linea).unwrap(), mensaje);
@@ -1377,11 +1616,13 @@ mod pruebas {
                 repetir: true,
             }],
             orden: None,
+            tmux: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::Adjuntar {
             sesion_id: 3,
             cols: 80,
             filas: 24,
+            colores: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::Desadjuntar { sesion_id: 3 });
         ida_y_vuelta_cliente(MensajeCliente::Teclas {
@@ -1730,8 +1971,8 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_ocho() {
-        assert_eq!(VERSION_PROTOCOLO, 8);
+    fn la_version_del_protocolo_es_la_nueve() {
+        assert_eq!(VERSION_PROTOCOLO, 9);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
@@ -1804,6 +2045,7 @@ mod pruebas {
             tuneles: vec![tunel],
             ejecuciones: Vec::new(),
             acciones_servicio: Vec::new(),
+            tuneles_temporales: Vec::new(),
         });
     }
 
@@ -1974,6 +2216,7 @@ mod pruebas {
                 motor: MotorNombre::Docker,
                 id: "web-app-1".to_string(),
             }),
+            tmux: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
             host_id: 7,
@@ -1983,6 +2226,7 @@ mod pruebas {
             orden: Some(OrdenPestana::SeguirDiario {
                 unidad: "app.service".to_string(),
             }),
+            tmux: None,
         });
         ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
             host_id: 7,
@@ -1993,6 +2237,7 @@ mod pruebas {
                 motor: MotorNombre::Podman,
                 id: "0af5c1e9a1b2".to_string(),
             }),
+            tmux: None,
         });
 
         let listado = Listado::vacio(Privilegio::SudoSinClave);
@@ -2076,6 +2321,7 @@ mod pruebas {
             tuneles: Vec::new(),
             ejecuciones: Vec::new(),
             acciones_servicio: Vec::new(),
+            tuneles_temporales: Vec::new(),
         });
     }
 
@@ -2103,11 +2349,12 @@ mod pruebas {
             ejecuciones: 0,
             escritorios: 0,
             acciones_servicio: 1,
+            tuneles_temporales: 0,
         };
         assert!(!trabajo.vacio());
         assert_eq!(trabajo.total(), 1);
         assert!(TrabajoServidor::CAMPOS.contains(&"acciones_servicio"));
-        assert_eq!(TrabajoServidor::CAMPOS.len(), 6);
+        assert_eq!(TrabajoServidor::CAMPOS.len(), 7);
         // Un servidor que no manda el campo vale 1 («puede haber trabajo»).
         let linea = r#"{"tipo":"VersionIncompatible","version":8,"trabajo":{"sesiones":0,"transferencias":0,"tuneles":0,"ejecuciones":0,"escritorios":0}}"#;
         match decodificar::<MensajeServidor>(linea).unwrap() {
@@ -2148,6 +2395,11 @@ mod pruebas {
             abierta_en: 1_700_000_000,
             ventanas: 2,
             actividad_no_vista: false,
+            reconexion: None,
+            titulo: None,
+            aviso: None,
+            tmux: None,
+            escritura_varios: false,
         }];
         ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
             version: 1,
@@ -2160,6 +2412,7 @@ mod pruebas {
             tuneles: Vec::new(),
             ejecuciones: Vec::new(),
             acciones_servicio: Vec::new(),
+            tuneles_temporales: Vec::new(),
         });
         ida_y_vuelta_servidor(MensajeServidor::VersionIncompatible {
             version: 99,
@@ -2173,6 +2426,7 @@ mod pruebas {
                 ejecuciones: 0,
                 escritorios: 0,
                 acciones_servicio: 0,
+                tuneles_temporales: 0,
             }),
         });
         ida_y_vuelta_servidor(MensajeServidor::Sesiones { lista: sesiones });
@@ -2282,6 +2536,348 @@ mod pruebas {
         match decodificar::<MensajeCliente>(&linea).unwrap() {
             MensajeCliente::Hola { version, .. } => assert_eq!(version, 99),
             otro => panic!("mensaje inesperado: {otro:?}"),
+        }
+    }
+
+    /// Los mensajes que estrena el terminal en la Fase 15 (v9) hacen ida y
+    /// vuelta por el lado del cliente.
+    #[test]
+    fn los_mensajes_de_terminal_hacen_ida_y_vuelta() {
+        ida_y_vuelta_cliente(MensajeCliente::CapturarHistorial {
+            peticion_id: RANGO_TERMINAL,
+            sesion_id: 3,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::Foco {
+            sesion_id: 3,
+            enfocada: true,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::IniciarEscrituraVarios {
+            peticion_id: RANGO_TERMINAL + 1,
+            sesiones: vec![3, 4],
+            deliberacion_id: None,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::IniciarEscrituraVarios {
+            peticion_id: RANGO_TERMINAL + 2,
+            sesiones: vec![3, 4],
+            deliberacion_id: Some(12),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::EscribirVarios {
+            id: 7,
+            pestanas: vec![
+                BytesPestana {
+                    sesion_id: 3,
+                    bytes: b"\x1b[13;2u".to_vec(),
+                },
+                BytesPestana {
+                    sesion_id: 4,
+                    bytes: b"\r".to_vec(),
+                },
+            ],
+        });
+        ida_y_vuelta_cliente(MensajeCliente::TerminarEscrituraVarios {
+            id: 7,
+            motivo: "el usuario lo paró".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirTunelTemporal {
+            peticion_id: RANGO_TERMINAL + 3,
+            sesion_id: 3,
+            destino: "localhost".to_string(),
+            puerto: 5173,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::CerrarTunelTemporal { id: 5 });
+        ida_y_vuelta_cliente(MensajeCliente::ListarTmux {
+            peticion_id: RANGO_TERMINAL + 4,
+            host_id: 7,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::TerminarTmux {
+            peticion_id: RANGO_TERMINAL + 5,
+            host_id: 7,
+            nombre: "magi-portatil-1".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::PortapapelesPermitido { sesion_id: 3 });
+        ida_y_vuelta_cliente(MensajeCliente::RenombrarSesion {
+            sesion_id: 3,
+            nombre: "web-01".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::MoverSesion {
+            sesion_id: 3,
+            posicion: 1,
+        });
+    }
+
+    /// Los mensajes de respuesta del terminal (v9) hacen ida y vuelta por el
+    /// lado del servidor, con tramos de colores, envolturas y los dos estados
+    /// de tmux.
+    #[test]
+    fn los_mensajes_de_respuesta_del_terminal_hacen_ida_y_vuelta() {
+        ida_y_vuelta_servidor(MensajeServidor::HistorialLote {
+            peticion_id: RANGO_TERMINAL,
+            sesion_id: 3,
+            lote: 0,
+            ultimo: false,
+            total: 42,
+            lineas: vec![
+                LineaHistorial {
+                    tramos: vec![
+                        Tramo {
+                            texto: "hola ".to_string(),
+                            primer_plano: Color::Indice(2),
+                            fondo: Color::Predeterminado,
+                            negrita: false,
+                            cursiva: false,
+                            subrayado: false,
+                            inverso: false,
+                        },
+                        Tramo {
+                            texto: "mundo".to_string(),
+                            primer_plano: Color::Rgb(0xd0, 0xd0, 0xd0),
+                            fondo: Color::Predeterminado,
+                            negrita: true,
+                            cursiva: false,
+                            subrayado: false,
+                            inverso: false,
+                        },
+                    ],
+                    envuelta: false,
+                },
+                LineaHistorial {
+                    tramos: vec![Tramo {
+                        texto: "ERROR".to_string(),
+                        primer_plano: Color::Predeterminado,
+                        fondo: Color::Indice(1),
+                        negrita: false,
+                        cursiva: true,
+                        subrayado: true,
+                        inverso: true,
+                    }],
+                    envuelta: true,
+                },
+            ],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::HistorialLote {
+            peticion_id: RANGO_TERMINAL,
+            sesion_id: 3,
+            lote: 1,
+            ultimo: true,
+            total: 1,
+            lineas: Vec::new(),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::EscrituraVariosIniciada {
+            peticion_id: RANGO_TERMINAL + 1,
+            id: 7,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::EscrituraVariosTerminada {
+            id: 7,
+            motivo: "inactividad (10 min)".to_string(),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::TunelTemporal {
+            peticion_id: RANGO_TERMINAL + 3,
+            id: 5,
+            puerto_local: 41_234,
+        });
+        let tunel_temporal = InfoTunelTemporal {
+            id: 5,
+            sesion_id: 3,
+            host_id: 7,
+            host_nombre: "web-01".to_string(),
+            puerto_local: 41_234,
+            destino: "127.0.0.1".to_string(),
+            puerto: 5173,
+            conexiones: 2,
+        };
+        ida_y_vuelta_servidor(MensajeServidor::TunelesTemporales {
+            lista: vec![tunel_temporal.clone()],
+        });
+        let sesiones_tmux = vec![
+            InfoSesionTmux {
+                nombre: "magi-portatil-1".to_string(),
+                enganchada: true,
+                ventanas: 3,
+                creada: "Mon Nov 9 19:00:00 2026".to_string(),
+            },
+            InfoSesionTmux {
+                nombre: "trabajo".to_string(),
+                enganchada: false,
+                ventanas: 1,
+                creada: "Sun Nov 8 10:00:00 2026".to_string(),
+            },
+        ];
+        ida_y_vuelta_servidor(MensajeServidor::SesionesTmux {
+            peticion_id: RANGO_TERMINAL + 4,
+            host_id: 7,
+            sesiones: sesiones_tmux,
+            sin_tmux: None,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::SesionesTmux {
+            peticion_id: RANGO_TERMINAL + 4,
+            host_id: 7,
+            sesiones: Vec::new(),
+            sin_tmux: Some("no hay tmux en el host".to_string()),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::TmuxTerminada {
+            peticion_id: RANGO_TERMINAL + 5,
+            resultado: ResultadoTmux::Ok,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::TmuxTerminada {
+            peticion_id: RANGO_TERMINAL + 6,
+            resultado: ResultadoTmux::NoExiste,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Portapapeles {
+            sesion_id: 3,
+            texto: "copiado del remoto".to_string(),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::PortapapelesPedido {
+            sesion_id: 3,
+            bytes: 4096,
+        });
+    }
+
+    /// `AbrirSesion` con tmux y `Adjuntar` con los colores del tema (v9)
+    /// hacen ida y vuelta.
+    #[test]
+    fn abrir_y_adjuntar_llevan_lo_nuevo_del_terminal() {
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
+            host_id: 7,
+            cols: 120,
+            filas: 38,
+            comandos_iniciales: Vec::new(),
+            orden: None,
+            tmux: Some("magi-portatil-1".to_string()),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::Adjuntar {
+            sesion_id: 3,
+            cols: 80,
+            filas: 24,
+            colores: Some(ColoresTema {
+                primer_plano: (0xd0, 0xd0, 0xd0),
+                fondo: (0x10, 0x10, 0x10),
+                cursor: (0xf0, 0xf0, 0xf0),
+            }),
+        });
+    }
+
+    /// Una sesión con reconexión, título, aviso y tmux hace ida y vuelta en
+    /// `Sesiones` y en la `Bienvenida`, que además lleva los túneles
+    /// temporales.
+    #[test]
+    fn la_sesion_lleva_lo_nuevo_del_terminal() {
+        let sesion = InfoSesion {
+            id: 1,
+            nombre: "web-01".to_string(),
+            host_id: 7,
+            host_nombre: "web-01".to_string(),
+            estado: EstadoSesionRemota::Caida,
+            motivo: Some("conexión perdida".to_string()),
+            identidad: "ed25519 · agente".to_string(),
+            abierta_en: 1_700_000_000,
+            ventanas: 2,
+            actividad_no_vista: false,
+            reconexion: Some(InfoReconexion {
+                intento: 3,
+                proximo_en: 1_700_000_008,
+                desde: 1_700_000_000,
+                causa: "conexión perdida".to_string(),
+            }),
+            titulo: Some("Claude Code".to_string()),
+            aviso: Some(InfoAviso {
+                texto: "compilación terminada".to_string(),
+                hora: 1_700_000_005,
+            }),
+            tmux: Some("magi-portatil-1".to_string()),
+            escritura_varios: true,
+        };
+        ida_y_vuelta_servidor(MensajeServidor::Sesiones {
+            lista: vec![sesion.clone()],
+        });
+        ida_y_vuelta_servidor(MensajeServidor::Bienvenida {
+            version: VERSION_PROTOCOLO,
+            version_app: "1.4.0".to_string(),
+            pid: 100,
+            cliente_id: 3,
+            clientes: 1,
+            sesiones: vec![sesion],
+            transferencias: Vec::new(),
+            tuneles: Vec::new(),
+            ejecuciones: Vec::new(),
+            acciones_servicio: Vec::new(),
+            tuneles_temporales: vec![InfoTunelTemporal {
+                id: 5,
+                sesion_id: 1,
+                host_id: 7,
+                host_nombre: "web-01".to_string(),
+                puerto_local: 41_234,
+                destino: "localhost".to_string(),
+                puerto: 5173,
+                conexiones: 1,
+            }],
+        });
+    }
+
+    /// Los mensajes de una versión anterior a la v9 se leen con sus valores
+    /// por defecto: los campos nuevos son opcionales en el cable.
+    #[test]
+    fn los_mensajes_de_una_version_anterior_se_leen_con_defectos() {
+        // AbrirSesion sin tmux (v8).
+        let linea = r#"{"tipo":"AbrirSesion","host_id":1,"cols":80,"filas":24}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::AbrirSesion { tmux, .. } => assert_eq!(tmux, None),
+            otro => panic!("{otro:?}"),
+        }
+        // Adjuntar sin los colores del tema (v8).
+        let linea = r#"{"tipo":"Adjuntar","sesion_id":1,"cols":80,"filas":24}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::Adjuntar { colores, .. } => assert_eq!(colores, None),
+            otro => panic!("{otro:?}"),
+        }
+        // IniciarEscrituraVarios sin deliberación (siempre es opcional).
+        let linea = r#"{"tipo":"IniciarEscrituraVarios","peticion_id":2,"sesiones":[1,2]}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::IniciarEscrituraVarios {
+                deliberacion_id, ..
+            } => assert_eq!(deliberacion_id, None),
+            otro => panic!("{otro:?}"),
+        }
+        // Bienvenida sin túneles temporales (v8).
+        let linea = r#"{"tipo":"Bienvenida","version":8,"version_app":"1.3.0","pid":1,"cliente_id":1,"clientes":1,"sesiones":[],"transferencias":[],"tuneles":[],"ejecuciones":[],"acciones_servicio":[]}"#;
+        match decodificar::<MensajeServidor>(linea).unwrap() {
+            MensajeServidor::Bienvenida {
+                tuneles_temporales, ..
+            } => assert!(tuneles_temporales.is_empty()),
+            otro => panic!("{otro:?}"),
+        }
+        // SesionesTmux sin el motivo de que no haya tmux.
+        let linea = r#"{"tipo":"SesionesTmux","peticion_id":2,"host_id":7,"sesiones":[]}"#;
+        match decodificar::<MensajeServidor>(linea).unwrap() {
+            MensajeServidor::SesionesTmux { sin_tmux, .. } => assert_eq!(sin_tmux, None),
+            otro => panic!("{otro:?}"),
+        }
+        // InfoSesion sin reconexión, título, aviso ni tmux (v8).
+        let linea = r#"{"tipo":"Sesiones","lista":[{"id":1,"nombre":"web-01","host_id":7,"host_nombre":"web-01","estado":"Abierta","motivo":null,"identidad":"ed25519 · agente","abierta_en":1700000000,"ventanas":1,"actividad_no_vista":false}]}"#;
+        match decodificar::<MensajeServidor>(linea).unwrap() {
+            MensajeServidor::Sesiones { lista } => {
+                assert_eq!(lista.len(), 1);
+                let sesion = &lista[0];
+                assert!(sesion.reconexion.is_none());
+                assert!(sesion.titulo.is_none());
+                assert!(sesion.aviso.is_none());
+                assert!(sesion.tmux.is_none());
+            }
+            otro => panic!("{otro:?}"),
+        }
+    }
+
+    /// Los `peticion_id` del terminal viven desde 2^49 y el protocolo es el 9,
+    /// por encima de los rangos de las fases anteriores.
+    #[test]
+    fn el_terminal_estrena_el_rango_y_la_version() {
+        assert_eq!(RANGO_TERMINAL, 1 << 49);
+        assert_eq!(VERSION_PROTOCOLO, 9);
+        // Por debajo quedan los rangos de las fases anteriores.
+        const {
+            assert!(RANGO_TERMINAL > 1 << 48);
+            assert!(RANGO_TERMINAL > RANGO_SERVICIOS);
+            assert!(RANGO_TERMINAL > RANGO_ESCRITORIOS);
+            assert!(RANGO_TERMINAL > RANGO_ESCRITORIOS_SERVIDOR);
         }
     }
 }

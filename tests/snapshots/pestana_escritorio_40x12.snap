@@ -1,8 +1,9 @@
 ---
 source: tests/redimensionado/vistas_n.rs
 ---
- MAGI · SESIÓN ────────── win-01 · RDP ─
+ MAGI · SESIÓN ──────────────── win-01 ─
 ▸▣ 1 win-01 │ +
+▸▣ win-01───────────────────────────────
 
   ▣ ESCRITORIO · win-01 · RDP
 
@@ -10,6 +11,5 @@ source: tests/redimensionado/vistas_n.rs
     Destino     192.0.2.30:3389 ⤴ hetzn…
 
   ↵ visor   y enlace   Ctrl+] x cerrar
-  visor del navegador · 127.0.0.1 · la …
- ▣ 1/1 · abierto · Ctrl+] ? ayuda
+ ▣ 1/1 · win-01 · 12 m · ^] ?
  escritorio «win-01» abriéndose

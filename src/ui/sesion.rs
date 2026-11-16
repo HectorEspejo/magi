@@ -1,10 +1,10 @@
-//! Vista Sesión: marco con el título, barra de pestañas, el terminal remoto y
-//! la barra de estado de la sesión.
+//! Vista Sesión (Fase 15): paneles con cabecera, barra de pestañas, modo
+//! historial, enlaces, escritura en varios y la barra de estado.
 //!
-//! Todo se deriva del área en cada pintado (Fase 7): la barra de pestañas se
-//! compacta en modo estrecho (solo glifo y número en las pestañas que no son
-//! la activa) y la barra de estado quita elementos por prioridad. El terminal
-//! se pinta solo en el área que ocupa el remoto; lo que sobra, con relleno.
+//! Todo se deriva del área en cada pintado: la disposición de paneles se
+//! reparte aquí y se deja en `Disposicion::panes` para que `Geometria` mande
+//! el tamaño de cada PTY. El terminal de cada panel se pinta con tui-term,
+//! salvo que su salida sincronizada (2026) pida retener el pintado.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -13,80 +13,129 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use tui_term::widget::{Cursor, PseudoTerminal};
 
-use crate::app::{App, PestanaUI};
-use crate::protocolo::EstadoSesionRemota;
+use crate::app::{paneles::DisposicionPaneles, App, PestanaUI};
+use crate::protocolo::{EstadoSesionRemota, InfoReconexion};
 use crate::tema::Tema;
 use crate::ui::disposicion::{self, Disposicion};
 
 /// Largo máximo del nombre de una pestaña en la barra.
 const NOMBRE_MAX: usize = 14;
-/// Pestañas de la forma completa: el prefijo `1`-`9` solo llega a nueve; con
-/// más se ve una ventana alrededor de la activa con `‹ ›`.
 const PESTANAS_COMPLETAS: usize = 9;
-/// Por debajo de este largo el nombre de la pestaña activa no se recorta: se
-/// quita (queda solo glifo y número).
 const NOMBRE_MIN: usize = 3;
+/// Alto de la cabecera de cada panel.
+const CABECERA: u16 = 1;
 
-pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, _disp: &mut Disposicion) {
+pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let Some(indice) = app.pestana_activa else {
         return;
     };
-    let Some(pestaña) = app.pestanas.get(indice) else {
+    let Some(pestana) = app.pestanas.get(indice) else {
         return;
     };
-    // Filas fijas: el marco con el título, la barra de pestañas y la barra de
-    // estado de la sesión. Con la barra global que pinta `ui::dibujar` son las
-    // cuatro que descuenta `alto_pty`: el contenido mide exactamente
-    // `alto_pty(filas de la ventana)`, el alto que el servidor conoce.
+    let ampliada = app.paneles.ampliado || app.paneles.disposicion == DisposicionPaneles::Completa;
+    let banner = app.escritura_varios.activa();
     let trozos = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(u16::from(banner)),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .split(area);
     marco.render_widget(
-        Paragraph::new(linea_titulo(pestaña, area.width, &app.tema)),
+        Paragraph::new(linea_titulo(app, pestana, area.width, ampliada)),
         trozos[0],
     );
     marco.render_widget(
         Paragraph::new(barra_pestañas(app, indice, area.width)),
         trozos[1],
     );
-    let contenido = trozos[2];
+    if banner {
+        marco.render_widget(Paragraph::new(linea_escritura(app, area.width)), trozos[2]);
+    }
+    let contenido = trozos[3];
     if contenido.height == 0 {
         return;
     }
-    // Fase 12: una pestaña de escritorio no tiene terminal: pinta su tarjeta y
-    // su propia barra de estado.
-    if pestaña.escritorio_id.is_some() {
-        super::escritorios::tarjeta(marco, contenido, app, pestaña);
+    // Modo historial: ocupa el contenido entero y su barra sustituye a la de
+    // estado.
+    if app.historial.is_some() {
+        disp.modo_area = Some(contenido);
+        pintar_historial(marco, contenido, app, disp);
         marco.render_widget(
-            Paragraph::new(super::escritorios::barra(area, app, pestaña, indice)),
-            trozos[3],
+            Paragraph::new(barra_historial(app, contenido.width)),
+            trozos[4],
         );
         return;
     }
-    if pestaña.estado == EstadoSesionRemota::Caida {
-        // La última pantalla se conserva en gris detrás del aviso, sin cursor
-        // (no hay nadie al otro lado).
-        if let Ok(parser) = pestaña.pantalla.lock() {
-            let widget = PseudoTerminal::new(parser.screen())
-                .cursor(cursor(&app.tema).visibility(false))
-                .style(Style::default().fg(app.tema.paleta.inactivo));
-            marco.render_widget(widget, contenido);
-        }
-        aviso_caida(marco, contenido, app, pestaña);
-    } else {
-        relleno(marco, contenido, app, pestaña);
-        if let Ok(parser) = pestaña.pantalla.lock() {
-            let widget = PseudoTerminal::new(parser.screen()).cursor(cursor(&app.tema));
-            marco.render_widget(widget, area_remota(contenido, pestaña));
+    if app.enlaces.activo {
+        disp.modo_area = Some(contenido);
+        pintar_panel_unico(marco, contenido, app, pestana);
+        pintar_enlaces(marco, contenido, app);
+        marco.render_widget(
+            Paragraph::new(barra_enlaces(app, contenido.width)),
+            trozos[4],
+        );
+        return;
+    }
+    // Paneles.
+    let reparto = app.paneles.reparto(contenido);
+    let indices = app.paneles.indices(&app.pestanas);
+    for (panel, zona) in &reparto {
+        let contenido_panel = Rect {
+            x: zona.x,
+            y: zona.y.saturating_add(CABECERA),
+            width: zona.width,
+            height: zona.height.saturating_sub(CABECERA),
+        };
+        disp.panes.push((*panel, contenido_panel));
+        pintar_cabecera(
+            marco,
+            *zona,
+            app,
+            *panel,
+            indices.get(*panel).copied().flatten(),
+        );
+        let pestaña_panel = indices
+            .get(*panel)
+            .copied()
+            .flatten()
+            .and_then(|indice| app.pestanas.get(indice));
+        match pestaña_panel {
+            Some(pestaña_panel) => {
+                pintar_pantalla(marco, contenido_panel, app, pestaña_panel);
+            }
+            None => {
+                marco.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!(" {} 1-9 para elegir pestaña", app.config.prefijo_escape),
+                        Style::default().fg(app.tema.paleta.inactivo),
+                    ))),
+                    contenido_panel,
+                );
+            }
         }
     }
+    // La barra de estado mide el relleno contra el área del panel enfocado,
+    // no contra toda la vista.
+    let area_enfocada = reparto
+        .iter()
+        .find(|(panel, _)| *panel == app.paneles.enfocado())
+        .map(|(_, zona)| Rect {
+            y: zona.y.saturating_add(CABECERA),
+            height: zona.height.saturating_sub(CABECERA),
+            ..*zona
+        })
+        .unwrap_or(contenido);
     marco.render_widget(
-        Paragraph::new(barra_estado(app, indice, pestaña, contenido)),
-        trozos[3],
+        Paragraph::new(barra_estado(
+            app,
+            indice,
+            pestana,
+            area_enfocada,
+            app.paneles.en_espera(contenido),
+        )),
+        trozos[4],
     );
 }
 
@@ -101,9 +150,142 @@ fn cursor(tema: &Tema) -> Cursor {
     }
 }
 
-/// Zona que ocupa el remoto: su tamaño vigente, si es menor que el área (otra
-/// ventana más pequeña impone el mínimo). El resto queda con el relleno, que
-/// el terminal taparía si se pintase sobre toda el área.
+/// Pinta una pestaña en el panel enfocado ocupando todo el contenido (modo
+/// enlaces).
+fn pintar_panel_unico(marco: &mut Frame, area: Rect, app: &App, pestana: &PestanaUI) {
+    let zona = Rect {
+        x: area.x,
+        y: area.y.saturating_add(CABECERA),
+        width: area.width,
+        height: area.height.saturating_sub(CABECERA),
+    };
+    let panel = app.paneles.enfocado();
+    let indice = app
+        .paneles
+        .indices(&app.pestanas)
+        .get(panel)
+        .copied()
+        .flatten();
+    pintar_cabecera(marco, area, app, panel, indice);
+    pintar_pantalla(marco, zona, app, pestana);
+}
+
+/// La cabecera de un panel: `▸` si está enfocado, el glifo y el nombre de su
+/// pestaña y `»` si recibe la escritura en varios.
+fn pintar_cabecera(marco: &mut Frame, zona: Rect, app: &App, panel: usize, indice: Option<usize>) {
+    if zona.height == 0 {
+        return;
+    }
+    let fila = Rect {
+        x: zona.x,
+        y: zona.y,
+        width: zona.width,
+        height: 1,
+    };
+    let tema = &app.tema;
+    let enfocado = panel == app.paneles.enfocado();
+    let mut spans = Vec::new();
+    let marca = if enfocado { tema.glifos.seleccion } else { " " };
+    spans.push(Span::styled(
+        marca.to_string(),
+        Style::default().fg(tema.paleta.acento),
+    ));
+    if let Some(pestaña) = indice.and_then(|indice| app.pestanas.get(indice)) {
+        spans.push(Span::styled(
+            glifo_pestaña(enfocado, pestaña, tema),
+            estilo_pestaña(enfocado, pestaña, tema),
+        ));
+        spans.push(Span::styled(
+            format!(
+                " {}",
+                recortar_nombre(&pestaña.nombre, NOMBRE_MAX, tema.ascii)
+            ),
+            if enfocado {
+                Style::default()
+                    .fg(tema.paleta.texto)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(tema.paleta.texto)
+            },
+        ));
+        if app.escritura_varios.incluye(pestaña.sesion_id) || pestaña.escritura_varios {
+            spans.push(Span::styled(
+                format!(" {}", tema.glifos.escribiendo),
+                Style::default().fg(tema.paleta.critico),
+            ));
+        }
+        if let Some(titulo) = &pestaña.titulo {
+            let hueco = usize::from(zona.width).saturating_sub(
+                spans
+                    .iter()
+                    .map(|span| span.content.chars().count())
+                    .sum::<usize>()
+                    + 1,
+            );
+            if hueco > 8 {
+                spans.push(Span::styled(
+                    format!(" {titulo}"),
+                    Style::default().fg(tema.paleta.inactivo),
+                ));
+            }
+        }
+    } else {
+        spans.push(Span::styled(
+            format!(" {}", super::tecla(tema, "vacío", "vacio")),
+            Style::default().fg(tema.paleta.inactivo),
+        ));
+    }
+    // Relleno hasta el ancho del panel, con el separador vertical.
+    let ancho: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let relleno = usize::from(zona.width).saturating_sub(ancho);
+    spans.push(Span::styled(
+        tema.glifos.linea.repeat(relleno),
+        Style::default().fg(tema.paleta.inactivo),
+    ));
+    marco.render_widget(Paragraph::new(Line::from(spans)), fila);
+}
+
+/// Pinta la pantalla de una pestaña en su panel (sin cabecera).
+fn pintar_pantalla(marco: &mut Frame, area: Rect, app: &App, pestana: &PestanaUI) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if pestana.escritorio_id.is_some() {
+        super::escritorios::tarjeta(marco, area, app, pestana);
+        return;
+    }
+    // La salida sincronizada no pinta hasta cerrarse o 200 ms: se deja lo
+    // anterior en el búfer.
+    if app.pantallas.retener_pintado(pestana.sesion_id) {
+        return;
+    }
+    if let Some(reconexion) = &pestana.reconexion {
+        pintar_ultima_pantalla(marco, area, app, pestana);
+        aviso_reconexion(marco, area, app, pestana, reconexion);
+        return;
+    }
+    if pestana.estado == EstadoSesionRemota::Caida {
+        pintar_ultima_pantalla(marco, area, app, pestana);
+        aviso_caida(marco, area, app, pestana);
+        return;
+    }
+    relleno(marco, area, app, pestana);
+    if let Ok(parser) = pestana.pantalla.lock() {
+        let widget = PseudoTerminal::new(parser.screen()).cursor(cursor(&app.tema));
+        marco.render_widget(widget, area_remota(area, pestana));
+    }
+}
+
+/// La última pantalla, en gris y sin cursor (no hay nadie al otro lado).
+fn pintar_ultima_pantalla(marco: &mut Frame, area: Rect, app: &App, pestana: &PestanaUI) {
+    if let Ok(parser) = pestana.pantalla.lock() {
+        let widget = PseudoTerminal::new(parser.screen())
+            .cursor(cursor(&app.tema).visibility(false))
+            .style(Style::default().fg(app.tema.paleta.inactivo));
+        marco.render_widget(widget, area_remota(area, pestana));
+    }
+}
+
 fn area_remota(area: Rect, pestaña: &PestanaUI) -> Rect {
     if pestaña.cols_remoto == 0 || pestaña.filas_remoto == 0 {
         return area;
@@ -115,8 +297,6 @@ fn area_remota(area: Rect, pestaña: &PestanaUI) -> Rect {
     }
 }
 
-/// ¿Sobra área porque el remoto es menor (otra ventana impone el mínimo)?
-/// Decide a la vez el relleno y el indicador «c×f (mín. ventana N)».
 fn hay_relleno(area: Rect, pestaña: &PestanaUI) -> bool {
     pestaña.estado == EstadoSesionRemota::Abierta
         && pestaña.cols_remoto > 0
@@ -124,8 +304,8 @@ fn hay_relleno(area: Rect, pestaña: &PestanaUI) -> bool {
         && (area.width > pestaña.cols_remoto || area.height > pestaña.filas_remoto)
 }
 
-/// Relleno tenue (`░`, `.` en ASCII) para la zona que no cubre el remoto
-/// cuando otra ventana más pequeña comparte la pestaña.
+/// Relleno tenue para la zona que no cubre el remoto cuando otra ventana más
+/// pequeña comparte la pestaña.
 fn relleno(marco: &mut Frame, area: Rect, app: &App, pestaña: &PestanaUI) {
     if !hay_relleno(area, pestaña) {
         return;
@@ -142,95 +322,24 @@ fn relleno(marco: &mut Frame, area: Rect, app: &App, pestaña: &PestanaUI) {
     marco.render_widget(Paragraph::new(lineas), area);
 }
 
-/// Aviso de pestaña caída. En áreas bajas se quitan primero las líneas en
-/// blanco y después el motivo; las acciones se abrevian si no caben.
-fn aviso_caida(marco: &mut Frame, area: Rect, app: &App, pestaña: &PestanaUI) {
+/// Línea de marco superior: `MAGI · SESIÓN` (con la disposición) a la
+/// izquierda y el nombre de la pestaña a la derecha.
+fn linea_titulo(app: &App, pestaña: &PestanaUI, ancho: u16, ampliada: bool) -> Line<'static> {
     let tema = &app.tema;
-    let motivo = pestaña
-        .motivo
-        .clone()
-        .unwrap_or_else(|| "conexión perdida".to_string());
-    let titulo = format!(
-        "{} Sesión caída hace {}",
-        tema.glifos.error,
-        formatear_duracion(pestaña.segundos())
-    );
-    // Márgenes: el borde y un espacio a cada lado.
-    let interior_max = usize::from(area.width.saturating_sub(4));
-    let prefijo = &app.config.prefijo_escape;
-    let acciones = format!("{prefijo} r  reconectar        {prefijo} x  cerrar");
-    let acciones = if acciones.chars().count() <= interior_max {
-        acciones
+    let titulo_vista = if ampliada {
+        "SESIÓN".to_string()
     } else {
-        let corto = prefijo_corto(prefijo);
-        format!("{corto} r reconectar  {corto} x cerrar")
-    };
-    let critico = Style::default()
-        .fg(tema.paleta.critico)
-        .add_modifier(Modifier::BOLD);
-    let texto = Style::default().fg(tema.paleta.texto);
-    let tenue = Style::default().fg(tema.paleta.inactivo);
-    // (texto, prioridad, estilo) en el orden en que se pintan.
-    let todas = [
-        (String::new(), 4, texto),
-        (titulo, 1, critico),
-        (motivo, 3, texto),
-        (String::new(), 4, texto),
-        (acciones, 2, tenue),
-    ];
-    let alto = (todas.len() as u16 + 2).min(area.height);
-    let filas = usize::from(alto.saturating_sub(2));
-    let mut orden: Vec<usize> = (0..todas.len()).collect();
-    orden.sort_by_key(|indice| (todas[*indice].1, *indice));
-    orden.truncate(filas);
-    orden.sort_unstable();
-    let ancho_texto = orden
-        .iter()
-        .map(|indice| todas[*indice].0.chars().count())
-        .max()
-        .unwrap_or(0);
-    let ancho = u16::try_from(ancho_texto)
-        .unwrap_or(u16::MAX)
-        .saturating_add(4);
-    let recta = disposicion::centrar_limitado(area, ancho, alto);
-    marco.render_widget(super::bloque("SESIÓN CAÍDA", tema), recta);
-    let interior = Rect {
-        x: recta.x + 2,
-        y: recta.y + 1,
-        width: recta.width.saturating_sub(4),
-        height: recta.height.saturating_sub(2),
-    };
-    let lineas: Vec<Line> = orden
-        .into_iter()
-        .map(|indice| {
-            let (linea, _, estilo) = &todas[indice];
-            Line::from(Span::styled(
-                disposicion::recortar(linea, usize::from(interior.width), tema.ascii),
-                *estilo,
-            ))
-        })
-        .collect();
-    marco.render_widget(Paragraph::new(lineas), interior);
-}
-
-/// Línea de marco superior: `MAGI · SESIÓN` a la izquierda y el nombre de la
-/// pestaña a la derecha, recortado (o quitado) si no cabe.
-fn linea_titulo(pestaña: &PestanaUI, ancho: u16, tema: &Tema) -> Line<'static> {
-    let ancho = usize::from(ancho);
-    let izquierda = format!(" MAGI {} SESIÓN ", tema.glifos.punto_medio);
-    let fijo = izquierda.chars().count();
-    // Hueco para el nombre: con un espacio a cada lado y al menos un trazo
-    // antes y otro después.
-    let hueco = ancho.saturating_sub(fijo + 4);
-    let nombre = match pestaña.tipo {
-        Some(tipo) => format!(
-            "{} {} {}",
-            pestaña.nombre,
+        format!(
+            "SESIÓN {} {}",
             tema.glifos.punto_medio,
-            tipo.etiqueta()
-        ),
-        None => pestaña.nombre.clone(),
+            app.paneles.disposicion.etiqueta()
+        )
     };
+    let ancho = usize::from(ancho);
+    let izquierda = format!(" MAGI {} {titulo_vista} ", tema.glifos.punto_medio);
+    let fijo = izquierda.chars().count();
+    let hueco = ancho.saturating_sub(fijo + 4);
+    let nombre = pestaña.nombre.clone();
     let derecha = if hueco >= NOMBRE_MIN {
         format!(" {} ", recortar_nombre(&nombre, hueco, tema.ascii))
     } else {
@@ -249,8 +358,6 @@ fn linea_titulo(pestaña: &PestanaUI, ancho: u16, tema: &Tema) -> Line<'static> 
     ])
 }
 
-/// Nombre recortado a `ancho` sin dejar un espacio colgando antes de la marca
-/// de recorte («vps-openclaw …» → «vps-openclaw…»).
 fn recortar_nombre(nombre: &str, ancho: usize, ascii: bool) -> String {
     let recortado = disposicion::recortar(nombre, ancho, ascii);
     if recortado == nombre {
@@ -264,20 +371,41 @@ fn recortar_nombre(nombre: &str, ancho: usize, ascii: bool) -> String {
     format!("{cuerpo}{marca}")
 }
 
-/// Forma de la barra de pestañas.
+/// La línea roja fija de la escritura en varios.
+fn linea_escritura(app: &App, ancho: u16) -> Line<'static> {
+    let tema = &app.tema;
+    let paneles = app.escritura_varios.paneles().len();
+    let hosts = app.escritura_varios.sesiones().len();
+    let texto = format!(
+        " {} ESCRIBIENDO EN {paneles} PANELES · prefijo E para parar ",
+        tema.glifos.escribiendo
+    );
+    let estilo = Style::default()
+        .fg(tema.paleta.fondo)
+        .bg(tema.paleta.critico)
+        .add_modifier(Modifier::BOLD);
+    let mut spans = vec![Span::styled(
+        disposicion::recortar(&texto, usize::from(ancho), tema.ascii),
+        estilo,
+    )];
+    let ocupado: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    if ocupado < usize::from(ancho) {
+        spans.push(Span::styled(
+            format!(" {hosts} sesiones"),
+            Style::default()
+                .fg(tema.paleta.critico)
+                .bg(tema.paleta.fondo),
+        ));
+    }
+    Line::from(spans)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Forma {
-    /// Glifo y nombre en todas las pestañas y `+ nueva` (modo normal).
     Completa,
-    /// Glifo y número; el nombre solo en la activa (hasta `nombre_max`, 0 =
-    /// sin nombre) y `+` al final.
     Compacta { nombre_max: usize },
 }
 
-/// Barra de pestañas. En modo normal, la forma completa; si no cabe o en modo
-/// estrecho, la compacta con todas las pestañas; si tampoco, la compacta con
-/// una ventana alrededor de la activa (`‹ ›`), recortando su nombre y, en
-/// último caso, quitándolo. La activa siempre se ve, marcada con `▸`.
 fn barra_pestañas(app: &App, activa: usize, ancho: u16) -> Line<'static> {
     let total = app.pestanas.len();
     let ancho_util = usize::from(ancho);
@@ -308,7 +436,6 @@ fn barra_pestañas(app: &App, activa: usize, ancho: u16) -> Line<'static> {
         if !cabe_ventana(activa, activa + 1) && nombre_max > 0 {
             continue;
         }
-        // La ventana crece alrededor de la activa mientras quepa.
         let (mut primera, mut fin) = (activa, activa + 1);
         loop {
             let mut crecio = false;
@@ -327,7 +454,6 @@ fn barra_pestañas(app: &App, activa: usize, ancho: u16) -> Line<'static> {
         let linea = linea_pestañas(app, activa, primera, fin, forma);
         return con_pista(app, linea, ancho_util);
     }
-    // No se llega aquí (la forma sin nombre siempre vale), pero sin pánico.
     linea_pestañas(
         app,
         activa,
@@ -337,8 +463,6 @@ fn barra_pestañas(app: &App, activa: usize, ancho: u16) -> Line<'static> {
     )
 }
 
-/// Pestañas `primera..fin` en la forma dada, con `‹ ›` si hay más a los lados
-/// y `+ nueva` (o `+`) al final.
 fn linea_pestañas(
     app: &App,
     activa: usize,
@@ -362,7 +486,6 @@ fn linea_pestañas(
         if indice > primera {
             spans.push(Span::styled(separador.clone(), tenue));
         }
-        // La primera de todas lleva un espacio de margen; la activa, `▸`.
         let marca = if es_activa {
             tema.glifos.seleccion
         } else if indice == 0 {
@@ -391,6 +514,13 @@ fn linea_pestañas(
             estilo_nombre = estilo_nombre.add_modifier(Modifier::BOLD);
         }
         spans.push(Span::styled(texto, estilo_nombre));
+        // Marca de aviso sin ver (campana/OSC 9/777).
+        if pestaña.aviso.is_some() {
+            spans.push(Span::styled(
+                format!(" {}", tema.glifos.aviso),
+                Style::default().fg(tema.paleta.acento),
+            ));
+        }
     }
     if fin < total {
         spans.push(Span::styled(
@@ -406,8 +536,6 @@ fn linea_pestañas(
     Line::from(spans)
 }
 
-/// Con diez pestañas o más el prefijo `1`-`9` no llega a todas: se añade la
-/// pista (entera o abreviada) si cabe tras las pestañas.
 fn con_pista(app: &App, mut linea: Line<'static>, ancho: usize) -> Line<'static> {
     let total = app.pestanas.len();
     if total < 10 {
@@ -435,26 +563,32 @@ fn con_pista(app: &App, mut linea: Line<'static>, ancho: usize) -> Line<'static>
 }
 
 fn glifo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> String {
-    // Fase 12: un escritorio se marca con su glifo de tipo (▣ / [D]).
     if let Some(tipo) = pestaña.tipo {
         return tipo.glifo(tema.ascii).to_string();
     }
-    let glifo = match pestaña.estado {
-        EstadoSesionRemota::Caida | EstadoSesionRemota::Cerrada => tema.glifos.error, // ✕
-        EstadoSesionRemota::Abierta => {
-            if pestaña.actividad_no_vista && !activa {
-                tema.glifos.conectando // ◐
-            } else {
-                tema.glifos.conectado // ●
+    let glifo = if pestaña.reconexion.is_some() {
+        tema.glifos.reconectando
+    } else {
+        match pestaña.estado {
+            EstadoSesionRemota::Caida | EstadoSesionRemota::Cerrada => tema.glifos.error,
+            EstadoSesionRemota::Abierta => {
+                if pestaña.actividad_no_vista && !activa {
+                    tema.glifos.conectando
+                } else {
+                    tema.glifos.conectado
+                }
             }
+            EstadoSesionRemota::Abriendo => tema.glifos.conectado,
         }
-        EstadoSesionRemota::Abriendo => tema.glifos.conectado,
     };
     glifo.to_string()
 }
 
 fn estilo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> Style {
     let base = Style::default();
+    if pestaña.reconexion.is_some() {
+        return base.fg(tema.paleta.acento);
+    }
     match pestaña.estado {
         EstadoSesionRemota::Caida => base.fg(tema.paleta.critico),
         _ => {
@@ -469,8 +603,6 @@ fn estilo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> Style {
     }
 }
 
-/// El prefijo en su forma corta de terminal: `Ctrl+]` → `^]`. Los demás
-/// (con `Alt`, varias teclas o teclas con nombre) se dejan como están.
 fn prefijo_corto(prefijo: &str) -> String {
     let texto = prefijo.trim();
     if let Some((modificador, tecla)) = texto.split_once('+') {
@@ -485,8 +617,6 @@ fn prefijo_corto(prefijo: &str) -> String {
     texto.to_string()
 }
 
-/// Un elemento de una barra con su prioridad (1 = no se quita nunca) y su
-/// texto completo y compacto.
 struct Elemento {
     completo: String,
     compacto: String,
@@ -509,10 +639,6 @@ impl Elemento {
     }
 }
 
-/// Compone una barra: `cabeza` y los elementos separados por ` · `. En modo
-/// normal prueba primero los textos completos; después, los compactos, y si
-/// aún no caben quita elementos de menor a mayor prioridad (a igualdad, el
-/// último). Los de prioridad 1 no se quitan nunca.
 fn componer(cabeza: &Elemento, elementos: &[Elemento], ancho: u16, tema: &Tema) -> Line<'static> {
     let ancho_util = usize::from(ancho);
     let mut quitables: Vec<usize> = (0..elementos.len())
@@ -560,11 +686,25 @@ fn componer(cabeza: &Elemento, elementos: &[Elemento], ancho: u16, tema: &Tema) 
     ultima
 }
 
-/// Barra de estado de la sesión, compactada por prioridad: glifo · posición ·
-/// host · tiempo · identidad · carga · ventanas (y túneles y el tamaño
-/// remoto, los últimos). Con relleno, el indicador `c×f (mín. ventana N)` no
-/// se quita nunca, igual que el glifo y la ayuda.
-fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> Line<'static> {
+/// Cuenta atrás hasta el próximo intento de reconexión.
+fn cuenta_atras(reconexion: &InfoReconexion) -> u64 {
+    let ahora = chrono::Utc::now().timestamp();
+    u64::try_from(reconexion.proximo_en.saturating_sub(ahora).max(0)).unwrap_or(0)
+}
+
+/// Segundos desde la caída de la reconexión.
+fn caida_hace(reconexion: &InfoReconexion) -> u64 {
+    let ahora = chrono::Utc::now().timestamp();
+    u64::try_from(ahora.saturating_sub(reconexion.desde).max(0)).unwrap_or(0)
+}
+
+fn barra_estado(
+    app: &App,
+    indice: usize,
+    pestaña: &PestanaUI,
+    area: Rect,
+    en_espera: bool,
+) -> Line<'static> {
     let tema = &app.tema;
     if app.modo_prefijo {
         return barra_prefijo(app, area.width);
@@ -578,10 +718,58 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
     );
     let tiempo = formatear_duracion(pestaña.segundos());
     let mut elementos = vec![
-        Elemento::fijo(format!("{}/{}", indice + 1, app.pestanas.len()), 2, texto),
+        // La posición se ve siempre: es la única forma de saber dónde estás.
+        Elemento::fijo(format!("{}/{}", indice + 1, app.pestanas.len()), 1, texto),
         Elemento::fijo(pestaña.host_nombre.clone(), 3, texto),
         Elemento::new(format!("conectado {tiempo}"), tiempo, 4, texto),
     ];
+    // Escritura en varios: la barra lo dice con texto, no solo con color.
+    if app.escritura_varios.activa() {
+        elementos.push(Elemento::fijo(
+            format!(
+                "{} escribiendo en {} paneles · {} E parar",
+                tema.glifos.escribiendo,
+                app.escritura_varios.paneles().len(),
+                prefijo_corto(&app.config.prefijo_escape)
+            ),
+            1,
+            Style::default()
+                .fg(tema.paleta.critico)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    // Disposición en espera (ventana pequeña).
+    if en_espera {
+        elementos.push(Elemento::new(
+            "disposición en espera: ventana pequeña".to_string(),
+            "ventana pequeña".to_string(),
+            1,
+            Style::default().fg(tema.paleta.acento),
+        ));
+    }
+    // Reconexión automática: cuenta atrás y causa.
+    if let Some(reconexion) = &pestaña.reconexion {
+        elementos.push(Elemento::fijo(
+            format!(
+                "{} intento {} en {} s · {}",
+                tema.glifos.reconectando,
+                reconexion.intento,
+                cuenta_atras(reconexion),
+                reconexion.causa
+            ),
+            1,
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(aviso) = &pestaña.aviso {
+        elementos.push(Elemento::fijo(
+            format!("{} {}", tema.glifos.aviso, aviso.texto),
+            2,
+            Style::default().fg(tema.paleta.acento),
+        ));
+    }
     let identidad = if pestaña.identidad.is_empty() {
         pestaña.motivo.clone().unwrap_or_default()
     } else {
@@ -590,14 +778,22 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
     if !identidad.is_empty() {
         elementos.push(Elemento::fijo(identidad, 5, texto));
     }
+    let carga = app.sondeos.get(&pestaña.host_id).and_then(|sondeo| {
+        let edad = crate::flota::estado::antiguedad_segundos(&sondeo.fecha)?;
+        if edad > 600.0 {
+            return None;
+        }
+        sondeo.carga_1m.map(|carga| format!("carga {carga:.1}"))
+    });
+    if let Some(carga) = carga {
+        elementos.push(Elemento::fijo(carga, 6, texto));
+    }
     if pestaña.cols_remoto > 0 {
         let mut tamano = format!(
             "{}{}{}",
             pestaña.cols_remoto, tema.glifos.por, pestaña.filas_remoto
         );
         let prioridad = if hay_relleno(area, pestaña) {
-            // Otra ventana más pequeña comparte la pestaña y fija el tamaño:
-            // explica el relleno, así que se queda siempre.
             match pestaña.ventana_minima {
                 Some(minima) if Some(minima) == app.cliente_id => {
                     tamano.push_str(" (mín. esta ventana)");
@@ -611,26 +807,19 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
         };
         elementos.push(Elemento::fijo(tamano, prioridad, texto));
     }
-    let carga = app.sondeos.get(&pestaña.host_id).and_then(|sondeo| {
-        let edad = crate::flota::estado::antiguedad_segundos(&sondeo.fecha)?;
-        if edad > 600.0 {
-            return None;
-        }
-        sondeo.carga_1m.map(|carga| format!("carga {carga:.1}"))
-    });
-    if let Some(carga) = carga {
-        elementos.push(Elemento::fijo(carga, 6, texto));
-    }
-    let activos = super::hosts::tuneles_activos_de_host(app, pestaña.host_id);
-    if activos > 0 {
-        elementos.push(Elemento::fijo(format!("túneles {activos}"), 8, texto));
-    }
     let ventanas = if pestaña.ventanas == 1 {
         "1 ventana".to_string()
     } else {
         format!("{} ventanas", pestaña.ventanas)
     };
     elementos.push(Elemento::fijo(ventanas, 7, texto));
+    if let Some(nombre) = &pestaña.tmux {
+        elementos.push(Elemento::fijo(
+            format!("tmux {nombre}"),
+            6,
+            Style::default().fg(tema.paleta.acento),
+        ));
+    }
     let prefijo = &app.config.prefijo_escape;
     elementos.push(Elemento::new(
         format!("{prefijo} ? ayuda"),
@@ -641,8 +830,6 @@ fn barra_estado(app: &App, indice: usize, pestaña: &PestanaUI, area: Rect) -> L
     componer(&cabeza, &elementos, area.width, tema)
 }
 
-/// Barra del modo prefijo: qué hace cada tecla tras el prefijo, compactada
-/// por prioridad como la de estado.
 fn barra_prefijo(app: &App, ancho: u16) -> Line<'static> {
     let tema = &app.tema;
     let prefijo = &app.config.prefijo_escape;
@@ -656,23 +843,417 @@ fn barra_prefijo(app: &App, ancho: u16) -> Line<'static> {
             .add_modifier(Modifier::BOLD),
     );
     let estilo = Style::default().fg(tema.paleta.acento);
+    let panel = if tema.ascii {
+        "<>^v panel"
+    } else {
+        "←↑→↓ panel"
+    };
     let mut elementos: Vec<Elemento> = [
         ("1-9 n p pestañas", 1),
-        ("l lista", 3),
+        (panel, 2),
+        ("Espacio disposición", 2),
+        ("z ampliar", 3),
+        ("[ historial", 2),
+        ("/ buscar", 3),
+        ("o enlaces", 3),
+        ("E escribir en varios", 3),
+        ("l lista", 4),
         ("c conectar", 5),
         ("x cerrar", 4),
         ("r reconectar", 6),
-        ("w ventana", 7),
+        (", renombrar", 6),
         ("q volver", 2),
-        ("prefijo de nuevo = literal", 8),
     ]
     .into_iter()
     .map(|(texto, prioridad)| Elemento::fijo(texto.to_string(), prioridad, estilo))
     .collect();
-    // La primera va pegada a la marca, con un espacio.
     elementos[0].completo.insert(0, ' ');
     elementos[0].compacto.insert(0, ' ');
     componer(&cabeza, &elementos, ancho, tema)
+}
+
+// ------------------------------------------------------------- historial
+
+/// Pinta el modo historial: las filas de la captura y la búsqueda resaltada.
+fn pintar_historial(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+    let Some(estado) = &app.historial else {
+        return;
+    };
+    let tema = &app.tema;
+    let alto = usize::from(area.height);
+    disp.historial_alto = Some(alto);
+    let mut lineas: Vec<Line> = Vec::new();
+    if estado.captura.is_empty() {
+        lineas.push(Line::from(Span::styled(
+            if estado.esperando {
+                " capturando el historial…"
+            } else {
+                " el historial está vacío"
+            },
+            Style::default().fg(tema.paleta.inactivo),
+        )));
+    } else {
+        let primera = estado.primera();
+        for fila in primera..(primera + alto).min(estado.captura.len()) {
+            let texto = estado.captura[fila].texto();
+            let (hay, actual) = estado.coincidencias_en(fila);
+            let seleccionada = estado.seleccion.is_some_and(|seleccion| {
+                let (inicio, fin) = if seleccion.inicio.0 <= seleccion.fin.0 {
+                    (seleccion.inicio.0, seleccion.fin.0)
+                } else {
+                    (seleccion.fin.0, seleccion.inicio.0)
+                };
+                (inicio..=fin).contains(&fila)
+            });
+            let mut estilo = Style::default().fg(tema.paleta.texto);
+            let mut marca = " ";
+            if actual {
+                marca = tema.glifos.seleccion;
+                estilo = estilo.fg(tema.paleta.acento).add_modifier(Modifier::BOLD);
+            } else if hay {
+                estilo = estilo.fg(tema.paleta.acento);
+            }
+            if seleccionada {
+                estilo = estilo.add_modifier(Modifier::REVERSED);
+            }
+            if fila == estado.cursor {
+                marca = tema.glifos.seleccion;
+            }
+            let texto = disposicion::recortar(
+                &format!("{marca}{texto}"),
+                usize::from(area.width),
+                tema.ascii,
+            );
+            lineas.push(Line::from(Span::styled(texto, estilo)));
+        }
+    }
+    marco.render_widget(Paragraph::new(lineas), area);
+}
+
+fn barra_historial(app: &App, ancho: u16) -> Line<'static> {
+    let tema = &app.tema;
+    let Some(estado) = &app.historial else {
+        return Line::default();
+    };
+    if estado.editando {
+        let Some(busqueda) = &estado.busqueda else {
+            return Line::default();
+        };
+        let clase = match busqueda.clase {
+            magi_nucleo::terminal::historial::ClaseBusqueda::Texto => "texto",
+            magi_nucleo::terminal::historial::ClaseBusqueda::Expresion => "regex",
+        };
+        let mut spans = vec![
+            Span::styled(
+                format!(" /{}", busqueda.patron),
+                Style::default().fg(tema.paleta.texto),
+            ),
+            Span::styled(
+                format!(" · {clase} · "),
+                Style::default().fg(tema.paleta.inactivo),
+            ),
+            Span::styled("Tab", Style::default().fg(tema.paleta.acento)),
+            Span::styled(" cambiar · ", Style::default().fg(tema.paleta.texto)),
+            Span::styled("↵", Style::default().fg(tema.paleta.acento)),
+            Span::styled(" buscar · ", Style::default().fg(tema.paleta.texto)),
+            Span::styled("Esc", Style::default().fg(tema.paleta.acento)),
+            Span::styled(" cancelar", Style::default().fg(tema.paleta.texto)),
+        ];
+        if let Some(error) = &busqueda.error {
+            spans.push(Span::styled(
+                format!(" · {error}"),
+                Style::default().fg(tema.paleta.critico),
+            ));
+        }
+        return Line::from(spans).style(Style::default().bg(tema.paleta.fondo));
+    }
+    let cabeza = Elemento::fijo(
+        format!(" {} ", tema.glifos.reconectando),
+        1,
+        Style::default().fg(tema.paleta.acento),
+    );
+    let mut elementos = vec![Elemento::fijo(
+        format!("HISTORIAL {} líneas", estado.captura.len()),
+        2,
+        Style::default().fg(tema.paleta.texto),
+    )];
+    if let Some(busqueda) = &estado.busqueda {
+        let total = busqueda.coincidencias.len();
+        let actual = busqueda.actual.map_or(0, |indice| indice + 1);
+        elementos.push(Elemento::fijo(
+            format!(
+                "/{} · {} · {actual} de {total}",
+                busqueda.patron,
+                match busqueda.clase {
+                    magi_nucleo::terminal::historial::ClaseBusqueda::Texto => "texto",
+                    magi_nucleo::terminal::historial::ClaseBusqueda::Expresion => "regex",
+                }
+            ),
+            1,
+            Style::default().fg(tema.paleta.acento),
+        ));
+        if let Some(error) = &busqueda.error {
+            elementos.push(Elemento::fijo(
+                error.clone(),
+                1,
+                Style::default().fg(tema.paleta.critico),
+            ));
+        }
+    }
+    elementos.push(Elemento::fijo(
+        format!(
+            "líneas {} {} {} de {}",
+            estado.primera() + 1,
+            tema.glifos.por,
+            (estado.primera() + estado.alto.max(1)).min(estado.captura.len()),
+            estado.captura.len()
+        ),
+        4,
+        Style::default().fg(tema.paleta.texto),
+    ));
+    if estado.nueva_salida {
+        elementos.push(Elemento::fijo(
+            format!("{} salida nueva", tema.glifos.abajo),
+            2,
+            Style::default().fg(tema.paleta.acento),
+        ));
+    }
+    let ayuda = [
+        ("v selec. · y copiar · w guardar · o enlaces", 5),
+        ("v · y · w · o · n N · Tab regex · q", 5),
+        ("v y w q", 1),
+    ];
+    elementos.push(Elemento::fijo(
+        ayuda[0].0.to_string(),
+        5,
+        Style::default().fg(tema.paleta.inactivo),
+    ));
+    componer(&cabeza, &elementos, ancho, tema)
+}
+
+// ----------------------------------------------------------------- enlaces
+
+/// Pinta la lista de enlaces marcados sobre el panel enfocado.
+fn pintar_enlaces(marco: &mut Frame, area: Rect, app: &App) {
+    let tema = &app.tema;
+    if app.enlaces.letras.is_empty() {
+        return;
+    }
+    let lineas: Vec<Line> = app
+        .enlaces
+        .letras
+        .iter()
+        .map(|(letra, enlace)| {
+            Line::from(vec![
+                Span::styled(
+                    format!("[{letra}] "),
+                    Style::default()
+                        .fg(tema.paleta.acento)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    disposicion::recortar(
+                        &enlace.url,
+                        usize::from(area.width.saturating_sub(6)),
+                        tema.ascii,
+                    ),
+                    Style::default().fg(tema.paleta.texto),
+                ),
+            ])
+        })
+        .collect();
+    let alto = u16::try_from(lineas.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let ancho = area.width.clamp(20, 66);
+    let caja = disposicion::centrar_limitado(
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        },
+        ancho,
+        alto.min(area.height),
+    );
+    marco.render_widget(super::bloque("ENLACES", tema), caja);
+    let interior = Rect {
+        x: caja.x + 1,
+        y: caja.y + 1,
+        width: caja.width.saturating_sub(2),
+        height: caja.height.saturating_sub(2),
+    };
+    marco.render_widget(Paragraph::new(lineas), interior);
+}
+
+fn barra_enlaces(app: &App, ancho: u16) -> Line<'static> {
+    let tema = &app.tema;
+    let cabeza = Elemento::fijo(
+        format!(" ENLACES {} ", app.enlaces.letras.len()),
+        1,
+        Style::default().fg(tema.paleta.acento),
+    );
+    let elementos = vec![Elemento::fijo(
+        "pulsa la letra · Esc salir".to_string(),
+        2,
+        Style::default().fg(tema.paleta.texto),
+    )];
+    componer(&cabeza, &elementos, ancho, tema)
+}
+
+// ----------------------------------------------------------------- avisos
+
+fn aviso_reconexion(
+    marco: &mut Frame,
+    area: Rect,
+    app: &App,
+    pestaña: &PestanaUI,
+    reconexion: &InfoReconexion,
+) {
+    let tema = &app.tema;
+    let prefijo = &app.config.prefijo_escape;
+    let corto = prefijo_corto(prefijo);
+    let acciones = if area.width > 50 {
+        format!("{prefijo} r  reintentar ya        {prefijo} x  cerrar")
+    } else {
+        format!("{corto} r reintentar   {corto} x cerrar")
+    };
+    let tmux = pestaña
+        .tmux
+        .as_ref()
+        .map(|nombre| format!("tmux {nombre}: lo que corría sigue en el host"))
+        .unwrap_or_default();
+    let critico = Style::default()
+        .fg(tema.paleta.acento)
+        .add_modifier(Modifier::BOLD);
+    let texto = Style::default().fg(tema.paleta.texto);
+    let tenue = Style::default().fg(tema.paleta.inactivo);
+    let todas = [
+        (String::new(), 1, critico),
+        (
+            format!(
+                "{} Reconectando con {} · intento {} en {} s",
+                tema.glifos.reconectando,
+                pestaña.host_nombre,
+                reconexion.intento,
+                cuenta_atras(reconexion)
+            ),
+            1,
+            critico,
+        ),
+        (
+            format!(
+                "caída hace {} s: {}",
+                caida_hace(reconexion),
+                reconexion.causa
+            ),
+            2,
+            texto,
+        ),
+        (tmux, 3, texto),
+        (String::new(), 1, texto),
+        (acciones, 1, tenue),
+    ];
+    let alto = (todas.len() as u16 + 2).min(area.height);
+    let filas = usize::from(alto.saturating_sub(2));
+    let mut orden: Vec<usize> = (0..todas.len()).collect();
+    orden.sort_by_key(|indice| (todas[*indice].1, *indice));
+    orden.truncate(filas);
+    orden.sort_unstable();
+    let ancho_texto = orden
+        .iter()
+        .map(|indice| todas[*indice].0.chars().count())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(ancho_texto)
+        .unwrap_or(u16::MAX)
+        .saturating_add(4);
+    let recta = disposicion::centrar_limitado(area, ancho, alto);
+    marco.render_widget(super::bloque("RECONECTANDO", tema), recta);
+    let interior = Rect {
+        x: recta.x + 2,
+        y: recta.y + 1,
+        width: recta.width.saturating_sub(4),
+        height: recta.height.saturating_sub(2),
+    };
+    let lineas: Vec<Line> = orden
+        .into_iter()
+        .map(|indice| {
+            let (linea, _, estilo) = &todas[indice];
+            Line::from(Span::styled(
+                disposicion::recortar(linea, usize::from(interior.width), tema.ascii),
+                *estilo,
+            ))
+        })
+        .collect();
+    marco.render_widget(Paragraph::new(lineas), interior);
+}
+
+fn aviso_caida(marco: &mut Frame, area: Rect, app: &App, pestaña: &PestanaUI) {
+    let tema = &app.tema;
+    let motivo = pestaña
+        .motivo
+        .clone()
+        .unwrap_or_else(|| "conexión perdida".to_string());
+    let titulo = format!(
+        "{} Sesión caída hace {}",
+        tema.glifos.error,
+        formatear_duracion(pestaña.segundos())
+    );
+    let interior_max = usize::from(area.width.saturating_sub(4));
+    let prefijo = &app.config.prefijo_escape;
+    let acciones = format!("{prefijo} r  reconectar        {prefijo} x  cerrar");
+    let acciones = if acciones.chars().count() <= interior_max {
+        acciones
+    } else {
+        let corto = prefijo_corto(prefijo);
+        format!("{corto} r reconectar  {corto} x cerrar")
+    };
+    let critico = Style::default()
+        .fg(tema.paleta.critico)
+        .add_modifier(Modifier::BOLD);
+    let texto = Style::default().fg(tema.paleta.texto);
+    let tenue = Style::default().fg(tema.paleta.inactivo);
+    let todas = [
+        (String::new(), 4, texto),
+        (titulo, 1, critico),
+        (motivo, 3, texto),
+        (String::new(), 4, texto),
+        (acciones, 2, tenue),
+    ];
+    let alto = (todas.len() as u16 + 2).min(area.height);
+    let filas = usize::from(alto.saturating_sub(2));
+    let mut orden: Vec<usize> = (0..todas.len()).collect();
+    orden.sort_by_key(|indice| (todas[*indice].1, *indice));
+    orden.truncate(filas);
+    orden.sort_unstable();
+    let ancho_texto = orden
+        .iter()
+        .map(|indice| todas[*indice].0.chars().count())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(ancho_texto)
+        .unwrap_or(u16::MAX)
+        .saturating_add(4);
+    let recta = disposicion::centrar_limitado(area, ancho, alto);
+    marco.render_widget(super::bloque("SESIÓN CAÍDA", tema), recta);
+    let interior = Rect {
+        x: recta.x + 2,
+        y: recta.y + 1,
+        width: recta.width.saturating_sub(4),
+        height: recta.height.saturating_sub(2),
+    };
+    let lineas: Vec<Line> = orden
+        .into_iter()
+        .map(|indice| {
+            let (linea, _, estilo) = &todas[indice];
+            Line::from(Span::styled(
+                disposicion::recortar(linea, usize::from(interior.width), tema.ascii),
+                *estilo,
+            ))
+        })
+        .collect();
+    marco.render_widget(Paragraph::new(lineas), interior);
 }
 
 pub fn formatear_duracion(segundos: u64) -> String {
@@ -699,34 +1280,14 @@ mod pruebas {
     }
 
     #[test]
-    fn componer_quita_por_prioridad_y_conserva_las_imprescindibles() {
-        let tema = Tema::respaldo();
-        let estilo = Style::default();
-        let cabeza = Elemento::fijo(" * ".to_string(), 1, estilo);
-        let elementos = [
-            Elemento::fijo("1/3".to_string(), 2, estilo),
-            Elemento::new("largo largo".to_string(), "corto".to_string(), 3, estilo),
-            Elemento::fijo("xxxxxxxx".to_string(), 4, estilo),
-            Elemento::fijo("ayuda".to_string(), 1, estilo),
-        ];
-        let texto = |linea: Line| -> String {
-            linea
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect()
+    fn la_cuenta_atras_no_es_negativa() {
+        let reconexion = InfoReconexion {
+            intento: 2,
+            proximo_en: 0,
+            desde: 0,
+            causa: "conexión perdida".to_string(),
         };
-        // Normal y con sitio: todo completo.
-        assert_eq!(
-            texto(componer(&cabeza, &elementos, 120, &tema)),
-            " * 1/3 · largo largo · xxxxxxxx · ayuda"
-        );
-        // Estrecho: compacto y quitando la de menor prioridad.
-        assert_eq!(
-            texto(componer(&cabeza, &elementos, 22, &tema)),
-            " * 1/3 · corto · ayuda"
-        );
-        // Sin sitio para nada: quedan las de prioridad 1.
-        assert_eq!(texto(componer(&cabeza, &elementos, 5, &tema)), " * ayuda");
+        assert_eq!(cuenta_atras(&reconexion), 0);
+        assert!(caida_hace(&reconexion) > 0);
     }
 }

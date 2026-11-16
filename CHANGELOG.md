@@ -9,6 +9,40 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **Terminal, segunda vuelta (Fase 15).** La vista Sesión gana **paneles**
+  (completa, lado a lado, apilados, 1 grande + 2 y rejilla de 4; `prefijo
+  Espacio` para cambiar, flechas para mover el foco, `z` para ampliar y
+  «abrir en rejilla…» en la paleta), **historial** de 10 000 líneas guardado en
+  el servidor con modo historial (`prefijo [` o `Shift+RePág`: navegación,
+  búsqueda de texto o expresión regular, selección, copia con el teclado y
+  guardado en un fichero), **enlaces** `http`/`https` con letras y diálogo
+  (abrir con el navegador del sistema, copiar, o túnel temporal para los de
+  `localhost` del host), **escritura en varios** paneles con deliberación MAGI
+  y concesión del servidor (aviso rojo fijo, `»` en cada panel, apagado a los
+  10 minutos), **reconexión automática** sin diálogos (2, 5, 10 y 30 s y luego
+  cada minuto hasta `reconexion_max_min`, cuenta atrás, `prefijo r` para
+  reintentar a mano) y **sesión persistente con tmux** por host (la pestaña
+  abre o recupera `magi-<equipo>-<n>`; la vista Sesiones lista, engancha y
+  termina sesiones de tmux). Se pueden renombrar (`prefijo ,`) y mover
+  (`prefijo <` `>`) pestañas, y el título y los avisos del remoto (campana,
+  OSC 9 y OSC 777) se ven en la pestaña y en Sesiones.
+  MAGI se comporta como un terminal de verdad para lo que corre dentro
+  (Claude Code como referencia): pegado entre corchetes de punta a punta (un
+  solo bloque, nunca como teclas sueltas), respuestas a DA1, DA2, DSR,
+  DECRQM, XTVERSION, XTWINOPS y OSC 10-12 solo desde el servidor, teclado de
+  kitty con la bandera 1 (Mayús+Intro es `CSI 13;2u`), salida sincronizada
+  (2026), ED 3, eventos de foco (1004), ratón transparente para el programa
+  que lo pide y portapapeles del remoto (OSC 52) con permiso por host
+  (`prefijo P`); leer el portapapeles, nunca. El terminal exterior queda como
+  estaba al salir, al ceder la terminal y tras un pánico. Migración 10
+  (columnas propias del equipo `reconectar`, `tmux_persistente` y
+  `portapapeles_remoto` en `HOSTS`, que no viajan), protocolo v9 y sección
+  `[terminal]` en `config.toml`; el móvil no cambia.
+
+- **Móvil de guardia (Fase 14).** La app Android añade Flota con sondeo como
+  pantalla de inicio, Servicios con logs y acciones, snippets con deliberación
+  y Registro, con la lógica compartida en `magi-nucleo`; sigue siendo lectora
+  de la sincronización y no cambia en esta fase.
 - **Servicios, contenedores y logs (Fase 13).** Vista **Servicios** (`F9`, y `u`
   desde Flota, Hosts y la ficha) con los hosts SSH a la izquierda y, a la
   derecha, los servicios y timers de systemd y los contenedores de Docker o
@@ -78,6 +112,9 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Cambiado
 
+- Versión 1.4.0 (MINOR: funcionalidad nueva, migración de esquema 10 y
+  protocolo 9; `formato` de sincronización sin cambios).
+
 - Versión 1.3.0 (MINOR: funcionalidad nueva, migración de esquema 9,
   protocolo 8 y `formato` 3 de sincronización).
 
@@ -93,6 +130,48 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 - Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
 
 ### Corregido
+
+- **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
+  encoding».** Copiada de la terminal, la clave suele llegar partida en dos
+  líneas o con espacios, y el escritorio solo quitaba los de los extremos.
+  Ahora quita todos los espacios y la pasa a mayúsculas, como el móvil. Si la
+  clave no vale, el aviso dice por qué en castellano: está vacía, es la clave
+  pública (`age1…`), no empieza por `AGE-SECRET-KEY-1` o está incompleta.
+
+- **Los errores del llavero en Linux no decían qué pasaba.** MAGI descartaba
+  lo que `secret-tool` escribía por la salida de error y solo enseñaba «el
+  llavero devolvió exit status: 1». Ahora el aviso lleva ese mensaje y, en los
+  casos conocidos, qué hacer: sin servicio de llavero en la sesión, instalar
+  `gnome-keyring` (o activar KWallet o KeePassXC); sin sesión de D-Bus, abrir
+  MAGI desde la sesión gráfica. Si falta `secret-tool`, dice qué paquete
+  instalar en Debian y Ubuntu, Arch o Fedora. El README lo pone en los
+  requisitos de Linux.
+
+- **Copiar colgaba la aplicación en Wayland.** `wl-copy` se queda como daemon
+  sirviendo el portapapeles y hereda su salida de error; al esperar a leer su
+  fin la interfaz se quedaba bloqueada para siempre (parecía un cierre). Ahora
+  se espera un poco al proceso directo y, si sigue vivo sirviendo el
+  portapapeles, se recoge en segundo plano: copiar vuelve al instante. Con
+  pruebas de regresión, incluida la de `wl-copy` real cuando hay Wayland.
+
+- **Pegar, seleccionar con el ratón y el foco exterior no funcionaban** (Fase
+  15). El hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained`
+  y `FocusLost` del terminal exterior: pegar no hacía nada y, con el ratón
+  capturado (Claude Code u otros programas que lo piden), la rueda, el clic y
+  el arrastre se perdían; el remoto tampoco veía los cambios de foco. Ahora se
+  reenvían al bucle de la UI con test de regresión del hilo.
+
+- Dos aperturas simultáneas de una base de datos con WAL pendiente ya no
+  chocan al crear su copia temporal (los nombres llevan un contador además del
+  reloj): `magi.db` se valida igual y los tests dejan de fallar cuando corren
+  en paralelo.
+
+- **Pegar fuera de una pestaña va al campo con foco** (Fase 15). El texto
+  pegado en un diálogo, la búsqueda del historial, la paleta, un filtro, la
+  ficha o Servicios se inserta en su campo de texto (sin saltos de línea, que
+  se juntan) en vez de descartarse; los diálogos que no tienen campo lo
+  ignoran. Al ceder la terminal al visor o al editor se deshacen otra vez el
+  pegado entre corchetes, el foco, las banderas de kitty y el ratón (D314).
 
 - **Pantalla negra al abrir un escritorio RDP.** El visor recibía
   `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente

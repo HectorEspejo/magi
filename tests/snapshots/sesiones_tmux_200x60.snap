@@ -1,0 +1,63 @@
+---
+source: tests/terminal_ui.rs
+---
+ MAGI · TMUX · web-01 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  SESIÓN                       ENGANCHADA   VENTANAS  CREADA
+▸ magi-portatil-1              sí           2         hace 3 h
+  despliegue                   no           1         ayer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ↵ abrir · T terminar · r refrescar · Esc volver
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda

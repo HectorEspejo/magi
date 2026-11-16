@@ -35,6 +35,15 @@ fn span_texto(contenido: &str) -> Span<'static> {
     Span::raw(contenido.to_string())
 }
 
+/// Casilla [x] o [ ] del diálogo de rejilla.
+fn casilla_texto(marcada: bool) -> &'static str {
+    if marcada {
+        "[x]"
+    } else {
+        "[ ]"
+    }
+}
+
 pub(crate) fn atajo(tecla: &str, tema: &Tema) -> Span<'static> {
     Span::styled(
         tecla.to_string(),
@@ -297,6 +306,133 @@ pub fn dibujar(
         }
         Dialogo::Escritorio(dialogo) => {
             crate::ui::escritorios::dibujar_dialogo(marco, area, app, dialogo, disp);
+        }
+        Dialogo::Elegir {
+            titulo,
+            lineas,
+            peligro,
+            opciones,
+        } => {
+            let cuerpo = lineas.iter().map(|texto| linea(texto)).collect();
+            let mut pie: Vec<Span<'static>> = Vec::new();
+            for (indice, (tecla, texto, _)) in opciones.iter().enumerate() {
+                if indice > 0 {
+                    pie.push(Span::raw("   "));
+                }
+                pie.push(atajo(&tecla.to_string(), tema));
+                pie.push(span_texto(&format!(" {texto}")));
+            }
+            pie.push(Span::raw("   "));
+            pie.push(atajo("Esc", tema));
+            pie.push(span_texto(" cancelar"));
+            mostrar(
+                66,
+                Hoja::nueva(titulo.clone(), cuerpo, vec![Line::from(pie)]).peligro(*peligro),
+            );
+        }
+        Dialogo::Rejilla(estado) => {
+            use crate::app::rejilla::FilaRejilla;
+            let seleccion = Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD);
+            let texto = Style::default().fg(tema.paleta.texto);
+            let tenue = Style::default().fg(tema.paleta.inactivo);
+            let mut cuerpo: Vec<Line<'static>> = Vec::new();
+            if estado.filas.is_empty() {
+                cuerpo.push(linea("  no hay hosts SSH en el inventario"));
+            }
+            for (indice, fila) in estado.filas.iter().enumerate() {
+                let elegida = indice == estado.seleccion;
+                let marca = if elegida { tema.glifos.seleccion } else { " " };
+                let estilo_marca = if elegida { seleccion } else { tenue };
+                match fila {
+                    FilaRejilla::Grupo { nombre, hosts } => {
+                        let marcado = estado.grupo_marcado(hosts);
+                        cuerpo.push(Line::from(vec![
+                            Span::styled(format!(" {marca} "), estilo_marca),
+                            Span::styled(casilla_texto(marcado), seleccion),
+                            Span::styled(format!(" GRUPO {nombre}"), seleccion),
+                            Span::styled(
+                                format!(
+                                    "  {} host{}",
+                                    hosts.len(),
+                                    if hosts.len() == 1 { "" } else { "s" }
+                                ),
+                                tenue,
+                            ),
+                        ]));
+                    }
+                    FilaRejilla::Host {
+                        id,
+                        nombre,
+                        bajo_grupo,
+                    } => {
+                        let sangria = if *bajo_grupo { "    " } else { "  " };
+                        cuerpo.push(Line::from(vec![
+                            Span::styled(format!(" {marca} "), estilo_marca),
+                            Span::styled(
+                                format!("{sangria}{}", casilla_texto(estado.marcado(*id))),
+                                texto,
+                            ),
+                            Span::styled(format!(" {nombre}"), texto),
+                        ]));
+                    }
+                }
+            }
+            if let Some(aviso) = &estado.aviso {
+                cuerpo.push(Line::from(Span::styled(
+                    format!(" {aviso}"),
+                    Style::default().fg(tema.paleta.critico),
+                )));
+            }
+            let pie = vec![
+                teclas(
+                    &[
+                        ("espacio", "marcar"),
+                        ("↑↓ / j k", "mover"),
+                        ("↵", "abrir (2-4)"),
+                        ("esc", "cancelar"),
+                    ],
+                    tema,
+                ),
+                Line::from(Span::styled(
+                    format!(" {} de 4 hosts marcados", estado.marcados()),
+                    tenue,
+                )),
+            ];
+            mostrar(66, Hoja::nueva("ABRIR EN REJILLA", cuerpo, pie));
+        }
+        Dialogo::Enlace(dialogo) => {
+            let mut cuerpo = vec![Line::from(Span::styled(
+                dialogo.url.clone(),
+                Style::default()
+                    .fg(tema.paleta.texto)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            if let Some((destino, puerto)) = &dialogo.tunel {
+                let host = if dialogo.host_nombre.is_empty() {
+                    "el host".to_string()
+                } else {
+                    dialogo.host_nombre.clone()
+                };
+                cuerpo.push(linea(&format!("apunta a {destino}:{puerto} de {host}")));
+            }
+            let mut pie: Vec<Span<'static>> = vec![
+                atajo("↵", tema),
+                span_texto(" abrir"),
+                Span::raw("   "),
+                atajo("c", tema),
+                span_texto(" copiar"),
+            ];
+            if dialogo.tunel.is_some() {
+                pie.push(Span::raw("   "));
+                pie.push(atajo("t", tema));
+                pie.push(span_texto(" túnel temporal"));
+            }
+            pie.push(Span::raw("   "));
+            pie.push(atajo("Esc", tema));
+            pie.push(span_texto(" salir"));
+            mostrar(66, Hoja::nueva("ENLACE", cuerpo, vec![Line::from(pie)]));
         }
         Dialogo::Confirmar {
             titulo,

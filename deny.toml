@@ -71,6 +71,18 @@ ignore = [
   # dependencias. Revisar al subir rusqlite.
   # Caducidad de la excepción: 2027-05-09 (la comprueba el job deny de ci.yml).
   { id = "RUSTSEC-2026-0459", reason = "SQLite embebido antiguo; vector local con un -wal ajeno y magi.db en el directorio privado del usuario; parche en rusqlite 0.41" },
+  # 2026-11-15 · RUSTSEC-2026-0495: el servidor de agente de russh
+  # (russh::keys::agent::server, desde 0.50.0-beta.12 hasta 0.64) firma con
+  # claves añadidas con la restricción de confirmación (ssh-add -c) sin llamar a
+  # Agent::confirm. MAGI no hace de agente: solo usa el cliente
+  # (russh::keys::agent::client) para pedir firmas al agente del usuario, así
+  # que el código afectado no se ejecuta. El parche está en russh 0.65, que
+  # exige subir el conjunto fijado por CLAUDE.md (russh, russh-sftp, ssh-key,
+  # age y el vendor de IronRDP) y repetir las pruebas manuales de la vista
+  # Sesión: se pospone a una fase de dependencias. Revisar al subir russh, y
+  # antes si MAGI empieza a usar agent::server.
+  # Caducidad de la excepción: 2027-05-15 (la comprueba el job deny de ci.yml).
+  { id = "RUSTSEC-2026-0495", reason = "servidor de agente de russh; MAGI solo usa agent::client; parche en russh 0.65" },
 ]
 
 [licenses]

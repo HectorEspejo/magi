@@ -99,6 +99,69 @@ fn migracion_desde_fase1_conserva_los_datos() {
     assert!(almacen.listar_identidades(true).unwrap().is_empty());
 }
 
+/// La migración 10 estrena los tres ajustes de terminal del host, propios del
+/// equipo: nacen con sus valores por defecto, se cambian sin subir la versión
+/// del host y una base de la 1.3 los recibe al abrir.
+#[test]
+fn migracion_diez_estrena_los_ajustes_de_terminal() {
+    let almacen = magi::almacen::abrir_en_memoria().unwrap();
+    let host = almacen.crear_host(&datos("web"), Origen::Manual).unwrap();
+    let leido = almacen.obtener_host(host).unwrap();
+    assert!(leido.reconectar, "la reconexión automática viene activa");
+    assert!(!leido.tmux_persistente);
+    assert!(!leido.portapapeles_remoto);
+    let antes = version_de_fila(&almacen, "HOSTS", host);
+    almacen
+        .fijar_reconectar(host, false)
+        .expect("fijar reconectar");
+    almacen
+        .fijar_tmux_persistente(host, true)
+        .expect("fijar tmux");
+    almacen
+        .fijar_portapapeles_remoto(host, true)
+        .expect("fijar portapapeles");
+    let leido = almacen.obtener_host(host).unwrap();
+    assert!(!leido.reconectar);
+    assert!(leido.tmux_persistente);
+    assert!(leido.portapapeles_remoto);
+    assert_eq!(
+        version_de_fila(&almacen, "HOSTS", host),
+        antes,
+        "los campos propios del equipo no suben la versión ni el vector"
+    );
+}
+
+/// Una base de la 1.3 (user_version 9) recibe la migración 10 al abrir: las
+/// columnas nacen con 1, 0 y 0.
+#[test]
+fn migracion_desde_la_uno_tres_recibe_los_ajustes_de_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    let host;
+    {
+        let almacen = magi::almacen::abrir(&ruta).unwrap();
+        host = almacen.crear_host(&datos("viejo"), Origen::Manual).unwrap();
+        let conexion = almacen.conexion();
+        conexion
+            .execute_batch(
+                "ALTER TABLE HOSTS DROP COLUMN reconectar;
+                 ALTER TABLE HOSTS DROP COLUMN tmux_persistente;
+                 ALTER TABLE HOSTS DROP COLUMN portapapeles_remoto;",
+            )
+            .unwrap();
+        conexion.pragma_update(None, "user_version", 9).unwrap();
+    }
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 10);
+    let leido = almacen.obtener_host(host).unwrap();
+    assert!(leido.reconectar);
+    assert!(!leido.tmux_persistente);
+    assert!(!leido.portapapeles_remoto);
+}
 #[test]
 fn los_sondeos_se_purgan_a_los_veinte_y_caen_con_el_host() {
     let almacen = magi::almacen::abrir_en_memoria().unwrap();
@@ -2455,8 +2518,8 @@ fn la_version_crece_de_forma_monotona_y_el_reloj_la_acompana() {
 // --------------------------------------- Fase 13: comprobaciones y fallos
 
 /// La migración 9 estrena COMPROBACIONES_SERVICIO y la columna
-/// SONDEOS.fallos_json, y una base de la fase 9 (user_version 6) sube a 9 sin
-/// perder sus hosts.
+/// SONDEOS.fallos_json, y una base de la fase 9 (user_version 6) sube hasta la
+/// versión actual sin perder sus hosts.
 #[test]
 fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
     let almacen = magi::almacen::abrir_en_memoria().unwrap();
@@ -2464,7 +2527,7 @@ fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     let tablas: Vec<String> = almacen
         .conexion()
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -2511,7 +2574,7 @@ fn la_migracion_9_estrena_las_comprobaciones_y_los_fallos_del_sondeo() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
     assert_eq!(
         almacen.listar_hosts().unwrap().len(),
         1,

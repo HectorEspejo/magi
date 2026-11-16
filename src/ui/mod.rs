@@ -31,12 +31,19 @@ pub mod transferencias;
 pub mod tuneles;
 
 use std::io::{self, Stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use crossterm::cursor::Show;
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+    LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -80,6 +87,80 @@ pub enum Vista {
 }
 
 pub type TerminalMagi = Terminal<CrosstermBackend<Stdout>>;
+
+// ------------------------------------------------ terminal exterior (F15)
+//
+// MAGI pide al terminal exterior el pegado entre corchetes, los eventos de
+// foco y, si se admite y `[terminal] teclado_mejorado`, la desambiguación del
+// teclado de kitty. El ratón se captura solo cuando hace falta (el remoto del
+// panel enfocado lo pide o `[terminal] raton`). Todo se deshace al salir, al
+// ceder la terminal (visor, paginador) y en el gancho de pánico (D314).
+
+static PEGADO_CORCHETES: AtomicBool = AtomicBool::new(false);
+static FOCO: AtomicBool = AtomicBool::new(false);
+static TECLADO_MEJORADO: AtomicBool = AtomicBool::new(false);
+static RATON: AtomicBool = AtomicBool::new(false);
+
+/// Pide al terminal exterior lo que MAGI necesita (idempotente).
+pub fn activar_extras(config: &crate::config::SeccionTerminal) {
+    let mut salida = io::stdout();
+    if !PEGADO_CORCHETES.swap(true, Ordering::Relaxed) {
+        let _ = execute!(salida, EnableBracketedPaste);
+    }
+    if !FOCO.swap(true, Ordering::Relaxed) {
+        let _ = execute!(salida, EnableFocusChange);
+    }
+    if config.teclado_mejorado
+        && !TECLADO_MEJORADO.load(Ordering::Relaxed)
+        && supports_keyboard_enhancement().unwrap_or(false)
+        && execute!(
+            salida,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+    {
+        TECLADO_MEJORADO.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Deshace lo que MAGI pidió al terminal exterior, en orden inverso.
+pub fn desactivar_extras() {
+    let mut salida = io::stdout();
+    if RATON.swap(false, Ordering::Relaxed) {
+        let _ = execute!(salida, DisableMouseCapture);
+    }
+    if TECLADO_MEJORADO.swap(false, Ordering::Relaxed) {
+        let _ = execute!(salida, PopKeyboardEnhancementFlags);
+    }
+    if FOCO.swap(false, Ordering::Relaxed) {
+        let _ = execute!(salida, DisableFocusChange);
+    }
+    if PEGADO_CORCHETES.swap(false, Ordering::Relaxed) {
+        let _ = execute!(salida, DisableBracketedPaste);
+    }
+}
+
+/// Captura o suelta el ratón del terminal exterior (solo cambia si hace falta).
+pub fn fijar_raton(capturado: bool) {
+    if capturado == RATON.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut salida = io::stdout();
+    if capturado {
+        if execute!(salida, EnableMouseCapture).is_ok() {
+            RATON.store(true, Ordering::Relaxed);
+        }
+    } else {
+        let _ = execute!(salida, DisableMouseCapture);
+        RATON.store(false, Ordering::Relaxed);
+    }
+}
+
+/// ¿Está el ratón capturado por MAGI? (para las pruebas y la ayuda).
+#[must_use]
+pub fn raton_capturado() -> bool {
+    RATON.load(Ordering::Relaxed)
+}
 
 pub fn iniciar_terminal() -> Result<TerminalMagi> {
     enable_raw_mode()?;

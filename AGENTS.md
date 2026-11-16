@@ -4,12 +4,13 @@
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con una app Android compañera (desde la Fase 11). Cliente: 4d3 (producto propio).
 Desde la Fase 9 es software libre (MIT OR Apache-2.0) en `4d3-org/magi` y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `4d3-org/homebrew-tap` y tarballs de GitHub Releases.
-Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode, ironrdp (fijado con `=`), axum 0.8, des, flate2; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
+Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode, ironrdp (fijado con `=`), axum 0.8, des, flate2, regex; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
 Desde la Fase 12 abre escritorios remotos: RDP con IronRDP, VNC con un cliente RFB propio y voxl arrancado por SSH. Se ven en un visor web servido por `magi --servidor` solo en `127.0.0.1`: el cliente web de voxl adaptado, en `visor/` (TypeScript, generado a `visor/dist/` con esbuild).
 Desde la Fase 13 maneja los servicios y timers de systemd, sus logs y los contenedores de Docker o Podman (con Compose) en la vista Servicios (`F9`): todo lo remoto va por el servidor con el script embebido `servicios.sh`.
 Desde la Fase 14 la app Android es también el móvil de guardia: Flota con sondeo (su pantalla de inicio), Servicios, snippets con deliberación y Registro, con la lógica del núcleo; sigue siendo lectora de la sincronización.
+Desde la Fase 15 la vista Sesión tiene paneles, historial con búsqueda y copia, enlaces, escritura en varios, reconexión automática y sesión persistente con tmux, y MAGI se comporta como un terminal de verdad para lo que corre dentro (Claude Code incluido).
 
 ## Documentación del proyecto
 
@@ -67,8 +68,8 @@ coméntalo con el desarrollador.
   `cargo fmt --all --check` y `cargo deny check`. Si tocas workflows o
   empaquetado: `actionlint`, `dist plan --tag vX.Y.Z` y
   `desktop-file-validate assets/magi.desktop`. Si tocas scripts: `shellcheck
-  scripts/*.sh crates/magi-nucleo/scripts/*.sh` (y `src/flota/sondeo.sh`
-  mientras siga ahí: la Fase 14 lo mueve a `crates/magi-nucleo/scripts/`). Para pruebas aisladas usa
+  scripts/*.sh crates/magi-nucleo/scripts/*.sh` (desde la Fase 14 incluye
+  el sondeo, `crates/magi-nucleo/scripts/sondeo.sh`). Para pruebas aisladas usa
   `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
   `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
@@ -78,6 +79,8 @@ coméntalo con el desarrollador.
 - La UI nunca recibe bytes del remoto: el parser `vt100` vive en la tarea de
   conexión y notifica `Pantalla` coalescido a ~30 fps. Los diálogos que esperan
   al usuario (huella, frase) no tienen timeout; el de 10 s solo cubre DNS/TCP.
+  Desde la Fase 15, el historial llega al cliente solo en capturas por tramos
+  (`CapturarHistorial`).
 - Log: `~/.local/state/magi/logs/magi.log.<fecha>` (un fichero por día).
 - Todo evento que deba quedar en el historial pasa por `registro::anotar`;
   nadie escribe en `REGISTRO` directamente y sus filas nunca se editan.
@@ -163,7 +166,7 @@ coméntalo con el desarrollador.
 - `peticion_id` por rangos: Archivos (panel) desde 0, túneles 2^40,
   operaciones de Archivos en la `App` (edición, permisos, sincronización) 2^42,
   ejecuciones 2^44, servicios 2^45 (desde la Fase 13), escritorios 2^46 y
-  diálogos que el servidor inicia desde el visor 2^47 (desde la Fase 12), peticiones esperables del cliente 2^48. El contador del
+  diálogos que el servidor inicia desde el visor 2^47 (desde la Fase 12), peticiones esperables del cliente 2^48 y terminal (capturas, tmux y túneles temporales) 2^49 (desde la Fase 15). El contador del
   panel se reinicia al cambiar de host: lo que deba sobrevivir a eso vive en la
   `App` y usa su propio rango. Un `Hecho` que implica filas de
   `REGISTRO` se envía después de `OrdenBd::Barrera`.
@@ -215,7 +218,9 @@ coméntalo con el desarrollador.
   sobre rutas sin normalizar.
 - Una deliberación autoriza una sola acción: la validación es común a
   ejecuciones y transferencias y «ya usada» vale en los dos sentidos. Para una
-  acción nueva, añade una variante a `PlanDeliberado`.
+  acción nueva, añade una variante a `PlanDeliberado`. Desde la Fase 14 hay dos:
+  el del núcleo (`Snippet` y `Servicio`, el que usa el móvil) y el del escritorio,
+  que añade `Sincronizacion`; cambia los dos a la vez (R135).
 - Tests aislados: `directories` resuelve el home por uid, así que fija
   `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_RUNTIME_DIR`,
   no solo `HOME`. La ruta de `XDG_RUNTIME_DIR` debe ser corta: el socket no
@@ -253,7 +258,11 @@ coméntalo con el desarrollador.
   el que lo garantiza.
 - La excepción de `cargo deny` RUSTSEC-2023-0071 (`rsa`) tiene fecha límite
   comprobada en CI: si el job `deny` falla por la fecha, revisa el aviso antes
-  de prorrogarla. La fecha de la página man es la de la versión (la constante
+  de prorrogarla. Desde la Fase 14 hay otra igual, RUSTSEC-2026-0459
+  (`libsqlite3-sys` 0.38.2, con un SQLite embebido antiguo), que caduca el 9 may
+  2027: el parche exige rusqlite 0.41; súbelo antes, con todas las pruebas del
+  almacén y la sincronización, y no la prorrogues sin revisar el aviso. La
+  fecha de la página man es la de la versión (la constante
   `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
   `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
@@ -359,7 +368,9 @@ coméntalo con el desarrollador.
   pasa a caído con el motivo. Desde la Fase 14 hay una sola conexión por host
   para todo (sesiones, túneles, sondeo, servicios, logs, ejecuciones y el SFTP
   de BALTHASAR-2), con el mismo vigilante y 60 s de gracia sin usos; cada uso
-  se suelta por identidad.
+  se suelta por identidad. Cada uso es un `UsoConexion` que se suelta con
+  `Drop`, y todo lo que ejecuta algo en un host va por `ejecutar_remoto` o
+  `abrir_canal_remoto` (plazo total y tope por flujo): no abras canales a mano.
 - Los servidores de pruebas (SSH, eco, canales de control) escuchan en
   `127.0.0.1`, nunca en `0.0.0.0`: el emulador llega al anfitrión por
   `10.0.2.2`, que es su loopback. Su SSH solo reenvía a los servicios de la
@@ -387,11 +398,11 @@ coméntalo con el desarrollador.
   por dobles en la JVM; en el emulador corren la prueba de humo, la de extremo
   a extremo de los túneles (desde la corrección 11b) y las de Flota, Servicios
   y Snippets (desde la Fase 14). Necesitan el servidor de pruebas del
-  anfitrión (`servidor_pruebas`: SSH en `127.0.0.1:12222`, eco en `:19091`,
-  control en `:12223` y backups en `/tmp/magi-pruebas/backups`; el emulador lo
-  ve en `10.0.2.2`), que desde la Fase 14 arranca también el job `humo` de CI.
-  Lo que solo se puede comprobar en un móvil real va al guion de validación del
-  informe de implementación.
+  anfitrión, que desde la Fase 14 arranca también el job `humo` de CI (en
+  `main`, en las etiquetas `android-v*` y en las PR que tocan el núcleo o la app;
+  tarda unos 75 min). Lo que solo se puede
+  comprobar en un móvil real va al guion de validación del informe de
+  implementación.
 - La codificación de teclas es una sola tabla, en
   `crates/magi-nucleo/src/terminal/teclas.rs`: el escritorio (`src/teclas.rs`)
   solo traduce a ella los eventos de crossterm y la app Android la usa igual.
@@ -407,15 +418,19 @@ coméntalo con el desarrollador.
 - La fixture `.age` de la prueba de humo se regenera con `cargo test -p
   magi-nucleo --test generar_fixture_android -- --ignored` (también la del
   `formato` 3, en `android/app/src/androidTest/assets/`), y la del túnel, con
-  `cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored`.
+  `cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored`;
+  la de Flota (desde la Fase 14), con `cargo test -p magi-nucleo --test
+  generar_fixture_flota_android -- --ignored`.
 - Pruebas de extremo a extremo del móvil: en Rust, `cargo test -p magi-movil
   --test tunel_local_e2e` y, desde la Fase 14, `--test flota_e2e --test
-  servicios_movil_e2e --test snippets_movil_e2e --test deliberacion_movil_e2e`;
+  servicios_movil_e2e --test snippets_movil_e2e --test deliberacion_movil_e2e
+  --test registro_purga_e2e`;
   en el emulador, arranca antes `cargo run -p magi-movil --example
-  servidor_pruebas` (se llamaba `servidor_pruebas_tunel` hasta la Fase 14) y
+  servidor_pruebas` (se llamaba `servidor_pruebas_tunel` hasta la Fase 14; vive
+  en `crates/magi-movil/tests/comun/servidor_pruebas.rs`, el ejemplo lo envuelve
+  y necesita `sftp-server`, que en CI sale de `openssh-server`) y
   ejecuta `./gradlew connectedDebugAndroidTest` (sin ese servidor, esas pruebas
-  se omiten solas). El job `humo` de `android.yml` hace lo mismo: lo arranca
-  antes del emulador, espera su línea «listo:» y lo para al terminar.
+  se omiten solas).
 - Antes de usar Gradle o cargo-ndk, exporta `ANDROID_HOME`, `ANDROID_SDK_ROOT`
   y `ANDROID_NDK_HOME` (NDK r30). Si lo haces con un script de entorno, que viva
   fuera de `/tmp` (se vacía al reiniciar). En documentos del repositorio, nunca
@@ -555,8 +570,11 @@ coméntalo con el desarrollador.
   cambian el estado del host: solo los vigilados lo hacen.
 - Las pruebas de servicios no usan red externa (servidor SSH de prueba con
   `systemctl`, `journalctl`, `docker`, `podman`, `sudo` y `nginx` falsos, y
-  salidas grabadas en `tests/fijos/servicios/`, que la Fase 14 mueve a
-  `crates/magi-nucleo/tests/fijos/` para compartirlas con el móvil): `cargo test -p magi-nucleo
+  salidas grabadas; desde la Fase 14 viven una sola vez en
+  `crates/magi-nucleo/tests/fijos/servicios/`, con los guiones falsos en
+  `falsos/` y el helper `binarios.rs`, que el escritorio, el núcleo y el móvil
+  incluyen con `#[path]`; no los copies: `tests/servicios_servidor.rs` aún
+  conserva una copia incrustada): `cargo test -p magi-nucleo
   --test servicios_lectura --test servicios_script --test
   sincronizacion_comprobaciones` y `TZ=UTC cargo test -p magi-ssh --test
   servicios_servidor --test servicios_ui --test servicios_e2e --test
@@ -567,7 +585,8 @@ coméntalo con el desarrollador.
   deliberaciones, con la lógica del núcleo (`flota/`, `servicios/`, `snippets/` y
   `deliberacion/`). Kotlin no decide qué acción se permite, qué exige deliberación
   ni cómo se lee lo que llega de un host, y `magi-movil` recomprueba la acción y
-  la deliberación antes de ejecutar.
+  la deliberación antes de ejecutar. Sus deliberaciones viven en memoria (64
+  como mucho), se consumen una sola vez y no sobreviven a un reinicio.
 - El sondeo vive en `crates/magi-nucleo/src/flota/` y `scripts/sondeo.sh`, y las
   comprobaciones de la deliberación en `crates/magi-nucleo/src/deliberacion/`, con
   proveedores por plataforma (desde la Fase 14). En `src/flota/` y
@@ -597,8 +616,62 @@ coméntalo con el desarrollador.
 - Los ajustes del móvil que en el escritorio están en `config.toml` (umbrales y
   refresco de Flota; refresco, espera, motores y sudo de Servicios; horas del
   backup y minutos de salud) viven en DataStore, con los valores por defecto y los
-  rangos del escritorio, y llegan al núcleo con `aplicar_ajustes`.
+  rangos del escritorio (donde el escritorio no los valida, los del informe de la
+  Fase 14, §5.4), y llegan al núcleo con `aplicar_ajustes`.
   `DELIBERACIONES.usuario` en el móvil es «móvil (<nombre del equipo>)».
+- Terminal (desde la Fase 15): lo que vt100 no lleva (modos 1004 y 2026,
+  banderas de kitty por pantalla, ED 3, título, avisos, OSC 52 y respuestas)
+  vive en `crates/magi-nucleo/src/terminal/emulador.rs`, con los `Callbacks` de
+  vt100; el servidor y el cliente lo usan igual. No busques secuencias en los
+  bytes por tu cuenta.
+- Solo el servidor responde a las consultas del remoto (tabla del informe de la
+  Fase 15, §5.5), en el mismo lote y una vez por pestaña, con ventanas adjuntas o
+  sin ellas. El cliente usa el emulador sin responder. Nunca respondas a un OSC 52
+  de lectura.
+- Terminal exterior: MAGI pide el pegado entre corchetes, los eventos de foco y,
+  con `[terminal] teclado_mejorado`, la desambiguación de kitty; el ratón, solo
+  cuando el remoto del panel enfocado lo pide o con `[terminal] raton`. Al salir,
+  al ceder la terminal (visor, paginador) y en el gancho de pánico, deshazlo
+  todo. El prefijo se reconoce en la codificación clásica y en la de kitty.
+- Pegar pasa siempre por `terminal/pegado.rs` (saneado y marcas `ESC[200~` y
+  `ESC[201~` si el remoto activó 2004), en escrituras propias y sin teclas
+  detrás. Nunca mandes un pegado como teclas sueltas.
+- Las teclas y el ratón se codifican con los modos de cada pestaña (cursor de
+  aplicación, bandera 1 de kitty, modo y codificación del ratón); en la
+  escritura en varios, cada pestaña recibe sus propios bytes.
+- Historial: lo guarda el servidor (el de vt100) con los topes `[terminal]
+  historial_lineas` e `historial_mib`; el cliente solo lo ve en capturas
+  temporales y `CSI 3 J` lo vacía. Va a disco solo con «guardar», por orden del
+  usuario (`ficheros.rs`, `create_new`, 600). Ni el historial, ni las capturas,
+  ni títulos, avisos, URLs o el portapapeles van al log o a REGISTRO.
+- Portapapeles del remoto (OSC 52): solo con `HOSTS.portapapeles_remoto` y
+  siempre con aviso; sin permiso, se guarda solo la última petición, 60 s.
+- Enlaces: solo `http` y `https`, a la vista antes de abrirlos, con `[terminal]
+  abrir_enlaces` desde el cliente y sin shell. Los túneles temporales van solo a
+  `localhost`, `127.0.0.1` o `::1` del host, escuchan en `127.0.0.1`, son trabajo
+  del servidor (`TrabajoServidor.tuneles_temporales`) y se cierran con su pestaña.
+- Escribir en varios: el servidor concede (`IniciarEscrituraVarios`),
+  recomprueba la deliberación (`PlanDeliberado::EscrituraVarios`, solo en el
+  escritorio) y escribe solo en las pestañas concedidas; termina con su ventana
+  y a los 10 min sin envíos.
+- Reconexión automática: la hace el servidor, sin diálogos (T15, T49), solo para
+  caídas de red y con las esperas de `crates/magi-nucleo/src/conexion/reconexion.rs`.
+  `prefijo r` es la reconexión a mano, con diálogos.
+- tmux, solo con `crates/magi-nucleo/scripts/terminal_tmux.sh` (`include_str!`),
+  con nombres validados en Rust y en el script (`^[A-Za-z0-9_-]{1,64}$`); nunca
+  texto interpolado en una orden de tmux.
+- `HOSTS.reconectar`, `tmux_persistente` y `portapapeles_remoto` (migración 10)
+  son propios del equipo: no viajan ni suben la versión del host.
+- Paneles: la disposición es de la ventana y no se guarda; cada panel pasa su
+  tamaño por `Geometria` (T46). Toda disposición o modo nuevo lleva sus
+  instantáneas.
+- Pruebas del terminal (sin red externa ni Claude Code): `cargo test -p
+  magi-nucleo --test terminal_emulador --test terminal_teclas --test
+  terminal_raton --test terminal_pegado --test terminal_historial --test
+  terminal_enlaces --test tmux_script --test reconexion` y `TZ=UTC cargo test -p
+  magi-ssh --test terminal_servidor --test terminal_ui --test terminal_e2e --test
+  redimensionado`. `tui_prueba` (en `tests/fijos/terminal/`) hace lo que Claude
+  Code: si cambias lo que MAGI responde o le pasa al remoto, amplíalo.
 
 ## Al terminar una fase (o al pausar la sesión)
 

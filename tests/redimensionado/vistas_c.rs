@@ -105,9 +105,15 @@ fn remoto(prueba: &mut AppPrueba, cols: u16, filas: u16, ventana_minima: Option<
     volcar(prueba, sesion_id, &htop(cols, filas), cols, filas);
 }
 
+/// Tamaño del área de contenido del panel enfocado (lo que recibe su PTY).
+fn tamano_panel(prueba: &AppPrueba) -> (u16, u16) {
+    let (_, rect) = prueba.app.disposicion().panes[0];
+    (rect.width, rect.height)
+}
+
 /// Esta ventana es la única adjunta: el remoto sigue a su tamaño aplicado.
 fn remoto_sigue(prueba: &mut AppPrueba) {
-    let (cols, filas) = prueba.app.tamano_pty();
+    let (cols, filas) = tamano_panel(prueba);
     remoto(prueba, cols, filas, Some(1));
 }
 
@@ -211,9 +217,9 @@ fn sesion_maqueta_60x16() {
     );
     assert!(estado.ends_with(" · ^] ?"), "{estado}");
     assert!(!estado.contains("conectado") && !estado.contains("ventanas"));
-    // El PTY recibe el área real: 60 columnas y 16 − 4 filas.
-    assert_eq!(prueba.app.tamano_pty(), (60, 12));
-    assert!(prueba.texto().contains("(htop repintado a 60x12)"));
+    // El PTY recibe el área real del panel: 60 columnas y 16 − 4 − 1 filas.
+    assert_eq!(tamano_panel(&prueba), (60, 11));
+    assert!(prueba.texto().contains("(htop repintado a 60x11)"));
 }
 
 /// El mínimo de Sesión (40×8) sustituye al global: a 40×8 se pinta la vista y
@@ -245,8 +251,9 @@ fn sesion_en_su_minimo_y_por_debajo() {
 fn el_terminal_ocupa_el_area_real_del_pty() {
     for (cols, filas) in [(40, 8), (40, 12), (60, 16), (80, 24), (200, 60)] {
         let mut prueba = en_sesion(cols, filas, Tema::respaldo(), tres_pestanas);
-        let (cols_pty, filas_pty) = prueba.app.tamano_pty();
-        assert_eq!((cols_pty, filas_pty), (cols, alto_pty(filas)));
+        let (cols_pty, filas_pty) = tamano_panel(&prueba);
+        // Cada panel descuenta su fila de cabecera (Fase 15).
+        assert_eq!((cols_pty, filas_pty), (cols, alto_pty(filas) - 1));
         let lineas: Vec<String> = (1..=filas_pty)
             .map(|numero| {
                 let mut linea = format!("L{numero:02}");
@@ -261,7 +268,7 @@ fn el_terminal_ocupa_el_area_real_del_pty() {
         volcar(&mut prueba, 1, &pantalla, cols_pty, filas_pty);
         let texto = prueba.texto();
         let pintadas: Vec<&str> = texto.lines().collect();
-        assert_eq!(pintadas[2], lineas[0], "{cols}×{filas}:\n{texto}");
+        assert_eq!(pintadas[3], lineas[0], "{cols}×{filas}:\n{texto}");
         let ultima = usize::from(filas) - 3;
         assert!(
             pintadas[ultima].starts_with(&format!("L{filas_pty:02}")),
@@ -345,10 +352,10 @@ fn sesion_relleno() {
     let texto = prueba.texto();
     let pintadas: Vec<&str> = texto.lines().collect();
     // Fila remota: 60 columnas de terminal y 20 de relleno.
-    assert!(pintadas[2].starts_with("root@hetzner-01:~# htop"));
-    assert!(pintadas[2].ends_with(&"░".repeat(20)), "{}", pintadas[2]);
+    assert!(pintadas[3].starts_with("root@hetzner-01:~# htop"));
+    assert!(pintadas[3].ends_with(&"░".repeat(20)), "{}", pintadas[3]);
     // Por debajo de las 14 filas remotas, todo relleno.
-    assert_eq!(pintadas[2 + 14], "░".repeat(80));
+    assert_eq!(pintadas[3 + 14], "░".repeat(80));
     assert!(barra_estado(&prueba).contains("60×14 (mín. ventana 2)"));
 
     // A 40×12, estrecho: el indicador se queda aunque se vayan host y tiempo.
@@ -368,7 +375,7 @@ fn sesion_relleno() {
     assert!(!prueba.texto().contains('░'));
     assert!(!barra_estado(&prueba).contains("80×20"));
     let prueba = en_sesion(200, 60, Tema::respaldo(), tres_pestanas);
-    assert!(barra_estado(&prueba).contains(" · 200×56 · "));
+    assert!(barra_estado(&prueba).contains(" · 200×55 · "));
 }
 
 /// Barra de estado por prioridad: glifo · posición · host · tiempo ·
@@ -378,7 +385,7 @@ fn barra_de_estado_por_prioridad() {
     let prueba = en_sesion(200, 60, Tema::respaldo(), tres_pestanas);
     assert_eq!(
         barra_estado(&prueba),
-        " ● 1/3 · hetzner-01 · conectado 18 m · ed25519 (agente) · 200×56 · carga 0.4 · \
+        " ● 1/3 · hetzner-01 · conectado 18 m · ed25519 (agente) · carga 0.4 · 200×55 · \
          2 ventanas · Ctrl+] ? ayuda"
     );
     let orden = [
@@ -388,6 +395,8 @@ fn barra_de_estado_por_prioridad() {
         "ed25519 (agente)",
         "carga 0.4",
         "2 ventanas",
+        // El tamaño remoto es lo primero que se quita (prioridad 9).
+        "200×55",
     ];
     for cols in [40u16, 50, 60, 70, 80, 90, 99, 100, 120] {
         let prueba = en_sesion(cols, 24, Tema::respaldo(), tres_pestanas);
@@ -434,12 +443,12 @@ fn sesion_caida() {
         );
         assert!(texto.contains("conexión cerrada por el remoto"), "{texto}");
     }
-    // En el mínimo de Sesión (4 filas de contenido) quedan el título y las
-    // acciones.
+    // En el mínimo de Sesión la cabecera del panel deja 3 filas: cabe el
+    // título del aviso (las acciones se ven a partir de 40×12).
     let prueba = en_sesion_caida(40, 8, Tema::respaldo());
     let texto = prueba.texto();
     assert!(texto.contains("Sesión caída"), "{texto}");
-    assert!(texto.contains("^] r reconectar  ^] x cerrar"), "{texto}");
+    assert!(texto.contains("rincon-dev"), "{texto}");
 }
 
 /// Modo prefijo: la barra dice qué hace cada tecla y se compacta por
@@ -450,8 +459,9 @@ fn sesion_modo_prefijo() {
     prueba.tecla_con(KeyCode::Char(']'), KeyModifiers::CONTROL);
     assert_eq!(
         barra_estado(&prueba),
-        " [MAGI] Ctrl+]  1-9 n p pestañas · l lista · c conectar · x cerrar · r reconectar · \
-         w ventana · q volver · prefijo de nuevo = literal"
+        " [MAGI] ^]  1-9 n p pestañas · ←↑→↓ panel · Espacio disposición · z ampliar · \
+         [ historial · / buscar · o enlaces · E escribir en varios · l lista · c conectar · \
+         x cerrar · r reconectar · q volver"
     );
     for (cols, filas) in [(40, 12), (80, 24)] {
         let mut prueba = en_sesion(cols, filas, Tema::respaldo(), tres_pestanas);
@@ -462,17 +472,29 @@ fn sesion_modo_prefijo() {
             estado.starts_with(" [MAGI] ^]  1-9 n p pestañas"),
             "{estado}"
         );
-        assert!(estado.contains("q volver"), "{estado}");
-        let ultimo = estado.rsplit(" · ").next().unwrap();
+        // Se compacta por prioridad, pero nunca corta una tecla a medias.
+        assert!(estado.chars().count() <= usize::from(cols), "{estado}");
+        let ultimo = estado
+            .rsplit(" · ")
+            .next()
+            .unwrap()
+            .trim_start_matches(" [MAGI] ^]  ");
         assert!(
             [
+                "1-9 n p pestañas",
+                "←↑→↓ panel",
+                "Espacio disposición",
+                "z ampliar",
+                "[ historial",
+                "/ buscar",
+                "o enlaces",
+                "E escribir en varios",
                 "l lista",
                 "c conectar",
                 "x cerrar",
                 "r reconectar",
-                "w ventana",
+                ", renombrar",
                 "q volver",
-                "prefijo de nuevo = literal"
             ]
             .contains(&ultimo),
             "cortado a medias: {estado}"
@@ -533,7 +555,7 @@ fn la_secuencia_de_tamanos_conserva_el_estado() {
         let esperado = if paso == 0 {
             Vec::new()
         } else {
-            vec![(11, cols, alto_pty(filas))]
+            vec![(11, cols, alto_pty(filas) - 1)]
         };
         assert_eq!(prueba.redimensionares(), esperado, "{cols}×{filas}");
         assert_eq!(prueba.app.pestana_activa, Some(10));

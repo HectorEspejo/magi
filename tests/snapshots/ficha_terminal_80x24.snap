@@ -1,0 +1,27 @@
+---
+source: tests/terminal_ui.rs
+---
+┌ MAGI · HOST · web-01 · editar · #1 ──────────────────────────────────────────┐
+│ VERIFICACIONES PREVIAS (deliberación MAGI)                                  ↑│
+│  [ ] salud del host                                                          │
+│      (último sondeo NOMINAL < 5 min)                                         │
+│  [ ] backup reciente                                                         │
+│      ruta                                                                    │
+│      [  ]                                                                    │
+│      patrón  (< 24 h)                                                        │
+│      [  ]                                                                    │
+│  [ ] tests en verde                                                          │
+│      comando                                                                 │
+│      [  ]                                                                    │
+│ TERMINAL (solo en este equipo)                                               │
+│  [x] Reconectar solo si se cae la red                                        │
+│  [ ] Sesión persistente con tmux                                            ↓│
+│  TÚNELES                                                             n nuevo │
+│    aún no hay túneles: n para crear uno                                      │
+│  COMPROBACIONES                                                      n nueva │
+│    aún no hay comprobaciones propias: n para crear una                       │
+│┌ SERVICIOS ──────────────────────────┐┌ OPCIONES EXTRA ─────────────────────┐│
+││                                     ││                                     ││
+│└─────────────────────────────────────┘└─────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

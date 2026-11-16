@@ -6,11 +6,13 @@
 
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 /// Intervalo mínimo entre dos pantallas enviadas: 30 fps como máximo.
 pub const INTERVALO_ENTRE_PANTALLAS: Duration = Duration::from_millis(33);
 
 /// Color de una celda de la pantalla.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Color {
     /// El color por defecto del terminal.
     Predeterminado,
@@ -35,7 +37,7 @@ impl Color {
 ///
 /// `texto` cubre todas las celdas del tramo: las celdas vacías son espacios y un
 /// carácter ancho ocupa dos columnas de la fila (la segunda no se repite).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tramo {
     /// Texto de las celdas seguidas.
     pub texto: String,
@@ -184,8 +186,14 @@ impl GeneradorTramos {
     }
 }
 
-/// Convierte una fila del parser en tramos del mismo estilo.
-fn tramos_de_fila(pantalla: &vt100::Screen, fila: u16, columnas: u16) -> Vec<Tramo> {
+/// Convierte una fila de la vista del parser en tramos del mismo estilo.
+///
+/// La fila es la visible con el desplazamiento de historial que tenga la
+/// pantalla en ese momento. El texto cubre todo el ancho: las celdas vacías son
+/// espacios (el llamador que quiera el texto recortado usa
+/// [`LineaHistorial::texto`](crate::terminal::historial::LineaHistorial::texto)).
+#[must_use]
+pub fn tramos_de_fila(pantalla: &vt100::Screen, fila: u16, columnas: u16) -> Vec<Tramo> {
     let mut tramos: Vec<Tramo> = Vec::new();
     let mut anterior_ancho = false;
     for columna in 0..columnas {

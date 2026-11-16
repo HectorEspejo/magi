@@ -42,6 +42,7 @@ async fn adjuntar(esc: &mut Escenario, sesion_id: u32, cols: u16, filas: u16) {
         sesion_id,
         cols,
         filas,
+        colores: None,
     })
     .await;
 }
@@ -122,6 +123,7 @@ async fn ac_dos_ventanas_la_pequena_se_cierra() {
             sesion_id: sesion,
             cols: 120,
             filas: 36,
+            colores: None,
         })
         .await;
     assert_eq!(esperar_tamanos(&mut esc, 2).await[1], (120, 36));
@@ -171,6 +173,7 @@ async fn ac_dos_ventanas_la_pequena_se_desadjunta() {
             sesion_id: sesion,
             cols: 100,
             filas: 26,
+            colores: None,
         })
         .await;
     assert_eq!(esperar_tamanos(&mut esc, 2).await[1], (100, 26));
@@ -194,6 +197,7 @@ async fn la_ventana_que_se_adjunta_sabe_el_tamano_vigente() {
             sesion_id: sesion,
             cols: 100,
             filas: 26,
+            colores: None,
         })
         .await;
     esperar_tamanos(&mut esc, 1).await;
@@ -230,6 +234,7 @@ async fn cada_ventana_sabe_quien_explica_su_relleno() {
             sesion_id: sesion,
             cols: 120,
             filas: 46,
+            colores: None,
         })
         .await;
     assert_eq!(esperar_tamanos(&mut esc, 2).await[1], (120, 30));

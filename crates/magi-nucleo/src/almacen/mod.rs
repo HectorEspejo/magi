@@ -205,6 +205,23 @@ impl Almacen {
         hosts::fijar_snippet_al_conectar(&self.conexion, id, snippet_id)
     }
 
+    /// Reconexión automática de las pestañas de este host (Fase 15). Propia
+    /// del equipo: no sube la versión del host ni viaja.
+    pub fn fijar_reconectar(&self, id: i64, reconectar: bool) -> Result<()> {
+        hosts::fijar_reconectar(&self.conexion, id, reconectar)
+    }
+
+    /// Sesión persistente con tmux de este host (Fase 15). Propia del equipo.
+    pub fn fijar_tmux_persistente(&self, id: i64, persistente: bool) -> Result<()> {
+        hosts::fijar_tmux_persistente(&self.conexion, id, persistente)
+    }
+
+    /// Permiso del portapapeles del remoto (OSC 52) de este host (Fase 15).
+    /// Propia del equipo; leer el portapapeles, nunca.
+    pub fn fijar_portapapeles_remoto(&self, id: i64, permitido: bool) -> Result<()> {
+        hosts::fijar_portapapeles_remoto(&self.conexion, id, permitido)
+    }
+
     // Snippets --------------------------------------------------------------
 
     pub fn listar_snippets(&self) -> Result<Vec<crate::snippets::Snippet>> {
