@@ -48,6 +48,7 @@ pub mod paneles;
 pub mod pegado;
 pub mod permisos;
 pub mod persistentes;
+pub mod persistentes_nueva;
 pub mod portapapeles;
 pub mod raton;
 pub mod rejilla;

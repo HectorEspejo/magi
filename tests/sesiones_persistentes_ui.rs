@@ -4,7 +4,9 @@
 //! `TZ=UTC`.
 //!
 //! Cada pista del Sprint 3 tiene su módulo (CONTRATO-S3):
-//! - `lista`: bloque «Persistentes», vista previa, diálogos y acciones (pista A);
+//! - `lista`: bloque «Persistentes», vista previa, diálogos y acciones (pista A1);
+//! - `nueva`: diálogo «Nueva sesión persistente» y la ficha que se guarda al
+//!   existir la sesión (pista A2);
 //! - `ficha`: bloque SESIONES de la ficha del host (pista A2);
 //! - `pestana`: pestaña persistente y soltada, barra de la pestaña, aviso de la
 //!   barra global, historial de tmux y REGISTRO (pista B).
@@ -13,5 +15,7 @@
 mod ficha;
 #[path = "sesiones_persistentes_ui/lista.rs"]
 mod lista;
+#[path = "sesiones_persistentes_ui/nueva.rs"]
+mod nueva;
 #[path = "sesiones_persistentes_ui/pestana.rs"]
 mod pestana;

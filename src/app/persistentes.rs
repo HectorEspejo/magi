@@ -2,20 +2,20 @@
 //! «Persistentes» de la vista Sesiones, la vista previa y los diálogos de las
 //! sesiones (nueva, ficha, renombrar, terminar, borrar y limpiar).
 //!
-//! **CONTRATO-S3-A.** Este módulo nace como esqueleto compilable al fijar el
-//! contrato del Sprint 3: la pista A lo rellena. Lo que ya está fijado y no
+//! **CONTRATO-S3-A1.** Este módulo nace como esqueleto compilable al fijar el
+//! contrato del Sprint 3: la pista A1 (lista, vista previa y acciones) lo rellena. Lo que ya está fijado y no
 //! debe cambiar de firma sin avisar a las demás pistas:
 //!
 //! - `EstadoPersistentes.lista`: la última `ListaPersistentes` que difundió el
 //!   servidor (la guarda `evento_persistentes`; la pista B la lee para el aviso
 //!   de la barra global y la pestaña soltada).
 //! - `App::persistentes_con_atencion`: las sesiones que piden atención ahora.
-//! - `App::pestana_persistente_abierta`: la pista B la llama al ver una pestaña
-//!   persistente nueva (la pista A guarda la ficha pendiente o, en un host
-//!   marcado, la ficha con `origen = host`).
-//! - `App::persistentes_apertura_fallida`: la pista B la llama desde
-//!   `apertura_tmux_fallida`; si devuelve `true`, la pista A ya enseñó su
-//!   diálogo (nombre ocupado: engancharse a la existente o cambiar el nombre).
+//! - `App::pestana_persistente_abierta` y `App::persistentes_apertura_fallida`
+//!   (en `persistentes_nueva.rs`, pista A2): la pista B las llama al ver una
+//!   pestaña persistente nueva y al fallar una apertura de tmux.
+//! - `App::abrir_dialogo_nueva_sesion` y `App::reabrir_ficha` (pista A2): las
+//!   llaman la pista A1 (teclas `n` y `↵` sobre una terminada), la paleta, la
+//!   pista B (`prefijo N`) y las vistas Hosts y Flota.
 //!
 //! El estado de una sesión (viva, clientes, equipo, actividad, atención,
 //! título) y su contenido (vista previa) viven solo en memoria: nunca van a
@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use crossterm::event::KeyEvent;
 
+use crate::app::persistentes_nueva::{CreacionPendiente, FormularioNueva};
 use crate::app::App;
 use crate::protocolo::{self, ListaPersistentes, MensajeServidor};
 
@@ -35,22 +36,25 @@ pub struct EstadoPersistentes {
     pub lista: Option<ListaPersistentes>,
     /// Cuándo llegó esa lista (reloj del cliente).
     pub recibida_en: Option<Instant>,
+    /// Sesiones que se pidieron crear y aún no tienen pestaña: la ficha se
+    /// guarda solo cuando la sesión ya existe en el host (pista A2).
+    pub creaciones: Vec<CreacionPendiente>,
 }
-
-/// Formulario «Nueva sesión persistente» (host, nombre, carpeta, comando,
-/// comando de reanudación y nota). CONTRATO-S3-A: lo define la pista A.
-pub struct FormularioNueva {}
 
 /// Diálogos de las sesiones persistentes (viven en `App.dialogo`).
 pub enum DialogoPersistentes {
-    /// «Nueva sesión persistente» (CONTRATO-S3-A: la pista A añade el resto).
+    /// «Nueva sesión persistente» (lo define la pista A2, `persistentes_nueva`).
     Nueva(FormularioNueva),
+    // CONTRATO-S3-A1: la pista A1 añade aquí la vista previa, la ficha de la
+    // sesión, renombrar y las confirmaciones de terminar, borrar y limpiar.
 }
 
 impl DialogoPersistentes {
     /// Pega texto en el campo con el foco; `false` si no admite texto.
-    pub fn pegar_texto(&mut self, _texto: &str) -> bool {
-        false
+    pub fn pegar_texto(&mut self, texto: &str) -> bool {
+        match self {
+            DialogoPersistentes::Nueva(formulario) => formulario.pegar_texto(texto),
+        }
     }
 }
 
@@ -103,38 +107,27 @@ impl App {
         false
     }
 
-    /// Tecla para un diálogo de las sesiones persistentes (CONTRATO-S3-A).
+    /// Tecla para un diálogo de las sesiones persistentes.
     pub(crate) fn tecla_dialogo_persistentes(
         &mut self,
         dialogo: DialogoPersistentes,
-        _tecla: KeyEvent,
+        tecla: KeyEvent,
     ) {
-        self.dialogo = Some(crate::app::Dialogo::Persistentes(dialogo));
+        match dialogo {
+            DialogoPersistentes::Nueva(formulario) => {
+                self.tecla_dialogo_nueva(formulario, tecla);
+            }
+        }
     }
 
     /// Ejecuta una acción confirmada (CONTRATO-S3-A).
     pub(crate) fn ejecutar_accion_persistentes(&mut self, _accion: AccionPersistentes) {}
 
-    /// Una entrada de la paleta (CONTRATO-S3-A).
-    pub(crate) fn accion_paleta_persistentes(&mut self, _accion: AccionPaletaPersistentes) {}
-
-    /// Una pestaña persistente acaba de aparecer en `Sesiones{lista}`: si hay
-    /// una creación pendiente de ese host y nombre, se guarda la ficha y se
-    /// anota `sesion_persistente_creada`; en un host marcado sin ficha, se crea
-    /// con `origen = host` (CONTRATO-S3-A; la llama la pista B).
-    #[allow(dead_code)] // CONTRATO-S3-B: la llama la pista B desde `reconciliar_sesiones`.
-    pub(crate) fn pestana_persistente_abierta(&mut self, _host_id: i64, _nombre: &str) {}
-
-    /// El servidor no pudo abrir la pestaña de tmux. Devuelve `true` si esta
-    /// pista enseñó su diálogo (nombre ocupado) y la pista B no debe mostrar
-    /// el error genérico (CONTRATO-S3-A).
-    pub(crate) fn persistentes_apertura_fallida(
-        &mut self,
-        _host_id: i64,
-        _nombre: &str,
-        _causa: protocolo::CausaAperturaTmux,
-    ) -> bool {
-        false
+    /// Una entrada de la paleta (CONTRATO-S3-A1).
+    pub(crate) fn accion_paleta_persistentes(&mut self, accion: AccionPaletaPersistentes) {
+        match accion {
+            AccionPaletaPersistentes::Nueva => self.abrir_dialogo_nueva_sesion(None),
+        }
     }
 
     /// Las sesiones que piden atención según la última lista del servidor, en
