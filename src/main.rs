@@ -294,7 +294,14 @@ fn main() -> anyhow::Result<()> {
             } else {
                 Some(avisos.join(" · "))
             };
-            app::ejecutar(rutas, config, tema, almacen, aviso, Some(host.id))
+            app::ejecutar(
+                rutas,
+                config,
+                tema,
+                almacen,
+                aviso,
+                Some(app::AperturaInicial::Host(host.id)),
+            )
         }
         Some(Comando::Diagnostico) | Some(Comando::Autocompletado { .. }) | Some(Comando::Man) => {
             // Se atienden al principio, antes de descubrir rutas y abrir el log.

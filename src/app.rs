@@ -47,6 +47,7 @@ pub mod lanzar;
 pub mod paneles;
 pub mod pegado;
 pub mod permisos;
+pub mod persistentes;
 pub mod portapapeles;
 pub mod raton;
 pub mod rejilla;
@@ -62,6 +63,9 @@ pub mod teclado;
 pub use dialogo_magi::DeliberacionAbierta;
 pub use geometria::Geometria;
 pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
+pub use persistentes::{
+    AccionPaletaPersistentes, AccionPersistentes, DialogoPersistentes, EstadoPersistentes,
+};
 pub use resultados::{AccionResultados, EstadoResultados};
 pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
 
@@ -2100,6 +2104,8 @@ pub enum AccionDialogo {
         id: i64,
         host_id: i64,
     },
+    /// Acciones confirmadas de las sesiones persistentes (Fase 16).
+    Persistentes(AccionPersistentes),
     /// Acciones confirmadas de la vista Snippets (Fase 6).
     Snippets(AccionSnippets),
     /// Lanzamiento de snippets (Fase 6): `p` con más de cinco hosts.
@@ -2205,6 +2211,9 @@ pub enum EntradaTextoAccion {
 }
 
 pub enum Dialogo {
+    /// Diálogos de las sesiones persistentes (Fase 16): nueva, ficha,
+    /// renombrar, terminar, borrar y limpiar.
+    Persistentes(DialogoPersistentes),
     /// Diálogos de la vista Snippets (formulario).
     Snippets(DialogoSnippets),
     /// Edición remota (Fase 8): subir, conflicto, fallo de la subida…
@@ -2410,6 +2419,7 @@ impl Dialogo {
                 campo.insertar_texto(texto);
                 true
             }
+            Dialogo::Persistentes(dialogo) => dialogo.pegar_texto(texto),
             Dialogo::ExportarRegistro { estado } => {
                 estado.campo.insertar_texto(texto);
                 true
@@ -2581,6 +2591,8 @@ pub enum AccionPaleta {
     IrATuneles,
     /// Abrir el diálogo de túnel nuevo.
     NuevoTunel,
+    /// Entradas de las sesiones persistentes (Fase 16).
+    Persistentes(AccionPaletaPersistentes),
     /// Entradas de la vista Snippets (Fase 6).
     Snippets(AccionPaletaSnippets),
     /// `snippet · <nombre>` y `snippet · <nombre> · <host>`.
@@ -2670,8 +2682,8 @@ pub struct App {
     abrir_al_cerrar: Option<i64>,
     /// Mensaje sobre sesiones que siguen abiertas, mostrado al salir.
     pub aviso_al_salir: Option<String>,
-    /// Host cuyo `AbrirSesion` se envía nada más conectar con el servidor.
-    pub abrir_al_arrancar: Option<i64>,
+    /// Lo que se abre nada más conectar con el servidor.
+    pub abrir_al_arrancar: Option<AperturaInicial>,
     pub vista: Vista,
     /// Vista desde la que se entró en Sesión (para `prefijo q`).
     pub vista_previa: Option<Vista>,
@@ -2851,6 +2863,9 @@ pub struct App {
     pub portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto,
     /// Lista de sesiones de tmux del host elegido en Sesiones, si se pidió.
     pub tmux: Option<EstadoTmux>,
+    /// Sesiones persistentes (Fase 16): lista del servidor, bloque, vista
+    /// previa y creaciones pendientes.
+    pub persistentes: EstadoPersistentes,
     /// Peticiones del terminal en vuelo, por peticion_id (desde 2^49).
     pub peticiones_terminal: HashMap<u64, PeticionTerminal>,
     siguiente_peticion_terminal: u64,
@@ -3076,6 +3091,7 @@ impl App {
             escritura_varios: escritura_varios::EscrituraVarios::default(),
             portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto::default(),
             tmux: None,
+            persistentes: EstadoPersistentes::default(),
             peticiones_terminal: HashMap::new(),
             siguiente_peticion_terminal: RANGO_TERMINAL,
             foco_exterior: true,
@@ -3259,8 +3275,19 @@ impl App {
         crate::ui::activar_extras(&self.config.terminal);
         // Primero el tamaño: la pestaña que se abra al arrancar lo necesita.
         self.iniciar_pintado(&mut terminal)?;
-        if let Some(host_id) = self.abrir_al_arrancar.take() {
-            self.conectar(host_id);
+        match self.abrir_al_arrancar.take() {
+            Some(AperturaInicial::Host(host_id)) => self.conectar(host_id),
+            // `magi sesion <nombre>`: engancharse soltando a los demás.
+            Some(AperturaInicial::Sesion { host_id, nombre }) => {
+                self.abrir_sesion_persistente(sesion::DestinoPersistente {
+                    host_id,
+                    servidor: protocolo::ServidorTmux::Magi,
+                    nombre,
+                    crear: None,
+                    compartir: false,
+                });
+            }
+            None => {}
         }
         while !self.salir {
             if !self.ciclo(&mut terminal)? {
@@ -4503,6 +4530,9 @@ impl App {
         if self.evento_terminal(&mensaje) {
             return;
         }
+        if self.evento_persistentes(&mensaje) {
+            return;
+        }
         match mensaje {
             protocolo::MensajeServidor::Sesiones { lista } => {
                 self.reconciliar_sesiones(lista);
@@ -4830,8 +4860,7 @@ impl App {
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
-            // CONTRATO-S3: las sesiones persistentes las atiende el cliente del
-            // Sprint 3 (bloque «Persistentes», vista previa y renombrar).
+            // Las sesiones persistentes las resuelve `evento_persistentes`.
             protocolo::MensajeServidor::SesionesPersistentes { .. }
             | protocolo::MensajeServidor::VistaPrevia { .. }
             | protocolo::MensajeServidor::TmuxRenombrada { .. } => {}
@@ -6866,6 +6895,11 @@ impl App {
                         self.ir_a_vista(Vista::Tuneles);
                         self.nuevo_tunel();
                     }
+                    Some(AccionPaleta::Persistentes(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_persistentes(accion);
+                    }
                     Some(AccionPaleta::Snippets(accion)) => {
                         let accion = accion.clone();
                         self.paleta = None;
@@ -8852,6 +8886,10 @@ impl App {
             self.tecla_tmux(tecla);
             return;
         }
+        // El bloque «Persistentes» (Fase 16) maneja sus teclas si tiene el foco.
+        if self.tecla_persistentes_sesiones(tecla) {
+            return;
+        }
         match tecla.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.seleccion_sesiones = self.seleccion_sesiones.saturating_sub(1);
@@ -9037,6 +9075,7 @@ impl App {
             return;
         };
         match dialogo {
+            Dialogo::Persistentes(dialogo) => self.tecla_dialogo_persistentes(dialogo, tecla),
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Edicion(dialogo) => self.tecla_dialogo_edicion(dialogo, tecla),
@@ -11174,6 +11213,7 @@ impl App {
                 // habitual; el bloque «Persistentes» elegirá el servidor.
                 self.terminar_tmux(host_id, protocolo::ServidorTmux::Habitual, nombre);
             }
+            AccionDialogo::Persistentes(accion) => self.ejecutar_accion_persistentes(accion),
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
             AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
@@ -11583,14 +11623,23 @@ pub fn instalar_hook_panico() {
 }
 
 /// Arranca el runtime de tokio, construye la app y ejecuta el bucle de la UI.
-/// Con `abrir_al_arrancar`, se abre una sesión nueva a ese host al empezar.
+/// Lo que MAGI abre al arrancar (`magi <host>` y `magi sesion <nombre>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AperturaInicial {
+    /// Una pestaña nueva a ese host.
+    Host(i64),
+    /// Engancharse a una sesión persistente existente del tmux propio.
+    Sesion { host_id: i64, nombre: String },
+}
+
+/// Con `abrir_al_arrancar`, se abre lo indicado al empezar.
 pub fn ejecutar(
     rutas: Rutas,
     config: Config,
     tema: Tema,
     almacen: Almacen,
     aviso: Option<String>,
-    abrir_al_arrancar: Option<i64>,
+    abrir_al_arrancar: Option<AperturaInicial>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

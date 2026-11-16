@@ -222,6 +222,7 @@ pub const ESTRECHO_IMPORTACION_BORRADOS: u16 = 56;
 pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
     use crate::app::Dialogo;
     match dialogo {
+        Dialogo::Persistentes(dialogo) => Some(crate::ui::persistentes::minimo(dialogo)),
         Dialogo::Edicion(dialogo) => Some(crate::ui::edicion::minimo(dialogo)),
         Dialogo::Permisos(dialogo) => Some(crate::ui::permisos::minimo(dialogo)),
         Dialogo::Sincronizar(dialogo) => Some(crate::ui::sincronizar::minimo(dialogo)),

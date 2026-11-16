@@ -65,6 +65,18 @@ pub struct EstadoTmux {
     pub desplazamiento: usize,
 }
 
+/// A qué sesión persistente se abre una pestaña (`abrir_sesion_persistente`).
+#[derive(Debug, Clone)]
+pub struct DestinoPersistente {
+    pub host_id: i64,
+    pub servidor: protocolo::ServidorTmux,
+    pub nombre: String,
+    /// Crear la sesión antes de engancharse (solo en el servidor propio).
+    pub crear: Option<protocolo::CrearTmux>,
+    /// Engancharse sin soltar a los demás.
+    pub compartir: bool,
+}
+
 /// Una petición del terminal en vuelo (rango 2^49).
 #[derive(Debug, Clone)]
 pub enum PeticionTerminal {
@@ -831,10 +843,10 @@ impl App {
             MensajeServidor::AperturaTmuxFallida {
                 host_id,
                 nombre,
+                causa,
                 mensaje,
-                ..
             } => {
-                self.apertura_tmux_fallida(*host_id, nombre, mensaje);
+                self.apertura_tmux_fallida(*host_id, nombre, *causa, mensaje);
                 true
             }
             MensajeServidor::Portapapeles { sesion_id, texto } => {
@@ -1032,14 +1044,55 @@ impl App {
         self.sucio = true;
     }
 
+    /// Abre una pestaña enganchada a una sesión persistente, creándola antes si
+    /// `destino.crear` lo pide. Es el único camino del cliente para abrir una
+    /// sesión del tmux propio: la pista A (lista y diálogos) y `magi sesion`
+    /// llaman aquí; la pista B (pestaña) la completa (CONTRATO-S3-B).
+    pub(crate) fn abrir_sesion_persistente(&mut self, destino: DestinoPersistente) {
+        let comandos = if destino.crear.is_some() {
+            self.comandos_al_conectar(destino.host_id)
+        } else {
+            Vec::new()
+        };
+        let (cols, filas) = self.tamano_pty();
+        self.servidor.enviar(MensajeCliente::AbrirSesion {
+            host_id: destino.host_id,
+            cols,
+            filas,
+            comandos_iniciales: comandos,
+            orden: None,
+            tmux: Some(protocolo::PeticionTmux {
+                servidor: destino.servidor,
+                nombre: destino.nombre,
+                crear: destino.crear,
+                compartir: destino.compartir,
+            }),
+        });
+        self.aperturas_pendientes.insert(destino.host_id);
+        self.tmux = None;
+        self.sucio = true;
+    }
+
     /// El servidor no abrió la pestaña de tmux que se pidió (sin tmux, tmux
     /// antiguo, la sesión ya no existe…): no hay pestaña que esperar. Se libera
     /// el host (si no, «ya hay una conexión en curso» lo bloquearía) y se dice
     /// el motivo tal como lo da el servidor. Los diálogos para engancharse a la
     /// existente o cambiar el nombre son del bloque «Persistentes»
     /// (CONTRATO-S3).
-    fn apertura_tmux_fallida(&mut self, host_id: i64, nombre: &str, motivo: &str) {
+    fn apertura_tmux_fallida(
+        &mut self,
+        host_id: i64,
+        nombre: &str,
+        causa: protocolo::CausaAperturaTmux,
+        motivo: &str,
+    ) {
         self.aperturas_pendientes.remove(&host_id);
+        // Nombre ocupado: la pista A enseña «engancharse a la existente o
+        // cambiar el nombre» (CONTRATO-S3-A).
+        if self.persistentes_apertura_fallida(host_id, nombre, causa) {
+            self.sucio = true;
+            return;
+        }
         let texto = if motivo.trim().is_empty() {
             format!("no se pudo abrir la sesión de tmux «{nombre}»")
         } else {

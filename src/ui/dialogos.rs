@@ -289,6 +289,9 @@ pub fn dibujar(
         Dialogo::Ejecutar(dialogo) => {
             crate::ui::ejecutar::dibujar_con_disposicion(marco, area, app, dialogo, disp);
         }
+        Dialogo::Persistentes(dialogo) => {
+            crate::ui::persistentes::dibujar(marco, area, app, dialogo, disp);
+        }
         Dialogo::Edicion(dialogo) => crate::ui::edicion::dibujar(marco, area, app, dialogo, disp),
         Dialogo::Permisos(dialogo) => {
             crate::ui::permisos::dibujar(marco, area, app, dialogo, disp);
