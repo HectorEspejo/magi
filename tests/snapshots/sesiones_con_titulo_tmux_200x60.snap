@@ -57,7 +57,7 @@ source: tests/terminal_ui.rs
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   web-01 · clave
-  servidor pid N · protocolo 9 · desde hace NN s
+  servidor pid N · protocolo 10 · desde hace NN s
 
 
  ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda

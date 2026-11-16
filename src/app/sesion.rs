@@ -19,6 +19,38 @@ use crate::app::{
 };
 use crate::protocolo::{self, EstadoSesionRemota, MensajeCliente, MensajeServidor};
 
+/// Una sesión de tmux en la lista de la Fase 15 (CONTRATO-S3: el Sprint 3 la
+/// sustituye por el bloque «Persistentes» de la vista Sesiones, que trabaja
+/// directamente con `protocolo::SesionVista`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SesionTmuxLista {
+    pub nombre: String,
+    pub enganchada: bool,
+    pub ventanas: u16,
+    /// Cuándo se creó, ya formateado para mostrarlo (vacío si no consta).
+    pub creada: String,
+}
+
+impl From<&protocolo::SesionVista> for SesionTmuxLista {
+    fn from(sesion: &protocolo::SesionVista) -> Self {
+        let creada = chrono::DateTime::from_timestamp(sesion.creada, 0)
+            .filter(|_| sesion.creada > 0)
+            .map(|momento| {
+                momento
+                    .with_timezone(&chrono::Local)
+                    .format("%a %b %e %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        SesionTmuxLista {
+            nombre: sesion.nombre.clone(),
+            enganchada: sesion.clientes > 0,
+            ventanas: u16::try_from(sesion.ventanas).unwrap_or(u16::MAX),
+            creada,
+        }
+    }
+}
+
 /// Lista de sesiones de tmux de un host, en la vista Sesiones.
 #[derive(Debug, Clone, Default)]
 pub struct EstadoTmux {
@@ -28,7 +60,7 @@ pub struct EstadoTmux {
     pub cargando: bool,
     /// El host no tiene tmux (o falló): el motivo.
     pub sin_tmux: Option<String>,
-    pub sesiones: Vec<protocolo::InfoSesionTmux>,
+    pub sesiones: Vec<SesionTmuxLista>,
     pub seleccion: usize,
     pub desplazamiento: usize,
 }
@@ -618,6 +650,9 @@ impl App {
         self.servidor.enviar(MensajeCliente::TerminarTmux {
             peticion_id,
             host_id,
+            // CONTRATO-S3: la lista de la Fase 15 solo trabaja con el tmux
+            // habitual; el bloque «Persistentes» elegirá el servidor.
+            servidor: protocolo::ServidorTmux::Habitual,
             nombre: nombre.clone(),
         });
         self.peticiones_terminal.insert(
@@ -773,6 +808,7 @@ impl App {
             }
             MensajeServidor::TmuxTerminada {
                 peticion_id,
+                servidor: _,
                 resultado,
             } => {
                 self.tmux_terminada(*peticion_id, *resultado);
@@ -879,7 +915,7 @@ impl App {
         &mut self,
         peticion_id: u64,
         host_id: i64,
-        sesiones: Vec<protocolo::InfoSesionTmux>,
+        sesiones: Vec<protocolo::SesionVista>,
         sin_tmux: Option<String>,
     ) {
         if self.peticiones_terminal.remove(&peticion_id).is_none() {
@@ -894,7 +930,7 @@ impl App {
         estado.cargando = false;
         estado.sin_tmux = sin_tmux.clone();
         estado.seleccion = estado.seleccion.min(sesiones.len().saturating_sub(1));
-        estado.sesiones = sesiones;
+        estado.sesiones = sesiones.iter().map(SesionTmuxLista::from).collect();
         self.sucio = true;
     }
 
@@ -953,7 +989,14 @@ impl App {
             filas,
             comandos_iniciales: comandos,
             orden: None,
-            tmux,
+            // CONTRATO-S3: la Fase 15 solo engancha sesiones del tmux habitual
+            // ya existentes; el diálogo de la Fase 16 pedirá crear o compartir.
+            tmux: tmux.map(|nombre| protocolo::PeticionTmux {
+                servidor: protocolo::ServidorTmux::Habitual,
+                nombre,
+                crear: None,
+                compartir: false,
+            }),
         });
         self.aperturas_pendientes.insert(host_id);
         self.tmux = None;

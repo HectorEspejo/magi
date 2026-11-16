@@ -21,8 +21,8 @@ use magi::app::{App, CampoFicha, Dialogo, EntradaTextoAccion, Evento};
 use magi::config::{Config, Rutas};
 use magi::modelo::{DatosHost, Origen};
 use magi::protocolo::{
-    BytesPestana, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion, InfoSesionTmux,
-    InfoTunelTemporal, MensajeCliente, MensajeServidor, ResultadoTmux,
+    BytesPestana, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion, InfoTunelTemporal,
+    MensajeCliente, MensajeServidor, ResultadoTmux, ServidorTmux, SesionVista, TmuxPestana,
 };
 use magi::tema::Tema;
 use magi::ui::componentes::CampoTexto;
@@ -264,6 +264,33 @@ fn sesion(id: u32, host: &str) -> InfoSesion {
         aviso: None,
         tmux: None,
         escritura_varios: false,
+    }
+}
+
+/// Una sesión de tmux del host como la lista el servidor (v10), con una fecha
+/// de creación fija para que la hora que se pinta no dependa del reloj.
+fn sesion_tmux(nombre: &str, clientes: u32, ventanas: u32, creada: i64) -> SesionVista {
+    SesionVista {
+        servidor: ServidorTmux::Habitual,
+        nombre: nombre.to_string(),
+        clientes,
+        equipo: None,
+        actividad: creada,
+        creada,
+        campana: false,
+        ventanas,
+        titulo: None,
+    }
+}
+
+/// La sesión de tmux habitual de una pestaña de la Fase 15 (sin versión ni
+/// soltada).
+fn tmux_habitual(nombre: &str) -> TmuxPestana {
+    TmuxPestana {
+        servidor: ServidorTmux::Habitual,
+        nombre: nombre.to_string(),
+        version: None,
+        soltada: None,
     }
 }
 
@@ -822,7 +849,7 @@ fn la_pestana_reconectando_se_ve_con_cuenta_atras() {
         desde: chrono::Utc::now().timestamp() - 41,
         causa: "conexión perdida".to_string(),
     });
-    reconectando.tmux = Some("magi-portatil-1".to_string());
+    reconectando.tmux = Some(tmux_habitual("magi-portatil-1"));
     prueba.entrar_en_sesion(vec![reconectando, sesion_de(2, dos, "db-01")]);
     let texto = prueba.texto();
     assert!(texto.contains("Reconectando con web-01"));
@@ -841,7 +868,7 @@ fn sesiones_muestra_titulo_avisos_y_lista_tmux() {
         texto: "Claude necesita tu permiso".to_string(),
         hora: 0,
     });
-    info.tmux = Some("magi-portatil-1".to_string());
+    info.tmux = Some(tmux_habitual("magi-portatil-1"));
     prueba.bienvenida(vec![info]);
     prueba.tecla(KeyCode::F(3));
     assert_eq!(prueba.app.vista, Vista::Sesiones);
@@ -871,18 +898,8 @@ fn sesiones_muestra_titulo_avisos_y_lista_tmux() {
         peticion_id,
         host_id: host,
         sesiones: vec![
-            InfoSesionTmux {
-                nombre: "magi-portatil-1".to_string(),
-                enganchada: true,
-                ventanas: 2,
-                creada: "hace 3 h".to_string(),
-            },
-            InfoSesionTmux {
-                nombre: "despliegue".to_string(),
-                enganchada: false,
-                ventanas: 1,
-                creada: "ayer".to_string(),
-            },
+            sesion_tmux("magi-portatil-1", 1, 2, 1_700_000_000),
+            sesion_tmux("despliegue", 0, 1, 1_699_900_000),
         ],
         sin_tmux: None,
     });
@@ -912,6 +929,7 @@ fn sesiones_muestra_titulo_avisos_y_lista_tmux() {
     assert_eq!(peticion.1, "magi-portatil-1");
     prueba.servidor(MensajeServidor::TmuxTerminada {
         peticion_id: peticion.0,
+        servidor: ServidorTmux::Habitual,
         resultado: ResultadoTmux::Ok,
     });
     assert!(!prueba
@@ -1094,7 +1112,7 @@ fn instantaneas_de_una_pestana_reconectando() {
         desde: chrono::Utc::now().timestamp() - 41,
         causa: "conexión perdida".to_string(),
     });
-    reconectando.tmux = Some("magi-portatil-1".to_string());
+    reconectando.tmux = Some(tmux_habitual("magi-portatil-1"));
     prueba.entrar_en_sesion(vec![reconectando, sesion_de(2, dos, "db-01")]);
     instantaneas(&mut prueba, "terminal_reconectando");
 }
@@ -1109,7 +1127,7 @@ fn instantaneas_de_sesiones_con_tmux() {
         texto: "Claude necesita tu permiso".to_string(),
         hora: 0,
     });
-    info.tmux = Some("magi-portatil-1".to_string());
+    info.tmux = Some(tmux_habitual("magi-portatil-1"));
     prueba.bienvenida(vec![info]);
     prueba.tecla(KeyCode::F(3));
     instantaneas(&mut prueba, "sesiones_con_titulo_tmux");
@@ -1126,18 +1144,8 @@ fn instantaneas_de_sesiones_con_tmux() {
         peticion_id,
         host_id: host,
         sesiones: vec![
-            InfoSesionTmux {
-                nombre: "magi-portatil-1".to_string(),
-                enganchada: true,
-                ventanas: 2,
-                creada: "hace 3 h".to_string(),
-            },
-            InfoSesionTmux {
-                nombre: "despliegue".to_string(),
-                enganchada: false,
-                ventanas: 1,
-                creada: "ayer".to_string(),
-            },
+            sesion_tmux("magi-portatil-1", 1, 2, 1_700_000_000),
+            sesion_tmux("despliegue", 0, 1, 1_699_900_000),
         ],
         sin_tmux: None,
     });

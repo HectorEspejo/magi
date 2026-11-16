@@ -71,7 +71,17 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// `LineasLog` y `FinLog`; `AbrirSesion` gana `orden` (pestañas con orden) y
 /// `TrabajoServidor.acciones_servicio`. Los `peticion_id` de servicios van
 /// desde 2^45.
-pub const VERSION_PROTOCOLO: u32 = 9;
+///
+/// v10 (Fase 16): sesiones persistentes. `AbrirSesion.tmux` pasa de un nombre a
+/// `PeticionTmux{servidor, nombre, crear?, compartir}` (cambia la semántica) e
+/// `InfoSesion.tmux` a `TmuxPestana{servidor, nombre, soltada?}`; `TerminarTmux` y
+/// `TmuxTerminada` ganan `servidor`, y `SesionesTmux` lleva `SesionVista`
+/// (clientes, equipo, actividad, campana y título). Nuevos:
+/// `ConsultarSesionesPersistentes` → `SesionesPersistentes{lista}`,
+/// `PedirVistaPrevia` → `VistaPrevia` y `RenombrarTmux` → `TmuxRenombrada`.
+/// `Reconectar` gana `compartir`. Sus `peticion_id` van en el rango del
+/// terminal (2^49). `TrabajoServidor` no cambia: las sesiones viven en el host.
+pub const VERSION_PROTOCOLO: u32 = 10;
 
 /// Los `peticion_id` del terminal (capturas, tmux y túneles temporales) viven
 /// desde 2^49, por encima de todo lo demás (Fase 15).
@@ -184,7 +194,6 @@ pub enum EstadoSesionRemota {
 
 pub use magi_nucleo::terminal::emulador::ColoresTema;
 pub use magi_nucleo::terminal::historial::LineaHistorial;
-pub use magi_nucleo::terminal::tmux::SesionTmux as InfoSesionTmux;
 
 /// Estado de la reconexión automática de una pestaña.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +245,117 @@ pub enum ResultadoTmux {
     NoExiste,
 }
 
+// ------------------------------------------- sesiones persistentes (v10)
+
+pub use magi_nucleo::sesiones_persistentes::{
+    ComprobacionHost, ErrorComprobacion, EstadoFicha, ServidorTmux, SesionVista, VersionTmux,
+};
+
+/// Lo que hace falta para crear una sesión nueva en el tmux propio (Fase 16).
+/// La carpeta y el comando son texto del usuario: el servidor los valida y los
+/// pasa al script como argumentos, nunca dentro de una orden.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrearTmux {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carpeta: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comando: Option<String>,
+}
+
+/// La sesión de tmux a la que se engancha una pestaña (`AbrirSesion.tmux`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeticionTmux {
+    pub servidor: ServidorTmux,
+    pub nombre: String,
+    /// Crear la sesión antes de engancharse (solo en el servidor propio). Si
+    /// ya existe, no se engancha: la apertura falla con la causa `existe`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crear: Option<CrearTmux>,
+    /// Engancharse sin soltar a los demás clientes.
+    #[serde(default)]
+    pub compartir: bool,
+}
+
+/// Una pestaña soltada: otro equipo se enganchó a su sesión.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Soltada {
+    /// Equipo que la tiene ahora (`@magi_equipo`), si consta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub por_equipo: Option<String>,
+    /// Época en segundos desde la que está soltada.
+    pub desde: i64,
+}
+
+/// La sesión de tmux de una pestaña en `Sesiones{lista}`. Es persistente si
+/// `servidor` es el propio (`magi`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TmuxPestana {
+    pub servidor: ServidorTmux,
+    pub nombre: String,
+    /// Versión de tmux del host, si se conoce (la barra de la pestaña la
+    /// enseña: R147).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<VersionTmux>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soltada: Option<Soltada>,
+}
+
+/// Una ficha vista desde el host (`SesionesPersistentes{lista}`). El estado
+/// no viaja a disco ni a REGISTRO: vive en la memoria del servidor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FichaVista {
+    pub uuid: String,
+    pub host_id: i64,
+    pub nombre: String,
+    pub estado: EstadoFicha,
+    /// La sesión tal como la lista `estado`, si está viva.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sesion: Option<SesionVista>,
+    /// Época en segundos de la última comprobación del host (0 si ninguna).
+    pub comprobada_en: i64,
+}
+
+/// Un host comprobado: su versión de tmux, la hora del host y lo que no tiene
+/// ficha (las del tmux propio sin ficha y las del tmux habitual).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostVisto {
+    pub host_id: i64,
+    pub comprobada_en: i64,
+    /// Hora del host (segundos Unix) al comprobar.
+    pub ahora: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux: Option<VersionTmux>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorComprobacion>,
+    #[serde(default)]
+    pub sin_ficha: Vec<SesionVista>,
+    #[serde(default)]
+    pub habitual: Vec<SesionVista>,
+}
+
+/// Lo que se difunde a todas las ventanas en cada cambio (lista completa, T27).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ListaPersistentes {
+    pub fichas: Vec<FichaVista>,
+    pub hosts: Vec<HostVisto>,
+}
+
+/// Valor por defecto de `servidor` en `TerminarTmux` y `TmuxTerminada`: el
+/// tmux habitual, que es sobre el que actuaba la Fase 15.
+fn servidor_habitual() -> ServidorTmux {
+    ServidorTmux::Habitual
+}
+
+/// Resultado de `RenombrarTmux`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResultadoRenombrar {
+    Ok,
+    NoExiste,
+    Ocupado,
+    /// El host no pudo (sin tmux, tmux antiguo, sin respuesta…), con el motivo.
+    Error(String),
+}
+
 /// Resumen de una sesión para la lista que se difunde a los clientes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InfoSesion {
@@ -260,9 +380,10 @@ pub struct InfoSesion {
     /// Último aviso del remoto sin ver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aviso: Option<InfoAviso>,
-    /// Nombre de la sesión de tmux, si la pestaña es persistente.
+    /// La sesión de tmux de la pestaña, si la tiene (Fase 16: servidor,
+    /// nombre y si está soltada).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tmux: Option<String>,
+    pub tmux: Option<TmuxPestana>,
     /// La pestaña está en una escritura en varios activa (la marca `»`). Lo
     /// ve cualquier ventana, no solo la que la activó (§7.14).
     #[serde(default)]
@@ -770,10 +891,11 @@ pub enum MensajeCliente {
         /// nunca manda texto para ejecutar por esta vía.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orden: Option<OrdenPestana>,
-        /// Nombre de una sesión de tmux existente a la que enganchar la
-        /// pestaña (Fase 15). Debe cumplir la validación del nombre.
+        /// Sesión de tmux a la que enganchar la pestaña, o que crear (Fase
+        /// 16, v10: antes era solo el nombre). El nombre debe cumplir la
+        /// validación; el servidor la repite.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tmux: Option<String>,
+        tmux: Option<PeticionTmux>,
     },
     Adjuntar {
         sesion_id: u32,
@@ -802,6 +924,10 @@ pub enum MensajeCliente {
     },
     Reconectar {
         sesion_id: u32,
+        /// En una pestaña persistente soltada: volver sin soltar a los demás
+        /// (Fase 16). Sin esto, `Reconectar` vuelve soltándolos.
+        #[serde(default)]
+        compartir: bool,
     },
     DecisionHuella {
         sesion_id: u32,
@@ -1092,11 +1218,40 @@ pub enum MensajeCliente {
         peticion_id: u64,
         host_id: i64,
     },
-    /// Termina una sesión de tmux del host (el cliente ya confirmó).
+    /// Termina una sesión de tmux del host (el cliente ya confirmó). Siempre
+    /// por el nombre exacto (`=<nombre>`); `servidor` dice cuál de los dos.
     TerminarTmux {
         peticion_id: u64,
         host_id: i64,
+        #[serde(default = "servidor_habitual")]
+        servidor: ServidorTmux,
         nombre: String,
+    },
+    /// Comprueba ya los hosts con fichas o marcados (Fase 16, al abrir la
+    /// lista, con `r` y cada `refresco_seg` con la lista a la vista). Las
+    /// peticiones seguidas se agrupan y un host comprobado hace menos de 5 s
+    /// no se repite. Responde a todas las ventanas con
+    /// `SesionesPersistentes{lista}`.
+    ConsultarSesionesPersistentes {
+        peticion_id: u64,
+    },
+    /// Las últimas líneas visibles de una sesión, en texto plano, solo para
+    /// la ventana que lo pide y sin guardarlas (Fase 16). Responde
+    /// `VistaPrevia`.
+    PedirVistaPrevia {
+        peticion_id: u64,
+        host_id: i64,
+        servidor: ServidorTmux,
+        nombre: String,
+    },
+    /// Renombra una sesión del tmux propio en el host (Fase 16); solo cuando
+    /// responde `Ok` el cliente cambia su ficha. Las pestañas enganchadas
+    /// siguen enganchadas. Responde `TmuxRenombrada`.
+    RenombrarTmux {
+        peticion_id: u64,
+        host_id: i64,
+        nombre: String,
+        nuevo: String,
     },
     /// Permite el portapapeles del remoto a este host y entrega la petición
     /// pendiente si sigue viva (60 s).
@@ -1538,18 +1693,45 @@ pub enum MensajeServidor {
     TunelesTemporales {
         lista: Vec<InfoTunelTemporal>,
     },
-    /// Sesiones de tmux del host. `sin_tmux` lleva el motivo si no hay tmux.
+    /// Sesiones de tmux del host, las de los dos servidores (v10: cada una
+    /// con servidor, clientes, equipo, actividad, campana y título).
+    /// `sin_tmux` lleva el motivo si no hay tmux.
     SesionesTmux {
         peticion_id: u64,
         host_id: i64,
-        sesiones: Vec<InfoSesionTmux>,
+        sesiones: Vec<SesionVista>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sin_tmux: Option<String>,
     },
     /// Resultado de terminar una sesión de tmux.
     TmuxTerminada {
         peticion_id: u64,
+        #[serde(default = "servidor_habitual")]
+        servidor: ServidorTmux,
         resultado: ResultadoTmux,
+    },
+    /// Estado visto de las sesiones persistentes: lista completa a todas las
+    /// ventanas en cada cambio (Fase 16, T27). Nunca lleva contenido.
+    SesionesPersistentes {
+        lista: ListaPersistentes,
+    },
+    /// Respuesta a `PedirVistaPrevia`: las últimas líneas en texto plano
+    /// (hasta 64 KiB), solo para quien la pidió. `error` lleva el motivo si no
+    /// se pudo leer.
+    VistaPrevia {
+        peticion_id: u64,
+        host_id: i64,
+        nombre: String,
+        lineas: Vec<String>,
+        /// Época en segundos de la lectura.
+        leida_en: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Respuesta a `RenombrarTmux`.
+    TmuxRenombrada {
+        peticion_id: u64,
+        resultado: ResultadoRenombrar,
     },
     /// Copia del remoto por OSC 52 con permiso del host: al portapapeles del
     /// sistema (u OSC 52 hacia fuera).
@@ -1635,7 +1817,14 @@ mod pruebas {
             filas: 30,
         });
         ida_y_vuelta_cliente(MensajeCliente::Cerrar { sesion_id: 3 });
-        ida_y_vuelta_cliente(MensajeCliente::Reconectar { sesion_id: 3 });
+        ida_y_vuelta_cliente(MensajeCliente::Reconectar {
+            sesion_id: 3,
+            compartir: false,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::Reconectar {
+            sesion_id: 3,
+            compartir: true,
+        });
         ida_y_vuelta_cliente(MensajeCliente::DecisionHuella {
             sesion_id: 3,
             decision: true,
@@ -1971,8 +2160,8 @@ mod pruebas {
     }
 
     #[test]
-    fn la_version_del_protocolo_es_la_nueve() {
-        assert_eq!(VERSION_PROTOCOLO, 9);
+    fn la_version_del_protocolo_es_la_diez() {
+        assert_eq!(VERSION_PROTOCOLO, 10);
     }
 
     /// Un servidor anterior a la v4 no manda su pid: se lee como ninguno.
@@ -2592,7 +2781,14 @@ mod pruebas {
         ida_y_vuelta_cliente(MensajeCliente::TerminarTmux {
             peticion_id: RANGO_TERMINAL + 5,
             host_id: 7,
+            servidor: ServidorTmux::Habitual,
             nombre: "magi-portatil-1".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::TerminarTmux {
+            peticion_id: RANGO_TERMINAL + 5,
+            host_id: 7,
+            servidor: ServidorTmux::Magi,
+            nombre: "agente-api".to_string(),
         });
         ida_y_vuelta_cliente(MensajeCliente::PortapapelesPermitido { sesion_id: 3 });
         ida_y_vuelta_cliente(MensajeCliente::RenombrarSesion {
@@ -2689,17 +2885,27 @@ mod pruebas {
             lista: vec![tunel_temporal.clone()],
         });
         let sesiones_tmux = vec![
-            InfoSesionTmux {
-                nombre: "magi-portatil-1".to_string(),
-                enganchada: true,
+            SesionVista {
+                servidor: ServidorTmux::Magi,
+                nombre: "agente-api".to_string(),
+                clientes: 1,
+                equipo: Some("portatil".to_string()),
+                actividad: 1_700_000_100,
+                creada: 1_700_000_000,
+                campana: true,
                 ventanas: 3,
-                creada: "Mon Nov 9 19:00:00 2026".to_string(),
+                titulo: Some("Claude Code".to_string()),
             },
-            InfoSesionTmux {
+            SesionVista {
+                servidor: ServidorTmux::Habitual,
                 nombre: "trabajo".to_string(),
-                enganchada: false,
+                clientes: 0,
+                equipo: None,
+                actividad: 1_699_990_000,
+                creada: 1_699_900_000,
+                campana: false,
                 ventanas: 1,
-                creada: "Sun Nov 8 10:00:00 2026".to_string(),
+                titulo: None,
             },
         ];
         ida_y_vuelta_servidor(MensajeServidor::SesionesTmux {
@@ -2716,10 +2922,12 @@ mod pruebas {
         });
         ida_y_vuelta_servidor(MensajeServidor::TmuxTerminada {
             peticion_id: RANGO_TERMINAL + 5,
+            servidor: ServidorTmux::Habitual,
             resultado: ResultadoTmux::Ok,
         });
         ida_y_vuelta_servidor(MensajeServidor::TmuxTerminada {
             peticion_id: RANGO_TERMINAL + 6,
+            servidor: ServidorTmux::Magi,
             resultado: ResultadoTmux::NoExiste,
         });
         ida_y_vuelta_servidor(MensajeServidor::Portapapeles {
@@ -2732,6 +2940,103 @@ mod pruebas {
         });
     }
 
+    /// Los mensajes de las sesiones persistentes (v10) hacen ida y vuelta, y
+    /// los campos opcionales que faltan se leen con su valor por defecto.
+    #[test]
+    fn las_sesiones_persistentes_hacen_ida_y_vuelta() {
+        ida_y_vuelta_cliente(MensajeCliente::ConsultarSesionesPersistentes {
+            peticion_id: RANGO_TERMINAL + 10,
+        });
+        ida_y_vuelta_cliente(MensajeCliente::PedirVistaPrevia {
+            peticion_id: RANGO_TERMINAL + 11,
+            host_id: 7,
+            servidor: ServidorTmux::Magi,
+            nombre: "agente-api".to_string(),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::RenombrarTmux {
+            peticion_id: RANGO_TERMINAL + 12,
+            host_id: 7,
+            nombre: "agente-api".to_string(),
+            nuevo: "agente-web".to_string(),
+        });
+        let sesion = SesionVista {
+            servidor: ServidorTmux::Magi,
+            nombre: "agente-api".to_string(),
+            clientes: 0,
+            equipo: Some("sobremesa".to_string()),
+            actividad: 1_700_000_100,
+            creada: 1_700_000_000,
+            campana: true,
+            ventanas: 1,
+            titulo: Some("Claude Code".to_string()),
+        };
+        ida_y_vuelta_servidor(MensajeServidor::SesionesPersistentes {
+            lista: ListaPersistentes {
+                fichas: vec![FichaVista {
+                    uuid: "0f8d6c2e-0000-4000-8000-000000000001".to_string(),
+                    host_id: 7,
+                    nombre: "agente-api".to_string(),
+                    estado: EstadoFicha::VivaLibre,
+                    sesion: Some(sesion.clone()),
+                    comprobada_en: 1_700_000_200,
+                }],
+                hosts: vec![HostVisto {
+                    host_id: 7,
+                    comprobada_en: 1_700_000_200,
+                    ahora: 1_700_000_199,
+                    tmux: Some(VersionTmux::nueva(3, 4)),
+                    error: None,
+                    sin_ficha: vec![sesion],
+                    habitual: Vec::new(),
+                }],
+            },
+        });
+        ida_y_vuelta_servidor(MensajeServidor::SesionesPersistentes {
+            lista: ListaPersistentes::default(),
+        });
+        ida_y_vuelta_servidor(MensajeServidor::VistaPrevia {
+            peticion_id: RANGO_TERMINAL + 11,
+            host_id: 7,
+            nombre: "agente-api".to_string(),
+            lineas: vec!["$ claude".to_string(), String::new()],
+            leida_en: 1_700_000_300,
+            error: None,
+        });
+        ida_y_vuelta_servidor(MensajeServidor::VistaPrevia {
+            peticion_id: RANGO_TERMINAL + 11,
+            host_id: 7,
+            nombre: "agente-api".to_string(),
+            lineas: Vec::new(),
+            leida_en: 1_700_000_300,
+            error: Some("el host no responde".to_string()),
+        });
+        for resultado in [
+            ResultadoRenombrar::Ok,
+            ResultadoRenombrar::NoExiste,
+            ResultadoRenombrar::Ocupado,
+            ResultadoRenombrar::Error("tmux demasiado antiguo".to_string()),
+        ] {
+            ida_y_vuelta_servidor(MensajeServidor::TmuxRenombrada {
+                peticion_id: RANGO_TERMINAL + 12,
+                resultado,
+            });
+        }
+        // Sin servidor ni compartir, un `TerminarTmux` y un `Reconectar` viejos
+        // se leen: el tmux habitual y sin compartir.
+        let linea = r#"{"tipo":"TerminarTmux","peticion_id":1,"host_id":7,"nombre":"x"}"#;
+        match serde_json::from_str::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::TerminarTmux { servidor, .. } => {
+                assert_eq!(servidor, ServidorTmux::Habitual)
+            }
+            otro => panic!("{otro:?}"),
+        }
+        let linea = r#"{"tipo":"Reconectar","sesion_id":3}"#;
+        match serde_json::from_str::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::Reconectar { compartir, .. } => assert!(!compartir),
+            otro => panic!("{otro:?}"),
+        }
+    }
+
     /// `AbrirSesion` con tmux y `Adjuntar` con los colores del tema (v9)
     /// hacen ida y vuelta.
     #[test]
@@ -2742,7 +3047,28 @@ mod pruebas {
             filas: 38,
             comandos_iniciales: Vec::new(),
             orden: None,
-            tmux: Some("magi-portatil-1".to_string()),
+            tmux: Some(PeticionTmux {
+                servidor: ServidorTmux::Habitual,
+                nombre: "magi-portatil-1".to_string(),
+                crear: None,
+                compartir: false,
+            }),
+        });
+        ida_y_vuelta_cliente(MensajeCliente::AbrirSesion {
+            host_id: 7,
+            cols: 120,
+            filas: 38,
+            comandos_iniciales: Vec::new(),
+            orden: None,
+            tmux: Some(PeticionTmux {
+                servidor: ServidorTmux::Magi,
+                nombre: "agente-api".to_string(),
+                crear: Some(CrearTmux {
+                    carpeta: Some("~/proyectos/api".to_string()),
+                    comando: Some("claude".to_string()),
+                }),
+                compartir: true,
+            }),
         });
         ida_y_vuelta_cliente(MensajeCliente::Adjuntar {
             sesion_id: 3,
@@ -2783,7 +3109,15 @@ mod pruebas {
                 texto: "compilación terminada".to_string(),
                 hora: 1_700_000_005,
             }),
-            tmux: Some("magi-portatil-1".to_string()),
+            tmux: Some(TmuxPestana {
+                servidor: ServidorTmux::Magi,
+                nombre: "agente-api".to_string(),
+                version: Some(VersionTmux::nueva(3, 5)),
+                soltada: Some(Soltada {
+                    por_equipo: Some("sobremesa".to_string()),
+                    desde: 1_700_000_050,
+                }),
+            }),
             escritura_varios: true,
         };
         ida_y_vuelta_servidor(MensajeServidor::Sesiones {
@@ -2871,7 +3205,7 @@ mod pruebas {
     #[test]
     fn el_terminal_estrena_el_rango_y_la_version() {
         assert_eq!(RANGO_TERMINAL, 1 << 49);
-        assert_eq!(VERSION_PROTOCOLO, 9);
+        assert_eq!(VERSION_PROTOCOLO, 10);
         // Por debajo quedan los rangos de las fases anteriores.
         const {
             assert!(RANGO_TERMINAL > 1 << 48);

@@ -210,7 +210,18 @@ impl Sesion {
             reconexion: self.reconexion.clone(),
             titulo: self.titulo.clone(),
             aviso: self.aviso.clone(),
-            tmux: self.tmux.clone(),
+            // CONTRATO-S2-A: hasta el Sprint 2 solo hay sesiones del tmux
+            // habitual (las de la Fase 15); la pista A pone aquí el servidor
+            // real, la versión de tmux y si la pestaña está soltada.
+            tmux: self
+                .tmux
+                .clone()
+                .map(|nombre| crate::protocolo::TmuxPestana {
+                    servidor: crate::protocolo::ServidorTmux::Habitual,
+                    nombre,
+                    version: None,
+                    soltada: None,
+                }),
             escritura_varios: self.escritura_varios,
         }
     }

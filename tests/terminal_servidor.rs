@@ -486,11 +486,11 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
     );
     assert!(
         escenario
-            .hasta(PLAZO, |escenario| escenario
-                .sesiones
-                .iter()
-                .any(|resumen| resumen.id == sesion
-                    && resumen.tmux.as_deref() == Some(esperada.as_str())))
+            .hasta(PLAZO, |escenario| escenario.sesiones.iter().any(
+                |resumen| resumen.id == sesion
+                    && resumen.tmux.as_ref().map(|tmux| tmux.nombre.as_str())
+                        == Some(esperada.as_str())
+            ))
             .await,
         "InfoSesion.tmux no lleva el nombre: {:?}",
         escenario.sesiones
@@ -539,6 +539,7 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
         .enviar(&MensajeCliente::TerminarTmux {
             peticion_id: peticion + 1,
             host_id,
+            servidor: magi::protocolo::ServidorTmux::Habitual,
             nombre: format!("magi-{equipo}-1"),
         })
         .await;

@@ -1000,7 +1000,12 @@ async fn manejar_mensaje(
         MensajeCliente::Cerrar { sesion_id } => {
             cerrar_sesion(estado, cliente_id, sesion_id).await;
         }
-        MensajeCliente::Reconectar { sesion_id } => {
+        // CONTRATO-S2-A: `compartir` (volver a una pestaña soltada sin soltar
+        // a los demás) lo completa la pista A del Sprint 2.
+        MensajeCliente::Reconectar {
+            sesion_id,
+            compartir: _,
+        } => {
             reconectar(estado, cliente_id, sesion_id).await;
         }
         MensajeCliente::DecisionHuella {
@@ -1474,9 +1479,12 @@ async fn manejar_mensaje(
                 tmux::manejar_listar(&estado_tarea, cliente_id, peticion_id, host_id).await;
             });
         }
+        // CONTRATO-S2-A: terminar en el servidor propio (`servidor` = magi) lo
+        // completa la pista A del Sprint 2; por ahora solo el tmux habitual.
         MensajeCliente::TerminarTmux {
             peticion_id,
             host_id,
+            servidor: _,
             nombre,
         } => {
             let estado_tarea = estado.clone();
@@ -1484,6 +1492,13 @@ async fn manejar_mensaje(
                 tmux::manejar_terminar(&estado_tarea, cliente_id, peticion_id, host_id, &nombre)
                     .await;
             });
+        }
+        // CONTRATO-S2-B: la pista B del Sprint 2 atiende la consulta del
+        // vigilante y la vista previa; la pista A, el renombrado.
+        MensajeCliente::ConsultarSesionesPersistentes { .. }
+        | MensajeCliente::PedirVistaPrevia { .. }
+        | MensajeCliente::RenombrarTmux { .. } => {
+            warn!("mensaje de sesiones persistentes aún sin atender (contrato del Sprint 2)");
         }
         MensajeCliente::PortapapelesPermitido { sesion_id } => {
             sesiones::permitir_portapapeles(estado, cliente_id, sesion_id).await;
@@ -1612,8 +1627,35 @@ async fn abrir_sesion(
     filas: u16,
     comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     orden: Option<crate::protocolo::OrdenPestana>,
-    tmux: Option<String>,
+    tmux: Option<crate::protocolo::PeticionTmux>,
 ) {
+    // CONTRATO-S2-A: hasta el Sprint 2 solo se enganchan sesiones del tmux
+    // habitual ya existentes (las de la Fase 15); crear en el servidor propio,
+    // compartir y la pestaña persistente los completa la pista A.
+    let tmux: Option<String> = match tmux {
+        None => None,
+        Some(peticion)
+            if peticion.servidor == crate::protocolo::ServidorTmux::Habitual
+                && peticion.crear.is_none() =>
+        {
+            Some(peticion.nombre)
+        }
+        Some(_) => {
+            let estado_bloqueado = estado.lock().await;
+            if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+                difusion::enviar(
+                    cliente,
+                    MensajeServidor::Error {
+                        mensaje:
+                            "las sesiones persistentes aún no están disponibles en el servidor"
+                                .to_string(),
+                        peticion_id: None,
+                    },
+                );
+            }
+            return;
+        }
+    };
     // El nombre de tmux se valida antes de crear nada: un nombre raro no
     // llega ni a la shell ni al script (§7.10).
     if let Some(nombre) = &tmux {

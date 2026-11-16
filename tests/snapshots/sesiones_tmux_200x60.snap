@@ -3,8 +3,8 @@ source: tests/terminal_ui.rs
 ---
  MAGI · TMUX · web-01 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   SESIÓN                       ENGANCHADA   VENTANAS  CREADA
-▸ magi-portatil-1              sí           2         hace 3 h
-  despliegue                   no           1         ayer
+▸ magi-portatil-1              sí           2         Tue Nov 14 22:13
+  despliegue                   no           1         Mon Nov 13 18:26
 
 
 

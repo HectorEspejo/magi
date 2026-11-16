@@ -4474,8 +4474,10 @@ impl App {
 
     /// Reconecta una sesión caída (pestaña o lista).
     fn reconectar_sesion(&mut self, sesion_id: u32) {
-        self.servidor
-            .enviar(protocolo::MensajeCliente::Reconectar { sesion_id });
+        self.servidor.enviar(protocolo::MensajeCliente::Reconectar {
+            sesion_id,
+            compartir: false,
+        });
         self.mensaje("reconectando…", false);
     }
 
@@ -4814,6 +4816,11 @@ impl App {
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
+            // CONTRATO-S3: las sesiones persistentes las atiende el cliente del
+            // Sprint 3 (bloque «Persistentes», vista previa y renombrar).
+            protocolo::MensajeServidor::SesionesPersistentes { .. }
+            | protocolo::MensajeServidor::VistaPrevia { .. }
+            | protocolo::MensajeServidor::TmuxRenombrada { .. } => {}
             // Los del terminal (F15) los resuelve `evento_terminal`.
             protocolo::MensajeServidor::HistorialLote { .. }
             | protocolo::MensajeServidor::EscrituraVariosIniciada { .. }
@@ -4927,7 +4934,9 @@ impl App {
                     reconexion: info.reconexion.clone(),
                     titulo: info.titulo.clone(),
                     aviso: info.aviso.clone(),
-                    tmux: info.tmux.clone(),
+                    // CONTRATO-S3: la pestaña guarda hoy solo el nombre; el
+                    // Sprint 3 le da el servidor, la versión y si está soltada.
+                    tmux: info.tmux.as_ref().map(|tmux| tmux.nombre.clone()),
                     escritura_varios: info.escritura_varios,
                 });
                 self.aperturas_pendientes.remove(&info.host_id);

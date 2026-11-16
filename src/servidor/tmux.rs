@@ -18,7 +18,7 @@ use magi_nucleo::terminal::tmux::{self, Listado, ResultadoTerminar, Suborden};
 
 use crate::conexion::cliente::Cliente;
 use crate::modelo::Host;
-use crate::protocolo::{InfoSesionTmux, MensajeServidor, ResultadoTmux};
+use crate::protocolo::{MensajeServidor, ResultadoTmux, ServidorTmux, SesionVista};
 
 use super::conexiones::{self, PoliticaConexion, UsoCanal};
 use super::EstadoServidor;
@@ -195,7 +195,24 @@ pub async fn manejar_listar(
     tomada.soltar().await;
     match resultado {
         Ok(listado) => {
-            let sesiones: Vec<InfoSesionTmux> = listado.sesiones;
+            // CONTRATO-S2-A: la lista de la Fase 15 (solo el tmux habitual, sin
+            // equipo, actividad ni título); la pista A la sustituye por la
+            // salida de `estado` con los dos servidores.
+            let sesiones: Vec<SesionVista> = listado
+                .sesiones
+                .into_iter()
+                .map(|sesion| SesionVista {
+                    servidor: ServidorTmux::Habitual,
+                    nombre: sesion.nombre,
+                    clientes: u32::from(sesion.enganchada),
+                    equipo: None,
+                    actividad: 0,
+                    creada: 0,
+                    campana: false,
+                    ventanas: u32::from(sesion.ventanas),
+                    titulo: None,
+                })
+                .collect();
             let sin_tmux = listado
                 .tmux
                 .is_none()
@@ -280,6 +297,7 @@ pub async fn manejar_terminar(
                 cliente_id,
                 MensajeServidor::TmuxTerminada {
                     peticion_id,
+                    servidor: ServidorTmux::Habitual,
                     resultado: ResultadoTmux::Ok,
                 },
             )
@@ -291,6 +309,7 @@ pub async fn manejar_terminar(
                 cliente_id,
                 MensajeServidor::TmuxTerminada {
                     peticion_id,
+                    servidor: ServidorTmux::Habitual,
                     resultado: ResultadoTmux::NoExiste,
                 },
             )
