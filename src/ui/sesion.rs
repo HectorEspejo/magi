@@ -813,9 +813,9 @@ fn barra_estado(
         format!("{} ventanas", pestaña.ventanas)
     };
     elementos.push(Elemento::fijo(ventanas, 7, texto));
-    if let Some(nombre) = &pestaña.tmux {
+    if let Some(tmux) = &pestaña.tmux {
         elementos.push(Elemento::fijo(
-            format!("tmux {nombre}"),
+            format!("tmux {}", tmux.nombre),
             6,
             Style::default().fg(tema.paleta.acento),
         ));
@@ -1121,7 +1121,7 @@ fn aviso_reconexion(
     let tmux = pestaña
         .tmux
         .as_ref()
-        .map(|nombre| format!("tmux {nombre}: lo que corría sigue en el host"))
+        .map(|tmux| format!("tmux {}: lo que corría sigue en el host", tmux.nombre))
         .unwrap_or_default();
     let critico = Style::default()
         .fg(tema.paleta.acento)

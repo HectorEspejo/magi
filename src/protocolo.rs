@@ -77,10 +77,17 @@ use crate::archivos::{Entrada, Propietario, TipoEntrada};
 /// `InfoSesion.tmux` a `TmuxPestana{servidor, nombre, soltada?}`; `TerminarTmux` y
 /// `TmuxTerminada` ganan `servidor`, y `SesionesTmux` lleva `SesionVista`
 /// (clientes, equipo, actividad, campana y título). Nuevos:
-/// `ConsultarSesionesPersistentes` → `SesionesPersistentes{lista}`,
+/// `ConsultarSesionesPersistentes{host_id?}` → `SesionesPersistentes{lista}`
+/// (`host_id`, opcional, pide además un host sin fichas ni marca),
 /// `PedirVistaPrevia` → `VistaPrevia` y `RenombrarTmux` → `TmuxRenombrada`.
 /// `Reconectar` gana `compartir`. Sus `peticion_id` van en el rango del
 /// terminal (2^49). `TrabajoServidor` no cambia: las sesiones viven en el host.
+/// Si `AbrirSesion` con `tmux` no puede abrir la pestaña, el servidor contesta al
+/// solicitante con `AperturaTmuxFallida{host_id, nombre, causa, mensaje}` (la
+/// causa es `CausaAperturaTmux`: `sin_tmux`, `tmux_antiguo`, `existe`,
+/// `sin_carpeta`, `conexion` u `otra`) y no deja pestaña; así el cliente puede
+/// ofrecer engancharse a la existente, cambiar el nombre o abrir una pestaña
+/// normal.
 pub const VERSION_PROTOCOLO: u32 = 10;
 
 /// Los `peticion_id` del terminal (capturas, tmux y túneles temporales) viven
@@ -354,6 +361,26 @@ pub enum ResultadoRenombrar {
     Ocupado,
     /// El host no pudo (sin tmux, tmux antiguo, sin respuesta…), con el motivo.
     Error(String),
+}
+
+/// Por qué no se pudo abrir una pestaña con tmux (`AperturaTmuxFallida`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CausaAperturaTmux {
+    /// El host no tiene tmux: «instala tmux en el host».
+    SinTmux,
+    /// El tmux del host es anterior a 3.0.
+    TmuxAntiguo,
+    /// Ya hay una sesión con ese nombre (al crear): se puede enganchar a la
+    /// existente o cambiar el nombre.
+    Existe,
+    /// La carpeta no existe en el host.
+    SinCarpeta,
+    /// No hubo conexión con el host (o se perdió al abrir).
+    Conexion,
+    /// Cualquier otra cosa (la sesión ya no existe, tmux no pudo, datos no
+    /// válidos…); el `mensaje` dice cuál.
+    Otra,
 }
 
 /// Resumen de una sesión para la lista que se difunde a los clientes.
@@ -1231,9 +1258,13 @@ pub enum MensajeCliente {
     /// lista, con `r` y cada `refresco_seg` con la lista a la vista). Las
     /// peticiones seguidas se agrupan y un host comprobado hace menos de 5 s
     /// no se repite. Responde a todas las ventanas con
-    /// `SesionesPersistentes{lista}`.
+    /// `SesionesPersistentes{lista}`. `host_id` (opcional, v10) pide además
+    /// comprobar un host `ssh` que no tiene fichas ni marca, como hace la tecla
+    /// `t` de la lista de pestañas: queda en la lista unos minutos.
     ConsultarSesionesPersistentes {
         peticion_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<i64>,
     },
     /// Las últimas líneas visibles de una sesión, en texto plano, solo para
     /// la ventana que lo pide y sin guardarlas (Fase 16). Responde
@@ -1732,6 +1763,16 @@ pub enum MensajeServidor {
     TmuxRenombrada {
         peticion_id: u64,
         resultado: ResultadoRenombrar,
+    },
+    /// Una `AbrirSesion` con `tmux` no pudo abrir la pestaña (Fase 16): no
+    /// queda pestaña ni ficha. Solo para quien la pidió, que la identifica por
+    /// `host_id` y `nombre`. `mensaje` lleva la instrucción («instala tmux en el
+    /// host», «ya hay una sesión … en <host>»…).
+    AperturaTmuxFallida {
+        host_id: i64,
+        nombre: String,
+        causa: CausaAperturaTmux,
+        mensaje: String,
     },
     /// Copia del remoto por OSC 52 con permiso del host: al portapapeles del
     /// sistema (u OSC 52 hacia fuera).
@@ -2946,7 +2987,27 @@ mod pruebas {
     fn las_sesiones_persistentes_hacen_ida_y_vuelta() {
         ida_y_vuelta_cliente(MensajeCliente::ConsultarSesionesPersistentes {
             peticion_id: RANGO_TERMINAL + 10,
+            host_id: None,
         });
+        // Con un host concreto (la tecla `t` de la lista de pestañas).
+        ida_y_vuelta_cliente(MensajeCliente::ConsultarSesionesPersistentes {
+            peticion_id: RANGO_TERMINAL + 13,
+            host_id: Some(7),
+        });
+        // Sin `host_id` en el cable (lo normal): `None`, y no se escribe.
+        let linea = r#"{"tipo":"ConsultarSesionesPersistentes","peticion_id":562949953421322}"#;
+        match decodificar::<MensajeCliente>(linea).unwrap() {
+            MensajeCliente::ConsultarSesionesPersistentes { host_id, .. } => {
+                assert_eq!(host_id, None)
+            }
+            otro => panic!("{otro:?}"),
+        }
+        assert!(!codificar(&MensajeCliente::ConsultarSesionesPersistentes {
+            peticion_id: RANGO_TERMINAL + 10,
+            host_id: None,
+        })
+        .unwrap()
+        .contains("host_id"));
         ida_y_vuelta_cliente(MensajeCliente::PedirVistaPrevia {
             peticion_id: RANGO_TERMINAL + 11,
             host_id: 7,
@@ -3021,6 +3082,30 @@ mod pruebas {
                 resultado,
             });
         }
+        // Los fallos de apertura llevan la causa tipada (snake_case).
+        for causa in [
+            CausaAperturaTmux::SinTmux,
+            CausaAperturaTmux::TmuxAntiguo,
+            CausaAperturaTmux::Existe,
+            CausaAperturaTmux::SinCarpeta,
+            CausaAperturaTmux::Conexion,
+            CausaAperturaTmux::Otra,
+        ] {
+            ida_y_vuelta_servidor(MensajeServidor::AperturaTmuxFallida {
+                host_id: 7,
+                nombre: "agente-api".to_string(),
+                causa,
+                mensaje: "ya hay una sesión «agente-api» en «web-01»".to_string(),
+            });
+        }
+        let json = serde_json::to_string(&MensajeServidor::AperturaTmuxFallida {
+            host_id: 7,
+            nombre: "x".to_string(),
+            causa: CausaAperturaTmux::TmuxAntiguo,
+            mensaje: String::new(),
+        })
+        .unwrap();
+        assert!(json.contains(r#""causa":"tmux_antiguo""#), "{json}");
         // Sin servidor ni compartir, un `TerminarTmux` y un `Reconectar` viejos
         // se leen: el tmux habitual y sin compartir.
         let linea = r#"{"tipo":"TerminarTmux","peticion_id":1,"host_id":7,"nombre":"x"}"#;

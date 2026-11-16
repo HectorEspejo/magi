@@ -439,6 +439,28 @@ fn crear_enganchar_soltar_historial_renombrar_y_terminar() {
 }
 
 #[test]
+fn un_renombrado_en_caliente_no_hace_terminada_a_una_sesion_soltada() {
+    let Some(real) =
+        Real::nuevo("un_renombrado_en_caliente_no_hace_terminada_a_una_sesion_soltada")
+    else {
+        return;
+    };
+    assert_eq!(real.crear("revision", "", "").codigo, 0);
+    let mut portatil = real.cliente(&["enganchar", "magi", "revision", "1", "portatil"]);
+    real.esperar_clientes("revision", 1);
+    // La sesión se renombra con el portátil enganchado y, después, la
+    // sobremesa se la lleva con `-d`. El script del portátil mira si «la
+    // misma» sesión sigue viva (por su identificador), no si sigue el nombre
+    // viejo: sale con 100 («te soltaron»), no con 0 («terminó»).
+    let renombrada = real.script(&["renombrar", "revision", "revision-2"]);
+    assert_eq!(leer_renombrar(&renombrada.stdout), ResultadoRenombrar::Ok);
+    let _sobremesa = real.cliente(&["enganchar", "magi", "revision-2", "1", "sobremesa"]);
+    let codigo = portatil.esperar_codigo(PLAZO).expect("el portátil sale");
+    assert_eq!(codigo, 100, "a este cliente lo soltó otro");
+    assert_eq!(fin_de_enganchar(codigo), FinEnganchar::Soltada);
+}
+
+#[test]
 fn magi_a_1_nunca_toca_a_magi_a_10() {
     let Some(real) = Real::nuevo("magi_a_1_nunca_toca_a_magi_a_10") else {
         return;
@@ -458,9 +480,10 @@ fn magi_a_1_nunca_toca_a_magi_a_10() {
     assert_eq!(enganchar.codigo, 75);
     let comprobar = leer_comprobar(&real.script(&["comprobar", "magi", "magi-a-1"]).stdout);
     assert!(!comprobar.existe);
-    // Con la forma antigua del script (legado) ocurre lo mismo.
+    // La forma antigua del script (un solo argumento) ya no existe: no toca nada.
     let antigua = real.script(&["terminar", "magi-a-1"]);
-    assert_eq!(antigua.stdout, "MAGI_RESULTADO=no_existe\n");
+    assert_eq!(antigua.codigo, 64);
+    assert!(antigua.stdout.is_empty());
     let sesion = real
         .sesion(ServidorTmux::Magi, "magi-a-10")
         .expect("sigue viva");
@@ -900,10 +923,11 @@ fn una_carpeta_con_almohadillas_no_se_expande_como_formato_de_tmux() {
 }
 
 #[test]
-fn el_legado_de_la_fase_15_sigue_funcionando_con_tmux_real() {
-    // LEGADO-S2: el servidor del escritorio usa `comprobar <nombre>`,
-    // `listar` y `terminar <nombre>` (tmux habitual) hasta el Sprint 2.
-    let Some(real) = Real::nuevo("el_legado_de_la_fase_15_sigue_funcionando_con_tmux_real") else {
+fn el_tmux_habitual_se_ve_y_se_termina_con_tmux_real() {
+    // Las sesiones de la Fase 15 viven en el tmux habitual: se comprueban, se
+    // ven en `estado` (con el separador que sobrevive a tmux 3.4 y 3.5) y se
+    // terminan por su nombre exacto, sin tocar el tmux propio.
+    let Some(real) = Real::nuevo("el_tmux_habitual_se_ve_y_se_termina_con_tmux_real") else {
         return;
     };
     let uno = real.tmux(
@@ -920,30 +944,28 @@ fn el_legado_de_la_fase_15_sigue_funcionando_con_tmux_real() {
         ],
     );
     assert_eq!(uno.codigo, 0, "{}", uno.stderr);
-    let comprobar = real.script(&["comprobar", "magi-x-10"]);
-    assert!(
-        comprobar.stdout.contains("MAGI_SESION=existe\n"),
-        "{}",
-        comprobar.stdout
-    );
-    let otra = real.script(&["comprobar", "magi-x-1"]);
-    assert!(
-        otra.stdout.contains("MAGI_SESION=nueva\n"),
-        "{}",
-        otra.stdout
-    );
-    // El separador de tmux sobrevive a 3.4 y 3.5: la sesión sale con sus campos.
-    let listar = real.script(&["listar"]);
-    let listado = magi_nucleo::terminal::tmux::leer_listado(&listar.stdout);
-    assert_eq!(listado.sesiones.len(), 1, "{}", listar.stdout);
-    assert_eq!(listado.sesiones[0].nombre, "magi-x-10");
-    assert_eq!(listado.sesiones[0].ventanas, 1);
-    assert!(!listado.sesiones[0].enganchada);
-    // R146: terminar magi-x-1 (que no existe) no mata a magi-x-10.
-    let terminar = real.script(&["terminar", "magi-x-1"]);
+    let comprobar = leer_comprobar(&real.script(&["comprobar", "habitual", "magi-x-10"]).stdout);
+    assert!(comprobar.existe);
+    // R146: «magi-x-1» no existe aunque «magi-x-10» sí.
+    let otra = leer_comprobar(&real.script(&["comprobar", "habitual", "magi-x-1"]).stdout);
+    assert!(!otra.existe);
+    let estado = leer_estado(&real.script(&["estado"]).stdout).expect("estado legible");
+    let sesion = estado
+        .sesiones
+        .iter()
+        .find(|sesion| sesion.servidor == ServidorTmux::Habitual && sesion.nombre == "magi-x-10")
+        .expect("la sesión del tmux habitual sale en estado");
+    assert_eq!(sesion.ventanas, 1);
+    assert_eq!(sesion.clientes, 0);
+    assert!(estado
+        .sesiones
+        .iter()
+        .all(|sesion| sesion.servidor == ServidorTmux::Habitual));
+    // Terminar «magi-x-1» (que no existe) no mata a «magi-x-10».
+    let terminar = real.script(&["terminar", "habitual", "magi-x-1"]);
     assert_eq!(terminar.stdout, "MAGI_RESULTADO=no_existe\n");
     assert_eq!(
-        real.script(&["terminar", "magi-x-10"]).stdout,
+        real.script(&["terminar", "habitual", "magi-x-10"]).stdout,
         "MAGI_RESULTADO=ok\n"
     );
 }

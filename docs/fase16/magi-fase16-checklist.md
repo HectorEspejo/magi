@@ -24,13 +24,13 @@
 ## tmux en el host
 - [x] `terminal_tmux.sh` usa el servidor propio `tmux -L magi -f /dev/null` con la configuración de MAGI aplicada con `set` al crear y al enganchar: sin barra, sin prefijo, ratón, teclas extendidas (3.2+, `csi-u` en 3.5+), portapapeles, foco, color completo, título hacia fuera, campana y `history-limit` igual a `[terminal] historial_lineas`
   - AC: Dado un host con su propio `~/.tmux.conf`, cuando MAGI crea una sesión, entonces esa configuración no se carga y las sesiones del tmux habitual siguen igual
-- [ ] Subórdenes nuevas `crear`, `enganchar`, `estado`, `vista`, `historial` y `renombrar`; `comprobar` y `terminar` ganan el servidor; `abrir` y `listar` desaparecen
+- [x] Subórdenes nuevas `crear`, `enganchar`, `estado`, `vista`, `historial` y `renombrar`; `comprobar` y `terminar` ganan el servidor; `abrir` y `listar` desaparecen
 - [x] `crear` comprueba la carpeta y crea la sesión sin engancharse; con comando, lo ejecuta con el shell de acceso del usuario y, al acabar, escribe «[MAGI] <comando> terminó con código N» y deja un shell en la carpeta
   - AC: Dado `comando = "false"`, cuando la sesión lo ejecuta, entonces se ve «terminó con código 1» y queda un shell en la carpeta
 - [x] `enganchar` suelta a los demás salvo al compartir, pone `@magi_equipo` y sale con 100 si a este cliente lo suelta otro, con 0 si la sesión terminó y con 75 si no existía
 - [x] Toda orden con `-t` apunta a `=<nombre>` y la existencia se comprueba con la lista exacta, también en `terminar` y `renombrar` (T126, R146)
   - AC: Dado `magi-a-10` viva y ninguna `magi-a-1`, cuando se pide terminar `magi-a-1`, entonces da `no_existe` y `magi-a-10` sigue viva
-- [ ] tmux 3.0 o posterior para el servidor propio: con uno anterior, «tmux demasiado antiguo (3.0 o posterior)» y una pestaña normal; sin tmux, «instala tmux en el host»
+- [x] tmux 3.0 o posterior para el servidor propio: con uno anterior, «tmux demasiado antiguo (3.0 o posterior)» y una pestaña normal; sin tmux, «instala tmux en el host»
 - [x] `estado` lista las sesiones de los dos servidores, el propio y el habitual, con servidor, nombre, clientes, equipo, actividad, creada, campana, ventanas y título, más la hora del host
 
 ## Teclado
@@ -38,19 +38,19 @@
   - AC: Dado Claude Code en una sesión persistente con tmux 3.5, cuando se pulsa Mayús+Intro, entonces inserta un salto de línea sin enviar
 
 ## Servidor
-- [ ] Pestaña persistente: `AbrirSesion` con `tmux` crea la sesión si hace falta (`comprobar` y `crear`) y la abre con `enganchar` en el canal con PTY; el snippet al conectar y el comando inicial (F6) solo se escriben en una sesión nueva sin comando propio
-- [ ] Pestaña soltada: si el script sale con 100, la pestaña pasa a `soltada` con el equipo que la tiene ahora (leído con `estado`) y conserva la última pantalla en vez de cerrarse
-- [ ] La reconexión automática (F15) de una pestaña persistente vuelve soltando a los demás solo si los clientes enganchados son de este equipo; si la tiene otro equipo, la pestaña queda soltada
+- [x] Pestaña persistente: `AbrirSesion` con `tmux` crea la sesión si hace falta (`comprobar` y `crear`) y la abre con `enganchar` en el canal con PTY; el snippet al conectar y el comando inicial (F6) solo se escriben en una sesión nueva sin comando propio
+- [x] Pestaña soltada: si el script sale con 100, la pestaña pasa a `soltada` con el equipo que la tiene ahora (leído con `estado`) y conserva la última pantalla en vez de cerrarse
+- [x] La reconexión automática (F15) de una pestaña persistente vuelve soltando a los demás solo si los clientes enganchados son de este equipo; si la tiene otro equipo, la pestaña queda soltada
   - AC: Dado una pestaña de sobremesa caída mientras el portátil usa la sesión, cuando sobremesa reconecta, entonces no se la quita al portátil y queda «soltada»
-- [ ] Vigilante: mientras haya alguna ventana conectada, cada `vigilar_seg` comprueba con `estado` los hosts con fichas o marcados, por el pool o con una conexión efímera sin diálogos, con 8 hosts a la vez como mucho y 10 s de plazo por host
+- [x] Vigilante: mientras haya alguna ventana conectada, cada `vigilar_seg` comprueba con `estado` los hosts con fichas o marcados, por el pool o con una conexión efímera sin diálogos, con 8 hosts a la vez como mucho y 10 s de plazo por host
   - AC: Dado un host que pide frase, cuando el vigilante lo comprueba, entonces no abre ningún diálogo y sus fichas quedan «sin comprobar: conéctate a mano»
-- [ ] `SesionesPersistentes{lista}` a todas las ventanas en cada cambio, con el estado visto por ficha y, por host comprobado, sus sesiones sin ficha y las del tmux habitual
+- [x] `SesionesPersistentes{lista}` a todas las ventanas en cada cambio, con el estado visto por ficha y, por host comprobado, sus sesiones sin ficha y las del tmux habitual
 - [ ] `ConsultarSesionesPersistentes` comprueba enseguida (al abrir la lista, con `r` y cada `refresco_seg` con la lista a la vista), agrupa las peticiones seguidas y no repite un host comprobado hace menos de 5 s
-- [ ] `CapturarHistorial` en una pestaña persistente lee el historial de tmux con `historial` y lo manda en tramos como en la F15
-- [ ] `PedirVistaPrevia` devuelve las últimas `vista_previa_lineas` en texto plano solo a la ventana que la pide, sin guardarlas
+- [x] `CapturarHistorial` en una pestaña persistente lee el historial de tmux con `historial` y lo manda en tramos como en la F15
+- [x] `PedirVistaPrevia` devuelve las últimas `vista_previa_lineas` en texto plano solo a la ventana que la pide, sin guardarlas
 - [ ] `RenombrarTmux` renombra en el host y solo entonces el cliente cambia la ficha; las pestañas enganchadas siguen enganchadas
-- [ ] El servidor lee y valida las filas de SESIONES_PERSISTENTES y HOSTS antes de usarlas y nunca escribe en ellas
-- [ ] Ni la salida de las sesiones, ni sus títulos, ni las vistas previas, ni el historial de tmux van al log ni a REGISTRO
+- [x] El servidor lee y valida las filas de SESIONES_PERSISTENTES y HOSTS antes de usarlas y nunca escribe en ellas
+- [x] Ni la salida de las sesiones, ni sus títulos, ni las vistas previas, ni el historial de tmux van al log ni a REGISTRO
 
 ## Cliente: Persistentes en la vista Sesiones
 - [ ] Bloque «Persistentes» arriba en Sesiones (`prefijo l`): fichas de todos los hosts con marca, estado, nombre, host, quién la tiene, actividad, `!` de atención, título y «antigua»; `Tab` pasa a «Pestañas» y vuelve
@@ -84,15 +84,15 @@
 
 ## API: protocolo cliente ⇄ servidor (v10)
 - [ ] `VERSION_PROTOCOLO = 10` y los `peticion_id` de las sesiones persistentes en el rango del terminal (2^49)
-- [ ] `AbrirSesion` con `tmux{servidor, nombre, crear, compartir}`
-- [ ] `ListarTmux` → `SesionesTmux` con `servidor`, `clientes`, `equipo`, `actividad`, `campana` y `titulo`, y `TerminarTmux` → `TmuxTerminada` con `servidor`
-- [ ] `ConsultarSesionesPersistentes` y `SesionesPersistentes{lista}`
-- [ ] `PedirVistaPrevia` → `VistaPrevia`
-- [ ] `RenombrarTmux` → `TmuxRenombrada`
-- [ ] `CapturarHistorial` → `HistorialLote` en pestañas persistentes y `Sesiones{lista}` con `InfoSesion.tmux` (`persistente` y `soltada`)
+- [x] `AbrirSesion` con `tmux{servidor, nombre, crear, compartir}`
+- [x] `ListarTmux` → `SesionesTmux` con `servidor`, `clientes`, `equipo`, `actividad`, `campana` y `titulo`, y `TerminarTmux` → `TmuxTerminada` con `servidor`
+- [x] `ConsultarSesionesPersistentes` y `SesionesPersistentes{lista}`
+- [x] `PedirVistaPrevia` → `VistaPrevia`
+- [x] `RenombrarTmux` → `TmuxRenombrada`
+- [x] `CapturarHistorial` → `HistorialLote` en pestañas persistentes y `Sesiones{lista}` con `InfoSesion.tmux` (`persistente` y `soltada`)
 
 ## Calidad, pruebas y publicación
-- [ ] Pruebas del núcleo: `sesiones_persistentes` (validadores, nombres automáticos, estado y lectura acotada) y `tmux_script` (subórdenes nuevas con el tmux falso)
+- [x] Pruebas del núcleo: `sesiones_persistentes` (validadores, nombres automáticos, estado y lectura acotada) y `tmux_script` (subórdenes nuevas con el tmux falso)
 - [ ] `tmux_real`: con tmux de verdad (en CI, instalado con apt; se omite si no lo hay), crear, enganchar, soltar desde otro cliente (sale con 100), historial, renombrar y terminar con `magi-a-1` y `magi-a-10`
 - [x] `sincronizacion_sesiones`: `formato` 4 solo cuando toca, unión de fichas con el mismo nombre, lápidas y la marca del host
 - [ ] `sesiones_persistentes_servidor` (vigilante, soltada, reconexión sin quitarla a otro equipo, captura y vista previa) y `sesiones_persistentes_ui` con `App::de_prueba`
@@ -103,6 +103,6 @@
 
 ---
 
-**Progreso Fase 16:** 18 / 67 funcionalidades
+**Progreso Fase 16:** 36 / 67 funcionalidades
 
-**Total MAGI (Fases 1-16):** 1264 / 1318 funcionalidades
+**Total MAGI (Fases 1-16):** 1282 / 1318 funcionalidades

@@ -21,9 +21,11 @@ use magi::app::{App, CampoFicha, Dialogo, EntradaTextoAccion, Evento};
 use magi::config::{Config, Rutas};
 use magi::modelo::{DatosHost, Origen};
 use magi::protocolo::{
-    BytesPestana, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion, InfoTunelTemporal,
-    MensajeCliente, MensajeServidor, ResultadoTmux, ServidorTmux, SesionVista, TmuxPestana,
+    BytesPestana, CausaAperturaTmux, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion,
+    InfoTunelTemporal, MensajeCliente, MensajeServidor, ResultadoTmux, ServidorTmux, SesionVista,
+    Soltada, TmuxPestana, VersionTmux,
 };
+use magi::registro::FiltroRegistro;
 use magi::tema::Tema;
 use magi::ui::componentes::CampoTexto;
 use magi::ui::Vista;
@@ -940,6 +942,437 @@ fn sesiones_muestra_titulo_avisos_y_lista_tmux() {
         .sesiones
         .iter()
         .any(|s| s.nombre == "magi-portatil-1"));
+    // `tmux_terminada` la anota el servidor, donde ocurre el efecto: el cliente
+    // no la repite al recibir la respuesta (una sola fila por terminación).
+    let registro = prueba
+        .app
+        .almacen
+        .listar_registro(&FiltroRegistro::default(), 50, 0)
+        .expect("registro");
+    assert!(
+        !registro
+            .iter()
+            .any(|entrada| entrada.tipo == "tmux_terminada"),
+        "el cliente anotó tmux_terminada: {registro:?}"
+    );
+}
+
+// ------------------------------------------- difusiones sucesivas (Fase 16)
+//
+// La primera lista del servidor siempre crea las pestañas; lo que cambia
+// después (título, aviso, reconexión, tmux y la pestaña soltada) solo llega
+// en las difusiones siguientes. Estas pruebas mandan dos o más listas.
+
+fn pestana(prueba: &Prueba, sesion_id: u32) -> &magi::app::PestanaUI {
+    prueba
+        .app
+        .pestanas
+        .iter()
+        .find(|pestana| pestana.sesion_id == sesion_id)
+        .expect("pestaña")
+}
+
+fn difundir(prueba: &mut Prueba, lista: Vec<InfoSesion>) {
+    prueba.servidor(MensajeServidor::Sesiones { lista });
+}
+
+fn aviso_en(hora: i64) -> InfoAviso {
+    InfoAviso {
+        texto: "Claude necesita tu permiso".to_string(),
+        hora,
+    }
+}
+
+#[test]
+fn la_segunda_difusion_actualiza_titulo_aviso_reconexion_y_tmux() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    let primera = sesion_de(1, host, "web-01");
+    prueba.bienvenida(vec![primera.clone()]);
+    let creada = pestana(&prueba, 1);
+    assert!(creada.titulo.is_none() && creada.aviso.is_none());
+    assert!(creada.reconexion.is_none() && creada.tmux.is_none());
+
+    let reconexion = InfoReconexion {
+        intento: 2,
+        proximo_en: chrono::Utc::now().timestamp() + 8,
+        desde: chrono::Utc::now().timestamp() - 20,
+        causa: "conexión perdida".to_string(),
+    };
+    let tmux = TmuxPestana {
+        servidor: ServidorTmux::Magi,
+        nombre: "refactor".to_string(),
+        version: Some(VersionTmux::nueva(3, 5)),
+        soltada: None,
+    };
+    let segunda = InfoSesion {
+        nombre: "refactor-web".to_string(),
+        estado: EstadoSesionRemota::Caida,
+        titulo: Some("Claude Code".to_string()),
+        aviso: Some(aviso_en(1_700_000_100)),
+        reconexion: Some(reconexion.clone()),
+        tmux: Some(tmux.clone()),
+        ..primera.clone()
+    };
+    difundir(&mut prueba, vec![segunda.clone()]);
+    let pestana_2 = pestana(&prueba, 1);
+    assert_eq!(pestana_2.nombre, "refactor-web");
+    assert_eq!(pestana_2.estado, EstadoSesionRemota::Caida);
+    assert_eq!(pestana_2.titulo.as_deref(), Some("Claude Code"));
+    assert_eq!(pestana_2.aviso, Some(aviso_en(1_700_000_100)));
+    assert_eq!(pestana_2.reconexion, Some(reconexion));
+    assert_eq!(pestana_2.tmux, Some(tmux.clone()));
+
+    // La pestaña soltada llega por la misma vía: el tmux lleva `soltada`.
+    let soltada = TmuxPestana {
+        soltada: Some(Soltada {
+            por_equipo: Some("portatil".to_string()),
+            desde: 1_700_000_200,
+        }),
+        ..tmux
+    };
+    difundir(
+        &mut prueba,
+        vec![InfoSesion {
+            tmux: Some(soltada.clone()),
+            ..segunda.clone()
+        }],
+    );
+    assert_eq!(pestana(&prueba, 1).tmux, Some(soltada));
+
+    // Y todo lo que el servidor quita, se quita: sin título, sin reconexión,
+    // sin aviso (otra ventana lo vio) y sin tmux.
+    difundir(
+        &mut prueba,
+        vec![InfoSesion {
+            estado: EstadoSesionRemota::Abierta,
+            titulo: None,
+            aviso: None,
+            reconexion: None,
+            tmux: None,
+            ..segunda
+        }],
+    );
+    let limpia = pestana(&prueba, 1);
+    assert_eq!(limpia.estado, EstadoSesionRemota::Abierta);
+    assert!(limpia.titulo.is_none());
+    assert!(limpia.aviso.is_none());
+    assert!(limpia.reconexion.is_none());
+    assert!(limpia.tmux.is_none());
+}
+
+#[test]
+fn el_titulo_y_el_aviso_de_la_segunda_difusion_se_ven_en_sesiones() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    let primera = sesion_de(1, host, "web-01");
+    prueba.bienvenida(vec![primera.clone()]);
+    prueba.tecla(KeyCode::F(3));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+    prueba.redimensionar(200, 60);
+    let antes = prueba.texto();
+    assert!(!antes.contains("Claude Code"));
+    // Sin aviso no hay `!` en ninguna parte de la pantalla: la comprobación de
+    // después no pasa por otra marca.
+    assert!(!antes.contains('!'), "{antes}");
+    difundir(
+        &mut prueba,
+        vec![InfoSesion {
+            titulo: Some("Claude Code".to_string()),
+            aviso: Some(aviso_en(1_700_000_100)),
+            ..primera
+        }],
+    );
+    let texto = prueba.texto();
+    assert!(texto.contains("Claude Code"), "{texto}");
+    assert!(texto.contains('!'), "{texto}");
+}
+
+#[test]
+fn un_aviso_ya_visto_no_vuelve_con_la_siguiente_difusion() {
+    let mut prueba = Prueba::nueva(&["web-01", "db-01"]);
+    let (uno, dos) = (prueba.host_id("web-01"), prueba.host_id("db-01"));
+    let web = sesion_de(1, uno, "web-01");
+    let db = sesion_de(2, dos, "db-01");
+    prueba.bienvenida(vec![web.clone(), db.clone()]);
+    prueba.tecla(KeyCode::F(3));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+
+    // El aviso llega con la pestaña sin ver: se enseña.
+    let con_aviso = InfoSesion {
+        aviso: Some(aviso_en(1_700_000_100)),
+        ..web.clone()
+    };
+    difundir(&mut prueba, vec![con_aviso.clone(), db.clone()]);
+    assert_eq!(pestana(&prueba, 1).aviso, Some(aviso_en(1_700_000_100)));
+    assert!(pestana(&prueba, 2).aviso.is_none());
+
+    // Se entra en la pestaña (el servidor aún no ha limpiado su aviso: lo
+    // hace al recibir el foco): el aviso se da por visto.
+    prueba.tecla(KeyCode::Enter);
+    assert_eq!(prueba.app.vista, Vista::Sesion);
+    assert!(pestana(&prueba, 1).aviso.is_none());
+
+    // Se sale a la lista y llega otra difusión con el mismo aviso: no vuelve.
+    prueba.prefijo(KeyCode::Char('l'));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+    difundir(&mut prueba, vec![con_aviso.clone(), db.clone()]);
+    assert!(
+        pestana(&prueba, 1).aviso.is_none(),
+        "un aviso que ya se vio volvió a aparecer"
+    );
+    difundir(&mut prueba, vec![con_aviso.clone(), db.clone()]);
+    assert!(pestana(&prueba, 1).aviso.is_none());
+
+    // Uno más nuevo sí se enseña, y una lista sin aviso lo quita.
+    let nuevo = InfoSesion {
+        aviso: Some(aviso_en(1_700_000_200)),
+        ..web.clone()
+    };
+    difundir(&mut prueba, vec![nuevo, db.clone()]);
+    assert_eq!(pestana(&prueba, 1).aviso, Some(aviso_en(1_700_000_200)));
+    difundir(&mut prueba, vec![web, db]);
+    assert!(pestana(&prueba, 1).aviso.is_none());
+}
+
+#[test]
+fn un_aviso_de_la_pestana_que_se_esta_mirando_no_se_enseña() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    let web = sesion_de(1, host, "web-01");
+    prueba.entrar_en_sesion(vec![web.clone()]);
+    assert_eq!(prueba.app.pestana_activa, Some(0));
+    // La campana llega mientras se mira la pestaña: el servidor guarda el
+    // aviso hasta que una ventana la enfoque, pero esta ya la está viendo.
+    let con_aviso = InfoSesion {
+        aviso: Some(aviso_en(1_700_000_100)),
+        ..web
+    };
+    difundir(&mut prueba, vec![con_aviso.clone()]);
+    assert!(pestana(&prueba, 1).aviso.is_none());
+    // Al irse a la lista, la difusión siguiente tampoco lo trae de vuelta.
+    prueba.prefijo(KeyCode::Char('l'));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+    difundir(&mut prueba, vec![con_aviso]);
+    assert!(pestana(&prueba, 1).aviso.is_none());
+}
+
+#[test]
+fn cerrar_una_pestana_con_tmux_propio_termina_en_el_servidor_de_la_pestana() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    let mut info = sesion_de(1, host, "web-01");
+    info.tmux = Some(TmuxPestana {
+        servidor: ServidorTmux::Magi,
+        nombre: "refactor".to_string(),
+        version: None,
+        soltada: None,
+    });
+    prueba.entrar_en_sesion(vec![info]);
+    prueba.drenar();
+    prueba.prefijo(KeyCode::Char('x'));
+    assert!(matches!(prueba.app.dialogo, Some(Dialogo::Elegir { .. })));
+    prueba.tecla(KeyCode::Char('T'));
+    let enviados = prueba.drenar();
+    assert!(
+        enviados.iter().any(|mensaje| matches!(
+            mensaje,
+            MensajeCliente::TerminarTmux { servidor: ServidorTmux::Magi, nombre, .. }
+                if nombre == "refactor"
+        )),
+        "TerminarTmux no fue al tmux propio: {enviados:?}"
+    );
+}
+
+/// El servidor v10 lista las sesiones de los dos servidores de tmux, pero la
+/// lista de la Fase 15 (`t`) solo sabe engancharse y terminar en el habitual
+/// (`↵` y `T` mandan `Habitual`): si enseñara también las del tmux propio,
+/// `T` sobre una de ellas respondería «ya no existía» y `↵` abriría una
+/// pestaña de una sesión que no existe en el habitual.
+#[test]
+fn la_lista_de_tmux_de_la_fase_15_solo_enseña_las_del_tmux_habitual() {
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let host = prueba.host_id("web-01");
+    prueba.bienvenida(vec![sesion_de(1, host, "web-01")]);
+    prueba.tecla(KeyCode::F(3));
+    prueba.tecla(KeyCode::Char('t'));
+    assert!(prueba.app.tmux.is_some());
+    let peticion_id = prueba
+        .drenar()
+        .into_iter()
+        .find_map(|mensaje| match mensaje {
+            MensajeCliente::ListarTmux { peticion_id, .. } => Some(peticion_id),
+            _ => None,
+        })
+        .expect("sin ListarTmux");
+    // La del tmux propio va primero y lleva el mismo nombre que otra del
+    // habitual: no se distinguirían por el nombre.
+    let propia = SesionVista {
+        servidor: ServidorTmux::Magi,
+        ..sesion_tmux("refactor", 0, 1, 1_700_000_000)
+    };
+    prueba.servidor(MensajeServidor::SesionesTmux {
+        peticion_id,
+        host_id: host,
+        sesiones: vec![
+            propia,
+            sesion_tmux("refactor", 0, 1, 1_699_900_000),
+            sesion_tmux("trabajo", 0, 1, 1_699_800_000),
+        ],
+        sin_tmux: None,
+    });
+    let nombres: Vec<String> = prueba
+        .app
+        .tmux
+        .as_ref()
+        .expect("lista abierta")
+        .sesiones
+        .iter()
+        .map(|sesion| sesion.nombre.clone())
+        .collect();
+    assert_eq!(nombres, ["refactor", "trabajo"]);
+    // `T` termina la del habitual, con `Habitual`.
+    prueba.tecla(KeyCode::Char('T'));
+    prueba.tecla(KeyCode::Enter);
+    let enviados = prueba.drenar();
+    assert!(
+        enviados.iter().any(|mensaje| matches!(
+            mensaje,
+            MensajeCliente::TerminarTmux { servidor: ServidorTmux::Habitual, nombre, host_id, .. }
+                if nombre == "refactor" && *host_id == host
+        )),
+        "TerminarTmux no fue al tmux habitual: {enviados:?}"
+    );
+}
+
+/// La respuesta tardía de una terminación (`T` en la lista de un host) no
+/// quita de la lista de otro host abierta después una sesión que se llame
+/// igual: la respuesta se aplica solo a la lista del host al que se pidió.
+#[test]
+fn una_terminacion_tardia_no_toca_la_lista_de_tmux_de_otro_host() {
+    let mut prueba = Prueba::nueva(&["web-01", "db-01"]);
+    let (uno, dos) = (prueba.host_id("web-01"), prueba.host_id("db-01"));
+    prueba.bienvenida(vec![
+        sesion_de(1, uno, "web-01"),
+        sesion_de(2, dos, "db-01"),
+    ]);
+    prueba.tecla(KeyCode::F(3));
+    let pedir_lista = |prueba: &mut Prueba, host: i64| {
+        prueba.tecla(KeyCode::Char('t'));
+        let peticion_id = prueba
+            .drenar()
+            .into_iter()
+            .find_map(|mensaje| match mensaje {
+                MensajeCliente::ListarTmux { peticion_id, .. } => Some(peticion_id),
+                _ => None,
+            })
+            .expect("sin ListarTmux");
+        prueba.servidor(MensajeServidor::SesionesTmux {
+            peticion_id,
+            host_id: host,
+            sesiones: vec![sesion_tmux("refactor", 0, 1, 1_699_900_000)],
+            sin_tmux: None,
+        });
+    };
+    // Se pide terminar «refactor» en web-01 y la respuesta tarda.
+    pedir_lista(&mut prueba, uno);
+    prueba.tecla(KeyCode::Char('T'));
+    prueba.tecla(KeyCode::Enter);
+    let terminar = prueba
+        .drenar()
+        .into_iter()
+        .find_map(|mensaje| match mensaje {
+            MensajeCliente::TerminarTmux { peticion_id, .. } => Some(peticion_id),
+            _ => None,
+        })
+        .expect("sin TerminarTmux");
+    // Mientras tanto se abre la lista de db-01, que también tiene «refactor».
+    prueba.tecla(KeyCode::Esc);
+    assert!(prueba.app.tmux.is_none());
+    prueba.tecla(KeyCode::Down);
+    pedir_lista(&mut prueba, dos);
+    assert_eq!(
+        prueba.app.tmux.as_ref().map(|lista| lista.host_id),
+        Some(dos)
+    );
+    prueba.servidor(MensajeServidor::TmuxTerminada {
+        peticion_id: terminar,
+        servidor: ServidorTmux::Habitual,
+        resultado: ResultadoTmux::Ok,
+    });
+    let nombres: Vec<String> = prueba
+        .app
+        .tmux
+        .as_ref()
+        .expect("lista abierta")
+        .sesiones
+        .iter()
+        .map(|sesion| sesion.nombre.clone())
+        .collect();
+    assert_eq!(
+        nombres,
+        ["refactor"],
+        "la terminación de web-01 quitó la sesión de la lista de db-01"
+    );
+}
+
+/// Con v10 el servidor no abre la pestaña si el tmux pedido no se puede
+/// enganchar (la sesión ya no existe, sin tmux…) y lo dice con
+/// `AperturaTmuxFallida`. Si el cliente la ignorara, el host se quedaría para
+/// siempre en `aperturas_pendientes` y ya no se podría abrir una sesión con él
+/// («ya hay una conexión en curso con ese host»).
+#[test]
+fn una_apertura_de_tmux_fallida_libera_el_host_y_dice_por_que() {
+    let mut prueba = Prueba::nueva(&["web-01", "db-01"]);
+    let (uno, dos) = (prueba.host_id("web-01"), prueba.host_id("db-01"));
+    prueba.bienvenida(vec![sesion_de(1, dos, "db-01")]);
+    prueba.tecla(KeyCode::F(3));
+    // La pestaña seleccionada es la de db-01: la lista de tmux es la suya.
+    prueba.tecla(KeyCode::Char('t'));
+    let peticion_id = prueba
+        .drenar()
+        .into_iter()
+        .find_map(|mensaje| match mensaje {
+            MensajeCliente::ListarTmux { peticion_id, .. } => Some(peticion_id),
+            _ => None,
+        })
+        .expect("sin ListarTmux");
+    prueba.servidor(MensajeServidor::SesionesTmux {
+        peticion_id,
+        host_id: dos,
+        sesiones: vec![sesion_tmux("trabajo", 0, 1, 1_699_900_000)],
+        sin_tmux: None,
+    });
+    prueba.tecla(KeyCode::Enter);
+    assert!(prueba.app.aperturas_pendientes.contains(&dos));
+    assert!(prueba.drenar().iter().any(
+        |mensaje| matches!(mensaje, MensajeCliente::AbrirSesion { host_id, .. } if *host_id == dos)
+    ));
+    prueba.servidor(MensajeServidor::AperturaTmuxFallida {
+        host_id: dos,
+        nombre: "trabajo".to_string(),
+        causa: CausaAperturaTmux::Otra,
+        mensaje: "la sesión «trabajo» ya no existe en «db-01»".to_string(),
+    });
+    assert!(
+        !prueba.app.aperturas_pendientes.contains(&dos),
+        "el host se quedó con una apertura pendiente"
+    );
+    let mensaje = prueba.app.mensaje.as_ref().expect("sin mensaje");
+    assert!(mensaje.error);
+    assert!(mensaje.texto.contains("ya no existe"), "{}", mensaje.texto);
+    // Un fallo de otro host no toca las aperturas en curso de este.
+    prueba.app.aperturas_pendientes.insert(uno);
+    prueba.servidor(MensajeServidor::AperturaTmuxFallida {
+        host_id: dos,
+        nombre: String::new(),
+        causa: CausaAperturaTmux::SinTmux,
+        mensaje: String::new(),
+    });
+    assert!(prueba.app.aperturas_pendientes.contains(&uno));
+    // Sin texto del servidor, el mensaje no queda vacío.
+    let mensaje = prueba.app.mensaje.as_ref().expect("sin mensaje");
+    assert!(mensaje.error && !mensaje.texto.is_empty());
 }
 
 // ------------------------------------------------------------------ ficha

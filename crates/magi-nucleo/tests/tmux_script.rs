@@ -17,9 +17,9 @@ use magi_nucleo::sesiones_persistentes::lectura::{
 };
 use magi_nucleo::sesiones_persistentes::{ServidorTmux, VersionTmux};
 use magi_nucleo::terminal::tmux::{
-    carpeta_valida, comando_valido, equipo_valido, etiqueta_equipo, fin_de_enganchar, leer_listado,
-    leer_terminar, nombre_nuevo, nombre_valido, orden, version_de_texto, FinEnganchar, Listado,
-    OrdenTmux, ResultadoTerminar, SesionTmux, Suborden, SCRIPT,
+    carpeta_valida, comando_valido, equipo_valido, etiqueta_equipo, fin_de_enganchar,
+    leer_terminar, nombre_valido, version_de_texto, FinEnganchar, OrdenTmux, ResultadoTerminar,
+    SCRIPT,
 };
 
 /// Salida cruda de una ejecución del script.
@@ -208,6 +208,20 @@ impl Entorno {
     /// Ejecuta el script con variables de entorno adicionales (versión del
     /// tmux falso, fallos, `HOME`…).
     fn ejecutar_con(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Salida {
+        let salida = self
+            .preparar(argumentos, entorno)
+            .output()
+            .expect("ejecutar terminal_tmux.sh");
+        Salida {
+            stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
+            codigo: salida.status.code().unwrap_or(-1),
+        }
+    }
+
+    /// El comando que ejecuta el script con el entorno de la prueba, sin
+    /// lanzarlo (para las que necesitan la entrada abierta o el hijo vivo).
+    fn preparar(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Command {
         // /bin/sh absoluto: el PATH del hijo es solo el de los falsos, para
         // que el script no vea el tmux real de la máquina.
         let mut comando = Command::new("/bin/sh");
@@ -215,6 +229,12 @@ impl Entorno {
         for argumento in argumentos {
             comando.arg(argumento);
         }
+        self.entorno_de(&mut comando, entorno);
+        comando
+    }
+
+    /// Pone al comando el entorno de la prueba.
+    fn entorno_de(&self, comando: &mut Command, entorno: &[(&str, &str)]) {
         // Con tmux falso, el PATH lleva además los directorios del sistema
         // para que el falso encuentre awk/sed/mkdir; el falso va primero, así
         // que nunca se usa un tmux real. Sin tmux, el PATH no ve ninguno.
@@ -238,7 +258,15 @@ impl Entorno {
         for (clave, valor) in entorno {
             comando.env(clave, valor);
         }
-        let salida = comando.output().expect("ejecutar terminal_tmux.sh");
+    }
+
+    /// Ejecuta la línea de comando que recibiría el shell de acceso del host
+    /// en un `exec` de ssh (`sh -c '<script>' magi-tmux …`, ya escapada).
+    fn ejecutar_linea(&self, linea: &str) -> Salida {
+        let mut comando = Command::new("/bin/sh");
+        comando.arg("-c").arg(linea);
+        self.entorno_de(&mut comando, &[]);
+        let salida = comando.output().expect("ejecutar la línea de exec");
         Salida {
             stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
             stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
@@ -269,74 +297,11 @@ fn instalar(destino: &Path, contenido: &str) {
 }
 
 #[test]
-fn listar_pasa_el_separador_a_tabuladores_y_normaliza_enganchada() {
-    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.sembrar_sesiones(&[
-        ("magi-portatil-1", 2, 2, "Mon Nov  9 19:20:00 2026"),
-        ("magi-portatil-2", 0, 1, "Tue Nov 10 08:00:00 2026"),
-    ]);
-    let salida = entorno.ejecutar(&["listar"]);
-    assert_eq!(salida.codigo, 0);
-    assert!(salida.stderr.is_empty());
-    assert_eq!(
-        salida.stdout,
-        concat!(
-            "MAGI_TMUX=tmux 3.4\n",
-            "MAGI_SESION\tmagi-portatil-1\t1\t2\tMon Nov  9 19:20:00 2026\n",
-            "MAGI_SESION\tmagi-portatil-2\t0\t1\tTue Nov 10 08:00:00 2026\n",
-        )
-    );
-    let llamadas = entorno.llamadas();
-    // Tabulador entre tmux y el script: tmux 3.4 y 3.5 escriben 0x1f como
-    // «\037» en la salida de list-sessions.
-    let sep = '\t';
-    assert!(llamadas.contains(&format!(
-        "list-sessions -F #{{session_name}}{sep}#{{session_attached}}{sep}#{{session_windows}}{sep}#{{session_created_string}}"
-    )));
-
-    // Lo que imprime el script es lo que entiende el lector del núcleo.
-    let listado = leer_listado(&salida.stdout);
-    assert_eq!(listado.tmux.as_deref(), Some("tmux 3.4"));
-    assert_eq!(listado.sesiones.len(), 2);
-    assert_eq!(listado.sesiones[0].nombre, "magi-portatil-1");
-    assert!(listado.sesiones[0].enganchada);
-    assert_eq!(listado.sesiones[0].ventanas, 2);
-    assert_eq!(listado.sesiones[0].creada, "Mon Nov  9 19:20:00 2026");
-    assert!(!listado.sesiones[1].enganchada);
-}
-
-#[test]
-fn listar_sin_sesiones_solo_da_la_version() {
-    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    // Sin fichero de estado, el tmux falso falla como "no hay servidor".
-    let salida = entorno.ejecutar(&["listar"]);
-    assert_eq!(salida.codigo, 0);
-    assert_eq!(salida.stdout, "MAGI_TMUX=tmux 3.4\n");
-    let listado = leer_listado(&salida.stdout);
-    assert!(listado.sesiones.is_empty());
-}
-
-#[test]
-fn sin_tmux_listar_y_comprobar_dicen_que_no() {
-    let entorno = Entorno::nuevo(None);
-    let salida = entorno.ejecutar(&["listar"]);
-    assert_eq!(salida.codigo, 0);
-    assert_eq!(salida.stdout, "MAGI_TMUX=no\n");
-    assert!(salida.stderr.is_empty());
-
-    let comprobar = entorno.ejecutar(&["comprobar", "magi-portatil-1"]);
-    assert_eq!(comprobar.codigo, 0);
-    assert_eq!(comprobar.stdout, "MAGI_TMUX=no\nMAGI_SESION=nueva\n");
-    // No se llamó a ningún tmux: no existe.
-    assert!(entorno.llamadas().is_empty());
-}
-
-#[test]
 fn un_tmux_que_falla_al_pedir_la_version_cuenta_como_ausente() {
     let entorno = Entorno::nuevo(Some(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$MAGI_TMUX_LLAMADAS\"\nexit 1\n",
     ));
-    let salida = entorno.ejecutar(&["listar"]);
+    let salida = entorno.ejecutar(&["estado"]);
     assert_eq!(salida.codigo, 0);
     assert_eq!(salida.stdout, "MAGI_TMUX=no\n");
     assert_eq!(entorno.llamadas().trim_end(), "-V");
@@ -346,80 +311,13 @@ fn un_tmux_que_falla_al_pedir_la_version_cuenta_como_ausente() {
 fn un_tmux_anterior_a_1_8_se_trata_como_sin_tmux() {
     let viejo = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$MAGI_TMUX_LLAMADAS\"\ncase \"$1\" in\n    -V) printf '%s\\n' 'tmux 1.7' ;;\nesac\n";
     let entorno = Entorno::nuevo(Some(viejo));
-    let salida = entorno.ejecutar(&["listar"]);
+    let salida = entorno.ejecutar(&["estado"]);
     assert_eq!(salida.stdout, "MAGI_TMUX=no\n");
-    // Abrir con un tmux viejo también usa el shell de acceso.
-    let abrir = entorno.ejecutar(&["abrir", "magi-portatil-1"]);
-    assert_eq!(abrir.codigo, 0);
-    assert_eq!(entorno.shell_recibido().as_deref(), Some("-l\n"));
-    assert!(!entorno.llamadas().contains("new-session"));
-}
-
-#[test]
-fn comprobar_dice_si_la_sesion_existe_por_nombre_exacto() {
-    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.sembrar_sesiones(&[("magi-portatil-1", 0, 1, "2026-11-09 19:00:00")]);
-    let existe = entorno.ejecutar(&["comprobar", "magi-portatil-1"]);
-    assert_eq!(existe.codigo, 0);
-    assert_eq!(existe.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=existe\n");
-    let nueva = entorno.ejecutar(&["comprobar", "magi-portatil-2"]);
-    assert_eq!(nueva.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=nueva\n");
-    let llamadas = entorno.llamadas();
-    // Comparación exacta por nombre (no `has-session -t`, que casa prefijos).
-    assert!(llamadas.contains("list-sessions -F #{session_name}"));
-}
-
-#[test]
-fn abrir_sustituye_el_proceso_por_new_session() {
-    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    // Sin estado previo: el tmux falso crea la sesión y se queda enganchado
-    // leyendo la entrada; con la entrada cerrada sale y deja su marca.
-    let salida = entorno.ejecutar(&["abrir", "magi-portatil-1"]);
-    assert_eq!(salida.codigo, 0);
-    assert_eq!(salida.stdout, "MAGI_TMUX_SESION=magi-portatil-1\n");
-    assert!(entorno.tiene_sesion("magi-portatil-1"));
-    let llamadas = entorno.llamadas();
-    assert!(llamadas.contains("-V"));
-    assert!(llamadas.contains("new-session -A -s magi-portatil-1"));
+    // Engancharse con un tmux viejo no engancha a nada (ni abre un shell).
+    let enganchar = entorno.ejecutar(&["enganchar", "habitual", "portatil-1", "0", "portatil"]);
+    assert_eq!(enganchar.codigo, 76, "{}", enganchar.stderr);
+    assert!(!entorno.llamadas().contains("attach-session"));
     assert!(entorno.shell_recibido().is_none());
-}
-
-#[test]
-fn abrir_sin_tmux_abre_el_shell_de_acceso() {
-    let entorno = Entorno::nuevo(None);
-    let salida = entorno.ejecutar(&["abrir", "magi-portatil-1"]);
-    assert_eq!(salida.codigo, 0);
-    assert!(salida.stdout.is_empty());
-    assert_eq!(entorno.shell_recibido().as_deref(), Some("-l\n"));
-}
-
-#[test]
-fn terminar_usa_kill_session_y_dice_el_resultado() {
-    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    entorno.sembrar_sesiones(&[("magi-portatil-1", 0, 1, "2026-11-09 19:00:00")]);
-    let terminada = entorno.ejecutar(&["terminar", "magi-portatil-1"]);
-    assert_eq!(terminada.codigo, 0);
-    assert_eq!(terminada.stdout, "MAGI_RESULTADO=ok\n");
-    assert_eq!(leer_terminar(&terminada.stdout), ResultadoTerminar::Ok);
-    // El tmux falso quita la sesión de su estado.
-    assert!(!entorno.tiene_sesion("magi-portatil-1"));
-
-    let perdida = entorno.ejecutar(&["terminar", "magi-portatil-9"]);
-    assert_eq!(perdida.codigo, 0);
-    assert_eq!(perdida.stdout, "MAGI_RESULTADO=no_existe\n");
-    assert_eq!(leer_terminar(&perdida.stdout), ResultadoTerminar::NoExiste);
-    let llamadas = entorno.llamadas();
-    // R146: «=» para que tmux no case por prefijo.
-    assert!(llamadas.contains("kill-session -t =magi-portatil-1"));
-    assert!(llamadas.contains("kill-session -t =magi-portatil-9"));
-}
-
-#[test]
-fn terminar_sin_tmux_dice_que_no_existe() {
-    let entorno = Entorno::nuevo(None);
-    let salida = entorno.ejecutar(&["terminar", "magi-portatil-1"]);
-    assert_eq!(salida.codigo, 0);
-    assert_eq!(salida.stdout, "MAGI_RESULTADO=no_existe\n");
 }
 
 #[test]
@@ -436,7 +334,7 @@ fn los_nombres_invalidos_se_rechazan_sin_tocar_tmux() {
         largo.as_str(),
     ];
     for nombre in invalidos {
-        let salida = entorno.ejecutar(&["comprobar", nombre]);
+        let salida = entorno.ejecutar(&["comprobar", "magi", nombre]);
         assert_eq!(salida.codigo, 64, "nombre rechazado: {nombre:?}");
         assert!(salida.stdout.is_empty(), "nombre rechazado: {nombre:?}");
         assert!(
@@ -450,12 +348,18 @@ fn los_nombres_invalidos_se_rechazan_sin_tocar_tmux() {
 #[test]
 fn los_argumentos_de_mas_o_de_menos_y_los_subordenes_desconocidos_son_uso() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    let casos: [&[&str]; 5] = [
+    // Las subórdenes de la Fase 15 (`abrir`, `listar` y las formas de un solo
+    // argumento de `comprobar` y `terminar`) ya no existen.
+    let casos: [&[&str]; 9] = [
         &[],
         &["comprobar"],
-        &["listar", "magi-portatil-1"],
-        &["abrir", "magi-portatil-1", "de-mas"],
-        &["pepe", "magi-portatil-1"],
+        &["comprobar", "portatil-1"],
+        &["terminar", "portatil-1"],
+        &["listar"],
+        &["abrir", "portatil-1"],
+        &["comprobar", "magi", "portatil-1", "de-mas"],
+        &["estado", "de-mas"],
+        &["pepe", "portatil-1"],
     ];
     for argumentos in casos {
         let salida = entorno.ejecutar(argumentos);
@@ -470,9 +374,15 @@ fn los_nombres_validos_de_64_caracteres_pasan() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     let nombre = "A_z-09".to_string() + &"b".repeat(58);
     assert_eq!(nombre.len(), 64);
-    let salida = entorno.ejecutar(&["comprobar", &nombre]);
+    let salida = entorno.ejecutar(&["comprobar", "magi", &nombre]);
     assert_eq!(salida.codigo, 0);
-    assert_eq!(salida.stdout, "MAGI_TMUX=tmux 3.4\nMAGI_SESION=nueva\n");
+    assert!(
+        salida
+            .stdout
+            .starts_with("MAGI_TMUX=tmux 3.4\nMAGI_SESION=nueva\n"),
+        "{}",
+        salida.stdout
+    );
     assert!(entorno
         .llamadas()
         .contains("list-sessions -F #{session_name}"));
@@ -504,131 +414,6 @@ fn la_etiqueta_del_equipo_va_sin_tildes_y_con_guiones() {
     let recortada = etiqueta_equipo("abcde fghij klmno pqrst");
     assert_eq!(recortada, "abcde-fghij-klmno-pq");
     assert!(!recortada.ends_with('-'));
-}
-
-#[test]
-fn el_nombre_nuevo_es_magi_equipo_n_y_evita_los_usados() {
-    assert_eq!(nombre_nuevo("portátil", &[]), "magi-portatil-1");
-    let existentes = vec![
-        "magi-portatil-1".to_string(),
-        "magi-portatil-3".to_string(),
-        "magi-otro-1".to_string(),
-        "suelta".to_string(),
-    ];
-    assert_eq!(nombre_nuevo("portátil", &existentes), "magi-portatil-2");
-    let existentes = vec![
-        "magi-portatil-2".to_string(),
-        "magi-portatil-x".to_string(),
-        "magi-portatil-".to_string(),
-    ];
-    assert_eq!(nombre_nuevo("portátil", &existentes), "magi-portatil-1");
-    // La etiqueta del equipo normaliza el nombre libre.
-    assert_eq!(
-        nombre_nuevo("Portátil de Héctor", &[]),
-        "magi-portatil-de-hector-1"
-    );
-}
-
-#[test]
-fn la_orden_del_script_lleva_el_nombre_como_argumento() {
-    let comprobar = orden(Suborden::Comprobar, Some("magi-portatil-1")).expect("orden válida");
-    assert_eq!(
-        comprobar,
-        vec![
-            "sh",
-            "-c",
-            SCRIPT,
-            "magi-tmux",
-            "comprobar",
-            "magi-portatil-1",
-        ]
-    );
-    assert_eq!(
-        orden(Suborden::Abrir, Some("magi-portatil-1")).unwrap()[4],
-        "abrir"
-    );
-    assert_eq!(
-        orden(Suborden::Terminar, Some("magi-portatil-1")).unwrap()[4],
-        "terminar"
-    );
-    let listar = orden(Suborden::Listar, None).expect("listar sin nombre");
-    assert_eq!(listar.len(), 5);
-    assert_eq!(listar[4], "listar");
-
-    assert!(orden(Suborden::Listar, Some("magi-portatil-1")).is_none());
-    assert!(orden(Suborden::Comprobar, None).is_none());
-    assert!(orden(Suborden::Abrir, Some("mal nombre")).is_none());
-    assert!(orden(Suborden::Terminar, Some("")).is_none());
-}
-
-#[test]
-fn leer_listado_entiende_lo_bueno_y_tolera_crlf() {
-    let salida =
-        "MAGI_TMUX=tmux 3.4\r\nMAGI_SESION\tmagi-portatil-1\t1\t2\tlun 9 nov 19:20:00 2026\r\n";
-    let listado = leer_listado(salida);
-    assert_eq!(listado.tmux.as_deref(), Some("tmux 3.4"));
-    assert_eq!(
-        listado.sesiones,
-        vec![SesionTmux {
-            nombre: "magi-portatil-1".to_string(),
-            enganchada: true,
-            ventanas: 2,
-            creada: "lun 9 nov 19:20:00 2026".to_string(),
-        }]
-    );
-    // También vale un espacio como separador tras MAGI_SESION.
-    let listado = leer_listado("MAGI_SESION magi-1\t0\t1\t2026");
-    assert_eq!(listado.sesiones.len(), 1);
-    assert!(!listado.sesiones[0].enganchada);
-}
-
-#[test]
-fn leer_listado_sin_tmux_o_vacio() {
-    assert_eq!(leer_listado("MAGI_TMUX=no\n"), Listado::default());
-    assert_eq!(leer_listado("MAGI_TMUX=\n"), Listado::default());
-    assert_eq!(leer_listado(""), Listado::default());
-    assert!(leer_listado("MAGI_TMUX=tmux 3.4\n").sesiones.is_empty());
-}
-
-#[test]
-fn leer_listado_acota_la_entrada_no_fiable() {
-    // 200 sesiones como mucho.
-    let mut salida = String::new();
-    for numero in 0..250 {
-        salida.push_str(&format!("MAGI_SESION\ts-{numero}\t0\t1\tx\n"));
-    }
-    assert_eq!(leer_listado(&salida).sesiones.len(), 200);
-
-    // Nombres de más de 64 caracteres o con controles: fuera.
-    let largo = "a".repeat(65);
-    assert!(leer_listado(&format!("MAGI_SESION\t{largo}\t0\t1\tx\n"))
-        .sesiones
-        .is_empty());
-    assert!(leer_listado("MAGI_SESION\tmagi\u{1}-1\t0\t1\tx\n")
-        .sesiones
-        .is_empty());
-    // Una línea de más de 1 KiB: fuera.
-    let enorme = format!("MAGI_SESION\tmagi-1\t0\t1\t{}\n", "x".repeat(1100));
-    assert!(leer_listado(&enorme).sesiones.is_empty());
-    // Líneas que no encajan: fuera, sin pánico.
-    assert!(leer_listado("MAGI_SESION\tmagi-1\t0\n").sesiones.is_empty());
-    assert!(leer_listado("MAGI_SESIONX\tsi\n").sesiones.is_empty());
-    assert!(leer_listado("\u{1b}[31mMAGI_SESION\tmagi-1\t0\t1\tx\n")
-        .sesiones
-        .is_empty());
-    // La versión se limpia y se acota.
-    let version = "v".repeat(200);
-    let listado = leer_listado(&format!("MAGI_TMUX={version}\n"));
-    assert_eq!(listado.tmux.as_deref().map(str::len), Some(64));
-}
-
-#[test]
-fn leer_listado_no_se_rompe_con_campos_ilegibles() {
-    let listado = leer_listado("MAGI_SESION\tmagi-1\tno\tmuchas\tlun\u{7} 9\n");
-    assert_eq!(listado.sesiones.len(), 1);
-    assert!(!listado.sesiones[0].enganchada);
-    assert_eq!(listado.sesiones[0].ventanas, 0);
-    assert_eq!(listado.sesiones[0].creada, "lun 9");
 }
 
 #[test]
@@ -815,12 +600,14 @@ fn terminar_magi_a_1_no_mata_a_magi_a_10() {
     // La existencia se comprueba con la lista exacta: ni siquiera se intenta.
     assert!(!entorno.llamadas().contains("kill-session"));
 
-    // Lo mismo en el tmux habitual y con la forma antigua del script.
+    // Lo mismo en el tmux habitual. La forma antigua del script (un solo
+    // argumento, que actuaba sobre el habitual) ya no existe.
     entorno.sembrar_sesiones(&[("magi-a-10", 0, 1, "2026-11-09 19:00:00")]);
     let habitual = entorno.ejecutar(&["terminar", "habitual", "magi-a-1"]);
     assert_eq!(habitual.stdout, "MAGI_RESULTADO=no_existe\n");
     let antigua = entorno.ejecutar(&["terminar", "magi-a-1"]);
-    assert_eq!(antigua.stdout, "MAGI_RESULTADO=no_existe\n");
+    assert_eq!(antigua.codigo, 64);
+    assert!(antigua.stdout.is_empty());
     assert!(entorno.tiene_sesion("magi-a-10"));
 }
 
@@ -1391,20 +1178,22 @@ fn enganchar_suelta_pone_el_equipo_aplica_la_configuracion_y_engancha() {
     assert_eq!(salida.codigo, 100, "{}", salida.stderr);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::Soltada);
     assert!(salida.stdout.contains("MAGI_TMUX_ADJUNTO=agente soltar=1"));
-    // La lista exacta, el equipo, la configuración, el enganche y, al volver,
-    // otra vez la lista exacta para saber si la sesión sigue viva.
+    // La lista exacta (existe), su identificador interno, el equipo, la
+    // configuración, el enganche y, al volver, si el identificador sigue vivo
+    // (no el nombre: un renombrado no la hace «terminada»).
     let propias = lineas_del_propio(&entorno);
-    assert_eq!(propias.len(), 5, "{propias:?}");
+    assert_eq!(propias.len(), 6, "{propias:?}");
     assert!(propias[0].ends_with("list-sessions -F #{session_name}"));
-    assert!(propias[1].ends_with("set-option -q -t =agente: @magi_equipo portatil"));
-    assert!(propias[2].contains("set -gq status off"));
-    assert!(propias[2].contains("set -sgq extended-keys on"));
+    assert!(propias[1].ends_with("list-sessions -F #{session_id}\t#{session_name}"));
+    assert!(propias[2].ends_with("set-option -q -t =agente: @magi_equipo portatil"));
+    assert!(propias[3].contains("set -gq status off"));
+    assert!(propias[3].contains("set -sgq extended-keys on"));
     // Idempotente y sin start-server ni history-limit.
-    assert!(!propias[2].contains("start-server"));
-    assert!(!propias[2].contains("history-limit"));
-    assert!(!propias[2].contains("terminal-overrides"));
-    assert!(propias[3].ends_with("attach-session -d -t =agente"));
-    assert!(propias[4].ends_with("list-sessions -F #{session_name}"));
+    assert!(!propias[3].contains("start-server"));
+    assert!(!propias[3].contains("history-limit"));
+    assert!(!propias[3].contains("terminal-overrides"));
+    assert!(propias[4].ends_with("attach-session -d -t =agente"));
+    assert!(propias[5].ends_with("list-sessions -F #{session_id}"));
     // @magi_equipo quedó en la sesión.
     let linea = entorno
         .estado_de_magi()
@@ -1691,6 +1480,22 @@ fn estado_sin_tmux_o_sin_sesiones() {
 }
 
 #[test]
+fn estado_con_un_tmux_que_falla_no_dice_que_no_hay_sesiones() {
+    // Regresión: tras un `apt upgrade tmux` con sesiones vivas, el cliente
+    // nuevo no habla con el servidor viejo («protocol version mismatch»). El
+    // script salía con 0 y una lista vacía, y MAGI daba por terminadas las
+    // sesiones vivas (la tecla `C` habría borrado sus fichas).
+    for orden in ["list-sessions", "list-windows"] {
+        let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+        entorno.sembrar_magi(&["agente"]);
+        let salida = entorno.ejecutar_con(&["estado"], &[("MAGI_TMUX_FALLA", orden)]);
+        assert_eq!(salida.codigo, 77, "{orden}: {}", salida.stderr);
+        assert!(!salida.stdout.contains("MAGI_SES"), "{orden}");
+        assert!(salida.stderr.contains("no pudo listar"), "{orden}");
+    }
+}
+
+#[test]
 fn estado_sanea_lo_que_viene_del_tmux_ajeno() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     let titulo_largo = "t".repeat(600);
@@ -1795,6 +1600,22 @@ fn vista_y_historial_de_una_sesion_inexistente_dan_75() {
         sin.ejecutar(&["historial", "habitual", "a", "10"]).codigo,
         76
     );
+}
+
+#[test]
+fn vista_e_historial_con_una_captura_que_falla_no_dan_un_exito_vacio() {
+    // Regresión: con la captura en una tubería, el código de salida era el de
+    // awk o sed y una sesión que desaparecía a mitad salía con 0 y vacía.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["agente"]);
+    for suborden in ["vista", "historial"] {
+        let salida = entorno.ejecutar_con(
+            &[suborden, "magi", "agente", "10"],
+            &[("MAGI_TMUX_FALLA", "capture-pane")],
+        );
+        assert_eq!(salida.codigo, 75, "{suborden}: {}", salida.stderr);
+        assert!(salida.stdout.is_empty(), "{suborden}");
+    }
 }
 
 #[test]
@@ -2236,4 +2057,154 @@ fn los_limites_del_script_coinciden_con_los_validadores_de_la_ficha() {
             "{nombre:?}"
         );
     }
+}
+
+// ======================================================================
+// Fase 16, Sprint 2: el enganche por `exec` y el renombrado en caliente
+// ======================================================================
+
+#[test]
+fn el_comando_exec_del_enganche_lleva_el_script_entero_y_cabe_en_un_argumento() {
+    // El peor caso: nombre de 64 caracteres y equipo de 20.
+    let nombre = "n".repeat(64);
+    let equipo = "e".repeat(20);
+    let orden = OrdenTmux::Enganchar {
+        servidor: ServidorTmux::Magi,
+        nombre: &nombre,
+        soltar: true,
+        equipo: &equipo,
+    };
+    let comando = orden.comando_exec().expect("orden válida");
+    assert!(comando.starts_with("sh -c '"), "{}", &comando[..40]);
+    assert!(comando.ends_with(&format!(" magi-tmux enganchar magi {nombre} 1 {equipo}")));
+    // El script va entero y escapado (cada comilla simple, como `'\''`).
+    let comillas = SCRIPT.matches('\'').count();
+    assert!(comando.len() > SCRIPT.len() + 3 * comillas);
+    // Los límites: un argumento de `execve` (el `-c` de la shell de acceso)
+    // admite 128 KiB (`MAX_ARG_STRLEN`) y el paquete de un `exec` de ssh, 256
+    // KiB en OpenSSH. Con el script de ~24 KB queda un margen holgado; si el
+    // script crece hasta aquí, hay que volver a pensar cómo se entrega.
+    assert!(
+        comando.len() < 64 * 1024,
+        "el exec del enganche pesa {} bytes: cerca del tope de un argumento",
+        comando.len()
+    );
+    // Y se ejecuta de verdad tal cual lo recibiría el shell del host: el
+    // script llega íntegro con sus argumentos y engancha a la sesión.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["sesion-x"]);
+    let orden = OrdenTmux::Enganchar {
+        servidor: ServidorTmux::Magi,
+        nombre: "sesion-x",
+        soltar: true,
+        equipo: "portatil",
+    };
+    let salida = entorno.ejecutar_linea(&orden.comando_exec().unwrap());
+    // Con la entrada cerrada el cliente falso sale con 0 y la sesión sigue
+    // viva: para el script, «te soltaron».
+    assert_eq!(salida.codigo, 100, "{}", salida.stderr);
+    assert!(salida
+        .stdout
+        .contains("MAGI_TMUX_ADJUNTO=sesion-x soltar=1"));
+    assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::Soltada);
+    assert!(entorno
+        .llamadas()
+        .contains("attach-session -d -t =sesion-x"));
+}
+
+#[test]
+fn el_comando_exec_escapa_los_datos_y_no_deja_pasar_nada_invalido() {
+    let orden = OrdenTmux::Enganchar {
+        servidor: ServidorTmux::Habitual,
+        nombre: "ok",
+        soltar: false,
+        equipo: "x",
+    };
+    let comando = orden.comando_exec().unwrap();
+    assert!(comando.ends_with(" magi-tmux enganchar habitual ok 0 x"));
+    // Datos no válidos: ni línea ni comando.
+    for (nombre, equipo) in [
+        ("a b", "x"),
+        ("a;rm", "x"),
+        ("ok", "X"),
+        ("ok", "a b"),
+        ("", "x"),
+    ] {
+        let orden = OrdenTmux::Enganchar {
+            servidor: ServidorTmux::Magi,
+            nombre,
+            soltar: false,
+            equipo,
+        };
+        assert!(orden.comando_exec().is_none(), "{nombre:?} {equipo:?}");
+        assert!(orden.linea_para_pty().is_none());
+    }
+    // La forma de la Fase 15 (escribir `exec …` en una shell) sigue entera.
+    let linea = OrdenTmux::Estado.linea_para_pty().unwrap();
+    assert!(linea.starts_with("exec sh -c '") && linea.ends_with("magi-tmux estado\n"));
+}
+
+#[test]
+fn un_renombrado_mientras_se_esta_enganchado_no_cuenta_como_terminada() {
+    // La sesión se renombra mientras este cliente está enganchado y, después,
+    // otro equipo se engancha con `-d` y lo suelta. Mirar la existencia por el
+    // nombre antiguo dava «terminada» (0) en vez de «soltada» (100): el script
+    // mira el identificador interno de la sesión.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(
+        &entorno.estado_magi,
+        &[
+            "otra\t0\t1\t2026-11-09 19:00:00".to_string(),
+            "refactor\t0\t1\t2026-11-09 19:00:00".to_string(),
+        ],
+    );
+    let mut hijo = entorno
+        .preparar(
+            &["enganchar", "magi", "refactor", "1", "sobremesa"],
+            &[("MAGI_TMUX_AL_SOLTAR_RENOMBRA", "refactor-2")],
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("arrancar el enganche");
+    // La entrada se mantiene abierta hasta el final: `wait_with_output` cierra
+    // la que quede en el hijo y el cliente falso saldría por ahí.
+    let _entrada = hijo.stdin.take();
+    // El cliente falso espera con la entrada abierta; cuando hay llamada a
+    // attach-session, otro equipo escribe el marcador de la sesión y el falso
+    // renombra antes de soltar al cliente.
+    let inicio = std::time::Instant::now();
+    while !entorno.llamadas().contains("attach-session") {
+        assert!(
+            inicio.elapsed() < std::time::Duration::from_secs(10),
+            "no se enganchó: {}",
+            entorno.llamadas()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    fs::write(
+        format!("{}.cliente.refactor", entorno.estado_magi.display()),
+        "otro\n",
+    )
+    .unwrap();
+    let salida = hijo.wait_with_output().expect("esperar al enganche");
+    assert_eq!(
+        salida.status.code(),
+        Some(100),
+        "stdout: {} stderr: {}",
+        String::from_utf8_lossy(&salida.stdout),
+        String::from_utf8_lossy(&salida.stderr)
+    );
+    assert!(
+        entorno.magi_tiene("refactor-2"),
+        "{}",
+        entorno.estado_de_magi()
+    );
+    assert!(!entorno.magi_tiene("refactor"));
+    // El identificador se pidió con la lista exacta, sin has-session.
+    assert!(entorno
+        .llamadas()
+        .contains("list-sessions -F #{session_id}"));
 }

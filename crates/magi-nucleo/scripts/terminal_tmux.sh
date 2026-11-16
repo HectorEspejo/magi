@@ -18,7 +18,9 @@
 #       (códigos de salida 0, 73, 72, 74, 76 y 1)
 #   enganchar <servidor> <nombre> <soltar 0|1> <equipo>
 #       sale con 0 si la sesión terminó, 100 si sigue (te soltaron), 75 si no
-#       existía, 76 sin tmux y 74 con un tmux demasiado antiguo
+#       existía, 76 sin tmux y 74 con un tmux demasiado antiguo. «Sigue» se
+#       mira por el identificador interno de la sesión, no por su nombre: un
+#       renombrado mientras estás enganchado no la hace «terminada»
 #   estado
 #       MAGI_TMUX=…, MAGI_AHORA=<segundos> y una línea MAGI_SES por sesión de
 #       los dos servidores, con los campos separados por 0x1F
@@ -36,11 +38,6 @@
 # se comprueba con la lista exacta de list-sessions, nunca con has-session -t.
 # Para las órdenes cuyo objetivo es un panel (capture-pane) o que aceptan un
 # panel (set-option), el objetivo es «=<nombre>:».
-#
-# LEGADO-S2: "abrir <nombre>", "listar", "comprobar <nombre>" y
-# "terminar <nombre>" (un solo argumento, sobre el tmux habitual) son las
-# subórdenes de la Fase 15. El servidor del escritorio las usa hasta el
-# Sprint 2; después se quitan de aquí y de terminal/tmux.rs.
 
 set -u
 
@@ -68,6 +65,7 @@ SALIDA_EXISTE=73
 SALIDA_ANTIGUO=74
 SALIDA_NO_EXISTE=75
 SALIDA_SIN_TMUX=76
+SALIDA_FALLO_TMUX=77
 SALIDA_SOLTADA=100
 
 # Comando de arranque (§7.2): corre con el shell de acceso del usuario, en modo
@@ -217,6 +215,24 @@ tmux_srv() {
 # ¿Existe la sesión con ese nombre exacto? (la lista exacta, nunca has-session)
 sesion_existe() {
     tmux_srv list-sessions -F '#{session_name}' 2>/dev/null | grep -Fxq -e "$1"
+}
+
+# Identificador interno de tmux ($0, $1…) de la sesión con ese nombre exacto;
+# vacío si no se sabe. Sobrevive a un renombrado y no se repite mientras viva
+# el servidor, así que sirve para saber si «la misma» sesión sigue viva.
+id_de_sesion() {
+    tmux_srv list-sessions -F "#{session_id}${TAB}#{session_name}" 2>/dev/null |
+        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 == nombre { print $1; exit }'
+}
+
+# ¿Sigue viva la sesión? sesion_viva <nombre> <identificador, o vacío>. Con
+# identificador, por él (aunque la hayan renombrado); sin él, por el nombre.
+sesion_viva() {
+    if [ -n "$2" ]; then
+        tmux_srv list-sessions -F '#{session_id}' 2>/dev/null | grep -Fxq -e "$2"
+    else
+        sesion_existe "$1"
+    fi
 }
 
 # ¿Tiene el host la terminfo de tmux-256color? Sin ella, screen-256color.
@@ -455,6 +471,7 @@ hacer_enganchar() {
         printf '[MAGI] la sesión «%s» ya no existe\n' "$NOMBRE" >&2
         exit "$SALIDA_NO_EXISTE"
     fi
+    ID=$(id_de_sesion "$NOMBRE")
     if [ "$SERVIDOR" = magi ]; then
         # Solo el tmux propio: el habitual no se toca (ni su configuración ni
         # sus opciones). La configuración es idempotente.
@@ -469,7 +486,7 @@ hacer_enganchar() {
         tmux_srv attach-session -t "=$NOMBRE"
     fi
     fin=$?
-    if sesion_existe "$NOMBRE"; then
+    if sesion_viva "$NOMBRE" "$ID"; then
         # Sigue viva: o te soltaron (tmux sale con 0) o el cliente no pudo
         # engancharse (sin terminal, por ejemplo).
         if [ "$fin" -ne 0 ]; then
@@ -492,6 +509,28 @@ ahora_del_host() {
     printf '%s' "$ahora"
 }
 
+# Ejecuta una orden de lista de tmux y deja su salida en $SALIDA_LISTA. Un
+# servidor que no existe o no contesta («no server running», «error connecting
+# to…») es una lista vacía; cualquier otro fallo (un tmux nuevo frente a un
+# servidor viejo tras un `apt upgrade`, por ejemplo) devuelve 1: con las
+# sesiones vivas, un fallo no puede pasar por «no hay sesiones», o MAGI las
+# daría por terminadas.
+leer_lista() {
+    SALIDA_LISTA=$(tmux_srv "$@" 2>&1)
+    codigo_lista=$?
+    if [ "$codigo_lista" -eq 0 ]; then
+        return 0
+    fi
+    case "$SALIDA_LISTA" in
+        *'no server running'*|*'error connecting to'*|*'No such file or directory'*|*'failed to connect to server'*)
+            SALIDA_LISTA=''
+            return 0
+            ;;
+    esac
+    SALIDA_LISTA=''
+    return 1
+}
+
 # Una línea MAGI_SES por sesión del servidor $1, con los campos separados por
 # 0x1F: servidor, nombre, clientes, equipo, actividad, creada, campana, ventanas
 # y título. Solo salen las sesiones con un nombre que MAGI pueda manejar; el
@@ -503,9 +542,17 @@ ahora_del_host() {
 # como «\037» (3.2 y 3.7 los dejan tal cual), y el tabulador sobrevive en todas.
 listar_servidor() {
     SERVIDOR=$1
+    if ! leer_lista list-sessions -F "S${TAB}#{session_name}${TAB}#{session_attached}${TAB}#{@magi_equipo}${TAB}#{session_created}${TAB}#{session_windows}${TAB}#{session_activity}${TAB}#{pane_title}"; then
+        return 1
+    fi
+    LISTA_SESIONES=$SALIDA_LISTA
+    if ! leer_lista list-windows -a -F "W${TAB}#{session_name}${TAB}#{window_activity}${TAB}#{window_bell_flag}"; then
+        return 1
+    fi
+    LISTA_VENTANAS=$SALIDA_LISTA
     {
-        tmux_srv list-sessions -F "S${TAB}#{session_name}${TAB}#{session_attached}${TAB}#{@magi_equipo}${TAB}#{session_created}${TAB}#{session_windows}${TAB}#{session_activity}${TAB}#{pane_title}" 2>/dev/null
-        tmux_srv list-windows -a -F "W${TAB}#{session_name}${TAB}#{window_activity}${TAB}#{window_bell_flag}" 2>/dev/null
+        printf '%s\n' "$LISTA_SESIONES"
+        printf '%s\n' "$LISTA_VENTANAS"
     } | LC_ALL=C awk -F "$TAB" -v OFS="$US" -v servidor="$1" '
         function limpio(texto) {
             gsub(/[[:cntrl:]]/, "", texto)
@@ -558,8 +605,10 @@ hacer_estado() {
     if ahora=$(ahora_del_host); then
         printf 'MAGI_AHORA=%s\n' "$ahora"
     fi
-    listar_servidor magi
-    listar_servidor habitual
+    if ! listar_servidor magi || ! listar_servidor habitual; then
+        printf '%s\n' '[MAGI] tmux no pudo listar las sesiones del host' >&2
+        exit "$SALIDA_FALLO_TMUX"
+    fi
 }
 
 # El texto de las últimas $3 líneas visibles de la sesión, sin espacios
@@ -573,7 +622,13 @@ hacer_vista() {
         printf '[MAGI] la sesión «%s» no existe\n' "$NOMBRE" >&2
         exit "$SALIDA_NO_EXISTE"
     fi
-    tmux_srv capture-pane -p -J -t "=$NOMBRE:" 2>/dev/null | LC_ALL=C awk -v ultimas="$LINEAS" '
+    # La captura va a una variable: en una tubería, el código de salida sería
+    # el de awk y una sesión que desaparece a mitad saldría como una vista vacía.
+    if ! captura=$(tmux_srv capture-pane -p -J -t "=$NOMBRE:" 2>/dev/null); then
+        printf '[MAGI] la sesión «%s» no existe\n' "$NOMBRE" >&2
+        exit "$SALIDA_NO_EXISTE"
+    fi
+    printf '%s\n' "$captura" | LC_ALL=C awk -v ultimas="$LINEAS" '
         { sub(/[ \t]+$/, ""); linea[NR] = $0 }
         END {
             n = NR
@@ -594,7 +649,11 @@ hacer_historial() {
         printf '[MAGI] la sesión «%s» no existe\n' "$NOMBRE" >&2
         exit "$SALIDA_NO_EXISTE"
     fi
-    tmux_srv capture-pane -p -e -J -S "-$LINEAS" -t "=$NOMBRE:" 2>/dev/null | sed 's/ *$//'
+    if ! captura=$(tmux_srv capture-pane -p -e -J -S "-$LINEAS" -t "=$NOMBRE:" 2>/dev/null); then
+        printf '[MAGI] la sesión «%s» no existe\n' "$NOMBRE" >&2
+        exit "$SALIDA_NO_EXISTE"
+    fi
+    printf '%s\n' "$captura" | sed 's/ *$//'
 }
 
 hacer_renombrar() {
@@ -639,72 +698,6 @@ hacer_terminar() {
     fi
 }
 
-# ---------------------------------------------------------------- LEGADO-S2
-# Subórdenes de la Fase 15 (tmux habitual, un solo argumento). Se quitan en el
-# Sprint 2, cuando el servidor use las nuevas.
-
-legado_comprobar() {
-    SERVIDOR=habitual
-    if ! detectar_tmux; then
-        printf '%s\n' 'MAGI_TMUX=no'
-        printf '%s\n' 'MAGI_SESION=nueva'
-        exit 0
-    fi
-    printf 'MAGI_TMUX=%s\n' "$VERSION_TMUX"
-    # Comparación exacta: `has-session -t` casa por prefijo en tmux y
-    # magi-x-1 también casaría con magi-x-10.
-    if sesion_existe "$1"; then
-        printf '%s\n' 'MAGI_SESION=existe'
-    else
-        printf '%s\n' 'MAGI_SESION=nueva'
-    fi
-}
-
-legado_abrir() {
-    if ! detectar_tmux; then
-        # Sin tmux (o demasiado viejo): el shell de acceso de siempre.
-        exec "${SHELL:-/bin/sh}" -l
-    fi
-    exec tmux new-session -A -s "$1"
-}
-
-legado_listar() {
-    if ! detectar_tmux; then
-        printf '%s\n' 'MAGI_TMUX=no'
-        exit 0
-    fi
-    printf 'MAGI_TMUX=%s\n' "$VERSION_TMUX"
-    # Separador: el tabulador (tmux 3.4 y 3.5 escriben 0x1f como «\037» en la
-    # salida de list-sessions): un nombre de sesión ajeno con «|» no desplaza
-    # los campos.
-    formato="#{session_name}${TAB}#{session_attached}${TAB}#{session_windows}${TAB}#{session_created_string}"
-    tmux -u list-sessions -F "$formato" 2>/dev/null | while IFS="$TAB" read -r nombre adheridos ventanas creada; do
-        case "$adheridos" in
-            ''|*[!0-9]*) adheridos=0 ;;
-        esac
-        if [ "$adheridos" -gt 0 ]; then
-            enganchada=1
-        else
-            enganchada=0
-        fi
-        printf 'MAGI_SESION\t%s\t%s\t%s\t%s\n' "$nombre" "$enganchada" "$ventanas" "$creada"
-    done
-}
-
-legado_terminar() {
-    if ! detectar_tmux; then
-        printf '%s\n' 'MAGI_RESULTADO=no_existe'
-        exit 0
-    fi
-    # «=» para que tmux no case por prefijo: magi-x-1 no puede matar magi-x-10
-    # (R146).
-    if tmux kill-session -t "=$1" 2>/dev/null; then
-        printf '%s\n' 'MAGI_RESULTADO=ok'
-    else
-        printf '%s\n' 'MAGI_RESULTADO=no_existe'
-    fi
-}
-
 # --------------------------------------------------------------- despacho
 
 SUBORDEN=${1:-}
@@ -714,21 +707,6 @@ if [ "$ARGUMENTOS" -lt 0 ]; then
 fi
 
 case "$SUBORDEN:$ARGUMENTOS" in
-    comprobar:1)
-        nombre_valido "${2:-}" || uso
-        legado_comprobar "$2"
-        ;;
-    abrir:1)
-        nombre_valido "${2:-}" || uso
-        legado_abrir "$2"
-        ;;
-    listar:0)
-        legado_listar
-        ;;
-    terminar:1)
-        nombre_valido "${2:-}" || uso
-        legado_terminar "$2"
-        ;;
     comprobar:2)
         servidor_valido "${2:-}" || uso
         nombre_valido "${3:-}" || uso

@@ -2138,6 +2138,8 @@ pub enum AccionDialogo {
     CerrarPestanaTerminandoTmux {
         sesion_id: u32,
         host_id: i64,
+        /// El servidor de tmux de la pestaña (el propio de MAGI o el habitual).
+        servidor: protocolo::ServidorTmux,
         nombre: String,
     },
     /// Terminar una sesión de tmux (ya confirmado).
@@ -2478,8 +2480,9 @@ pub struct PestanaUI {
     pub titulo: Option<String>,
     /// Último aviso del remoto sin ver (campana, OSC 9 u OSC 777).
     pub aviso: Option<protocolo::InfoAviso>,
-    /// Nombre de la sesión de tmux de la pestaña, si es persistente.
-    pub tmux: Option<String>,
+    /// La sesión de tmux de la pestaña, tal como la difunde el servidor:
+    /// servidor (`magi` o habitual), nombre, versión de tmux y si está soltada.
+    pub tmux: Option<protocolo::TmuxPestana>,
     /// La pestaña está en una escritura en varios de alguna ventana (la
     /// marca `»`; también la ven las demás ventanas).
     pub escritura_varios: bool,
@@ -2706,6 +2709,11 @@ pub struct App {
     pub pantallas: cliente::pantallas::Pantallas,
     /// Hosts cuyo `AbrirSesion` está en vuelo (se activa al aparecer).
     pub aperturas_pendientes: HashSet<i64>,
+    /// Hora del último aviso que el usuario ya vio en cada pestaña (por
+    /// `sesion_id`). El servidor conserva el aviso hasta que una ventana
+    /// enfoca la pestaña; sin esto, la siguiente difusión devolvería a la
+    /// pestaña un aviso que ya se vio aquí (Fase 16, pista C).
+    avisos_vistos: HashMap<u32, i64>,
     /// Contraseñas a guardar en el llavero cuando la sesión abra.
     contrasenas_pendientes: HashMap<u32, (protocolo::Secreto, bool)>,
     /// Datos de la bienvenida del servidor para la vista Sesiones.
@@ -2987,6 +2995,7 @@ impl App {
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
             aperturas_pendientes: HashSet::new(),
+            avisos_vistos: HashMap::new(),
             contrasenas_pendientes: HashMap::new(),
             servidor_pid: None,
             cliente_id: None,
@@ -4410,7 +4419,12 @@ impl App {
         {
             // Al verla se limpian también la marca de actividad y el aviso.
             pestaña.actividad_no_vista = false;
-            pestaña.aviso = None;
+            // Se recuerda la hora del aviso visto: el servidor lo conserva
+            // hasta que una ventana enfoca la pestaña y la difusión siguiente
+            // lo traería de vuelta (`reconciliar_sesiones`).
+            if let Some(aviso) = pestaña.aviso.take() {
+                self.avisos_vistos.insert(sesion_id, aviso.hora);
+            }
         }
     }
 
@@ -4822,7 +4836,8 @@ impl App {
             | protocolo::MensajeServidor::VistaPrevia { .. }
             | protocolo::MensajeServidor::TmuxRenombrada { .. } => {}
             // Los del terminal (F15) los resuelve `evento_terminal`.
-            protocolo::MensajeServidor::HistorialLote { .. }
+            protocolo::MensajeServidor::AperturaTmuxFallida { .. }
+            | protocolo::MensajeServidor::HistorialLote { .. }
             | protocolo::MensajeServidor::EscrituraVariosIniciada { .. }
             | protocolo::MensajeServidor::EscrituraVariosTerminada { .. }
             | protocolo::MensajeServidor::TunelTemporal { .. }
@@ -4897,11 +4912,19 @@ impl App {
             self.quitar_pestaña(sesion_id);
         }
         for info in lista {
+            // La pestaña que se está mirando ya ve sus avisos (como con los
+            // datos, `Evento::Pantallas`).
+            let viendo = self.vista == Vista::Sesion && self.pestana_activa_id() == Some(info.id);
             if let Some(pestaña) = self
                 .pestanas
                 .iter_mut()
                 .find(|pestaña| pestaña.sesion_id == info.id)
             {
+                // Lo que cambia con la pestaña ya abierta lo difunde el
+                // servidor en cada lista: nombre (`RenombrarSesion`), estado,
+                // reconexión, título, aviso y la sesión de tmux (con la
+                // pestaña soltada), y se copia aquí en cada una.
+                pestaña.nombre = info.nombre;
                 pestaña.estado = info.estado;
                 pestaña.motivo = info.motivo;
                 pestaña.identidad = info.identidad;
@@ -4911,6 +4934,14 @@ impl App {
                 pestaña.actividad_no_vista = pestaña.actividad_no_vista || info.actividad_no_vista;
                 pestaña.abierta_en = info.abierta_en;
                 pestaña.escritura_varios = info.escritura_varios;
+                pestaña.reconexion = info.reconexion;
+                pestaña.titulo = info.titulo;
+                pestaña.tmux = info.tmux;
+                let mut visto = self.avisos_vistos.get(&info.id).copied();
+                conciliar_aviso(&mut pestaña.aviso, &mut visto, info.aviso, viendo);
+                if let Some(hora) = visto {
+                    self.avisos_vistos.insert(info.id, hora);
+                }
             } else {
                 let pantalla = self.pantallas.crear(info.id, 24, 80);
                 let activar = self.aperturas_pendientes.contains(&info.host_id);
@@ -4934,9 +4965,7 @@ impl App {
                     reconexion: info.reconexion.clone(),
                     titulo: info.titulo.clone(),
                     aviso: info.aviso.clone(),
-                    // CONTRATO-S3: la pestaña guarda hoy solo el nombre; el
-                    // Sprint 3 le da el servidor, la versión y si está soltada.
-                    tmux: info.tmux.as_ref().map(|tmux| tmux.nombre.clone()),
+                    tmux: info.tmux.clone(),
                     escritura_varios: info.escritura_varios,
                 });
                 self.aperturas_pendientes.remove(&info.host_id);
@@ -5053,6 +5082,7 @@ impl App {
     /// vista Sesión: nunca se queda una vista Sesión sin pestaña que pintar.
     fn quitar_pestaña(&mut self, sesion_id: u32) {
         self.pantallas.quitar(sesion_id);
+        self.avisos_vistos.remove(&sesion_id);
         let Some(indice) = self
             .pestanas
             .iter()
@@ -5229,6 +5259,7 @@ impl App {
     /// Respuesta al diálogo SERVIDOR CAÍDO: `s` relanza, `n` sigue sin sesiones.
     fn resolver_servidor_caido(&mut self, relanzar: bool) {
         self.pestanas.clear();
+        self.avisos_vistos.clear();
         self.escritorios.clear();
         self.peticiones_escritorio.clear();
         self.aperturas_escritorio.clear();
@@ -11131,14 +11162,17 @@ impl App {
             AccionDialogo::CerrarPestanaTerminandoTmux {
                 sesion_id,
                 host_id,
+                servidor,
                 nombre,
             } => {
                 self.servidor
                     .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
-                self.terminar_tmux(host_id, nombre);
+                self.terminar_tmux(host_id, servidor, nombre);
             }
             AccionDialogo::TerminarTmux { host_id, nombre } => {
-                self.terminar_tmux(host_id, nombre);
+                // CONTRATO-S3: la lista de la Fase 15 solo trabaja con el tmux
+                // habitual; el bloque «Persistentes» elegirá el servidor.
+                self.terminar_tmux(host_id, protocolo::ServidorTmux::Habitual, nombre);
             }
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
@@ -11197,6 +11231,7 @@ impl App {
                 // El servidor cierra las sesiones (anotándolas) y se apaga.
                 self.servidor.enviar(protocolo::MensajeCliente::Parar);
                 self.pestanas.clear();
+                self.avisos_vistos.clear();
                 self.escritorios.clear();
                 self.peticiones_escritorio.clear();
                 self.aperturas_escritorio.clear();
@@ -11378,6 +11413,31 @@ fn lanzar_tick(runtime: &tokio::runtime::Runtime, tx: mpsc::UnboundedSender<Even
             }
         }
     });
+}
+
+/// Decide el aviso de una pestaña tras una difusión del servidor. El servidor
+/// conserva el aviso hasta que una ventana enfoca la pestaña, pero cada
+/// ventana lo da por visto al entrar en ella (`limpiar_actividad`): un aviso
+/// cuya hora ya se vio aquí, o que llega a la pestaña que se está mirando, no
+/// vuelve a aparecer; uno más nuevo, sí. Si el servidor ya no lo tiene
+/// (alguna ventana lo vio), se quita.
+fn conciliar_aviso(
+    actual: &mut Option<protocolo::InfoAviso>,
+    visto: &mut Option<i64>,
+    difundido: Option<protocolo::InfoAviso>,
+    viendo: bool,
+) {
+    match difundido {
+        None => *actual = None,
+        Some(aviso) => {
+            if viendo || visto.is_some_and(|hora| aviso.hora <= hora) {
+                *visto = Some(visto.map_or(aviso.hora, |hora| hora.max(aviso.hora)));
+                *actual = None;
+            } else {
+                *actual = Some(aviso);
+            }
+        }
+    }
 }
 
 fn usuario_local() -> String {

@@ -1,38 +1,31 @@
 //! tmux del host: nombres, argumentos del script y lectura de su salida
-//! (Fase 15, ampliado en la Fase 16).
+//! (Fase 15, reescrito en la Fase 16).
 //!
 //! Todo pasa por `scripts/terminal_tmux.sh`, embebido con `include_str!`: el
 //! nombre se valida en Rust y en el script y va siempre como argumento, nunca
 //! interpolado en una orden de tmux.
 //!
-//! Desde la Fase 16 las órdenes son las de [`OrdenTmux`] (`comprobar`,
-//! `crear`, `enganchar`, `estado`, `vista`, `historial`, `renombrar` y
-//! `terminar`, con servidor propio o habitual) y lo que devuelven se lee con
-//! `sesiones_persistentes::lectura`, que lo trata como entrada no fiable.
-//!
-//! LEGADO-S2: [`Suborden`], [`orden`], [`leer_listado`] y [`leer_terminar`]
-//! son las subórdenes de la Fase 15 (`abrir`, `listar`, y `comprobar` y
-//! `terminar` con un solo argumento, sobre el tmux habitual). El servidor del
-//! escritorio las usa hasta el Sprint 2; después se quitan.
+//! Las órdenes son las de [`OrdenTmux`] (`comprobar`, `crear`, `enganchar`,
+//! `estado`, `vista`, `historial`, `renombrar` y `terminar`, con servidor
+//! propio o habitual) y lo que devuelven se lee con
+//! `sesiones_persistentes::lectura`, que lo trata como entrada no fiable. Las
+//! reglas de nombre, carpeta y comando son las de
+//! `sesiones_persistentes::validadores`: aquí solo se envuelven.
 
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
 use crate::modelo::normalizar_busqueda;
+use crate::sesiones_persistentes::validadores;
 use crate::sesiones_persistentes::{ServidorTmux, VersionTmux};
 
 /// El script embebido.
 pub const SCRIPT: &str = include_str!("../../scripts/terminal_tmux.sh");
 
-/// Nombres admitidos: letras, números, guion y guion bajo, hasta 64.
+/// Nombres admitidos: letras, números, guion y guion bajo, hasta 64 (la regla
+/// es la de `sesiones_persistentes::validadores`).
 #[must_use]
 pub fn nombre_valido(nombre: &str) -> bool {
-    !nombre.is_empty()
-        && nombre.len() <= 64
-        && nombre
-            .chars()
-            .all(|caracter| caracter.is_ascii_alphanumeric() || caracter == '-' || caracter == '_')
+    validadores::nombre_valido(nombre)
 }
 
 /// Largo máximo de la etiqueta del equipo en los nombres nuevos.
@@ -69,178 +62,6 @@ pub fn etiqueta_equipo(nombre_equipo: &str) -> String {
     }
 }
 
-/// Nombre libre `magi-<equipo>-<n>` para una sesión nueva.
-#[must_use]
-pub fn nombre_nuevo(equipo: &str, existentes: &[String]) -> String {
-    let prefijo = format!("magi-{}-", etiqueta_equipo(equipo));
-    let mut usados = Vec::new();
-    for existente in existentes {
-        let Some(sufijo) = existente.strip_prefix(&prefijo) else {
-            continue;
-        };
-        if !sufijo.is_empty() && sufijo.chars().all(|caracter| caracter.is_ascii_digit()) {
-            if let Ok(numero) = sufijo.parse::<u32>() {
-                usados.push(numero);
-            }
-        }
-    }
-    let mut numero = 1;
-    while usados.contains(&numero) {
-        numero += 1;
-    }
-    format!("{prefijo}{numero}")
-}
-
-/// Subordenes del script de la Fase 15.
-///
-/// LEGADO-S2: las usa `src/servidor/tmux.rs` hasta el Sprint 2; las órdenes
-/// nuevas son [`OrdenTmux`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Suborden {
-    Comprobar,
-    Abrir,
-    Listar,
-    Terminar,
-}
-
-impl Suborden {
-    #[must_use]
-    pub fn como_texto(self) -> &'static str {
-        match self {
-            Suborden::Comprobar => "comprobar",
-            Suborden::Abrir => "abrir",
-            Suborden::Listar => "listar",
-            Suborden::Terminar => "terminar",
-        }
-    }
-}
-
-/// Orden para ejecutar el script por un canal `exec`:
-/// `sh -c <script> magi-tmux <suborden> [<nombre>]`. `None` si el nombre no
-/// es válido, falta o sobra.
-///
-/// LEGADO-S2: solo la forma de la Fase 15 (sobre el tmux habitual y con un
-/// solo argumento). Las nuevas, con `OrdenTmux::argumentos`.
-#[must_use]
-pub fn orden(suborden: Suborden, nombre: Option<&str>) -> Option<Vec<String>> {
-    let nombre = match suborden {
-        Suborden::Listar => {
-            // Listar no lleva nombre: el script rechaza los argumentos de más.
-            if nombre.is_some() {
-                return None;
-            }
-            None
-        }
-        Suborden::Comprobar | Suborden::Abrir | Suborden::Terminar => {
-            let nombre = nombre?;
-            if !nombre_valido(nombre) {
-                return None;
-            }
-            Some(nombre.to_string())
-        }
-    };
-    let mut argumentos = vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        SCRIPT.to_string(),
-        "magi-tmux".to_string(),
-        suborden.como_texto().to_string(),
-    ];
-    if let Some(nombre) = nombre {
-        argumentos.push(nombre);
-    }
-    Some(argumentos)
-}
-
-/// Una sesión de tmux del host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SesionTmux {
-    pub nombre: String,
-    pub enganchada: bool,
-    pub ventanas: u16,
-    /// Descripción de cuándo se creó (la da tmux).
-    pub creada: String,
-}
-
-/// Lo que devuelve `listar`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Listado {
-    /// Versión de tmux, si la hay.
-    pub tmux: Option<String>,
-    pub sesiones: Vec<SesionTmux>,
-}
-
-/// Límites de la entrada no fiable de `listar` (§5.1).
-const MAXIMO_SESIONES: usize = 200;
-const MAXIMO_NOMBRE: usize = 64;
-const MAXIMO_LINEA: usize = 1024;
-const MAXIMO_VERSION: usize = 64;
-const MAXIMO_CREADA: usize = 128;
-
-/// Lee la salida de `listar` (entrada no fiable).
-#[must_use]
-pub fn leer_listado(salida: &str) -> Listado {
-    let mut listado = Listado::default();
-    for linea in salida.lines() {
-        let linea = linea.strip_suffix('\r').unwrap_or(linea);
-        if linea.len() > MAXIMO_LINEA {
-            continue;
-        }
-        if let Some(valor) = linea.strip_prefix("MAGI_TMUX=") {
-            let version = limpiar(valor, MAXIMO_VERSION);
-            listado.tmux = if version.is_empty() || version == "no" {
-                None
-            } else {
-                Some(version)
-            };
-            continue;
-        }
-        let Some(resto) = linea.strip_prefix("MAGI_SESION") else {
-            continue;
-        };
-        let Some(resto) = resto.strip_prefix('\t').or_else(|| resto.strip_prefix(' ')) else {
-            continue;
-        };
-        if listado.sesiones.len() >= MAXIMO_SESIONES {
-            continue;
-        }
-        let campos: Vec<&str> = resto.split('\t').collect();
-        if campos.len() != 4 {
-            continue;
-        }
-        let nombre = campos[0];
-        if nombre.is_empty()
-            || nombre.chars().count() > MAXIMO_NOMBRE
-            || nombre.chars().any(char::is_control)
-        {
-            continue;
-        }
-        let enganchada = campos[1]
-            .trim()
-            .parse::<u32>()
-            .map(|clientes| clientes > 0)
-            .unwrap_or(false);
-        let ventanas = campos[2].trim().parse::<u16>().unwrap_or(0);
-        listado.sesiones.push(SesionTmux {
-            nombre: nombre.to_string(),
-            enganchada,
-            ventanas,
-            creada: limpiar(campos[3], MAXIMO_CREADA),
-        });
-    }
-    listado
-}
-
-/// Quita los controles y recorta: lo que llega del host se pinta en la lista.
-fn limpiar(texto: &str, maximo: usize) -> String {
-    texto
-        .trim()
-        .chars()
-        .filter(|caracter| !caracter.is_control())
-        .take(maximo)
-        .collect()
-}
-
 /// Resultado de `terminar`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultadoTerminar {
@@ -264,9 +85,9 @@ pub fn leer_terminar(salida: &str) -> ResultadoTerminar {
 // ---------------------------------------------------------------- Fase 16
 
 /// Bytes máximos de la carpeta de una sesión (el mismo tope que el script).
-pub const MAXIMO_CARPETA: usize = 1024;
+pub const MAXIMO_CARPETA: usize = validadores::MAXIMO_CARPETA_BYTES;
 /// Bytes máximos del comando de arranque (el mismo tope que el script).
-pub const MAXIMO_COMANDO: usize = 4096;
+pub const MAXIMO_COMANDO: usize = validadores::MAXIMO_COMANDO_BYTES;
 /// Líneas máximas de `history-limit` que acepta el script.
 pub const MAXIMO_LINEAS_HISTORIAL_TMUX: u32 = 1_000_000;
 /// Líneas máximas que se piden a `vista` y a `historial`.
@@ -302,21 +123,21 @@ pub fn equipo_valido(equipo: &str) -> bool {
 }
 
 /// Carpeta que acepta `crear`: absoluta o `~/…`, hasta 1024 bytes y sin
-/// saltos de línea ni bytes nulos. La vacía no es una carpeta (es «sin
+/// saltos de línea ni bytes nulos (la regla es la de
+/// `validadores::validar_carpeta`). La vacía no es una carpeta (es «sin
 /// carpeta»): quien la pasa usa `None`.
 #[must_use]
 pub fn carpeta_valida(carpeta: &str) -> bool {
-    (carpeta.starts_with('/') || carpeta.starts_with("~/"))
-        && carpeta.len() <= MAXIMO_CARPETA
-        && !carpeta.contains(['\n', '\r', '\0'])
+    !carpeta.is_empty() && validadores::validar_carpeta(carpeta).is_ok()
 }
 
 /// Comando de arranque que acepta `crear`: texto libre de hasta 4096 bytes y
-/// sin bytes nulos. Es el comando del usuario, como un snippet: no se escapa
-/// porque va como dato (`$1`) del envoltorio del script.
+/// sin bytes nulos (la regla es la de `validadores::validar_comando`). Es el
+/// comando del usuario, como un snippet: no se escapa porque va como dato
+/// (`$1`) del envoltorio del script.
 #[must_use]
 pub fn comando_valido(comando: &str) -> bool {
-    comando.len() <= MAXIMO_COMANDO && !comando.contains('\0')
+    validadores::validar_comando(comando).is_ok()
 }
 
 /// Versión de tmux a partir del texto de `tmux -V` o de `MAGI_TMUX=`:
@@ -560,18 +381,29 @@ impl OrdenTmux<'_> {
         Some(argumentos)
     }
 
-    /// La línea que se escribe en el PTY de una pestaña para ejecutar la orden
-    /// con `exec`, de modo que el código de salida de la pestaña sea el del
-    /// script (`enganchar`: 0, 100 o 75). Cada argumento va escapado para el
-    /// shell de acceso; nada se interpola.
+    /// El comando para el `exec` de un canal con PTY (`sh -c <script> magi-tmux
+    /// <suborden> <argumentos…>`), con cada argumento escapado para el shell de
+    /// acceso del host: el `exec` de ssh lo pasa por él. Es como se engancha
+    /// una pestaña (`enganchar`): el script no se escribe en la pantalla, y el
+    /// código de salida del canal es el del script (0, 100, 75, 74 o 76).
+    /// Nada se interpola: los datos van como argumentos.
+    #[must_use]
+    pub fn comando_exec(&self) -> Option<String> {
+        let argumentos = self.argumentos()?;
+        Some(
+            argumentos
+                .iter()
+                .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
+                .collect::<Vec<String>>()
+                .join(" "),
+        )
+    }
+
+    /// La línea que se escribiría en el PTY de una shell para ejecutar la
+    /// orden con `exec` (la forma de la Fase 15: con el script de la Fase 16
+    /// llenaría la pantalla con su eco; la pestaña usa [`Self::comando_exec`]).
     #[must_use]
     pub fn linea_para_pty(&self) -> Option<String> {
-        let argumentos = self.argumentos()?;
-        let linea = argumentos
-            .iter()
-            .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
-        Some(format!("exec {linea}\n"))
+        Some(format!("exec {}\n", self.comando_exec()?))
     }
 }

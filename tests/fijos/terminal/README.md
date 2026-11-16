@@ -34,9 +34,10 @@ instalado. Pasa `shellcheck` y `sh -n`.
 | `MAGI_TMUX_ARGUMENTOS` | no | Fichero donde se anota cada invocación con los argumentos **sueltos**: una línea con cada argumento seguido de `0x1F`. Sirve para comprobar que un dato va como un solo argumento (los argumentos con saltos de línea no se pueden distinguir). |
 | `MAGI_TMUX_ENTORNO` | no | Fichero donde se anota, por invocación, `TMUX=<valor>`: lo que veía tmux en esa variable. |
 | `MAGI_TMUX_VERSION` | no | Lo que imprime `tmux -V`. Por defecto `tmux 3.4`. Admite `tmux 3.3a`, `tmux next-3.6`, `tmux master`, `tmux 2.9a`… |
-| `MAGI_TMUX_FALLA` | no | Órdenes de tmux que fallan con código 1 (separadas por espacios): `new-session`, `attach-session`, `rename-session` o `set`. |
+| `MAGI_TMUX_FALLA` | no | Órdenes de tmux que fallan con código 1 (separadas por espacios): `new-session`, `attach-session`, `rename-session`, `list-sessions`, `list-windows` (con «protocol version mismatch»), `capture-pane` o `set`. |
 | `MAGI_TMUX_ATTACH_MATA` | no | Con `1`, al acabar `attach-session` (fin de la entrada) la sesión desaparece, como si su programa hubiera terminado. |
 | `MAGI_TMUX_ATTACH_ESTADO` | no | Código de salida de `attach-session` (por defecto 0), para simular un cliente que no puede engancharse. |
+| `MAGI_TMUX_AL_SOLTAR_RENOMBRA` | no | Un nombre: cuando a un `attach-session` lo suelta otro cliente (ver «Soltar a un cliente»), la sesión se renombra a ese nombre antes de que el cliente salga, como si la hubieran renombrado mientras estaba enganchado. |
 
 ### Formato del estado
 
@@ -99,14 +100,23 @@ el falso devuelve tres líneas con espacios al final y líneas vacías detrás.
 | `start-server`, `kill-server` | — | 0 | `kill-server` vacía el estado. |
 | `set` / `set-option [flags] [-t destino] opción valor` | — | 0 | Solo hace algo con `@magi_equipo` y `-t`: pone el equipo de la sesión. El resto solo queda en las bitácoras. Falla con `MAGI_TMUX_FALLA=set`. |
 | `has-session -t <destino>` | — | 0 si existe, 1 si no | Ninguno. Con las reglas de destino de abajo. |
-| `list-sessions [-F <formato>]` | Una línea por sesión, sustituyendo `#{session_name}`, `#{session_attached}`, `#{session_windows}`, `#{session_created_string}`, `#{session_created}`, `#{session_activity}`, `#{@magi_equipo}` y `#{pane_title}`. Sin formato: `nombre: N windows (created …)`. Sin sesiones: error por stderr y código 1 (como un tmux sin servidor). | 0/1 | Ninguno. |
+| `list-sessions [-F <formato>]` | Una línea por sesión, sustituyendo `#{session_id}` (`$` y el número de línea menos uno: no cambia al renombrar), `#{session_name}`, `#{session_attached}`, `#{session_windows}`, `#{session_created_string}`, `#{session_created}`, `#{session_activity}`, `#{@magi_equipo}` y `#{pane_title}`. Sin formato: `nombre: N windows (created …)`. Sin sesiones: error por stderr y código 1 (como un tmux sin servidor). | 0/1 | Ninguno. |
 | `list-windows -a [-F <formato>]` | Una línea por ventana (tantas como diga `ventanas`) con `#{session_name}`, `#{window_index}`, `#{window_activity}` y `#{window_bell_flag}`. | 0/1 | Ninguno. |
 | `new-session [-d] [-A] -s <nombre> [-x n] [-y n] [-c carpeta] [-- programa…]` | Sin `-d` (o con `-A`): `MAGI_TMUX_SESION=<nombre>` y, por cada línea de la entrada, `MAGI_TMUX_ENTRADA=<línea>` hasta el fin de la entrada (simula el PTY). | 0 | Crea la sesión si no existe. Si existe y no hay `-A`: `duplicate session` y código 1. El programa y la carpeta solo quedan en la bitácora de argumentos. Falla con `MAGI_TMUX_FALLA=new-session`. |
-| `attach-session [-d] -t <destino>` | `MAGI_TMUX_ADJUNTO=<nombre> soltar=<0\|1>` y las líneas de la entrada como `MAGI_TMUX_ENTRADA=<línea>`, hasta el fin de la entrada. | `MAGI_TMUX_ATTACH_ESTADO` (0) | Sin sesión: `can't find session` y código 1. Con `MAGI_TMUX_ATTACH_MATA=1`, quita la sesión al acabar. |
+| `attach-session [-d] -t <destino>` | `MAGI_TMUX_ADJUNTO=<nombre> soltar=<0\|1>` y las líneas de la entrada como `MAGI_TMUX_ENTRADA=<línea>`, hasta el fin de la entrada o hasta que lo suelte otro cliente. | `MAGI_TMUX_ATTACH_ESTADO` (0); 0 si lo soltaron | Sin sesión: `can't find session` y código 1. Con `MAGI_TMUX_ATTACH_MATA=1`, quita la sesión al acabar. Con `-d` suelta a los demás clientes (ver «Soltar a un cliente»). |
 | `kill-session -t <destino>` | — | 0 si existía (la borra), 1 si no | Quita su línea del estado. |
 | `rename-session -t <destino> [--] <nuevo>` | — | 0 / 1 | Cambia el nombre; si ya hay otra con el nombre nuevo, `duplicate session` y código 1. |
 | `capture-pane [-p] [-e] [-J] [-S n] -t <nombre>:` | El contenido del panel (ver arriba). Ignora `-e`, `-J` y `-S`. | 0 / 1 | Como el tmux real, **exige** el destino con dos puntos (`=nombre:`): con `-t =nombre` da `can't find pane`. |
 | Otra orden | Error por stderr | 2 | — |
+
+**Soltar a un cliente.** `attach-session` lee su entrada en segundo plano y,
+mientras tanto, mira el marcador de la sesión, el fichero
+`<fichero de estado>.cliente.<nombre>` (la ruta del estado del servidor, con
+ese sufijo). Un `attach-session -d` escribe su pid en el marcador y los clientes
+que ya estaban enganchados, al ver que ha cambiado, salen con 0, como el cliente
+de tmux al que otro le quita la sesión. Una prueba puede simular a otro equipo
+escribiendo cualquier contenido en el marcador. El falso no cambia por sí solo
+el número de clientes (`adheridos`) ni `@magi_equipo`: la prueba los siembra.
 
 **Destinos de sesión**, como los resuelve tmux: `=nombre` solo casa por
 nombre exacto; sin `=`, casa el nombre exacto o, si no lo hay, un prefijo
@@ -143,8 +153,8 @@ En los dos casos, fijar `MAGI_TMUX_ESTADO` (y, si se quiere,
 `MAGI_TMUX_ESTADO_MAGI`, `MAGI_TMUX_LLAMADAS` y `MAGI_TMUX_ARGUMENTOS`) a
 ficheros del temporal de la prueba y sembrarlos antes de cada escenario. Las
 pruebas del núcleo que lo usan son `cargo test -p magi-nucleo --test
-tmux_script`; las del escritorio, las de `tests/terminal_servidor.rs` y
-`tests/terminal_e2e.rs`.
+tmux_script`; las del escritorio, las de `tests/terminal_servidor.rs`,
+`tests/terminal_e2e.rs` y `tests/sesiones_persistentes_servidor.rs`.
 
 ### Comprobación
 

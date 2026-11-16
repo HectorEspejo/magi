@@ -26,12 +26,19 @@ use crate::conexion::EventoConexion;
 use crate::config::Rutas;
 use crate::modelo::{EstadoSesion, Host};
 use crate::protocolo::{
-    ColoresTema, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion, MensajeServidor,
-    Secreto,
+    CausaAperturaTmux, ColoresTema, EstadoSesionRemota, InfoAviso, InfoReconexion, InfoSesion,
+    MensajeServidor, PeticionTmux, Secreto, ServidorTmux, Soltada, TmuxPestana, VersionTmux,
 };
 use magi_nucleo::conexion::reconexion::{self, Causa};
+use magi_nucleo::sesiones_persistentes::lectura::ResultadoCrear;
+use magi_nucleo::sesiones_persistentes::nombres::nombre_automatico;
+use magi_nucleo::sesiones_persistentes::validadores;
 use magi_nucleo::terminal::emulador::PantallaEmulada;
 use magi_nucleo::terminal::historial::lineas_de_historial;
+use magi_nucleo::terminal::tmux::{
+    OrdenTmux, MAXIMO_LINEAS_HISTORIAL_TMUX, SALIDA_ANTIGUO, SALIDA_NO_EXISTE, SALIDA_SIN_TMUX,
+    SALIDA_SOLTADA,
+};
 
 use super::cliente_remoto::Tamano;
 use super::conexiones::{self, ConexionTomada, PoliticaConexion, UsoCanal};
@@ -77,6 +84,41 @@ pub fn sanear_tamano(tamano: Tamano) -> Tamano {
         cols: tamano.cols.clamp(2, COLS_MAX),
         filas: tamano.filas.clamp(1, FILAS_MAX),
     }
+}
+
+/// Valida la sesión de tmux que pide el cliente (repite lo que valida él) y la
+/// normaliza: la carpeta o el comando vacíos son «sin valor». En el servidor
+/// habitual solo se engancha: crear solo vale en el propio de MAGI. `Err`
+/// lleva el nombre (saneado, para el mensaje) y la instrucción.
+pub fn validar_peticion_tmux(mut peticion: PeticionTmux) -> Result<PeticionTmux, (String, String)> {
+    let nombre_saneado: String = peticion
+        .nombre
+        .chars()
+        .filter(|caracter| !caracter.is_control())
+        .take(validadores::MAXIMO_NOMBRE)
+        .collect();
+    let fallo = |mensaje: String| (nombre_saneado.clone(), mensaje);
+    if validadores::validar_nombre(&peticion.nombre).is_err() {
+        return Err(fallo(format!(
+            "nombre de tmux no admitido: «{nombre_saneado}»"
+        )));
+    }
+    if let Some(crear) = peticion.crear.as_mut() {
+        if peticion.servidor != ServidorTmux::Magi {
+            return Err(fallo(
+                "las sesiones nuevas solo se crean en el tmux de MAGI".to_string(),
+            ));
+        }
+        crear.carpeta = crear.carpeta.take().filter(|carpeta| !carpeta.is_empty());
+        crear.comando = crear.comando.take().filter(|comando| !comando.is_empty());
+        if let Some(carpeta) = &crear.carpeta {
+            validadores::validar_carpeta(carpeta).map_err(|error| fallo(error.to_string()))?;
+        }
+        if let Some(comando) = &crear.comando {
+            validadores::validar_comando(comando).map_err(|error| fallo(error.to_string()))?;
+        }
+    }
+    Ok(peticion)
 }
 
 /// Generación de cada diálogo pendiente: el temporizador de uno no puede
@@ -172,8 +214,22 @@ pub struct Sesion {
     pub aviso: Option<InfoAviso>,
     /// Época del último aviso admitido (uno cada 5 s por pestaña).
     pub ultimo_aviso_en: i64,
-    /// Nombre de la sesión de tmux, si la pestaña es persistente.
+    /// Nombre de la sesión de tmux a la que está enganchada la pestaña. Es el
+    /// estado vivo: la reconexión sale de aquí y no de lo que se pidió al
+    /// abrirla (un host marcado pone el nombre automático al abrir).
     pub tmux: Option<String>,
+    /// Qué servidor de tmux (Fase 16): solo vale con `tmux`. Es persistente si
+    /// es el propio de MAGI.
+    pub tmux_servidor: ServidorTmux,
+    /// Versión de tmux que dio el host al abrir (la barra de la pestaña la
+    /// enseña).
+    pub tmux_version: Option<VersionTmux>,
+    /// Engancharse sin soltar a los demás (lo que pidió el usuario al abrir o
+    /// al volver): la reconexión automática lo respeta y no quita a nadie.
+    pub tmux_compartir: bool,
+    /// Otro equipo se enganchó a la sesión y la pestaña quedó caída con su
+    /// última pantalla: quién la tiene y desde cuándo. Se quita al volver.
+    pub soltada: Option<Soltada>,
     /// Estado de la reconexión automática, mientras dura.
     pub reconexion: Option<InfoReconexion>,
     /// Ventanas que tienen esta pestaña en el panel enfocado y el terminal
@@ -210,18 +266,12 @@ impl Sesion {
             reconexion: self.reconexion.clone(),
             titulo: self.titulo.clone(),
             aviso: self.aviso.clone(),
-            // CONTRATO-S2-A: hasta el Sprint 2 solo hay sesiones del tmux
-            // habitual (las de la Fase 15); la pista A pone aquí el servidor
-            // real, la versión de tmux y si la pestaña está soltada.
-            tmux: self
-                .tmux
-                .clone()
-                .map(|nombre| crate::protocolo::TmuxPestana {
-                    servidor: crate::protocolo::ServidorTmux::Habitual,
-                    nombre,
-                    version: None,
-                    soltada: None,
-                }),
+            tmux: self.tmux.as_ref().map(|nombre| TmuxPestana {
+                servidor: self.tmux_servidor,
+                nombre: nombre.clone(),
+                version: self.tmux_version,
+                soltada: self.soltada.clone(),
+            }),
             escritura_varios: self.escritura_varios,
         }
     }
@@ -440,9 +490,10 @@ pub struct DatosApertura {
     /// Es una reconexión: el id y el nombre ya existen. Se escribe la línea de
     /// «reconectada» y solo se repiten los comandos con `repetir`.
     pub reconexion: bool,
-    /// Nombre de tmux pedido (pestaña nueva desde la lista) o el de la sesión
-    /// al reconectar. `None`: lo decide `tmux_persistente`.
-    pub tmux: Option<String>,
+    /// La sesión de tmux que pidió el cliente al abrir (crearla o engancharse).
+    /// `None`: la decide la marca `sesiones_persistentes` del host. Al
+    /// reconectar no se usa: manda el estado vivo de la sesión (`Sesion.tmux`).
+    pub tmux: Option<PeticionTmux>,
     /// La de la sesión: cancelarla aborta la apertura.
     pub cancelar: tokio_util::sync::CancellationToken,
     /// Textos que se escriben en la shell, en orden (al reconectar, solo los
@@ -511,30 +562,76 @@ async fn abrir_y_servir(
             pantalla.redimensionar(datos.filas, datos.cols, historial);
         }
 
-        // 2. tmux: listar/comprobar y abrir la sesión del host. Es opcional:
-        //    si algo va mal, se sigue con un shell normal y un aviso.
-        let preparado = preparar_tmux(&estado, sesion_id, &datos, &handle, reintento).await;
-        let tmux_nuevo = preparado.as_ref().is_some_and(|(_, nuevo)| *nuevo);
-        let tmux_nombre = preparado.map(|(nombre, _)| nombre);
-
-        // 3. Canal con PTY y COLORTERM. Si falla, la conexión se suelta.
-        let mut canal = match abrir_con_plazo_terminal(&handle, datos.cols, datos.filas).await {
-            Ok(canal) => canal,
-            Err(motivo) => {
+        // 2. tmux: comprobar, crear o mirar el estado de la sesión del host.
+        //    Una pestaña normal se abre siempre; una con tmux pedida no se
+        //    degrada en silencio (no queda pestaña y el cliente decide), y la
+        //    de un host marcado sí cae a un shell normal con un aviso.
+        let preparado = preparar_tmux(&estado, &datos, &handle, reintento, auto).await;
+        // La pestaña pudo cerrarse mientras se hablaba con el host (por ejemplo,
+        // creando la sesión): no se abre un canal para nadie.
+        if datos.cancelar.is_cancelled() {
+            tomada.soltar().await;
+            return;
+        }
+        let plan = match preparado {
+            Preparado::Normal => None,
+            Preparado::Enganchar(plan) => Some(plan),
+            Preparado::Fallida(causa, mensaje) => {
+                tomada.soltar().await;
+                apertura_tmux_fallida(&estado, &datos, causa, mensaje).await;
+                return;
+            }
+            Preparado::Soltada(por_equipo) => {
+                // La reconexión automática no le quita la sesión a otro equipo.
+                marcar_soltada(&estado, sesion_id, por_equipo).await;
+                tomada.soltar().await;
+                return;
+            }
+            Preparado::Terminada(motivo) => {
+                tomada.soltar().await;
+                sesion_terminada_en_el_host(&estado, &datos, &motivo).await;
+                return;
+            }
+            Preparado::SinComprobar(motivo) => {
+                // La pestaña queda caída con la instrucción (la sesión del host
+                // no se toca): se reintenta a mano con prefijo r.
                 tomada.soltar().await;
                 if auto {
                     cerrar_intento(&estado, sesion_id, &motivo, intento_auto).await;
                 } else {
-                    apertura_fallida(&estado, &datos, &motivo).await;
+                    caida(&estado, sesion_id, &motivo).await;
                 }
                 return;
             }
         };
 
-        // 4. Comandos iniciales: primero la orden de tmux (solo si la sesión
-        //    es nueva), después lo que diga el cliente. Al engancharse a una
-        //    sesión de tmux que ya existía no se escribe nada: el programa
-        //    sigue dentro.
+        // 3. Canal con PTY y COLORTERM. Una pestaña con tmux no abre un shell
+        //    para escribir el script: lo lanza con `exec` (de otro modo el eco
+        //    de sus 24 KB llenaría la pantalla y el historial). Si falla, la
+        //    conexión se suelta.
+        let arranque = match &plan {
+            Some(plan) => Arranque::Exec(plan.comando.clone()),
+            None => Arranque::Shell,
+        };
+        let mut canal =
+            match abrir_con_plazo_terminal(&handle, datos.cols, datos.filas, arranque).await {
+                Ok(canal) => canal,
+                Err(motivo) => {
+                    tomada.soltar().await;
+                    if auto {
+                        cerrar_intento(&estado, sesion_id, &motivo, intento_auto).await;
+                    } else {
+                        apertura_fallida(&estado, &datos, &motivo).await;
+                    }
+                    return;
+                }
+            };
+
+        // 4. Comandos iniciales. En una pestaña normal se escriben ya (al
+        //    reconectar, solo los que `repetir`). En una con tmux, solo en una
+        //    sesión nueva sin comando propio y DESPUÉS del enganche (cuando
+        //    tmux ya ha pintado): al engancharse a una sesión que ya existía
+        //    no se escribe nada, el programa sigue dentro.
         let es_reconexion = reintento;
         let comandos: Vec<String> = if es_reconexion {
             datos
@@ -550,31 +647,37 @@ async fn abrir_y_servir(
                 .map(|comando| comando.texto.clone())
                 .collect()
         };
-        let escribir_comandos = match tmux_nombre.as_deref() {
-            Some(nombre) => match super::tmux::orden_abrir(nombre) {
-                Some(linea) => {
-                    let _ = escribir_canal(&mut canal, linea.as_bytes()).await;
-                    tmux_nuevo
+        let mut diferidos: Vec<String> = Vec::new();
+        match &plan {
+            Some(plan) => {
+                if plan.nueva && !plan.con_comando_propio {
+                    diferidos = comandos;
                 }
-                None => true,
-            },
-            None => true,
-        };
-        if escribir_comandos {
-            for texto in &comandos {
-                let escrito =
-                    tokio::time::timeout(PLAZO_CANAL, canal.data_bytes(texto.clone().into_bytes()))
-                        .await;
-                if !matches!(escrito, Ok(Ok(()))) {
-                    warn!(sesion = sesion_id, "no se pudo escribir el comando inicial");
-                    break;
+            }
+            None => {
+                for texto in &comandos {
+                    let escrito = tokio::time::timeout(
+                        PLAZO_CANAL,
+                        canal.data_bytes(texto.clone().into_bytes()),
+                    )
+                    .await;
+                    if !matches!(escrito, Ok(Ok(()))) {
+                        warn!(sesion = sesion_id, "no se pudo escribir el comando inicial");
+                        break;
+                    }
                 }
             }
         }
 
         // 5. Pestaña abierta: estado, difusión y anotación.
-        let primera_en_conexion =
-            marcar_abierta(&estado, sesion_id, &tomada, tmux_nombre.clone()).await;
+        let tmux_nombre = plan.as_ref().map(|plan| plan.nombre.clone());
+        let primera_en_conexion = marcar_abierta(
+            &estado,
+            sesion_id,
+            &tomada,
+            plan.as_ref().map(TmuxAbierta::de_plan),
+        )
+        .await;
         marcar_conexion_bd(
             &estado,
             host_id,
@@ -608,11 +711,35 @@ async fn abrir_y_servir(
             &mut canal,
             &datos.pantalla,
             &mut rx_comandos,
+            plan.is_some(),
+            diferidos,
         )
         .await;
+        // Otro equipo se llevó la sesión: la pestaña queda soltada con su
+        // última pantalla. Se mira quién la tiene con esta misma conexión
+        // antes de soltarla.
+        if let FinSesion::Soltada = fin {
+            if let Some(plan) = &plan {
+                sesion_soltada(&estado, sesion_id, &handle, plan).await;
+            }
+            tomada.soltar().await;
+            return;
+        }
         tomada.soltar().await;
         match fin {
-            FinSesion::Cerrada => return,
+            FinSesion::Cerrada | FinSesion::Soltada => return,
+            FinSesion::TmuxFallo {
+                causa,
+                mensaje,
+                cerrar,
+            } => {
+                if cerrar {
+                    sesion_tmux_cerrada(&estado, &datos, causa, mensaje).await;
+                } else {
+                    caida(&estado, sesion_id, &mensaje).await;
+                }
+                return;
+            }
             FinSesion::Caida(motivo) => {
                 let causa = reconexion::clasificar(&motivo);
                 let reintentar = causa.recuperable() && datos.host.reconectar;
@@ -661,12 +788,22 @@ async fn abrir_conexion(
     }
 }
 
+/// Cómo arranca el canal con PTY de la pestaña.
+enum Arranque {
+    /// El shell de acceso del usuario.
+    Shell,
+    /// Un comando con `exec` (el enganche de tmux): el código de salida del
+    /// canal es el del script.
+    Exec(String),
+}
+
 /// Abre el canal con PTY de la pestaña y pide `COLORTERM=truecolor` (el host
 /// puede ignorarlo). El plazo lo pone quien llama.
 async fn abrir_con_plazo_terminal(
     handle: &Arc<Handle<Cliente>>,
     cols: u16,
     filas: u16,
+    arranque: Arranque,
 ) -> Result<Channel<russh::client::Msg>, String> {
     let apertura = handle.clone();
     let abrir = async move {
@@ -689,10 +826,16 @@ async fn abrir_con_plazo_terminal(
             )
             .await
             .map_err(|error| format!("no se pudo pedir el PTY: {error}"))?;
-        canal
-            .request_shell(true)
-            .await
-            .map_err(|error| format!("no se pudo pedir la shell: {error}"))?;
+        match arranque {
+            Arranque::Shell => canal
+                .request_shell(true)
+                .await
+                .map_err(|error| format!("no se pudo pedir la shell: {error}"))?,
+            Arranque::Exec(comando) => canal
+                .exec(true, comando.into_bytes())
+                .await
+                .map_err(|error| format!("no se pudo lanzar tmux: {error}"))?,
+        }
         Ok::<Channel<russh::client::Msg>, String>(canal)
     };
     match tokio::time::timeout(PLAZO_CANAL, abrir).await {
@@ -702,109 +845,511 @@ async fn abrir_con_plazo_terminal(
     }
 }
 
-/// Escribe en el canal con plazo (para los comandos iniciales).
-async fn escribir_canal(
-    canal: &mut Channel<russh::client::Msg>,
-    bytes: &[u8],
-) -> Result<(), String> {
-    match tokio::time::timeout(PLAZO_CANAL, canal.data_bytes(bytes.to_vec())).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(format!("se perdió la conexión: {error}")),
-        Err(_) => Err("el host no aceptó la escritura a tiempo".to_string()),
+// ---------------------------------------------------------------- tmux
+
+/// La sesión de tmux a la que va a engancharse la pestaña (o está ya).
+struct PlanEnganche {
+    servidor: ServidorTmux,
+    nombre: String,
+    /// Versión de tmux del host, si la dio la comprobación.
+    version: Option<VersionTmux>,
+    /// Sin soltar a los demás clientes.
+    compartir: bool,
+    /// El comando de `exec` con el que se engancha (el script y sus
+    /// argumentos, ya escapados).
+    comando: String,
+    /// La creó esta apertura.
+    nueva: bool,
+    /// Se creó con un comando de arranque propio: los comandos iniciales de
+    /// la pestaña (snippet al conectar, comando inicial) no se escriben.
+    con_comando_propio: bool,
+}
+
+/// Lo que la pestaña guarda de su sesión de tmux al quedar abierta.
+struct TmuxAbierta {
+    servidor: ServidorTmux,
+    nombre: String,
+    version: Option<VersionTmux>,
+    compartir: bool,
+}
+
+impl TmuxAbierta {
+    fn de_plan(plan: &PlanEnganche) -> Self {
+        Self {
+            servidor: plan.servidor,
+            nombre: plan.nombre.clone(),
+            version: plan.version,
+            compartir: plan.compartir,
+        }
     }
 }
 
-/// Prepara la sesión de tmux antes de abrir el PTY. Devuelve el nombre y si
-/// hay que crearla (para escribir el snippet al conectar). Nunca falla: si
-/// algo va mal, se abre un shell normal con un aviso en la pestaña.
-async fn preparar_tmux(
+/// Qué hace la apertura o la reconexión con tmux.
+enum Preparado {
+    /// Una pestaña normal (sin tmux pedido, o el host marcado sin tmux utilizable,
+    /// o una reconexión a una sesión del tmux habitual que ya no existe: con su
+    /// aviso en la pestaña).
+    Normal,
+    /// Engancharse a la sesión.
+    Enganchar(PlanEnganche),
+    /// Lo pedido no se puede abrir: no queda pestaña (con la causa y la
+    /// instrucción para el cliente).
+    Fallida(CausaAperturaTmux, String),
+    /// Reconexión automática: la sesión la tiene otro equipo y no se le quita.
+    Soltada(Option<String>),
+    /// Reconexión: la sesión ya no existe en el host; la pestaña se cierra.
+    Terminada(String),
+    /// Reconexión: no se pudo mirar la sesión; la pestaña queda caída.
+    SinComprobar(String),
+}
+
+/// Pone un aviso en la pestaña (con el tope de uno cada 5 s) sin esperar.
+fn avisar_en_pestana(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
+    texto: String,
+) {
+    let estado = estado.clone();
+    tokio::spawn(async move {
+        let mut estado_bloqueado = estado.lock().await;
+        if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
+            if sesion.anotar_aviso(&texto, Utc::now().timestamp()) {
+                difundir_lista(&mut estado_bloqueado);
+            }
+        }
+    });
+}
+
+/// Prepara la sesión de tmux antes de abrir el PTY de la pestaña (§4.1 a §4.4
+/// del informe de la Fase 16). Nunca dialoga: la conexión ya está abierta y
+/// todo va por canales `exec` con plazo.
+async fn preparar_tmux(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     datos: &DatosApertura,
     handle: &Arc<Handle<Cliente>>,
     es_reconexion: bool,
-) -> Option<(String, bool)> {
-    let pedido = datos.tmux.clone();
-    if pedido.is_none() && !datos.host.tmux_persistente {
-        return None;
-    }
-    let avisar = |estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, texto: String| {
-        let estado = estado.clone();
-        tokio::spawn(async move {
-            let mut estado_bloqueado = estado.lock().await;
-            if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
-                if sesion.anotar_aviso(&texto, Utc::now().timestamp()) {
-                    difundir_lista(&mut estado_bloqueado);
-                }
-            }
-        });
-    };
+    auto: bool,
+) -> Preparado {
     if es_reconexion {
-        let nombre = pedido?;
-        match super::tmux::comprobar(handle, &nombre).await {
-            Ok((version, existe)) if version.is_some() && existe => Some((nombre, false)),
-            Ok((version, _)) => {
-                avisar(
-                    estado,
-                    if version.is_none() {
-                        format!("sin tmux en «{}»: shell normal", datos.host.nombre)
-                    } else {
-                        format!(
-                            "la sesión de tmux «{nombre}» se perdió: shell normal en «{}»",
-                            datos.host.nombre
-                        )
-                    },
-                );
-                None
-            }
-            Err(motivo) => {
-                warn!(sesion = sesion_id, "no se pudo comprobar tmux: {motivo}");
-                avisar(
-                    estado,
-                    format!(
-                        "no se pudo comprobar tmux en «{}»: shell normal ({motivo})",
-                        datos.host.nombre
-                    ),
-                );
-                None
-            }
+        return preparar_reconexion(estado, datos, handle, auto).await;
+    }
+    match datos.tmux.clone() {
+        Some(peticion) => preparar_pedida(estado, datos, handle, peticion).await,
+        None if datos.host.sesiones_persistentes => {
+            preparar_host_marcado(estado, datos, handle).await
         }
-    } else if let Some(nombre) = pedido {
-        // Pedida desde la lista de tmux: se engancha tal cual.
-        Some((nombre, false))
-    } else {
-        // Pestaña nueva con sesión persistente: se busca un nombre libre.
-        match super::tmux::listar(handle).await {
-            Ok(listado) => {
-                let Some(_version) = listado.tmux else {
-                    avisar(
-                        estado,
-                        format!("sin tmux en «{}»: shell normal", datos.host.nombre),
-                    );
-                    return None;
-                };
-                let existentes: Vec<String> = listado
-                    .sesiones
-                    .iter()
-                    .map(|sesion| sesion.nombre.clone())
-                    .collect();
-                let equipo = super::tmux::nombre_equipo(estado).await;
-                let nombre = magi_nucleo::terminal::tmux::nombre_nuevo(&equipo, &existentes);
-                Some((nombre, true))
-            }
+        None => Preparado::Normal,
+    }
+}
+
+/// El comando de `exec` con el que se engancha la pestaña. `None` si algún
+/// dato no es válido (nunca pasa con una etiqueta de equipo y un nombre ya
+/// validados).
+fn comando_de_enganche(
+    servidor: ServidorTmux,
+    nombre: &str,
+    soltar: bool,
+    equipo: &str,
+) -> Option<String> {
+    OrdenTmux::Enganchar {
+        servidor,
+        nombre,
+        soltar,
+        equipo,
+    }
+    .comando_exec()
+}
+
+/// Un `crear` sin carpeta ni comando con el tamaño y el historial de la
+/// pestaña (el host marcado) o con lo que pidió el cliente.
+fn orden_crear<'a>(
+    datos: &DatosApertura,
+    nombre: &'a str,
+    carpeta: Option<&'a str>,
+    comando: Option<&'a str>,
+) -> OrdenTmux<'a> {
+    OrdenTmux::Crear {
+        nombre,
+        carpeta: carpeta.filter(|carpeta| !carpeta.is_empty()),
+        comando: comando.filter(|comando| !comando.is_empty()),
+        lineas_historial: u32::try_from(datos.historial_lineas)
+            .unwrap_or(u32::MAX)
+            .min(MAXIMO_LINEAS_HISTORIAL_TMUX),
+        columnas: datos.cols,
+        filas: datos.filas,
+    }
+}
+
+/// Traduce el resultado de `crear` en un fallo con su causa y su instrucción.
+fn fallo_de_crear(
+    resultado: ResultadoCrear,
+    detalle: Option<String>,
+    host: &str,
+    nombre: &str,
+    carpeta: Option<&str>,
+) -> (CausaAperturaTmux, String) {
+    match resultado {
+        ResultadoCrear::SinTmux => (
+            CausaAperturaTmux::SinTmux,
+            format!("instala tmux en el host «{host}»"),
+        ),
+        ResultadoCrear::Antiguo => (
+            CausaAperturaTmux::TmuxAntiguo,
+            format!("tmux demasiado antiguo (3.0 o posterior) en «{host}»"),
+        ),
+        ResultadoCrear::Existe => (
+            CausaAperturaTmux::Existe,
+            format!("ya hay una sesión «{nombre}» en «{host}»"),
+        ),
+        ResultadoCrear::SinCarpeta => (
+            CausaAperturaTmux::SinCarpeta,
+            format!(
+                "la carpeta {} no existe en «{host}»",
+                carpeta.unwrap_or("indicada")
+            ),
+        ),
+        ResultadoCrear::Creada | ResultadoCrear::Error => (
+            CausaAperturaTmux::Otra,
+            match detalle {
+                Some(detalle) => {
+                    format!("tmux no pudo crear la sesión «{nombre}» en «{host}»: {detalle}")
+                }
+                None => format!("tmux no pudo crear la sesión «{nombre}» en «{host}»"),
+            },
+        ),
+    }
+}
+
+/// Apertura pedida por el cliente (`AbrirSesion.tmux`): comprobar, crear si
+/// hace falta y enganchar. Si algo falla, no hay pestaña.
+async fn preparar_pedida(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    handle: &Arc<Handle<Cliente>>,
+    peticion: PeticionTmux,
+) -> Preparado {
+    let host = datos.host.nombre.as_str();
+    let nombre = peticion.nombre.as_str();
+    let comprobada = match super::tmux::comprobar(handle, peticion.servidor, nombre).await {
+        Ok(comprobada) => comprobada,
+        Err(motivo) => {
+            warn!(
+                sesion = datos.sesion_id,
+                "no se pudo comprobar tmux: {motivo}"
+            );
+            return Preparado::Fallida(
+                CausaAperturaTmux::Conexion,
+                format!("no se pudo hablar con tmux en «{host}»: {motivo}"),
+            );
+        }
+    };
+    let Some(version) = comprobada.tmux else {
+        return Preparado::Fallida(
+            CausaAperturaTmux::SinTmux,
+            format!("instala tmux en el host «{host}»"),
+        );
+    };
+    if peticion.servidor == ServidorTmux::Magi && version < VersionTmux::MINIMA {
+        return Preparado::Fallida(
+            CausaAperturaTmux::TmuxAntiguo,
+            format!("tmux demasiado antiguo (3.0 o posterior) en «{host}»"),
+        );
+    }
+    // Al tmux habitual no se le suelta a nadie: el propio terminal del usuario
+    // puede estar enganchado a esa sesión (la Fase 15 compartía).
+    let soltar = peticion.servidor == ServidorTmux::Magi && !peticion.compartir;
+    let mut nueva = false;
+    let mut con_comando_propio = false;
+    if let Some(crear) = &peticion.crear {
+        if peticion.servidor != ServidorTmux::Magi {
+            return Preparado::Fallida(
+                CausaAperturaTmux::Otra,
+                "las sesiones nuevas solo se crean en el tmux de MAGI".to_string(),
+            );
+        }
+        if comprobada.existe {
+            return Preparado::Fallida(
+                CausaAperturaTmux::Existe,
+                format!("ya hay una sesión «{nombre}» en «{host}»"),
+            );
+        }
+        let orden = orden_crear(
+            datos,
+            nombre,
+            crear.carpeta.as_deref(),
+            crear.comando.as_deref(),
+        );
+        if orden.argumentos().is_none() {
+            return Preparado::Fallida(
+                CausaAperturaTmux::Otra,
+                "los datos de la sesión no son válidos".to_string(),
+            );
+        }
+        match super::tmux::crear(handle, &orden).await {
             Err(motivo) => {
-                warn!(sesion = sesion_id, "no se pudo listar tmux: {motivo}");
-                avisar(
+                warn!(
+                    sesion = datos.sesion_id,
+                    "no se pudo crear la sesión de tmux: {motivo}"
+                );
+                return Preparado::Fallida(
+                    CausaAperturaTmux::Conexion,
+                    format!("no se pudo hablar con tmux en «{host}»: {motivo}"),
+                );
+            }
+            Ok(creada) if creada.lectura.resultado != ResultadoCrear::Creada => {
+                let (causa, mensaje) = fallo_de_crear(
+                    creada.lectura.resultado,
+                    creada.detalle,
+                    host,
+                    nombre,
+                    crear.carpeta.as_deref(),
+                );
+                return Preparado::Fallida(causa, mensaje);
+            }
+            Ok(_) => {}
+        }
+        nueva = true;
+        con_comando_propio = crear.comando.as_deref().is_some_and(|c| !c.is_empty());
+    } else if !comprobada.existe {
+        return Preparado::Fallida(
+            CausaAperturaTmux::Otra,
+            format!("la sesión «{nombre}» ya no existe en «{host}»"),
+        );
+    }
+    let equipo = super::tmux::etiqueta_del_equipo(estado).await;
+    let Some(comando) = comando_de_enganche(peticion.servidor, nombre, soltar, &equipo) else {
+        return Preparado::Fallida(
+            CausaAperturaTmux::Otra,
+            "los datos de la sesión no son válidos".to_string(),
+        );
+    };
+    Preparado::Enganchar(PlanEnganche {
+        servidor: peticion.servidor,
+        nombre: peticion.nombre,
+        version: Some(version),
+        compartir: !soltar && peticion.servidor == ServidorTmux::Magi,
+        comando,
+        nueva,
+        con_comando_propio,
+    })
+}
+
+/// Intentos de nombre automático antes de rendirse: otra ventana puede haber
+/// creado el mismo nombre entre mirar y crear.
+const INTENTOS_NOMBRE_AUTOMATICO: usize = 8;
+
+/// Pestaña nueva en un host con `sesiones_persistentes`: nombre automático
+/// `<equipo>-<n>`, sesión en el shell de acceso y enganche, sin diálogo. Sin
+/// tmux utilizable, cae a una pestaña normal con un aviso.
+async fn preparar_host_marcado(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    handle: &Arc<Handle<Cliente>>,
+) -> Preparado {
+    let sesion_id = datos.sesion_id;
+    let host = datos.host.nombre.as_str();
+    let lectura = match super::tmux::estado(handle).await {
+        Ok(lectura) => lectura,
+        Err(motivo) => {
+            warn!(sesion = sesion_id, "no se pudo mirar tmux: {motivo}");
+            avisar_en_pestana(
+                estado,
+                sesion_id,
+                format!("no se pudo hablar con tmux en «{host}»: esta pestaña no es persistente"),
+            );
+            return Preparado::Normal;
+        }
+    };
+    let Some(version) = lectura.tmux else {
+        avisar_en_pestana(
+            estado,
+            sesion_id,
+            format!("{host} no tiene tmux: esta pestaña no es persistente"),
+        );
+        return Preparado::Normal;
+    };
+    if version < VersionTmux::MINIMA {
+        avisar_en_pestana(
+            estado,
+            sesion_id,
+            format!(
+                "tmux demasiado antiguo (3.0 o posterior) en {host}: esta pestaña no es persistente"
+            ),
+        );
+        return Preparado::Normal;
+    }
+    let equipo = super::tmux::etiqueta_del_equipo(estado).await;
+    let mut en_host: Vec<String> = lectura
+        .sesiones
+        .iter()
+        .filter(|sesion| sesion.servidor == ServidorTmux::Magi)
+        .map(|sesion| sesion.nombre.clone())
+        .collect();
+    // Si no se pueden leer las fichas, sus nombres reservados son un
+    // desconocido: elegir uno a ciegas chocaría después con el UNIQUE.
+    let Some(en_fichas) = nombres_de_fichas(estado, datos.host.id).await else {
+        avisar_en_pestana(
+            estado,
+            sesion_id,
+            format!("no se pudieron leer las sesiones de «{host}»: esta pestaña no es persistente"),
+        );
+        return Preparado::Normal;
+    };
+    for _ in 0..INTENTOS_NOMBRE_AUTOMATICO {
+        let nombre = nombre_automatico(&equipo, &en_host, &en_fichas);
+        let orden = orden_crear(datos, &nombre, None, None);
+        match super::tmux::crear(handle, &orden).await {
+            Ok(creada) => match creada.lectura.resultado {
+                ResultadoCrear::Creada => {
+                    let Some(comando) =
+                        comando_de_enganche(ServidorTmux::Magi, &nombre, true, &equipo)
+                    else {
+                        return Preparado::Normal;
+                    };
+                    return Preparado::Enganchar(PlanEnganche {
+                        servidor: ServidorTmux::Magi,
+                        nombre,
+                        version: creada.lectura.tmux.or(Some(version)),
+                        compartir: false,
+                        comando,
+                        nueva: true,
+                        con_comando_propio: false,
+                    });
+                }
+                ResultadoCrear::Existe => en_host.push(nombre),
+                _ => {
+                    avisar_en_pestana(
+                        estado,
+                        sesion_id,
+                        format!("no se pudo crear la sesión en «{host}»: esta pestaña no es persistente"),
+                    );
+                    return Preparado::Normal;
+                }
+            },
+            Err(motivo) => {
+                warn!(
+                    sesion = sesion_id,
+                    "no se pudo crear la sesión de tmux: {motivo}"
+                );
+                avisar_en_pestana(
                     estado,
+                    sesion_id,
                     format!(
-                        "no se pudo hablar con tmux en «{}»: shell normal",
-                        datos.host.nombre
+                        "no se pudo hablar con tmux en «{host}»: esta pestaña no es persistente"
                     ),
                 );
-                None
+                return Preparado::Normal;
             }
         }
     }
+    avisar_en_pestana(
+        estado,
+        sesion_id,
+        format!("no se encontró un nombre libre en «{host}»: esta pestaña no es persistente"),
+    );
+    Preparado::Normal
+}
+
+/// Nombres de las fichas de sesiones persistentes de un host (las terminadas
+/// también cuentan: su nombre sigue reservado). Se lee de SQLite sin escribir;
+/// `None` si no se pudo leer.
+async fn nombres_de_fichas(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    host_id: i64,
+) -> Option<Vec<String>> {
+    let lectura = estado.lock().await.lectura.clone();
+    lectura.lock().ok().and_then(|almacen| {
+        crate::almacen::sesiones_persistentes::nombres_de_host(almacen.conexion(), host_id).ok()
+    })
+}
+
+/// La sesión de tmux de la pestaña tal como está viva ahora: servidor, nombre
+/// y si se enganchó compartiendo. Es de donde sale la reconexión.
+async fn tmux_vivo(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+) -> Option<(ServidorTmux, String, bool)> {
+    let estado_bloqueado = estado.lock().await;
+    let sesion = estado_bloqueado.sesiones.get(&sesion_id)?;
+    Some((
+        sesion.tmux_servidor,
+        sesion.tmux.clone()?,
+        sesion.tmux_compartir,
+    ))
+}
+
+/// Reconexión de una pestaña con tmux (§4.4): mira el estado de la sesión con
+/// `estado` y decide. La automática nunca le quita la sesión a otro equipo; la
+/// manual (prefijo `r` o volver desde una pestaña soltada) manda el usuario.
+async fn preparar_reconexion(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    handle: &Arc<Handle<Cliente>>,
+    auto: bool,
+) -> Preparado {
+    let sesion_id = datos.sesion_id;
+    let host = datos.host.nombre.as_str();
+    // El nombre sale del estado vivo de la pestaña, no de lo que se pidió al
+    // abrirla (un host marcado pone el nombre automático al abrir).
+    let Some((servidor, nombre, compartir)) = tmux_vivo(estado, sesion_id).await else {
+        return Preparado::Normal;
+    };
+    let lectura = match super::tmux::estado(handle).await {
+        Ok(lectura) => lectura,
+        Err(motivo) => {
+            warn!(sesion = sesion_id, "no se pudo comprobar tmux: {motivo}");
+            return Preparado::SinComprobar(format!(
+                "no se pudo comprobar tmux en «{host}»: {motivo} · prefijo r para reintentar"
+            ));
+        }
+    };
+    let perdida = |texto: String| match servidor {
+        // Una sesión propia que ya no existe: la pestaña se cierra, como al
+        // hacer `exit`. En la del tmux habitual, la Fase 15 seguía con un
+        // shell normal y un aviso.
+        ServidorTmux::Magi => Preparado::Terminada(texto),
+        ServidorTmux::Habitual => {
+            avisar_en_pestana(estado, sesion_id, format!("{texto}: shell normal"));
+            Preparado::Normal
+        }
+    };
+    let Some(version) = lectura.tmux else {
+        return perdida(format!("«{host}» ya no tiene tmux"));
+    };
+    if servidor == ServidorTmux::Magi && version < VersionTmux::MINIMA {
+        return Preparado::SinComprobar(format!(
+            "tmux demasiado antiguo (3.0 o posterior) en «{host}»"
+        ));
+    }
+    let Some(sesion) = lectura
+        .sesiones
+        .iter()
+        .find(|sesion| sesion.servidor == servidor && sesion.nombre == nombre)
+    else {
+        return perdida(format!("la sesión «{nombre}» ya no existe en «{host}»"));
+    };
+    let equipo = super::tmux::etiqueta_del_equipo(estado).await;
+    // Solo en el tmux propio hay equipos y se suelta a nadie.
+    let soltar = servidor == ServidorTmux::Magi && !compartir;
+    if servidor == ServidorTmux::Magi && auto && sesion.clientes > 0 {
+        // Clientes enganchados: si el último equipo en engancharse es este, son
+        // los de la conexión caída y se vuelve; si no, la tiene otro.
+        if sesion.equipo.as_deref() != Some(equipo.as_str()) {
+            return Preparado::Soltada(sesion.equipo.clone());
+        }
+    }
+    let Some(comando) = comando_de_enganche(servidor, &nombre, soltar, &equipo) else {
+        return Preparado::SinComprobar("los datos de la sesión no son válidos".to_string());
+    };
+    Preparado::Enganchar(PlanEnganche {
+        servidor,
+        nombre,
+        version: Some(version),
+        compartir,
+        comando,
+        nueva: false,
+        con_comando_propio: false,
+    })
 }
 
 /// Marca la sesión abierta con la conexión tomada y su identidad. Devuelve si
@@ -814,7 +1359,7 @@ async fn marcar_abierta(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
     tomada: &ConexionTomada,
-    tmux: Option<String>,
+    tmux: Option<TmuxAbierta>,
 ) -> bool {
     let mut estado_bloqueado = estado.lock().await;
     let otra_en_la_misma = estado_bloqueado.sesiones.values().any(|sesion| {
@@ -836,8 +1381,22 @@ async fn marcar_abierta(
     sesion.identidad = tomada.identidad.clone();
     sesion.abierta_en = Utc::now().timestamp();
     sesion.handle = Some(tomada.handle.clone());
-    if tmux.is_some() {
-        sesion.tmux = tmux;
+    // Volver a engancharse quita la marca de «soltada». Una pestaña que cae a
+    // un shell normal (la del tmux habitual que ya no existe) deja de ser de
+    // tmux.
+    sesion.soltada = None;
+    match tmux {
+        Some(tmux) => {
+            sesion.tmux = Some(tmux.nombre);
+            sesion.tmux_servidor = tmux.servidor;
+            sesion.tmux_version = tmux.version;
+            sesion.tmux_compartir = tmux.compartir;
+        }
+        None => {
+            sesion.tmux = None;
+            sesion.tmux_version = None;
+            sesion.tmux_compartir = false;
+        }
     }
     !otra_en_la_misma
 }
@@ -892,7 +1451,17 @@ async fn anunciar_reconectada(
         Some(nombre) => format!("tmux {nombre}"),
         None => "shell nuevo".to_string(),
     };
-    let texto = format!("\r\n\x1b[2m── reconectada {hora} · {detalle} ──\x1b[0m\r\n");
+    // Un shell nuevo empieza sin modos de teclado: lo que el programa de antes
+    // dejó puesto (`modifyOtherKeys` y las banderas de kitty) se apaga en el
+    // emulador del servidor y en los de las ventanas (el texto va a los dos),
+    // antes de leer nada del canal nuevo. Con tmux no: es él quien los vuelve a
+    // pedir al engancharse.
+    let reinicio = if tmux.is_none() {
+        "\x1b[>4;0m\x1b[<99u"
+    } else {
+        ""
+    };
+    let texto = format!("{reinicio}\r\n\x1b[2m── reconectada {hora} · {detalle} ──\x1b[0m\r\n");
     let (pantalla, ids) = {
         let estado_bloqueado = estado.lock().await;
         let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
@@ -925,7 +1494,22 @@ enum FinSesion {
     Cerrada,
     /// La conexión cayó sin exit: puede reintentarse.
     Caida(String),
+    /// Una pestaña de tmux cuyo script salió con 100: otro equipo se enganchó
+    /// a la sesión, que sigue viva. La pestaña queda soltada.
+    Soltada,
+    /// tmux no pudo (o dejó de poder): la sesión ya no existe, no hay tmux o es
+    /// antiguo (la pestaña se cierra), o el cliente de tmux no pudo
+    /// engancharse (queda caída). No es una caída de red: no se reintenta.
+    TmuxFallo {
+        causa: CausaAperturaTmux,
+        mensaje: String,
+        cerrar: bool,
+    },
 }
+
+/// Lo que se espera a que tmux pinte antes de escribir los comandos iniciales
+/// si no llega nada del canal.
+const PLAZO_COMANDOS_DIFERIDOS: Duration = Duration::from_secs(2);
 
 enum FinReintento {
     /// La pestaña se cerró mientras esperaba (o el servidor se apaga).
@@ -937,17 +1521,27 @@ enum FinReintento {
 /// Bucle de una sesión abierta: teclas y tamaños de los adjuntos hacia el
 /// remoto, datos del remoto hacia los adjuntos y el parser del servidor, que
 /// responde a las consultas en el mismo lote.
+///
+/// Con `tmux`, el canal es el del `exec` del script de enganche y su código de
+/// salida dice cómo acabó (0: la sesión terminó, 100: te soltaron, 75, 74 y
+/// 76: no puede). `diferidos` son los comandos iniciales de una sesión nueva:
+/// se escriben cuando llega lo primero que pinta tmux (o a los 2 s).
 async fn bucle_sesion(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
     canal: &mut Channel<russh::client::Msg>,
     pantalla: &PantallaCompartida,
     rx_comandos: &mut mpsc::UnboundedReceiver<ComandoSesion>,
+    tmux: bool,
+    mut diferidos: Vec<String>,
 ) -> FinSesion {
     let mut vio_eof = false;
     // Llegó el estado de salida del remoto: no es una caída de red, es un
     // cierre normal de la pestaña aunque el canal tarde en cerrarse.
     let mut vio_exit = false;
+    let mut codigo_salida: Option<u32> = None;
+    let mut limite_diferidos =
+        (!diferidos.is_empty()).then(|| tokio::time::Instant::now() + PLAZO_COMANDOS_DIFERIDOS);
     loop {
         tokio::select! {
             comando = rx_comandos.recv() => match comando {
@@ -990,6 +1584,10 @@ async fn bucle_sesion(
                             "el remoto dejó de aceptar las respuestas".to_string(),
                         );
                     }
+                    if !diferidos.is_empty() {
+                        limite_diferidos = None;
+                        escribir_diferidos(sesion_id, canal, &mut diferidos).await;
+                    }
                 }
                 Some(ChannelMsg::ExtendedData { data, .. }) => {
                     if !procesar_datos(estado, sesion_id, pantalla, &data, canal).await {
@@ -999,22 +1597,106 @@ async fn bucle_sesion(
                     }
                 }
                 Some(ChannelMsg::Eof) => vio_eof = true,
-                Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::ExitSignal { .. }) => {
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    vio_exit = true;
+                    codigo_salida = Some(exit_status);
+                }
+                Some(ChannelMsg::ExitSignal { .. }) => {
                     vio_exit = true;
                 }
+                Some(ChannelMsg::Failure) if tmux => {
+                    // El host rechazó el `exec` y no va a cerrar el canal (con
+                    // su PTY): se cierra aquí o seguiría ocupando uno de los
+                    // canales de la conexión, que puede ser del pool.
+                    let _ = tokio::time::timeout(PLAZO_CANAL, canal.close()).await;
+                    return FinSesion::TmuxFallo {
+                        causa: CausaAperturaTmux::Otra,
+                        mensaje: "el host no admitió lanzar tmux en la pestaña".to_string(),
+                        cerrar: true,
+                    };
+                }
                 Some(ChannelMsg::Close) => {
-                    cerrada(estado, sesion_id, "el remoto cerró la sesión").await;
-                    return FinSesion::Cerrada;
+                    return fin_de_canal(estado, sesion_id, tmux, codigo_salida).await;
                 }
                 None => {
                     if vio_eof || vio_exit {
-                        cerrada(estado, sesion_id, "el remoto cerró la sesión").await;
-                        return FinSesion::Cerrada;
+                        return fin_de_canal(estado, sesion_id, tmux, codigo_salida).await;
                     }
                     return FinSesion::Caida("la conexión se ha perdido".to_string());
                 }
                 _ => {}
             },
+            _ = tokio::time::sleep_until(limite_diferidos.unwrap_or_else(tokio::time::Instant::now)),
+                if limite_diferidos.is_some() =>
+            {
+                limite_diferidos = None;
+                escribir_diferidos(sesion_id, canal, &mut diferidos).await;
+            }
+        }
+    }
+}
+
+/// Escribe los comandos iniciales que esperaban a que tmux pintara.
+async fn escribir_diferidos(
+    sesion_id: u32,
+    canal: &mut Channel<russh::client::Msg>,
+    diferidos: &mut Vec<String>,
+) {
+    for texto in std::mem::take(diferidos) {
+        let escrito = tokio::time::timeout(PLAZO_CANAL, canal.data_bytes(texto.into_bytes())).await;
+        if !matches!(escrito, Ok(Ok(()))) {
+            warn!(sesion = sesion_id, "no se pudo escribir el comando inicial");
+            return;
+        }
+    }
+}
+
+/// El canal de la pestaña terminó con el estado de salida (o sin él). En una
+/// pestaña de tmux, el código del script dice cómo (§7.4); en una normal, es
+/// el `exit` de siempre.
+async fn fin_de_canal(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+    tmux: bool,
+    codigo: Option<u32>,
+) -> FinSesion {
+    if !tmux {
+        cerrada(estado, sesion_id, "el remoto cerró la sesión").await;
+        return FinSesion::Cerrada;
+    }
+    let fallo = |causa, mensaje: &str, cerrar| FinSesion::TmuxFallo {
+        causa,
+        mensaje: mensaje.to_string(),
+        cerrar,
+    };
+    match codigo.map(|codigo| codigo as i32) {
+        Some(SALIDA_SOLTADA) => FinSesion::Soltada,
+        Some(SALIDA_NO_EXISTE) => fallo(
+            CausaAperturaTmux::Otra,
+            "la sesión de tmux ya no existe en el host",
+            true,
+        ),
+        Some(SALIDA_SIN_TMUX) => fallo(CausaAperturaTmux::SinTmux, "instala tmux en el host", true),
+        Some(SALIDA_ANTIGUO) => fallo(
+            CausaAperturaTmux::TmuxAntiguo,
+            "tmux demasiado antiguo (3.0 o posterior)",
+            true,
+        ),
+        Some(otro) if otro != 0 => FinSesion::TmuxFallo {
+            causa: CausaAperturaTmux::Otra,
+            mensaje: format!(
+                "tmux no pudo engancharse (código {otro}) · prefijo r para reintentar"
+            ),
+            cerrar: false,
+        },
+        // Sin código de salida (solo una señal, o el canal se cerró sin
+        // `exit-status`) no se sabe si la sesión terminó: tratarlo como
+        // terminada cerraría una pestaña de una sesión que puede seguir viva.
+        // Es una caída, y la reconexión mira el host.
+        None => FinSesion::Caida("la conexión se ha perdido".to_string()),
+        Some(_) => {
+            cerrada(estado, sesion_id, "la sesión de tmux terminó").await;
+            FinSesion::Cerrada
         }
     }
 }
@@ -1503,6 +2185,209 @@ fn avisar_fallida(estado_bloqueado: &mut EstadoServidor, sesion_id: u32, motivo:
         },
     );
     difundir_lista(estado_bloqueado);
+}
+
+// ---------------------------------------------------------------- tmux: fin
+
+/// Avisa solo al solicitante de que la pestaña de tmux no pudo abrirse (o
+/// dejó de poder). Si la ventana ya no está, no hay a quién avisar.
+fn avisar_fallo_de_tmux(
+    estado_bloqueado: &EstadoServidor,
+    solicitante: u32,
+    host_id: i64,
+    nombre: Option<&str>,
+    causa: CausaAperturaTmux,
+    mensaje: &str,
+) {
+    if let Some(cliente) = estado_bloqueado.clientes.get(&solicitante) {
+        difusion::enviar(
+            cliente,
+            MensajeServidor::AperturaTmuxFallida {
+                host_id,
+                nombre: nombre.unwrap_or_default().to_string(),
+                causa,
+                mensaje: mensaje.to_string(),
+            },
+        );
+    }
+}
+
+/// La apertura pedida con tmux no pudo hacerse (sin tmux, tmux antiguo, ya
+/// existe, sin carpeta…): no queda pestaña. El servidor no anota nada (no se
+/// produjo ningún efecto) ni toca el estado del host: la conexión estaba bien.
+/// El solicitante recibe `AperturaTmuxFallida` con la causa y la instrucción
+/// para ofrecer engancharse a la existente, cambiar el nombre o abrir una
+/// pestaña normal.
+async fn apertura_tmux_fallida(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    causa: CausaAperturaTmux,
+    mensaje: String,
+) {
+    // Solo la causa va al log: el mensaje puede llevar la carpeta del usuario.
+    warn!(
+        sesion = datos.sesion_id,
+        host = %datos.host.nombre,
+        "apertura de tmux fallida: {causa:?}"
+    );
+    let nombre = datos.tmux.as_ref().map(|tmux| tmux.nombre.clone());
+    let mut estado_bloqueado = estado.lock().await;
+    estado_bloqueado.pendientes.remove(&datos.sesion_id);
+    if estado_bloqueado.sesiones.remove(&datos.sesion_id).is_some() {
+        avisar_fallo_de_tmux(
+            &estado_bloqueado,
+            datos.solicitante,
+            datos.host.id,
+            nombre.as_deref(),
+            causa,
+            &mensaje,
+        );
+        avisar_fallida(&mut estado_bloqueado, datos.sesion_id, &mensaje);
+    }
+}
+
+/// Una reconexión encontró que la sesión de tmux ya no existe en el host: la
+/// pestaña se cierra como al hacer `exit` y el solicitante sabe por qué.
+async fn sesion_terminada_en_el_host(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    motivo: &str,
+) {
+    let nombre = tmux_vivo(estado, datos.sesion_id)
+        .await
+        .map(|(_, nombre, _)| nombre);
+    {
+        let estado_bloqueado = estado.lock().await;
+        avisar_fallo_de_tmux(
+            &estado_bloqueado,
+            datos.solicitante,
+            datos.host.id,
+            nombre.as_deref(),
+            CausaAperturaTmux::Otra,
+            motivo,
+        );
+    }
+    cerrada(estado, datos.sesion_id, "la sesión de tmux terminó").await;
+}
+
+/// El script de enganche salió con 75, 74 o 76 con la pestaña ya abierta (la
+/// sesión desapareció entre comprobar y engancharse): se cierra y se avisa.
+async fn sesion_tmux_cerrada(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    causa: CausaAperturaTmux,
+    mensaje: String,
+) {
+    let nombre = tmux_vivo(estado, datos.sesion_id)
+        .await
+        .map(|(_, nombre, _)| nombre)
+        .or_else(|| datos.tmux.as_ref().map(|tmux| tmux.nombre.clone()));
+    {
+        let estado_bloqueado = estado.lock().await;
+        avisar_fallo_de_tmux(
+            &estado_bloqueado,
+            datos.solicitante,
+            datos.host.id,
+            nombre.as_deref(),
+            causa,
+            &mensaje,
+        );
+    }
+    cerrada(estado, datos.sesion_id, &mensaje).await;
+}
+
+/// Texto del motivo de una pestaña soltada.
+fn motivo_soltada(por_equipo: Option<&str>) -> String {
+    match por_equipo {
+        Some(equipo) => format!("soltada: la usa {equipo}"),
+        None => "soltada: la usa otro equipo".to_string(),
+    }
+}
+
+/// La pestaña queda caída con su última pantalla y sin conexión, marcada como
+/// soltada (nadie la cierra: se vuelve con `Reconectar` o se cierra a mano).
+/// Difunde la lista ya, antes de cualquier trabajo lento. Devuelve el instante
+/// en que se soltó (para no pisar una soltada posterior).
+async fn marcar_soltada(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+    por_equipo: Option<String>,
+) -> i64 {
+    let desde = Utc::now().timestamp();
+    let mut estado_bloqueado = estado.lock().await;
+    let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
+        return desde;
+    };
+    sesion.estado = EstadoSesionRemota::Caida;
+    sesion.reconectando = false;
+    sesion.reconexion = None;
+    sesion.adelantar = None;
+    sesion.motivo = Some(motivo_soltada(por_equipo.as_deref()));
+    // La conexión la suelta quien llama, por identidad.
+    sesion.handle = None;
+    sesion.soltada = Some(Soltada { por_equipo, desde });
+    let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
+    let aviso = MensajeServidor::Estado {
+        sesion_id,
+        estado: EstadoSesionRemota::Caida,
+        motivo: sesion.motivo.clone(),
+    };
+    difusion::difundir_a_adjuntos(&estado_bloqueado.clientes, &ids, aviso);
+    estado_bloqueado.pendientes.remove(&sesion_id);
+    difundir_lista(&mut estado_bloqueado);
+    drop(estado_bloqueado);
+    // Sin canal, la escritura en varios y los túneles temporales de la pestaña
+    // terminan como en una caída (se pueden volver a pedir al volver).
+    super::escritura_varios::sesion_acabo(estado, sesion_id, "la sesión se soltó").await;
+    super::tuneles_temporales::sesion_acabo(estado, sesion_id, "la sesión se soltó").await;
+    desde
+}
+
+/// El script de enganche salió con 100: otro equipo se llevó la sesión. La
+/// pestaña pasa a soltada (con su última pantalla) y se difunde ya; después se
+/// mira con `estado`, por la misma conexión, quién la tiene ahora.
+async fn sesion_soltada(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+    handle: &Arc<Handle<Cliente>>,
+    plan: &PlanEnganche,
+) {
+    let desde = marcar_soltada(estado, sesion_id, None).await;
+    let por_equipo = match super::tmux::estado(handle).await {
+        Ok(lectura) => lectura
+            .sesiones
+            .iter()
+            .find(|sesion| sesion.servidor == plan.servidor && sesion.nombre == plan.nombre)
+            .filter(|sesion| sesion.clientes > 0)
+            .and_then(|sesion| sesion.equipo.clone()),
+        Err(motivo) => {
+            warn!(
+                sesion = sesion_id,
+                "no se pudo ver quién tiene la sesión: {motivo}"
+            );
+            None
+        }
+    };
+    if por_equipo.is_none() {
+        return;
+    }
+    let mut estado_bloqueado = estado.lock().await;
+    let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
+        return;
+    };
+    // El usuario pudo volver o cerrar mientras tanto.
+    if sesion.estado != EstadoSesionRemota::Caida {
+        return;
+    }
+    let Some(soltada) = sesion.soltada.as_mut() else {
+        return;
+    };
+    if soltada.desde != desde {
+        return;
+    }
+    soltada.por_equipo = por_equipo.clone();
+    sesion.motivo = Some(motivo_soltada(por_equipo.as_deref()));
+    difundir_lista(&mut estado_bloqueado);
 }
 
 // ---------------------------------------------------------------- foco y portapapeles

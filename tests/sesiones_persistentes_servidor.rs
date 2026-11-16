@@ -4,11 +4,11 @@
 //! `SesionesPersistentes{lista}`, consulta agrupada, vista previa y renombrar).
 //!
 //! Todo con el servidor SSH de pruebas de `tests/comun` (sin red externa) y el
-//! tmux falso de `tests/fijos/terminal`. Cada pista del Sprint 2 tiene su
-//! módulo: `pestana` (pista A) aquí, y `vigilante` (pista B) en
-//! `sesiones_persistentes_vigilante.rs` mientras se desarrollan por separado
-//! (CONTRATO-S2: al integrarlas, `vigilante` pasa a colgar de este fichero).
+//! tmux falso de `tests/fijos/terminal`. Cada pista tiene su módulo:
+//! `pestana` y `vigilante`.
 
 mod comun;
 #[path = "sesiones_persistentes_servidor/pestana.rs"]
 mod pestana;
+#[path = "sesiones_persistentes_servidor/vigilante.rs"]
+mod vigilante;

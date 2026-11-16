@@ -164,6 +164,7 @@ formatear() {
                     next
                 }
                 linea = formato
+                linea = sustituir(linea, "#{session_id}", "$" (NR - 1))
                 linea = sustituir(linea, "#{session_name}", nombre)
                 linea = sustituir(linea, "#{session_attached}", adheridos)
                 linea = sustituir(linea, "#{session_windows}", ventanas)
@@ -237,13 +238,41 @@ orden_attach() {
         exit 1
     }
     soltar=0
+    # «attach -d» suelta a los demás clientes: escribe el marcador de la sesión
+    # y los clientes que ya estaban enganchados (que miran el marcador) salen
+    # con 0, como el cliente de tmux al que le quitan la sesión. La prueba
+    # puede simular a otro equipo escribiendo ese marcador a mano.
+    marcador="${FICHERO}.cliente.${nombre}"
     if tiene_bandera d; then
         soltar=1
+        printf '%s\n' "$$" > "$marcador"
     fi
+    inicial=$(cat "$marcador" 2>/dev/null || true)
     printf 'MAGI_TMUX_ADJUNTO=%s soltar=%s\n' "$nombre" "$soltar"
-    while IFS= read -r linea; do
-        printf 'MAGI_TMUX_ENTRADA=%s\n' "$linea"
+    # La entrada se lee en segundo plano para poder mirar el marcador mientras
+    # tanto (un trabajo asíncrono sin control de trabajos pierde la entrada
+    # estándar: de ahí el descriptor 3).
+    exec 3<&0
+    (
+        while IFS= read -r linea; do
+            printf 'MAGI_TMUX_ENTRADA=%s\n' "$linea"
+        done
+    ) <&3 &
+    lector=$!
+    while kill -0 "$lector" 2>/dev/null; do
+        actual=$(cat "$marcador" 2>/dev/null || true)
+        if [ "$actual" != "$inicial" ]; then
+            kill "$lector" 2>/dev/null
+            # Otro cliente nos soltó: la sesión sigue (y puede que la hayan
+            # renombrado mientras tanto, si la prueba lo pide).
+            if [ -n "${MAGI_TMUX_AL_SOLTAR_RENOMBRA:-}" ]; then
+                cambiar_campo "$nombre" 1 "$MAGI_TMUX_AL_SOLTAR_RENOMBRA"
+            fi
+            exit 0
+        fi
+        sleep 0.1
     done
+    wait "$lector" 2>/dev/null
     # El programa de la sesión termina: la sesión desaparece.
     if [ "${MAGI_TMUX_ATTACH_MATA:-0}" = 1 ]; then
         quitar_sesion "$nombre"
@@ -292,6 +321,7 @@ orden_has_session() {
 
 orden_list_sessions() {
     preparar_estado
+    debe_fallar list-sessions && { printf '%s\n' 'protocol version mismatch (client 8, server 7)' >&2; exit 1; }
     if [ ! -s "$FICHERO" ]; then
         printf 'no server running on %s\n' "$FICHERO" >&2
         exit 1
@@ -301,6 +331,7 @@ orden_list_sessions() {
 
 orden_list_windows() {
     preparar_estado
+    debe_fallar list-windows && { printf '%s\n' 'protocol version mismatch (client 8, server 7)' >&2; exit 1; }
     if [ ! -s "$FICHERO" ]; then
         printf 'no server running on %s\n' "$FICHERO" >&2
         exit 1
@@ -310,6 +341,7 @@ orden_list_windows() {
 
 orden_capture_pane() {
     preparar_estado
+    debe_fallar capture-pane && { printf '%s\n' 'tmux falso: capture-pane falla por MAGI_TMUX_FALLA' >&2; exit 1; }
     nombre=$(resolver_sesion "$V_t") || {
         printf "can't find pane: %s\n" "$V_t" >&2
         exit 1

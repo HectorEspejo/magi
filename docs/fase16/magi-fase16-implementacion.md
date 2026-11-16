@@ -1,7 +1,7 @@
 # MAGI - Fase 16: Sesiones Persistentes — Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión. Estado: **Sprint 1 de 3 cerrado** (núcleo, script de tmux, sincronización y teclado). Faltan el servidor y el protocolo v10 (Sprint 2) y el cliente, la CLI y el cierre (Sprint 3).
-> Rama `fase16`. Contrato del Sprint 1 en el commit `68ab095`.
+> Documento vivo: se actualiza en cada sesión. Estado: **Sprint 2 de 3 cerrado** (núcleo, script de tmux, sincronización y teclado, más el servidor y el protocolo v10). Falta el cliente, la CLI y el cierre (Sprint 3).
+> Rama `fase16`. Contrato del Sprint 1 en el commit `68ab095`, Sprint 1 en `ff1b9cc` y contrato del Sprint 2 en `1d26f87`.
 
 ---
 
@@ -52,6 +52,22 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 - Pista D, el volcado de `Adjuntar` no apagaba `modifyOtherKeys` en una ventana que ya lo tenía activo.
 
 **Estado de las comprobaciones del sprint:** `cargo fmt --all --check` limpio, `cargo clippy --workspace --all-targets --locked -- -D warnings` limpio, `shellcheck` limpio, `cargo deny check` limpio, y `TZ=UTC cargo test --workspace --locked --no-fail-fast`: **2115 pruebas pasan, 0 fallan, 6 ignoradas** (los generadores de fixtures, que se ejecutan con `--ignored`).
+
+### Sprint 2 — Servidor y protocolo v10
+
+Se hizo con tres pistas en paralelo sobre el contrato `1d26f87` (con un revisor adversarial por pista) y una integración posterior. **36 de 67 ítems del checklist** quedan marcados al cerrarlo.
+
+**Pestaña persistente (servidor).** `AbrirSesion` con `tmux{servidor, nombre, crear, compartir}` valida, comprueba (`comprobar`), crea (`crear`) y engancha (`enganchar`). El enganche va por `exec` en el canal con PTY: el script ya no se escribe en el shell (resuelto el punto 1 de «Para el Sprint 2» del Sprint 1; ver el límite de los hosts con Dropbear en §6). El snippet al conectar y el comando inicial solo se escriben en una sesión nueva sin comando propio. Si `enganchar` sale con 100, la pestaña pasa a `soltada` con su última pantalla y se difunde `Sesiones{lista}` antes de leer con `estado` quién la tiene. `Reconectar{compartir}` vuelve a engancharse. La reconexión automática sale del estado vivo de la pestaña (`tmux_vivo`) y nunca le quita la sesión a otro equipo; antes salía de `datos.tmux`, que el bucle automático no actualizaba (arreglo del fallo heredado de la Fase 15, con test). `ListarTmux` devuelve las sesiones de los dos servidores y `TerminarTmux` va con servidor y `=nombre` exacto, con la anotación `tmux_terminada` solo en el servidor y tras la barrera. `CapturarHistorial` de una pestaña con tmux lee `historial` (5 s) y lo manda en tramos. Se retiró el legado de la Fase 15 (`abrir`, `listar`, las formas de un argumento de `comprobar` y `terminar`, `nombre_nuevo`, `SesionTmux`, `Listado` y `leer_listado`).
+
+**Vigilante, consultas, vista previa y renombrar** (`src/servidor/sesiones_persistentes.rs`, nuevo). Solo trabaja con alguna ventana conectada y comprueba con `estado` los hosts `ssh` con fichas o marcados, 8 a la vez, 10 s por host, sin diálogos (`NoInteractiva`): un host que pediría huella, frase o contraseña queda con `ErrorComprobacion::NecesitaDialogo` y sus fichas `inalcanzable`, nunca `terminada`. Todo el estado vive en memoria. Difunde `SesionesPersistentes{lista}` solo si algo cambia (sin contar `comprobada_en` ni `ahora`), y una ventana nueva la recibe tras la `Bienvenida`. `ConsultarSesionesPersistentes` agrupa las peticiones seguidas y no repite un host comprobado hace menos de 5 s. `PedirVistaPrevia` y `RenombrarTmux` responden solo a la ventana que pregunta; tras un renombrado con `Ok` se renombra en memoria, se fuerza una recomprobación del host y cambia el nombre de las pestañas enganchadas. Nada de contenido, títulos ni historial llega al log ni a REGISTRO (la prueba de no-fuga cubre salida, título, historial, carpeta, comando y vista previa). El servidor lee y valida las filas de SESIONES_PERSISTENTES y HOSTS (`almacen::sesiones_persistentes::leer_para_vigilante`) y nunca escribe en ellas.
+
+**Arreglos del cliente heredados de la Fase 15.** `reconciliar_sesiones` copia ahora `reconexion`, `titulo`, `tmux` y `nombre` a las pestañas que ya existen, y el aviso se decide con la hora (uno ya visto no vuelve con la siguiente difusión); `PestanaUI.tmux` pasa a `Option<TmuxPestana>`; el cliente deja de anotar `tmux_terminada`.
+
+**Revisión adversarial por pista.** Los revisores encontraron y se corrigieron, con prueba de regresión: (a) `estado` y `comprobar` ignoraban el código de salida del script y una lectura cortada se leía como «la sesión ya no existe» (cerraba pestañas vivas) o como «sin sesiones» (todas las fichas «terminadas» y la tecla `C` las habría borrado); (b) el vigilante hacía lo mismo y una consulta se quedaba sin respuesta si fallaba la lectura de SQLite; (c) una comprobación en vuelo anterior a un renombrado pisaba el cambio; (d) hosts pedidos a mano con ids falsos ocupaban plazas durante 10 min; (e) el cliente descartaba `AperturaTmuxFallida` y dejaba el host en `aperturas_pendientes`; la lista de la Fase 15 mezclaba las sesiones de los dos servidores; una terminación tardía borraba la fila de otro host; (f) `Sesion.soltada` no se limpiaba al reconectar y un `exec` rechazado por el host dejaba un canal ocupado.
+
+**Integración.** Tras las pistas se corrigieron además los pendientes que podían perder datos: el script `estado` salía con 0 y una lista vacía si `list-sessions` fallaba por otra causa que «no hay servidor» (por ejemplo, `protocol version mismatch` tras un `apt upgrade tmux` con sesiones vivas), y `vista` e `historial` daban éxito vacío si la captura fallaba (la salida era la de `awk` o `sed`); ahora `estado` sale con 77 y las capturas con 75. Un canal de tmux cerrado sin código de salida ya no cierra la pestaña como «terminada»: es una caída y la reconexión mira el host. Si no se pueden leer las fichas de un host marcado, la pestaña se abre normal con aviso en lugar de elegir un nombre a ciegas. Las pruebas del vigilante pasan a colgar de `sesiones_persistentes_servidor` (un solo objetivo).
+
+**Verificación.** `cargo fmt --all --check`, `clippy --workspace --all-targets --locked -- -D warnings`, `shellcheck`, `cargo deny check` y `TZ=UTC cargo test --workspace --locked --no-fail-fast`: **2179 pasan, 0 fallan, 6 ignoradas** (70 objetivos). `tmux_real` (13 pruebas) pasa con tmux 3.2a, 3.4, 3.5 y 3.7c.
 
 ---
 
@@ -104,6 +120,24 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 - `preparar_tmux` en una reconexión automática usa `datos.tmux`, que el bucle no actualiza tras `marcar_abierta`: en un host marcado con nombre automático (`datos.tmux == None`) la reconexión automática vuelve con un shell normal y pierde la marca de tmux. Confirmado leyendo el código.
 - `reconciliar_sesiones` (`src/app.rs`) no copia `titulo`, `aviso`, `reconexion` ni `tmux` a las pestañas que ya existen, solo al crearlas. Confirmado leyendo el código; son campos de los que depende la pestaña «soltada» y la atención.
 
+**Sprint 2**
+
+- **`AperturaTmuxFallida{host_id, nombre, causa, mensaje}` (mensaje nuevo, no está en el informe).** El servidor lo manda cuando no abre la pestaña de tmux o cuando una reconexión o un `enganchar` ya abierto fallan con 75, 74 o 76. `causa` es `sin_tmux`, `tmux_antiguo`, `existe`, `sin_carpeta`, `conexion` u `otra`. Hace falta para que el cliente muestre «instala tmux en el host», «tmux demasiado antiguo» o «ya existe» con su instrucción (checklist: «errores con instrucción») y libere la apertura pendiente; sin él, el cliente solo vería un fallo genérico. Va sin `peticion_id`: el cliente correlaciona por host y nombre. **Propuesta:** añadir la causa `no_existe` («la sesión ya no existe» al engancharse sin crear sale hoy como `otra` con ese mensaje) para que el cliente marque la ficha como terminada al momento.
+- **Los datos no válidos de `AbrirSesion` (nombre, carpeta o comando) ya no dan `Error{peticion_id: None}`** como en la Fase 15: dan `AperturaTmuxFallida` con causa `otra`, para que lleguen al diálogo de la sesión.
+- **`CapturarHistorial` lee el historial de tmux también en las pestañas del tmux habitual**, no solo del propio. El informe (§7.8) dice que el historial de MAGI se lee igual con `historial habitual`, y vt100 casi no guarda nada bajo tmux. Una pestaña sin tmux, o con tmux pero caída o soltada, sigue capturando del emulador como en la Fase 15.
+- **En el tmux habitual `crear` se rechaza** (causa `otra`: «las sesiones nuevas solo se crean en el tmux de MAGI»), no solo se ignora; y `enganchar habitual` va con `soltar = 0`, como la Fase 15 (punto 3 de «Para el Sprint 2»).
+- **Reconexión cuando la sesión ya no existe.** En el tmux propio la pestaña se cierra (como al hacer `exit`) y se avisa con `AperturaTmuxFallida`; en el habitual se mantiene lo de la Fase 15 (shell normal con aviso). La Fase 15 abría un shell normal en los dos casos.
+- **Nombres automáticos de la Fase 15 (`magi-<equipo>-<n>`) retirados** (`nombre_nuevo`): los sustituye `nombres::nombre_automatico`. El nombre del host marcado lo elige el servidor y la ficha (origen `host`) la guarda el cliente cuando la pestaña queda abierta.
+- **Script: salida 77 (`SALIDA_FALLO_TMUX`) en `estado`** cuando tmux falla por otra causa que «no hay servidor». No está en la tabla de salidas del informe (§7.4); cualquier salida distinta de 0 de `estado` o `comprobar` se trata como «sin respuesta». Además, `enganchar` mira si la sesión sigue viva por su identificador interno (`#{session_id}`) y no por el nombre (arreglo del punto 5 de «Para el Sprint 2»).
+- **`ConsultarSesionesPersistentes` gana `host_id: Option<i64>`** (serde `default`, no se escribe si es `None`) para comprobar un host sin fichas ni marca (la lista lo conserva 10 min). Campo opcional nuevo, anotado en el comentario v10 del protocolo.
+- **Vigilante con `NoInteractiva` también en la vista previa y el renombrado.** La Fase 15 usaba `Interactiva` en listar y terminar. El informe no lo concreta; pulsar `v` o `,` en una lista no debe abrir un diálogo de huella. La contraseña, si el host la pide, llega del llavero de esa ventana por `PideLlavero`.
+- **`[persistentes]` gana `vigilar_ms_pruebas`** (`#[serde(skip)]`, `#[doc(hidden)]`): solo existe para acelerar las pruebas; con él puesto la regla de los 5 s se desactiva. No cambia ningún valor por defecto.
+- **La lista de `SesionesPersistentes` se acota a 3 MiB** (primero acorta las sesiones por host y, si no basta, las quita) para que ningún mensaje pase del tamaño del códec. El informe no lo pide; es la regla de CLAUDE.md sobre el tamaño de los mensajes.
+- **El renombrado no anota nada en REGISTRO:** el informe no define un tipo para eso (los cuatro nuevos son crear, reabrir, enganchar y borrar).
+- **Primera comprobación del vigilante a los `vigilar_seg`** de conectar la primera ventana; la inmediata es `ConsultarSesionesPersistentes`.
+- **Cliente (pista C), más allá de lo pedido:** `reconciliar_sesiones` copia también `nombre`; `AccionDialogo::CerrarPestanaTerminandoTmux` gana `servidor` (antes mandaba siempre `Habitual`); `App.avisos_vistos` (hora del último aviso visto por pestaña) en lugar de un campo en `PestanaUI`, porque esta se construye también en `src/app/escritorios.rs`; la lista de tmux de la Fase 15 se filtra al servidor habitual hasta que el bloque «Persistentes» (Sprint 3) enseñe el otro.
+- **Doble anotación de `tmux_terminada`:** resuelta (solo el servidor, que sabe cuándo se produjo el efecto); el punto 4 de «Para el Sprint 2» (los dos fallos heredados de la Fase 15) queda corregido, con test de regresión.
+
 ---
 
 ## 3. Estructura de archivos creada/modificada
@@ -125,6 +159,14 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 
 **Android:** `android/CHANGELOG.md`, `PruebaFormatoSincronizacionAndroid.kt`, `PruebaHumoNucleo.kt`, `PruebaConversiones.kt`, `PruebaFormato4SincronizacionAndroid.kt` (nueva) y la fixture `magi-ffffffff-aaaa-4bbb-8ccc-dddddddddddd.age`.
 
+**Sprint 2**
+
+- **Servidor (`src/servidor/`)**: `sesiones_persistentes.rs` (nuevo: vigilante, consultas, vista previa y renombrar), `sesiones.rs` (apertura, enganche, soltada, reconexión, `fin_de_canal`), `tmux.rs` (`comprobar`, `crear`, `estado`, `terminar`, `ejecutar_en_handle` por `exec`), `historial.rs` (historial de tmux por tramos) y `mod.rs` (manejadores y arranque del vigilante).
+- **Protocolo y configuración**: `src/protocolo.rs` (`AperturaTmuxFallida`, `CausaAperturaTmux`, `host_id` opcional y el resto de v10), `src/config.rs` (`vigilar_ms_pruebas`).
+- **Núcleo**: `scripts/terminal_tmux.sh` (legado retirado, `leer_lista`, salida 77, capturas en variable), `src/terminal/tmux.rs` (`OrdenTmux::comando_exec`, `fin_de_enganchar`), `src/almacen/sesiones_persistentes.rs` (`leer_para_vigilante`).
+- **Cliente**: `src/app.rs`, `src/app/sesion.rs`, `src/ui/sesion.rs` (los tres arreglos heredados y `apertura_tmux_fallida`).
+- **Pruebas**: `tests/sesiones_persistentes_servidor.rs` con sus módulos `sesiones_persistentes_servidor/{pestana,vigilante}.rs` (52 pruebas; el objetivo temporal `sesiones_persistentes_vigilante.rs` se borró), `tests/terminal_servidor.rs`, `tests/terminal_ui.rs` (45), `crates/magi-nucleo/tests/{tmux_script,tmux_real}.rs` y el tmux falso `tests/fijos/terminal/tmux` con su README (`#{session_id}`, `attach-session` que simula que otro equipo suelta, `MAGI_TMUX_AL_SOLTAR_RENOMBRA`, `MAGI_TMUX_FALLA` con `list-sessions`, `list-windows` y `capture-pane`).
+
 ---
 
 ## 4. Decisiones técnicas tomadas durante el desarrollo
@@ -138,11 +180,22 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 - **Script robusto frente al entorno del host.** Los dos fallos más graves que encontró el revisor (locale sin UTF-8 y `;` final) vienen de que un canal `exec` de ssh no es una sesión de login: la prueba con tmux real y `LANG` sin definir queda como regresión.
 - **`modifyOtherKeys` como en xterm.** Estado por emulador (es decir, por pestaña); nivel 1 y 2; la tabla de teclas no cambia ni un byte con el modo apagado (una prueba compara la tabla actual con `teclas_clasicas.txt`).
 
+**Sprint 2**
+
+- **Contrato compilable otra vez antes de las pistas** (`1d26f87`), con marcadores `CONTRATO-S2-*` que cada pista retiró: no queda ninguno ni `LEGADO-S2`.
+- **El enganche va por `exec` en un canal con PTY.** El script (≈ 25 KB) viaja como comando del canal (`OrdenTmux::comando_exec`) y no se escribe en el shell: no deja eco ni historial. Comprobado con un `sshd` real y el `ssh` de línea de órdenes (25 016 bytes) y con el servidor de pruebas de russh; **no** con el cliente russh de MAGI contra un `sshd` real ni con Dropbear (ver §6).
+- **Un fallo de lectura nunca se parece a una ausencia.** Es la regla que sale de la revisión: el código de salida del script se comprueba siempre, y ante un fallo `estado` da «sin respuesta» (pestaña caída o fichas `inalcanzable`), nunca «sin sesiones» ni «ya no existe». Por eso el script distingue «no hay servidor tmux» (lista vacía) de cualquier otro fallo.
+- **Soltada sin cerrar el canal a ciegas.** El bucle de canal devuelve `FinSesion::Soltada` (código 100) y la pestaña conserva su última pantalla; `TmuxFallo{cerrar}` distingue entre cerrar la pestaña (sesión terminada, sin tmux, antiguo) y dejarla caída (no se pudo engancharse).
+- **La reconexión automática parte del estado vivo** (`tmux_vivo`: servidor, nombre y si se enganchó compartiendo) y guarda `tmux_compartir` para no quitar a otro equipo que compartía.
+- **El vigilante impone su plazo por fuera de `conexion_para_canal`** (`tokio::time::timeout`, 10 s por host) y escribe su propio `ejecutar_con_limite` en lugar de usar `ejecutar_en_handle` de `servidor/tmux.rs`: el límite debe cubrir también la apertura del canal, y el otro la abre con un plazo fijo fuera del plazo de la orden. Quedan dos funciones parecidas; unificarlas es posible pero se dejó para no mezclar semánticas.
+- **La lista de sesiones persistentes se difunde antes de la espera de la red** cuando cambian las fichas o los hosts, y de nuevo a medida que llega cada host: un host colgado no retrasa la lista de los demás.
+- **Pruebas con el tmux falso y con tmux real.** La lógica del servidor se prueba con el tmux falso y el servidor SSH de pruebas; el comportamiento del script, también con tmux real (3.2a, 3.4, 3.5 y 3.7c).
+
 ---
 
 ## 5. Funcionalidades del checklist completadas (texto exacto)
 
-**18 de 67 ítems del checklist** (Sprint 1). El resto se marca al cerrar los Sprints 2 y 3; los dos ítems del Sprint 1 que siguen sin marcar y por qué están en §6.
+**36 de 67 ítems del checklist** (18 del Sprint 1 y 18 del Sprint 2). El resto se marca al cerrar el Sprint 3; los ítems que siguen sin marcar y por qué están en §6.
 
 ## Núcleo: modelo, validación y almacén
 - [x] Migración 11: `HOSTS.sesiones_persistentes` (0, viaja) y tabla SESIONES_PERSISTENTES (`uuid`, `version`, `vector`, `host_id` con CASCADE, `nombre` único por host, `carpeta`, `comando`, `comando_reanudar`, `nota`, `origen`, `creada_por`, `creada_en`, `actualizado_en`)
@@ -174,11 +227,35 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 - [x] Toda orden con `-t` apunta a `=<nombre>` y la existencia se comprueba con la lista exacta, también en `terminar` y `renombrar` (T126, R146)
   - AC: Dado `magi-a-10` viva y ninguna `magi-a-1`, cuando se pide terminar `magi-a-1`, entonces da `no_existe` y `magi-a-10` sigue viva
 - [x] `estado` lista las sesiones de los dos servidores, el propio y el habitual, con servidor, nombre, clientes, equipo, actividad, creada, campana, ventanas y título, más la hora del host
+- [x] Subórdenes nuevas `crear`, `enganchar`, `estado`, `vista`, `historial` y `renombrar`; `comprobar` y `terminar` ganan el servidor; `abrir` y `listar` desaparecen
+- [x] tmux 3.0 o posterior para el servidor propio: con uno anterior, «tmux demasiado antiguo (3.0 o posterior)» y una pestaña normal; sin tmux, «instala tmux en el host»
+
+## Servidor
+- [x] Pestaña persistente: `AbrirSesion` con `tmux` crea la sesión si hace falta (`comprobar` y `crear`) y la abre con `enganchar` en el canal con PTY; el snippet al conectar y el comando inicial (F6) solo se escriben en una sesión nueva sin comando propio
+- [x] Pestaña soltada: si el script sale con 100, la pestaña pasa a `soltada` con el equipo que la tiene ahora (leído con `estado`) y conserva la última pantalla en vez de cerrarse
+- [x] La reconexión automática (F15) de una pestaña persistente vuelve soltando a los demás solo si los clientes enganchados son de este equipo; si la tiene otro equipo, la pestaña queda soltada
+  - AC: Dado una pestaña de sobremesa caída mientras el portátil usa la sesión, cuando sobremesa reconecta, entonces no se la quita al portátil y queda «soltada»
+- [x] Vigilante: mientras haya alguna ventana conectada, cada `vigilar_seg` comprueba con `estado` los hosts con fichas o marcados, por el pool o con una conexión efímera sin diálogos, con 8 hosts a la vez como mucho y 10 s de plazo por host
+  - AC: Dado un host que pide frase, cuando el vigilante lo comprueba, entonces no abre ningún diálogo y sus fichas quedan «sin comprobar: conéctate a mano»
+- [x] `SesionesPersistentes{lista}` a todas las ventanas en cada cambio, con el estado visto por ficha y, por host comprobado, sus sesiones sin ficha y las del tmux habitual
+- [x] `CapturarHistorial` en una pestaña persistente lee el historial de tmux con `historial` y lo manda en tramos como en la F15
+- [x] `PedirVistaPrevia` devuelve las últimas `vista_previa_lineas` en texto plano solo a la ventana que la pide, sin guardarlas
+- [x] El servidor lee y valida las filas de SESIONES_PERSISTENTES y HOSTS antes de usarlas y nunca escribe en ellas
+- [x] Ni la salida de las sesiones, ni sus títulos, ni las vistas previas, ni el historial de tmux van al log ni a REGISTRO
 
 ## CLI y configuración
 - [x] `[persistentes]` en `config.toml`: `vigilar_seg` (60; 30-600), `refresco_seg` (30; 10-300), `antigua_dias` (7; 1-365) y `vista_previa_lineas` (20; 5-100), acotadas con aviso al arrancar
 
+## API: protocolo cliente ⇄ servidor (v10)
+- [x] `AbrirSesion` con `tmux{servidor, nombre, crear, compartir}`
+- [x] `ListarTmux` → `SesionesTmux` con `servidor`, `clientes`, `equipo`, `actividad`, `campana` y `titulo`, y `TerminarTmux` → `TmuxTerminada` con `servidor`
+- [x] `ConsultarSesionesPersistentes` y `SesionesPersistentes{lista}`
+- [x] `PedirVistaPrevia` → `VistaPrevia`
+- [x] `RenombrarTmux` → `TmuxRenombrada`
+- [x] `CapturarHistorial` → `HistorialLote` en pestañas persistentes y `Sesiones{lista}` con `InfoSesion.tmux` (`persistente` y `soltada`)
+
 ## Calidad, pruebas y publicación
+- [x] Pruebas del núcleo: `sesiones_persistentes` (validadores, nombres automáticos, estado y lectura acotada) y `tmux_script` (subórdenes nuevas con el tmux falso)
 - [x] `sincronizacion_sesiones`: `formato` 4 solo cuando toca, unión de fichas con el mismo nombre, lápidas y la marca del host
 
 ---
@@ -193,7 +270,7 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 - tmux 3.0a y 3.1c no se han probado con binario real (la descarga de sus fuentes la bloqueó el clasificador de permisos y no se rodeó); su configuración está probada con el tmux falso y sale de la lectura del CHANGES de 3.2a. Tampoco se ha probado el script con `dash` (el `/bin/sh` de Ubuntu y de CI; aquí `/bin/sh` es bash), ni con el `awk` de macOS ni con mawk 1.3.3: la primera ejecución en CI es la comprobación real.
 - `nombre_valido` del script usa un glob `[A-Za-z0-9_-]` sin `LC_ALL=C`; en un bash antiguo con locale no C el rango por colación podría admitir letras acentuadas que Rust rechaza. No se fija `LC_ALL` en todo el script porque el servidor de tmux heredaría esa variable y las sesiones del usuario perderían UTF-8.
 
-**Para el Sprint 2 (servidor y protocolo v10)**
+**Para el Sprint 2 (servidor y protocolo v10) — resuelto en el Sprint 2, salvo lo que se dice en «Del Sprint 2»**
 
 1. El script pasó de 4 KB a 26 KB y la Fase 15 lo escribe entero en el PTY de la pestaña como `exec sh -c '…'`. Con el script nuevo eso muestra 45 KB de eco con el prompt de continuación antes de que tmux tome la pantalla, y ese texto acaba en el historial. **`enganchar` debe entregarse al host de otra forma** (un `exec` por un canal aparte con el script por la entrada estándar y el PTY, o `request_exec` con el comando, valorándolo con el informe).
 2. Pasar el servidor a `OrdenTmux`, `leer_estado`, `leer_comprobar`, `leer_crear`, `leer_renombrar`, `leer_terminar` y `fin_de_enganchar`, y **quitar el legado marcado `LEGADO-S2`**. `leer_terminar` y `ResultadoTerminar` deben quedarse (los usa `sesiones_persistentes::lectura`).
@@ -205,8 +282,23 @@ Otros hallazgos de la prueba, ya aplicados en el script y en el emulador:
 8. Unificar las reglas duplicadas entre `terminal/tmux.rs` y `sesiones_persistentes/validadores.rs`.
 9. `escribir_tuneles` y las otras escrituras de la sincronización tienen el mismo patrón de `continue` con el host sin resolver que dejaba una ficha con el nombre temporal `__magi_sync__<uuid>`; por lectura del código, sus filas locales quedarían igual. **Es de fases anteriores y no está probado**: lo corregí solo para las fichas. Conviene decidirlo.
 
+**Del Sprint 2, sin cerrar**
+
+- **Ítems sin marcar de la parte de servidor, porque su texto incluye algo del cliente o de CI:** «`ConsultarSesionesPersistentes` comprueba enseguida (al abrir la lista, con `r` y cada `refresco_seg`…)» (el servidor agrupa y respeta los 5 s; los disparadores son del cliente); «`RenombrarTmux` renombra en el host y solo entonces el cliente cambia la ficha» (el servidor renombra y recomprueba; el cambio de la ficha es del cliente); «`VERSION_PROTOCOLO = 10` y los `peticion_id` … (2^49)» (la versión está y la prueba la fija, pero el cliente aún no manda esos mensajes); «`tmux_real`» (hecho y pasando con cuatro versiones, falta `apt install tmux` en `ci.yml`); y «`sesiones_persistentes_servidor` … y `sesiones_persistentes_ui`» (el primero, hecho; falta el segundo). El ítem del vigilante está marcado, pero el texto «sin comprobar: conéctate a mano» de su criterio lo pinta el cliente (Sprint 3): el servidor deja `HostVisto.error = necesita_dialogo` y las fichas `inalcanzable`.
+- **Hosts con Dropbear.** El script va entero (≈ 25 KB) en cada `exec` (`comprobar`, `crear`, `estado`, `historial`, `terminar` y `enganchar`). Dropbear limita la longitud del comando (la cifra, unos 9000 bytes, es de memoria del revisor y no se comprobó); la Fase 15, con un script de 4 KB, funcionaba ahí y la 16 deja de hacerlo en esos hosts. Con OpenSSH no hay problema. Hoy el error al menos se dice claro («el host no admitió ejecutar el comando de tmux»). **Hace falta decidir cómo entregar el script:** por la entrada estándar (sirve para todo salvo `enganchar`, que necesita el PTY), por un fichero temporal en el host o recortándolo por suborden. No se ha cambiado por tratarse de una decisión de diseño.
+- **Carreras estrechas en la reconexión automática.** Lee `estado`, decide y luego hace `attach -d`: otro equipo puede engancharse en medio y perder la sesión, porque el script no tiene un modo atómico «solo si no hay clientes de otro equipo». Además, `compartir` se lee antes del `await` de `estado`, y `sesion_soltada` busca por el nombre del plan, de modo que tras un renombrado deja «otro equipo» sin nombre.
+- **Sesión huérfana.** Si `crear` funciona pero `abrir_con_plazo_terminal` falla después, la sesión queda en el host y el cliente solo ve el fallo genérico de apertura, no `AperturaTmuxFallida`.
+- **Un cliente nuevo recibe la lista que había al irse la última ventana** (hasta `vigilar_seg` sin comprobar, con avisos de atención caducados). El cliente y la CLI (`magi sesiones`) deben mirar `comprobada_en` y no tomar esa lista por la respuesta a su consulta: esperar una difusión posterior a su petición.
+- **Aviso retenido en el servidor (heredado de la Fase 15).** El servidor guarda el aviso de una pestaña aunque alguna ventana la esté mirando y solo lo limpia al recibir `Foco(true)`: otra ventana que no la mira sigue enseñando el `!`. El cliente ya descarta el de la pestaña que mira; la raíz está en el servidor.
+- **Plazo del vigilante.** Con una apertura interactiva esperando al usuario en el mismo host, `conexion_para_canal` espera el cerrojo hasta 30 s pero el vigilante corta a los 7 s: el host sale con `plazo` y no con `necesita_dialogo` (la ficha sale inalcanzable, nunca terminada). El plazo real por host puede llegar a ~12 s (el cierre del canal añade hasta 2 s).
+- **Carga de conexiones.** Cada pasada abre una conexión nueva por host si no hay una del pool (que la conserva 30 s): con 60 s de periodo y 20 hosts, ≈ 20 conexiones por minuto. Es lo previsto en el informe (pool o conexión efímera); conviene vigilarlo en la validación manual.
+- **Lectura de SQLite del vigilante.** Un error transitorio al leer un host concreto lo deja fuera de los vigilados durante una pasada (sus fichas pasan a «sin comprobar», no a «terminadas»). Y `almacen::sesiones_persistentes::listar` sigue avisando con `warn` en cada lectura de una fila ilegible, sin deduplicar (el vigilante ya no lo usa y avisa una vez por motivo).
+- **Pruebas.** Las de soltada y reconexión de `pestana.rs` dependen de un `sleep` de 300 ms y de sondeos de 100 ms del tmux falso (seis ejecuciones seguidas sin intermitencias, pero es una dependencia del reloj); la del plazo del host colgado tarda ~45 s a propósito; la de no-fuga usa un suscriptor global (`OnceLock`) porque con uno de ámbito de hilo los eventos del servidor no llegaban (causa sin aclarar). La carrera «comprobación en vuelo anterior a un renombrado» solo tiene prueba unitaria de la función pura.
+- **Revisión adversarial de cierre pendiente** (Sprint 3): estas revisiones por pista no la sustituyen.
+
 **Para el Sprint 3 (cliente, CLI y cierre)**
 
+- Del Sprint 2: el diálogo del host (`app.rs`) sigue leyendo y escribiendo `tmux_persistente` (debe pasar a `fijar_sesiones_persistentes`); el cliente debe mandar `compartir` en `Reconectar` para «`c` compartir» y enseñar `InfoSesion.tmux.soltada`; debe atender `AperturaTmuxFallida` con su instrucción y crear la ficha (origen `host`) del host marcado a partir de `InfoSesion.tmux.nombre`; y cambiar la ficha enseguida tras un `TmuxRenombrada` `Ok` y volver a consultar.
 - El diálogo y la CLI deben validar con `validar_datos` (que normaliza espacios) y usar el resultado normalizado; los validadores sueltos no recortan.
 - Cablear `sesion_persistente_borrada` y las demás anotaciones de REGISTRO (hoy solo existen las constantes y `registro::anotar` las admite).
 - Etiqueta legible en la vista CONFLICTOS para `sesion_persistente` (hoy sale en crudo) y qué hace `r` sobre un conflicto `nombre` de unión (da un error claro).
@@ -240,6 +332,14 @@ cargo test -p magi-nucleo --test sesiones_persistentes --test tmux_script --test
 cargo test -p magi-nucleo --lib terminal:: sesiones_persistentes::
 ```
 `tmux_real` usa el `tmux` del `PATH` (o el directorio de `MAGI_TMUX_DIR`, para repetirlo con otras versiones) y necesita el comando `script` de util-linux para darle un tty; se omite con un aviso si falta cualquiera de los dos. Con 3.2a, 3.4, 3.5 y 3.7c pasan las 12 pruebas.
+
+**Pruebas del Sprint 2**
+```
+TZ=UTC MAGI_SFTP_SERVER=/usr/lib/ssh/sftp-server cargo test --workspace --locked --no-fail-fast   # 2179 pasan, 0 fallan, 6 ignoradas
+TZ=UTC cargo test -p magi-ssh --test sesiones_persistentes_servidor --test terminal_servidor --test terminal_ui --test terminal_e2e
+cargo test -p magi-nucleo --test tmux_script --test tmux_real --test sesiones_persistentes
+```
+`tmux_real` con otras versiones: `MAGI_TMUX_DIR=<directorio con el tmux> cargo test -p magi-nucleo --test tmux_real` (pasa con 3.2a, 3.4, 3.5 y 3.7c). `sesiones_persistentes_servidor` tarda ~50 s por la prueba del host colgado.
 
 **Android (formato 4).** En `android/`, con `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` (NDK `30.0.16248370`) exportados: `./gradlew lint testDebugUnitTest` → `BUILD SUCCESSFUL`. Las pruebas instrumentadas (`connectedDebugAndroidTest`) no se pudieron ejecutar en local (ver §6); la lógica del lector con la misma fixture está cubierta en Rust (`la_fixture_android_del_formato_4_se_lee_en_modo_lector`).
 

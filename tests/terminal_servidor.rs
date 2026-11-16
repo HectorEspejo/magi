@@ -39,9 +39,9 @@ fn con_almacen(escenario: &Escenario, cambio: impl FnOnce(&rusqlite::Connection)
     almacen.cerrar().unwrap();
 }
 
-fn fijar_tmux(escenario: &Escenario, host_id: i64, valor: bool) {
+fn fijar_sesiones_persistentes(escenario: &Escenario, host_id: i64, valor: bool) {
     con_almacen(escenario, |conexion| {
-        magi::almacen::hosts::fijar_tmux_persistente(conexion, host_id, valor).unwrap();
+        magi::almacen::hosts::fijar_sesiones_persistentes(conexion, host_id, valor).unwrap();
     });
 }
 
@@ -441,22 +441,21 @@ async fn la_reconexion_automatica_reabre_la_pestana() {
 
 #[tokio::test]
 async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
-    // El fake de tmux guarda su estado en un fichero TSV: una sesión por
-    // línea (nombre, adheridos, ventanas, creada).
+    // El fake de tmux guarda su estado en ficheros TSV (uno por servidor): una
+    // sesión por línea (nombre, adheridos, ventanas, creada).
     let estado = tempfile::tempdir().unwrap();
     let fichero = estado.path().join("tmux_estado");
+    let propio = estado.path().join("tmux_estado.magi");
     let llamadas = estado.path().join("tmux_llamadas");
     let equipo = magi_nucleo::terminal::tmux::etiqueta_equipo(&magi::config::nombre_actual());
-    let esperada = format!("magi-{equipo}-2");
-    std::fs::write(
-        &fichero,
-        format!("magi-{equipo}-1\t0\t1\t2026-11-09 19:20:00\n"),
-    )
-    .unwrap();
+    let esperada = format!("{equipo}-2");
+    // En el tmux propio ya hay una sesión de este equipo y, en el habitual, una
+    // de la Fase 15 (no se migra, pero se ve y se termina).
+    std::fs::write(&propio, format!("{equipo}-1\t0\t1\t2026-11-09 19:20:00\n")).unwrap();
+    std::fs::write(&fichero, "magi-vieja-1\t0\t1\t2026-11-09 19:20:00\n").unwrap();
     let binarios = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fijos/terminal");
     let mut escenario = escenario(OpcionesEscenario {
         hosts: 1,
-        programa_shell: Some(vec!["sh".to_string()]),
         binarios: Some(binarios),
         entorno_extra: vec![
             (
@@ -472,18 +471,8 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
     })
     .await;
     let host_id = escenario.hosts[0];
-    fijar_tmux(&escenario, host_id, true);
+    fijar_sesiones_persistentes(&escenario, host_id, true);
     let sesion = escenario.abrir_sesion(escenario.hosts[0]).await;
-    assert!(
-        escenario
-            .hasta(Duration::from_secs(15), |escenario| escenario
-                .observado
-                .programa_salida()
-                .contains(&format!("MAGI_TMUX_SESION={esperada}")))
-            .await,
-        "no se enganchó la sesión de tmux nueva: {:?}",
-        escenario.observado.programa_salida()
-    );
     assert!(
         escenario
             .hasta(PLAZO, |escenario| escenario.sesiones.iter().any(
@@ -495,19 +484,28 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
         "InfoSesion.tmux no lleva el nombre: {:?}",
         escenario.sesiones
     );
-    let listado = std::fs::read_to_string(&fichero).unwrap();
+    let listado = std::fs::read_to_string(&propio).unwrap();
     assert!(
         listado.contains(&esperada),
         "tmux no creó la sesión: {listado}"
     );
+    // La pestaña se da por abierta al mandar el `exec` de enganche: el host lo
+    // procesa un instante después.
     assert!(
-        std::fs::read_to_string(&llamadas)
-            .unwrap_or_default()
-            .contains("new-session"),
-        "el script no pidió abrir la sesión al tmux falso"
+        escenario
+            .hasta(PLAZO, |_| std::fs::read_to_string(&llamadas)
+                .unwrap_or_default()
+                .contains("attach-session"))
+            .await,
+        "el script no se enganchó a la sesión"
+    );
+    let bitacora = std::fs::read_to_string(&llamadas).unwrap_or_default();
+    assert!(
+        bitacora.contains("new-session -d"),
+        "el script no pidió crear la sesión al tmux falso"
     );
 
-    // La vista Sesiones lista las sesiones del host.
+    // La vista Sesiones lista las sesiones de los dos servidores del host.
     let peticion = RANGO_TERMINAL + 100;
     escenario
         .enviar(&MensajeCliente::ListarTmux {
@@ -530,17 +528,22 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
         unreachable!()
     };
     assert!(sin_tmux.is_none());
-    assert!(sesiones
-        .iter()
-        .any(|sesion| sesion.nombre == format!("magi-{equipo}-1")));
+    assert!(sesiones.iter().any(|sesion| {
+        sesion.servidor == magi::protocolo::ServidorTmux::Magi
+            && sesion.nombre == format!("{equipo}-1")
+    }));
+    assert!(sesiones.iter().any(|sesion| {
+        sesion.servidor == magi::protocolo::ServidorTmux::Habitual
+            && sesion.nombre == "magi-vieja-1"
+    }));
 
-    // Terminar la sesión que ya existía, con su anotación.
+    // Terminar la que ya existía en el tmux propio, con su anotación.
     escenario
         .enviar(&MensajeCliente::TerminarTmux {
             peticion_id: peticion + 1,
             host_id,
-            servidor: magi::protocolo::ServidorTmux::Habitual,
-            nombre: format!("magi-{equipo}-1"),
+            servidor: magi::protocolo::ServidorTmux::Magi,
+            nombre: format!("{equipo}-1"),
         })
         .await;
     let mensaje = escenario
@@ -554,6 +557,7 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
     assert!(matches!(
         mensaje,
         MensajeServidor::TmuxTerminada {
+            servidor: magi::protocolo::ServidorTmux::Magi,
             resultado: ResultadoTmux::Ok,
             ..
         }
@@ -566,6 +570,11 @@ async fn tmux_persistente_abre_la_sesion_y_lista_y_termina() {
                 .any(|(tipo, _)| tipo == "tmux_terminada"))
             .await,
         "no se anotó tmux_terminada"
+    );
+    let listado = std::fs::read_to_string(&propio).unwrap();
+    assert!(
+        !listado.contains(&format!("{equipo}-1")) && listado.contains(&esperada),
+        "terminó la sesión equivocada: {listado}"
     );
 }
 

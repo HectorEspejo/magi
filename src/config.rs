@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -257,6 +258,12 @@ pub struct SeccionPersistentes {
     pub antigua_dias: u64,
     /// Líneas de la vista previa de una sesión (5-100).
     pub vista_previa_lineas: u64,
+    /// Solo pruebas: periodo del vigilante en milisegundos, por debajo del
+    /// mínimo de `vigilar_seg`. No se lee ni se escribe en `config.toml`; con 0
+    /// (lo normal) manda `vigilar_seg`.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub vigilar_ms_pruebas: u64,
 }
 
 impl Default for SeccionPersistentes {
@@ -266,6 +273,7 @@ impl Default for SeccionPersistentes {
             refresco_seg: 30,
             antigua_dias: 7,
             vista_previa_lineas: 20,
+            vigilar_ms_pruebas: 0,
         }
     }
 }
@@ -295,6 +303,17 @@ impl SeccionPersistentes {
     #[must_use]
     pub fn vigilar_seg_efectivo(&self) -> u64 {
         self.vigilar_seg.clamp(30, 600)
+    }
+
+    /// Lo que espera el vigilante entre comprobaciones: `vigilar_seg` acotado
+    /// o, solo en las pruebas, `vigilar_ms_pruebas`.
+    #[must_use]
+    pub fn periodo_vigilante(&self) -> Duration {
+        if self.vigilar_ms_pruebas > 0 {
+            Duration::from_millis(self.vigilar_ms_pruebas)
+        } else {
+            Duration::from_secs(self.vigilar_seg_efectivo())
+        }
     }
 
     /// Segundos de refresco de la lista, acotados a su rango.

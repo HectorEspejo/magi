@@ -330,3 +330,188 @@ fn nombre_en_uso_o(error: rusqlite::Error, nombre: &str) -> Error {
         Error::new(error)
     }
 }
+
+// ------------------------------------------------------- lectura del vigilante
+
+/// Lo que lee el vigilante del servidor en cada pasada (Fase 16, §4.5): las
+/// fichas, los hosts que hay que comprobar y los que hacen falta para los
+/// saltos «a través de».
+///
+/// La lectura valida cada fila antes de entregarla (la pudo escribir otro
+/// proceso o llegar por la sincronización) y nunca falla por una sola fila
+/// ilegible: la salta y deja su motivo en `ilegibles`, sin escribir nada en el
+/// log (el vigilante lee cada minuto y avisa una sola vez por motivo). Los
+/// motivos nunca llevan comandos, notas ni carpetas.
+#[derive(Debug, Default)]
+pub struct LecturaVigilante {
+    /// Fichas legibles, en el orden de la lista (host y nombre).
+    pub fichas: Vec<Ficha>,
+    /// Hosts `ssh` legibles con alguna ficha o con la marca
+    /// `sesiones_persistentes`: los que se comprueban, por id.
+    pub vigilados: Vec<i64>,
+    /// Todos los hosts legibles, por id (la cadena de saltos los necesita).
+    pub hosts: std::collections::HashMap<i64, crate::modelo::Host>,
+    /// Por qué se saltó cada fila ilegible.
+    pub ilegibles: Vec<String>,
+}
+
+/// Lee las fichas de una consulta sin avisar en el log: devuelve las legibles
+/// y el motivo de cada fila saltada. Un error real de SQLite sí se propaga.
+fn consultar_con_motivos(conexion: &Connection) -> Result<(Vec<Ficha>, Vec<String>)> {
+    let mut sentencia = conexion.prepare(&format!("{SELECCION} ORDER BY h.nombre, s.nombre"))?;
+    let filas = sentencia.query_map([], mapear)?;
+    let mut fichas = Vec::new();
+    let mut motivos = Vec::new();
+    for fila in filas {
+        match fila {
+            Ok(Ok(ficha)) => fichas.push(ficha),
+            Ok(Err(motivo)) => motivos.push(motivo),
+            Err(
+                error @ (rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::InvalidColumnType(..)),
+            ) => motivos.push(format!("una ficha no se puede leer: {error}")),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok((fichas, motivos))
+}
+
+/// Lee lo que necesita una pasada del vigilante: fichas válidas, hosts `ssh`
+/// a comprobar y el inventario legible. El servidor solo lee: esta función no
+/// escribe nada.
+pub fn leer_para_vigilante(conexion: &Connection) -> Result<LecturaVigilante> {
+    let (fichas, mut ilegibles) = consultar_con_motivos(conexion)?;
+
+    // Cada host por separado: uno ilegible (un tipo que este binario no
+    // entiende, unas opciones corruptas) no deja sin comprobar a los demás.
+    let ids: Vec<i64> = {
+        let mut sentencia = conexion.prepare("SELECT id FROM HOSTS ORDER BY id")?;
+        let filas = sentencia.query_map([], |fila| fila.get::<_, i64>(0))?;
+        filas.collect::<rusqlite::Result<Vec<i64>>>()?
+    };
+    let mut hosts = std::collections::HashMap::new();
+    for id in ids {
+        match crate::almacen::hosts::obtener(conexion, id) {
+            Ok(host) => {
+                hosts.insert(id, host);
+            }
+            Err(error) => ilegibles.push(format!("el host {id} no se puede leer: {error}")),
+        }
+    }
+
+    let mut vigilados: Vec<i64> = hosts
+        .values()
+        .filter(|host| host.tipo == TipoHost::Ssh)
+        .filter(|host| {
+            host.sesiones_persistentes || fichas.iter().any(|ficha| ficha.host_id == host.id)
+        })
+        .map(|host| host.id)
+        .collect();
+    vigilados.sort_unstable();
+
+    // Una ficha cuyo host no se pudo leer no se comprueba: se queda en la
+    // lista, «sin comprobar».
+    Ok(LecturaVigilante {
+        fichas,
+        vigilados,
+        hosts,
+        ilegibles,
+    })
+}
+
+#[cfg(test)]
+mod pruebas_vigilante {
+    use super::*;
+    use crate::almacen::Almacen;
+    use crate::modelo::{DatosHost, Origen};
+
+    fn host(almacen: &Almacen, nombre: &str, tipo: TipoHost) -> i64 {
+        almacen
+            .crear_host(
+                &DatosHost {
+                    nombre: nombre.to_string(),
+                    direccion: "192.0.2.10".to_string(),
+                    tipo,
+                    usuario: Some("usuario".to_string()),
+                    ..DatosHost::default()
+                },
+                Origen::Manual,
+            )
+            .expect("host")
+    }
+
+    fn datos(nombre: &str) -> DatosFicha {
+        DatosFicha {
+            nombre: nombre.to_string(),
+            carpeta: None,
+            comando: Some("claude".to_string()),
+            comando_reanudar: None,
+            nota: None,
+            origen: OrigenFicha::Manual,
+            creada_por: "portatil".to_string(),
+        }
+    }
+
+    #[test]
+    fn el_vigilante_solo_vigila_los_hosts_ssh_con_fichas_o_marcados() {
+        let almacen = Almacen::abrir_en_memoria().unwrap();
+        let con_ficha = host(&almacen, "con-ficha", TipoHost::Ssh);
+        let marcado = host(&almacen, "marcado", TipoHost::Ssh);
+        let otro = host(&almacen, "otro", TipoHost::Ssh);
+        let escritorio = host(&almacen, "escritorio", TipoHost::Rdp);
+        crear(almacen.conexion(), con_ficha, &datos("api")).unwrap();
+        crate::almacen::hosts::fijar_sesiones_persistentes(almacen.conexion(), marcado, true)
+            .unwrap();
+
+        let lectura = leer_para_vigilante(almacen.conexion()).unwrap();
+        assert_eq!(lectura.vigilados, vec![con_ficha, marcado]);
+        assert!(!lectura.vigilados.contains(&otro));
+        assert!(!lectura.vigilados.contains(&escritorio));
+        assert_eq!(lectura.fichas.len(), 1);
+        // El inventario entero está para resolver los saltos.
+        assert_eq!(lectura.hosts.len(), 4);
+        assert!(lectura.ilegibles.is_empty());
+    }
+
+    #[test]
+    fn una_fila_ilegible_se_salta_con_su_motivo_y_sin_llevar_comandos() {
+        let almacen = Almacen::abrir_en_memoria().unwrap();
+        let sano = host(&almacen, "sano", TipoHost::Ssh);
+        let roto = host(&almacen, "roto", TipoHost::Ssh);
+        crear(almacen.conexion(), sano, &datos("api")).unwrap();
+        let ficha_rota = crear(almacen.conexion(), roto, &datos("web")).unwrap();
+        // Una ficha con un origen que este binario no conoce y un host de un
+        // tipo desconocido: las filas las pudo escribir otro proceso.
+        almacen
+            .conexion()
+            .execute(
+                "UPDATE SESIONES_PERSISTENTES SET origen = 'raro' WHERE id = ?1",
+                [ficha_rota],
+            )
+            .unwrap();
+        let tipo_raro = host(&almacen, "tipo-raro", TipoHost::Ssh);
+        almacen
+            .conexion()
+            .execute("UPDATE HOSTS SET tipo = 'raro' WHERE id = ?1", [tipo_raro])
+            .unwrap();
+
+        let lectura = leer_para_vigilante(almacen.conexion()).unwrap();
+        assert_eq!(lectura.fichas.len(), 1, "solo la ficha sana");
+        assert_eq!(lectura.fichas[0].nombre, "api");
+        // El host sano se vigila; el de la ficha ilegible (sin marca ni otra
+        // ficha) y el de tipo raro, no.
+        assert!(!lectura.vigilados.contains(&roto));
+        assert!(lectura.vigilados.contains(&sano));
+        assert!(!lectura.vigilados.contains(&tipo_raro));
+        assert!(!lectura.hosts.contains_key(&tipo_raro));
+        assert_eq!(lectura.ilegibles.len(), 2, "{:?}", lectura.ilegibles);
+        assert!(
+            lectura
+                .ilegibles
+                .iter()
+                .all(|motivo| !motivo.contains("claude")),
+            "un motivo lleva el comando: {:?}",
+            lectura.ilegibles
+        );
+    }
+}

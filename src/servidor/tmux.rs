@@ -1,11 +1,15 @@
-//! tmux del servidor (Fase 15): comprobar, listar y terminar sesiones del
-//! host por un canal `exec` del pool, y armar la orden con la que se abre una
-//! sesión nueva en el PTY de la pestaña.
+//! tmux del servidor (Fase 15, reescrito en la Fase 16): ejecutar el script
+//! `terminal_tmux.sh` por un canal `exec` de la conexión (comprobar, crear,
+//! estado, historial, terminar…), la lista de sesiones del host y terminar una.
+//! La pestaña se engancha en `sesiones.rs`, con el canal con PTY.
 //!
-//! Todo pasa por el script embebido `terminal_tmux.sh` del núcleo: el nombre
-//! se valida en Rust y en el script y va siempre como argumento, nunca
-//! interpolado en una orden de tmux. Lo que devuelve `listar` es entrada no
-//! fiable y lo lee `magi_nucleo::terminal::tmux`.
+//! Todo pasa por el script embebido del núcleo: el nombre, la carpeta y el
+//! comando se validan en Rust y en el script y van siempre como argumentos,
+//! nunca interpolados en una orden de tmux. Lo que devuelve el script es
+//! entrada no fiable y lo lee `magi_nucleo::sesiones_persistentes::lectura`.
+//!
+//! Ni la salida del script, ni los títulos, ni los comandos van al log o a
+//! REGISTRO: solo los nombres de las sesiones y los códigos de salida.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,42 +18,50 @@ use std::time::Duration;
 use russh::client::Handle;
 use tracing::warn;
 
-use magi_nucleo::terminal::tmux::{self, Listado, ResultadoTerminar, Suborden};
+use magi_nucleo::sesiones_persistentes::lectura::{
+    self, LecturaComprobar, LecturaCrear, LecturaEstado, ResultadoCrear,
+};
+use magi_nucleo::terminal::tmux::{self, OrdenTmux, ResultadoTerminar};
 
 use crate::conexion::cliente::Cliente;
 use crate::modelo::Host;
-use crate::protocolo::{MensajeServidor, ResultadoTmux, ServidorTmux, SesionVista};
+use crate::protocolo::{MensajeServidor, ResultadoTmux, ServidorTmux};
 
 use super::conexiones::{self, PoliticaConexion, UsoCanal};
 use super::EstadoServidor;
 
-/// Plazo de las operaciones de tmux que hablan con el host (`5.2: 10 s).
-pub const PLAZO: Duration = Duration::from_secs(10);
+/// Plazo para abrir el canal `exec` (el de la orden lo da `OrdenTmux::plazo`).
+const PLAZO_CANAL: Duration = Duration::from_secs(10);
 
-/// Tope de lo que se guarda de la salida del script (entrada no fiable).
+/// Plazo para cerrar el canal `exec` (si el host no contesta, no se espera).
+const PLAZO_CIERRE_CANAL: Duration = Duration::from_secs(2);
+
+/// Tope de lo que se guarda de la salida de un script (entrada no fiable).
 const TOPE_SALIDA: usize = 4 * 1024 * 1024;
 
-/// La orden que se escribe en el PTY de una pestaña para abrir o enganchar su
-/// sesión de tmux: `exec sh -c <script> magi-tmux abrir <nombre>`. Devuelve
-/// `None` si el nombre no es válido (nunca se interpola).
-#[must_use]
-pub fn orden_abrir(nombre: &str) -> Option<String> {
-    let argumentos = tmux::orden(Suborden::Abrir, Some(nombre))?;
-    let linea = argumentos
-        .iter()
-        .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
-    Some(format!("exec {linea}\n"))
+/// Tope de lo que se guarda de la salida de `historial`: el que acepta el
+/// núcleo. Se conserva el final (lo más reciente); el núcleo lo alinea después
+/// a una línea entera.
+const TOPE_SALIDA_HISTORIAL: usize = lectura::MAXIMO_HISTORIAL;
+
+/// Lo que el servidor guarda de la salida de un script y cómo la recorta si se
+/// pasa del tope.
+#[derive(Clone, Copy)]
+enum Recorte {
+    /// Se queda el principio (lo normal: las salidas son cabeceras y listas).
+    Cabeza(usize),
+    /// Se queda el final (el historial: lo más reciente).
+    Cola(usize),
 }
 
 /// Ejecuta el script por un canal `exec` de la conexión y devuelve su salida
 /// (stdout y stderr juntos) y el código. El canal se cierra siempre.
-pub async fn ejecutar_en_handle(
+async fn ejecutar_en_handle(
     handle: &Arc<Handle<Cliente>>,
     argumentos: &[String],
     plazo: Duration,
-) -> Result<(String, i32), String> {
+    recorte: Recorte,
+) -> Result<(Vec<u8>, i32), String> {
     let limite = tokio::time::Instant::now() + plazo;
     let comando = argumentos
         .iter()
@@ -58,8 +70,11 @@ pub async fn ejecutar_en_handle(
         .join(" ");
     let apertura = handle.clone();
     let mut canal =
-        conexiones::abrir_con_plazo(PLAZO, async move { apertura.channel_open_session().await })
-            .await?;
+        conexiones::abrir_con_plazo(
+            PLAZO_CANAL,
+            async move { apertura.channel_open_session().await },
+        )
+        .await?;
     let mut salida = Vec::new();
     let mut codigo = None;
     let trabajo = async {
@@ -71,13 +86,30 @@ pub async fn ejecutar_en_handle(
         loop {
             match canal.wait().await {
                 Some(russh::ChannelMsg::Data { data })
-                | Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
-                    if salida.len() < TOPE_SALIDA {
-                        salida.extend_from_slice(&data);
+                | Some(russh::ChannelMsg::ExtendedData { data, .. }) => match recorte {
+                    Recorte::Cabeza(tope) => {
+                        if salida.len() < tope {
+                            let sitio = tope - salida.len();
+                            salida.extend_from_slice(&data[..data.len().min(sitio)]);
+                        }
                     }
-                }
+                    Recorte::Cola(tope) => {
+                        salida.extend_from_slice(&data);
+                        // Se recorta con holgura (el doble) para no mover los
+                        // bytes a cada bloque.
+                        if salida.len() > tope * 2 {
+                            salida.drain(..salida.len() - tope);
+                        }
+                    }
+                },
                 Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
                     codigo = Some(exit_status as i32);
+                }
+                // El host rechazó el `exec` (un comando demasiado largo para su
+                // servidor, una shell restringida…): sin esto la salida vacía
+                // se leería como «el host no tiene tmux».
+                Some(russh::ChannelMsg::Failure) => {
+                    return Err("el host no admitió ejecutar el comando de tmux".to_string());
                 }
                 Some(russh::ChannelMsg::Close) | None => break,
                 _ => {}
@@ -86,60 +118,160 @@ pub async fn ejecutar_en_handle(
         Ok::<(), String>(())
     };
     let resultado = tokio::time::timeout_at(limite, trabajo).await;
-    let _ = canal.close().await;
+    // El canal se cierra pase lo que pase (en una conexión compartida, uno
+    // abierto de más agotaría `MaxSessions`), pero sin esperar sin plazo.
+    let _ = tokio::time::timeout(PLAZO_CIERRE_CANAL, canal.close()).await;
     match resultado {
         Err(_) => Err("se agotó el plazo de tmux".to_string()),
         Ok(Err(motivo)) => Err(motivo),
-        Ok(Ok(())) => Ok((
-            String::from_utf8_lossy(&salida).to_string(),
-            codigo.unwrap_or(-1),
-        )),
-    }
-}
-
-/// Lee la salida de `comprobar`: la versión de tmux (si la hay) y si la
-/// sesión existe.
-#[must_use]
-pub fn leer_comprobar(salida: &str) -> (Option<String>, bool) {
-    let mut version = None;
-    let mut existe = false;
-    for linea in salida.lines() {
-        let linea = linea.trim_end_matches('\r');
-        if let Some(valor) = linea.strip_prefix("MAGI_TMUX=") {
-            let valor = valor.trim();
-            if !valor.is_empty() && valor != "no" {
-                version = Some(valor.chars().take(64).collect::<String>());
+        Ok(Ok(())) => {
+            if let Recorte::Cola(tope) = recorte {
+                if salida.len() > tope {
+                    salida.drain(..salida.len() - tope);
+                }
             }
-        } else if let Some(valor) = linea.strip_prefix("MAGI_SESION=") {
-            existe = valor.trim() == "existe";
+            Ok((salida, codigo.unwrap_or(-1)))
         }
     }
-    (version, existe)
 }
 
-/// `comprobar <nombre>`: hay tmux y la sesión existe.
+/// Ejecuta una orden del script por un canal `exec` con el plazo de T32.
+/// `Err` si la orden no es válida, no se puede ejecutar por `exec` (la de
+/// `enganchar` va en el PTY) o el host no contesta a tiempo.
+pub async fn ejecutar_orden(
+    handle: &Arc<Handle<Cliente>>,
+    orden: &OrdenTmux<'_>,
+) -> Result<(Vec<u8>, i32), String> {
+    let argumentos = orden
+        .argumentos()
+        .ok_or_else(|| "orden de tmux no válida".to_string())?;
+    let plazo = orden
+        .plazo()
+        .ok_or_else(|| "esa orden de tmux no se ejecuta por exec".to_string())?;
+    let recorte = match orden {
+        OrdenTmux::Historial { .. } => Recorte::Cola(TOPE_SALIDA_HISTORIAL),
+        _ => Recorte::Cabeza(TOPE_SALIDA),
+    };
+    ejecutar_en_handle(handle, &argumentos, plazo, recorte).await
+}
+
+// ----------------------------------------------------------- las órdenes
+
+/// `comprobar <servidor> <nombre>`: versión de tmux y si la sesión existe.
 pub async fn comprobar(
     handle: &Arc<Handle<Cliente>>,
+    servidor: ServidorTmux,
     nombre: &str,
-) -> Result<(Option<String>, bool), String> {
-    let Some(argumentos) = tmux::orden(Suborden::Comprobar, Some(nombre)) else {
-        return Err("nombre de tmux no válido".to_string());
-    };
-    let (salida, _codigo) = ejecutar_en_handle(handle, &argumentos, PLAZO).await?;
-    Ok(leer_comprobar(&salida))
+) -> Result<LecturaComprobar, String> {
+    let (salida, codigo) =
+        ejecutar_orden(handle, &OrdenTmux::Comprobar { servidor, nombre }).await?;
+    // `comprobar` sale con 0 cuando ha dicho todo lo que sabe: con otro código
+    // (o sin decir cómo salió) la salida puede ser una cabecera sin lo demás, y
+    // leerla daría «no hay tmux» o «la sesión no existe» sin saberlo.
+    if codigo != 0 {
+        return Err(format!(
+            "el host no devolvió la comprobación de tmux completa (código {codigo})"
+        ));
+    }
+    Ok(lectura::leer_comprobar(&String::from_utf8_lossy(&salida)))
 }
 
-/// `listar`: las sesiones de tmux del host, ya validadas.
-pub async fn listar(handle: &Arc<Handle<Cliente>>) -> Result<Listado, String> {
-    let Some(argumentos) = tmux::orden(Suborden::Listar, None) else {
-        return Err("orden de tmux no válida".to_string());
-    };
-    let (salida, _codigo) = ejecutar_en_handle(handle, &argumentos, PLAZO).await?;
-    Ok(tmux::leer_listado(&salida))
+/// `estado`: las sesiones de los dos servidores. `Err` si el host no contesta,
+/// si el script no terminó bien o si lo que devuelve no es su salida.
+///
+/// `estado` sale con 0 cuando ha dicho todo lo que sabe. Con otro código (le
+/// falta `awk` al host, se cortó a mitad) o sin decir cómo salió, lo escrito
+/// puede ser la versión de tmux y ninguna sesión: la reconexión cerraría una
+/// pestaña cuya sesión sigue viva. Sin una salida completa no se sabe cómo
+/// están (como en el vigilante).
+pub async fn estado(handle: &Arc<Handle<Cliente>>) -> Result<LecturaEstado, String> {
+    let (salida, codigo) = ejecutar_orden(handle, &OrdenTmux::Estado).await?;
+    if codigo != 0 {
+        return Err(format!(
+            "el host no devolvió el estado de tmux completo (código {codigo})"
+        ));
+    }
+    lectura::leer_estado_bytes(&salida)
+        .ok_or_else(|| "el host no devolvió el estado de tmux".to_string())
 }
 
-/// El nombre de este equipo para los nombres de tmux: el de la sincronización
-/// (fila `es_este = 1` de EQUIPOS) o, sin sincronización, el del sistema.
+/// Lo que dice `crear`, más lo que tmux o el shell escribieron además de las
+/// marcas del script (un posible motivo del error, ya saneado).
+pub struct CreadaEnElHost {
+    pub lectura: LecturaCrear,
+    pub detalle: Option<String>,
+}
+
+/// `crear`: la sesión en el tmux propio, sin engancharse.
+pub async fn crear(
+    handle: &Arc<Handle<Cliente>>,
+    orden: &OrdenTmux<'_>,
+) -> Result<CreadaEnElHost, String> {
+    let (salida, codigo) = ejecutar_orden(handle, orden).await?;
+    let texto = String::from_utf8_lossy(&salida);
+    let lectura = lectura::leer_crear(&texto, Some(codigo));
+    let detalle = if lectura.resultado == ResultadoCrear::Error {
+        detalle_de_error(&texto)
+    } else {
+        None
+    };
+    Ok(CreadaEnElHost { lectura, detalle })
+}
+
+/// La primera línea de la salida que no es una marca del script (lo que tmux
+/// escribió por su error), sin caracteres de control y de hasta 200
+/// caracteres. Va al mensaje de error que ve el usuario, nunca al log.
+fn detalle_de_error(salida: &str) -> Option<String> {
+    salida
+        .lines()
+        .map(str::trim)
+        .find(|linea| !linea.is_empty() && !linea.starts_with("MAGI_"))
+        .map(|linea| {
+            linea
+                .chars()
+                .filter(|caracter| !caracter.is_control())
+                .take(200)
+                .collect::<String>()
+        })
+        .filter(|linea| !linea.is_empty())
+}
+
+/// `historial`: el historial con colores, ya acotado a 8 MiB.
+pub async fn historial(
+    handle: &Arc<Handle<Cliente>>,
+    servidor: ServidorTmux,
+    nombre: &str,
+    lineas: u32,
+) -> Result<String, String> {
+    let (salida, codigo) = ejecutar_orden(
+        handle,
+        &OrdenTmux::Historial {
+            servidor,
+            nombre,
+            lineas,
+        },
+    )
+    .await?;
+    match codigo {
+        0 => {
+            let texto = String::from_utf8_lossy(&salida);
+            Ok(lectura::acotar_historial(&texto).to_string())
+        }
+        tmux::SALIDA_NO_EXISTE => Err(format!("la sesión «{nombre}» ya no existe")),
+        tmux::SALIDA_SIN_TMUX => Err("el host ya no tiene tmux".to_string()),
+        tmux::SALIDA_ANTIGUO => Err("tmux demasiado antiguo (3.0 o posterior)".to_string()),
+        otro => Err(format!("tmux no pudo leer el historial (código {otro})")),
+    }
+}
+
+/// La etiqueta de este equipo para `@magi_equipo` (la misma que ponen los
+/// nombres automáticos).
+pub async fn etiqueta_del_equipo(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) -> String {
+    tmux::etiqueta_equipo(&nombre_equipo(estado).await)
+}
+
+/// El nombre de este equipo: el de la sincronización (fila `es_este = 1` de
+/// EQUIPOS) o, sin sincronización, el del sistema.
 pub async fn nombre_equipo(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) -> String {
     let lectura = estado.lock().await.lectura.clone();
     lectura
@@ -159,8 +291,9 @@ pub async fn nombre_equipo(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) -> 
 
 // ---------------------------------------------------------------- mensajes
 
-/// `ListarTmux`: lista las sesiones del host por el pool (abriendo la
-/// conexión con los diálogos de siempre si no hay ninguna viva).
+/// `ListarTmux`: las sesiones de los dos servidores del host, leídas con
+/// `estado` por el pool (abriendo la conexión con los diálogos de siempre si
+/// no hay ninguna viva: lo pidió el usuario).
 pub async fn manejar_listar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
@@ -191,29 +324,11 @@ pub async fn manejar_listar(
             return;
         }
     };
-    let resultado = listar(&tomada.handle).await;
+    let resultado = self::estado(&tomada.handle).await;
     tomada.soltar().await;
     match resultado {
-        Ok(listado) => {
-            // CONTRATO-S2-A: la lista de la Fase 15 (solo el tmux habitual, sin
-            // equipo, actividad ni título); la pista A la sustituye por la
-            // salida de `estado` con los dos servidores.
-            let sesiones: Vec<SesionVista> = listado
-                .sesiones
-                .into_iter()
-                .map(|sesion| SesionVista {
-                    servidor: ServidorTmux::Habitual,
-                    nombre: sesion.nombre,
-                    clientes: u32::from(sesion.enganchada),
-                    equipo: None,
-                    actividad: 0,
-                    creada: 0,
-                    campana: false,
-                    ventanas: u32::from(sesion.ventanas),
-                    titulo: None,
-                })
-                .collect();
-            let sin_tmux = listado
+        Ok(lectura) => {
+            let sin_tmux = lectura
                 .tmux
                 .is_none()
                 .then(|| format!("sin tmux en «{}»", host.nombre));
@@ -223,7 +338,7 @@ pub async fn manejar_listar(
                 MensajeServidor::SesionesTmux {
                     peticion_id,
                     host_id,
-                    sesiones,
+                    sesiones: lectura.sesiones,
                     sin_tmux,
                 },
             )
@@ -233,12 +348,16 @@ pub async fn manejar_listar(
     }
 }
 
-/// `TerminarTmux`: termina una sesión del host (el cliente ya confirmó).
+/// `TerminarTmux`: termina una sesión del host (el cliente ya confirmó). El
+/// script siempre apunta a `=<nombre>`: terminar «magi-a-1» con «magi-a-10»
+/// viva da `NoExiste` y no toca la otra. El efecto se anota cuando se ha
+/// producido y la respuesta sale después de que el escritor lo confirme.
 pub async fn manejar_terminar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
     peticion_id: u64,
     host_id: i64,
+    servidor: ServidorTmux,
     nombre: &str,
 ) {
     if !tmux::nombre_valido(nombre) {
@@ -275,12 +394,9 @@ pub async fn manejar_terminar(
             return;
         }
     };
-    let resultado = match tmux::orden(Suborden::Terminar, Some(nombre)) {
-        Some(argumentos) => ejecutar_en_handle(&tomada.handle, &argumentos, PLAZO)
-            .await
-            .map(|(salida, _)| tmux::leer_terminar(&salida)),
-        None => Err("nombre de tmux no válido".to_string()),
-    };
+    let resultado = ejecutar_orden(&tomada.handle, &OrdenTmux::Terminar { servidor, nombre })
+        .await
+        .map(|(salida, _)| lectura::leer_terminar(&String::from_utf8_lossy(&salida)));
     tomada.soltar().await;
     match resultado {
         Ok(ResultadoTerminar::Ok) => {
@@ -292,12 +408,14 @@ pub async fn manejar_terminar(
                 detalle: format!("«{}» · {nombre}", host.nombre),
                 resultado: crate::modelo::ResultadoRegistro::Ok,
             });
+            // La respuesta sale con la fila ya escrita (T21).
+            super::confirmar_escritura(estado).await;
             responder(
                 estado,
                 cliente_id,
                 MensajeServidor::TmuxTerminada {
                     peticion_id,
-                    servidor: ServidorTmux::Habitual,
+                    servidor,
                     resultado: ResultadoTmux::Ok,
                 },
             )
@@ -309,7 +427,7 @@ pub async fn manejar_terminar(
                 cliente_id,
                 MensajeServidor::TmuxTerminada {
                     peticion_id,
-                    servidor: ServidorTmux::Habitual,
+                    servidor,
                     resultado: ResultadoTmux::NoExiste,
                 },
             )
@@ -381,4 +499,22 @@ async fn responder_error(
         },
     )
     .await;
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn el_detalle_del_error_salta_las_marcas_y_limpia_los_controles() {
+        let salida = "MAGI_TMUX=tmux 3.4\n\ncreate session failed: x\u{7}y\nMAGI_RESULTADO=error\n";
+        assert_eq!(
+            detalle_de_error(salida).as_deref(),
+            Some("create session failed: xy")
+        );
+        assert_eq!(detalle_de_error("MAGI_RESULTADO=error\n"), None);
+        assert_eq!(detalle_de_error(""), None);
+        let larga = format!("{}\n", "a".repeat(500));
+        assert_eq!(detalle_de_error(&larga).unwrap().chars().count(), 200);
+    }
 }
