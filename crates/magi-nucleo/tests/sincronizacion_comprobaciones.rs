@@ -527,20 +527,22 @@ fn una_comprobacion_de_un_host_que_no_es_ssh_es_huerfana() {
 }
 
 #[test]
-fn el_lector_acepta_los_formatos_1_2_y_3_y_rechaza_el_4_como_formato_nuevo() {
-    for numero in [1u32, 2, 3] {
+fn el_lector_acepta_los_formatos_1_2_3_y_4_y_rechaza_el_5_como_formato_nuevo() {
+    // Desde la Fase 16 el máximo conocido es el 4: sus ficheros se leen.
+    assert_eq!(formato::FORMATO_MAXIMO, 4);
+    for numero in [1u32, 2, 3, 4] {
         let documento = documento_con(numero, Vec::new(), Vec::new());
         let json = formato::serializar(&documento).expect("serializando");
         let leido = formato::parsear(&json).expect("se acepta el formato");
         assert_eq!(leido.formato, numero);
     }
-    let mut documento = documento_con(3, Vec::new(), Vec::new());
+    let mut documento = documento_con(4, Vec::new(), Vec::new());
     documento.formato = formato::FORMATO_MAXIMO + 1;
     let json = formato::serializar(&documento).expect("serializando");
     let error = formato::parsear(&json)
         .expect_err("un formato más nuevo no se lee")
         .to_string();
-    assert!(error.contains("formato 4"), "{error}");
+    assert!(error.contains("formato 5"), "{error}");
     assert!(error.contains("actualiza MAGI"), "{error}");
 }
 

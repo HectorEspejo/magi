@@ -20,12 +20,17 @@
 //! - **Formato 3** (Fase 13): aparece el elemento `comprobacion_servicio`
 //!   (comprobaciones propias de servicio o proyecto). MAGI 1.2 lo rechaza como
 //!   `formato_nuevo` en vez de perderlas sin saberlo (D249).
+//! - **Formato 4** (Fase 16): aparece el elemento `sesion_persistente` (fichas
+//!   de sesiones persistentes) y el host gana el campo `sesiones_persistentes`.
+//!   MAGI 1.4 lo rechaza como `formato_nuevo` en vez de perderlos sin saberlo
+//!   (D328).
 //!
 //! El formato que se escribe lo decide el inventario al exportar (ver
-//! `elementos::formato_a_escribir`): 3 si hay alguna comprobación propia, si
-//! no 2 si hay algún host que no es SSH y si no 1, para que MAGI 1.1 y 1.2
-//! sigan leyendo los inventarios que no necesitan lo nuevo (D220). Al leer se
-//! aceptan los tres.
+//! `elementos::formato_a_escribir`): 4 si hay alguna ficha de sesión
+//! persistente o algún host marcado, si no 3 si hay alguna comprobación propia,
+//! si no 2 si hay algún host que no es SSH y si no 1, para que las versiones
+//! anteriores sigan leyendo los inventarios que no necesitan lo nuevo (D220).
+//! Al leer se aceptan los cuatro.
 //!
 //! La firma es HMAC-SHA256 del JSON (los bytes que empiezan en la llave de
 //! apertura y acaban en la de cierre, sin el salto de línea final) con una

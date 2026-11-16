@@ -553,12 +553,66 @@ fn migracion_7(
     Ok(())
 }
 
+/// Lo que hicieron las migraciones al abrir la base de datos, para avisar al
+/// usuario una sola vez.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultadoMigracion {
+    /// Hosts cuya marca `tmux_persistente` (Fase 15) pasó a
+    /// `sesiones_persistentes` (Fase 16). Solo es distinto de cero en la
+    /// apertura que aplica la migración 11: las siguientes la encuentran ya
+    /// aplicada y no cambian nada.
+    pub hosts_con_marca_migrada: usize,
+}
+
+/// Paso en Rust de la migración 11 (D327): cada host `ssh` con
+/// `tmux_persistente = 1` pasa a `sesiones_persistentes = 1` por el camino
+/// que sube la versión del host (así la marca viaja a los demás equipos; un
+/// `UPDATE` en el SQL de la migración no la subiría: el fallo de R84) y
+/// `tmux_persistente` vuelve a 0, que ya nadie escribe. Se ejecuta dentro de
+/// la transacción que sube `user_version` a 11, así que o se aplica todo o
+/// nada, y no se repite. Devuelve cuántos hosts migró.
+///
+/// Un host que no es `ssh` no puede tener sesiones persistentes: solo se le
+/// apaga la marca antigua y no cuenta.
+fn migracion_11_marca(conexion: &Connection) -> Result<usize> {
+    let marcados: Vec<(i64, String)> = {
+        let mut sentencia = conexion
+            .prepare("SELECT id, tipo FROM HOSTS WHERE tmux_persistente <> 0 ORDER BY id")?;
+        let filas = sentencia.query_map([], |fila| Ok((fila.get(0)?, fila.get(1)?)))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut migrados = 0;
+    for (id, tipo) in marcados {
+        if tipo == "ssh" {
+            conexion.execute(
+                "UPDATE HOSTS SET sesiones_persistentes = 1, tmux_persistente = 0 WHERE id = ?1",
+                params![id],
+            )?;
+            // La columna acaba de nacer con 0, así que lo que viaja del host
+            // cambia siempre: se sube la versión sin comparar antes y después.
+            // Comparar con `datos_de` leería y validaría el resto de la fila
+            // (puerto, keepalive, opciones del escritorio…) y una fila
+            // corrupta haría fallar la migración entera, dejando la base sin
+            // poder abrirse en cada arranque.
+            versiones::subir(conexion, versiones::Tabla::Hosts, id)?;
+            migrados += 1;
+        } else {
+            conexion.execute(
+                "UPDATE HOSTS SET tmux_persistente = 0 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+    }
+    Ok(migrados)
+}
+
 pub fn aplicar(
     conexion: &mut Connection,
     equipo: &crate::rutas::Equipo,
     app_version: &str,
-) -> Result<()> {
+) -> Result<ResultadoMigracion> {
     comprobar_version(conexion)?;
+    let mut resultado = ResultadoMigracion::default();
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
     for (indice, sql) in MIGRACIONES.iter().enumerate() {
         let numero = indice as i64 + 1;
@@ -597,8 +651,9 @@ pub fn aplicar(
     if version < 11 {
         let transaccion = conexion.transaction()?;
         transaccion.execute_batch(MIGRACION_11_SESIONES)?;
+        resultado.hosts_con_marca_migrada = migracion_11_marca(&transaccion)?;
         transaccion.pragma_update(None, "user_version", 11)?;
         transaccion.commit()?;
     }
-    Ok(())
+    Ok(resultado)
 }

@@ -1914,6 +1914,16 @@ async fn adjuntar(
                 if banderas != 0 {
                     bytes.extend_from_slice(format!("\x1b[>{banderas}u").as_bytes());
                 }
+                // `modifyOtherKeys` (Fase 16) tampoco va en el volcado de vt100:
+                // se reinyecta con su petición, detrás de lo anterior, para que
+                // la ventana que se adjunta ahora codifique igual las teclas.
+                // Se manda siempre, también con nivel 0: la ventana puede
+                // conservar el emulador de una adjunción anterior (el cliente
+                // reutiliza el parser de la pestaña) con un nivel que el
+                // remoto apagó mientras estaba soltada, y sin el `CSI > 4 ; 0
+                // m` seguiría codificando las teclas con él en el shell.
+                let modify_other_keys = pantalla.emulador().modify_other_keys();
+                bytes.extend_from_slice(format!("\x1b[>4;{modify_other_keys}m").as_bytes());
                 (bytes, (cols, filas))
             })
             .unwrap_or((Vec::new(), tamano_sesion))

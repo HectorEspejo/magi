@@ -241,8 +241,8 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         // No hay fila que borrar: ni lápida ni cambios.
         return Ok(());
     };
-    // Túneles, sincronizaciones y comprobaciones de servicio del host caen en
-    // cascada: también dejan lápida (Fase 10 y §3.7 de la Fase 13).
+    // Túneles, sincronizaciones, comprobaciones de servicio y fichas de sesión
+    // del host caen en cascada: también dejan lápida (Fase 10, Fase 13 y Fase 16).
     let tuneles = hijas_para_lapida(&transaccion, versiones::Tabla::Tuneles, "nombre", id)?;
     let sincronizaciones = hijas_para_lapida(
         &transaccion,
@@ -254,6 +254,15 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         &transaccion,
         versiones::Tabla::ComprobacionesServicio,
         "objetivo",
+        id,
+    )?;
+    // Las fichas de sesiones persistentes también caen en cascada y dejan su
+    // lápida (§3.7 de la Fase 16). Borrar el host no termina sus sesiones: si
+    // viven, siguen en el host sin ficha.
+    let fichas = hijas_para_lapida(
+        &transaccion,
+        versiones::Tabla::SesionesPersistentes,
+        "nombre",
         id,
     )?;
     // Los hosts que lo usaban como salto se quedan con la referencia a nulo
@@ -311,6 +320,15 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
         crate::almacen::dejar_lapida(
             &transaccion,
             versiones::Tabla::ComprobacionesServicio,
+            &hija.uuid,
+            &hija.nombre,
+            &hija.vector,
+        )?;
+    }
+    for hija in &fichas {
+        crate::almacen::dejar_lapida(
+            &transaccion,
+            versiones::Tabla::SesionesPersistentes,
             &hija.uuid,
             &hija.nombre,
             &hija.vector,
@@ -455,11 +473,38 @@ pub fn fijar_reconectar(conexion: &Connection, id: i64, reconectar: bool) -> Res
 }
 
 /// Fija la sesión persistente con tmux de este host. Propia del equipo.
+///
+/// Obsoleta desde la Fase 16: la sustituye `fijar_sesiones_persistentes` y la
+/// migración 11 copia su valor allí. Se queda como está hasta que el cliente
+/// deje de llamarla (Sprint 3).
 pub fn fijar_tmux_persistente(conexion: &Connection, id: i64, persistente: bool) -> Result<()> {
     conexion.execute(
         "UPDATE HOSTS SET tmux_persistente = ?1 WHERE id = ?2",
         params![persistente as i64, id],
     )?;
+    Ok(())
+}
+
+/// Marca (o desmarca) el host para que toda pestaña nueva sea una sesión
+/// persistente con nombre automático (Fase 16). A diferencia de las marcas
+/// propias del equipo, viaja con el inventario: sube la versión del host, como
+/// `fijar_snippet_al_conectar`. Solo se puede marcar un host `ssh`; desmarcar
+/// vale en cualquiera. Va aparte de `DatosHost` para que la importación de
+/// `~/.ssh/config` no la pise.
+pub fn fijar_sesiones_persistentes(conexion: &Connection, id: i64, marcado: bool) -> Result<()> {
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    if marcado {
+        crate::almacen::sesiones_persistentes::comprobar_host_ssh(&transaccion, id)?;
+    }
+    let antes = versiones::datos_de(&transaccion, versiones::Tabla::Hosts, id)?;
+    // Solo escribe si el valor cambia: marcar lo ya marcado no toca la ficha.
+    transaccion.execute(
+        "UPDATE HOSTS SET sesiones_persistentes = ?1, actualizado_en = ?2
+          WHERE id = ?3 AND sesiones_persistentes <> ?1",
+        params![marcado as i64, fecha_ahora(), id],
+    )?;
+    versiones::subir_si_cambio(&transaccion, versiones::Tabla::Hosts, id, antes.as_deref())?;
+    transaccion.commit()?;
     Ok(())
 }
 

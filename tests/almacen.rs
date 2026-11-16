@@ -48,6 +48,7 @@ fn migracion_desde_vacio_crea_todas_las_tablas() {
         "DELIBERACIONES",
         "SINCRONIZACIONES_DIR",
         "COMPROBACIONES_SERVICIO",
+        "SESIONES_PERSISTENTES",
     ] {
         assert!(nombres.contains(&tabla.to_string()), "falta {tabla}");
     }
@@ -131,8 +132,22 @@ fn migracion_diez_estrena_los_ajustes_de_terminal() {
     );
 }
 
-/// Una base de la 1.3 (user_version 9) recibe la migración 10 al abrir: las
-/// columnas nacen con 1, 0 y 0.
+/// Deshace a mano la migración 11 (Fase 16): quita la tabla y la columna que
+/// añade y deja `user_version` en 10, como estaba una base de la 1.4.
+fn dejar_como_la_version_diez(conexion: &rusqlite::Connection) {
+    conexion
+        .execute_batch(
+            "DROP TABLE SESIONES_PERSISTENTES;
+             ALTER TABLE HOSTS DROP COLUMN sesiones_persistentes;",
+        )
+        .unwrap();
+    conexion.pragma_update(None, "user_version", 10).unwrap();
+}
+
+/// Una base de la 1.3 (user_version 9) recibe las migraciones 10 y 11 al
+/// abrir: las columnas de terminal nacen con 1, 0 y 0, y la marca de sesiones
+/// persistentes de la Fase 16, con 0. La base de la 1.3 se reconstruye de
+/// verdad: sin las columnas de la 10 ni la tabla y la columna de la 11.
 #[test]
 fn migracion_desde_la_uno_tres_recibe_los_ajustes_de_terminal() {
     let dir = tempfile::tempdir().unwrap();
@@ -142,6 +157,7 @@ fn migracion_desde_la_uno_tres_recibe_los_ajustes_de_terminal() {
         let almacen = magi::almacen::abrir(&ruta).unwrap();
         host = almacen.crear_host(&datos("viejo"), Origen::Manual).unwrap();
         let conexion = almacen.conexion();
+        dejar_como_la_version_diez(conexion);
         conexion
             .execute_batch(
                 "ALTER TABLE HOSTS DROP COLUMN reconectar;
@@ -156,12 +172,78 @@ fn migracion_desde_la_uno_tres_recibe_los_ajustes_de_terminal() {
         .conexion()
         .query_row("PRAGMA user_version", [], |fila| fila.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let leido = almacen.obtener_host(host).unwrap();
     assert!(leido.reconectar);
     assert!(!leido.tmux_persistente);
     assert!(!leido.portapapeles_remoto);
+    assert!(!leido.sesiones_persistentes);
+    assert!(almacen.listar_fichas().unwrap().is_empty());
 }
+
+/// Una base de la 1.4 (user_version 10) recibe la migración 11 al abrir: queda
+/// en 11 con la tabla SESIONES_PERSISTENTES y la columna
+/// `HOSTS.sesiones_persistentes` (0), y conserva sus hosts.
+#[test]
+fn migracion_once_crea_la_tabla_de_fichas_y_la_columna_del_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = dir.path().join("magi.db");
+    let host;
+    {
+        let almacen = magi::almacen::abrir(&ruta).unwrap();
+        host = almacen.crear_host(&datos("viejo"), Origen::Manual).unwrap();
+        dejar_como_la_version_diez(almacen.conexion());
+        let hay_tabla: i64 = almacen
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'SESIONES_PERSISTENTES'",
+                [],
+                |fila| fila.get(0),
+            )
+            .unwrap();
+        assert_eq!(hay_tabla, 0, "el escenario es una base sin la migración 11");
+    }
+    let almacen = magi::almacen::abrir(&ruta).unwrap();
+    let version: i64 = almacen
+        .conexion()
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(version, magi::almacen::migraciones::VERSION_BD);
+    let columnas: Vec<String> = almacen
+        .conexion()
+        .prepare("SELECT name FROM pragma_table_info('SESIONES_PERSISTENTES')")
+        .unwrap()
+        .query_map([], |fila| fila.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap();
+    for columna in [
+        "id",
+        "uuid",
+        "version",
+        "vector",
+        "host_id",
+        "nombre",
+        "carpeta",
+        "comando",
+        "comando_reanudar",
+        "nota",
+        "origen",
+        "creada_por",
+        "creada_en",
+        "actualizado_en",
+    ] {
+        assert!(columnas.iter().any(|c| c == columna), "falta {columna}");
+    }
+    let leido = almacen.obtener_host(host).unwrap();
+    assert_eq!(leido.nombre, "viejo");
+    assert!(!leido.sesiones_persistentes, "nace apagada");
+    assert!(almacen.listar_fichas().unwrap().is_empty());
+    assert_eq!(almacen.hosts_con_marca_migrada(), 0);
+    assert_eq!(almacen.aviso_de_migracion(), None);
+}
+
 #[test]
 fn los_sondeos_se_purgan_a_los_veinte_y_caen_con_el_host() {
     let almacen = magi::almacen::abrir_en_memoria().unwrap();
@@ -1669,6 +1751,46 @@ fn una_base_de_datos_de_version_futura_no_se_abre_ni_se_toca() {
         .query_row("SELECT valor FROM MARCA", [], |fila| fila.get(0))
         .unwrap();
     assert_eq!(marca, "intacta");
+}
+
+/// La base que escribiría la versión siguiente a la que conoce el binario (la
+/// 12, tras la 11 de las sesiones persistentes) no se abre ni se toca.
+#[test]
+fn una_base_de_datos_en_la_version_doce_no_se_abre_ni_se_toca() {
+    let directorio = tempfile::tempdir().unwrap();
+    let ruta = directorio.path().join("magi.db");
+    {
+        let conexion = rusqlite::Connection::open(&ruta).unwrap();
+        conexion
+            .execute_batch(
+                "CREATE TABLE MARCA (valor TEXT); \
+                 INSERT INTO MARCA VALUES ('intacta'); \
+                 PRAGMA user_version = 12;",
+            )
+            .unwrap();
+    }
+    assert_eq!(magi::almacen::migraciones::VERSION_BD + 1, 12);
+    let antes = std::fs::read(&ruta).unwrap();
+    let error = match magi::almacen::abrir(&ruta) {
+        Ok(_) => panic!("la versión 12 no se abre"),
+        Err(error) => error,
+    };
+    let mensaje = format!("{error:#}");
+    assert!(
+        mensaje.contains("esta base de datos es de una versión más nueva de MAGI; actualiza MAGI"),
+        "{mensaje}"
+    );
+    assert_eq!(
+        std::fs::read(&ruta).unwrap(),
+        antes,
+        "el fichero queda intacto"
+    );
+    assert!(!directorio.path().join("magi.db-wal").exists());
+    let conexion = rusqlite::Connection::open(&ruta).unwrap();
+    let version: i64 = conexion
+        .query_row("PRAGMA user_version", [], |fila| fila.get(0))
+        .unwrap();
+    assert_eq!(version, 12);
 }
 
 /// Una magi.db de una versión futura con un WAL pendiente de recuperar tampoco

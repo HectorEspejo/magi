@@ -3,9 +3,9 @@
 //! vt100 lleva la pantalla, el historial, el pegado entre corchetes, el ratón,
 //! la pantalla alternativa y los colores. Lo que no lleva —los modos 1004
 //! (foco) y 2026 (salida sincronizada), las banderas del teclado de kitty por
-//! pantalla, ED 3, el título, los avisos (BEL, OSC 9 y OSC 777), OSC 52 y las
-//! respuestas a las consultas del remoto— vive aquí, en los `Callbacks` del
-//! parser.
+//! pantalla, `modifyOtherKeys` (Fase 16), ED 3, el título, los avisos (BEL,
+//! OSC 9 y OSC 777), OSC 52 y las respuestas a las consultas del remoto— vive
+//! aquí, en los `Callbacks` del parser.
 //!
 //! El emulador es el mismo en el servidor y en el cliente: el servidor lo crea
 //! respondiendo (solo él escribe al remoto) y el cliente sin responder. Las
@@ -145,6 +145,10 @@ pub struct Modos {
     pub principal: PilaKitty,
     /// Banderas del teclado de kitty de la pantalla alternativa.
     pub alternativa: PilaKitty,
+    /// Nivel de `modifyOtherKeys` de xterm (`CSI > 4 ; n m`): 0 apagado, 1 o
+    /// 2. Es de la pestaña, no de cada pantalla. tmux lo pide así a su
+    /// terminal para recibir las teclas con modificadores (Fase 16).
+    pub modify_other_keys: u8,
     /// Título que puso el remoto (OSC 0 u OSC 2), saneado.
     pub titulo: Option<String>,
     /// Último aviso, sin avisar todavía.
@@ -261,6 +265,12 @@ impl Emulador {
         self.modos.kitty(alternativa)
     }
 
+    /// Nivel de `modifyOtherKeys` que pidió el remoto (0 si no lo pidió).
+    #[must_use]
+    pub fn modify_other_keys(&self) -> u8 {
+        self.modos.modify_other_keys
+    }
+
     /// Se lleva las respuestas pendientes (una vez por lote).
     pub fn respuestas(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.modos.respuestas)
@@ -364,6 +374,16 @@ fn estado_de_modo(screen: &vt100::Screen, emulador: &Emulador, modo: u16) -> u8 
         Some(true) => 1,
         Some(false) => 2,
         None => 0,
+    }
+}
+
+/// Nivel de `modifyOtherKeys` que dice el segundo parámetro de `CSI > 4 ; n m`:
+/// 1 y 2 lo activan (un nivel mayor se trata como 2) y 0 o ausente lo apagan.
+fn nivel_modify_other_keys(parametro: Option<u16>) -> u8 {
+    match parametro {
+        None | Some(0) => 0,
+        Some(1) => 1,
+        Some(_) => 2,
     }
 }
 
@@ -497,6 +517,22 @@ impl vt100::Callbacks for Emulador {
             }
             (Some(b'='), None, 'u') => {
                 self.pila(alternativa).fijar(primero.unwrap_or(0));
+            }
+            // modifyOtherKeys de xterm: `CSI > 4 ; n m` lo activa (nivel 1 o 2)
+            // y `CSI > 4 m` o `CSI > 4 ; 0 m` lo apagan. Solo cuenta el primer
+            // parámetro 4; los demás recursos de teclado (`CSI > 0 m`, …) no
+            // se llevan. Es como tmux pide las teclas extendidas.
+            (Some(b'>'), None, 'm') => {
+                if primero == Some(4) {
+                    let nivel = parametros.get(1).and_then(|grupo| grupo.first()).copied();
+                    self.modos.modify_other_keys = nivel_modify_other_keys(nivel);
+                }
+            }
+            // DECSTR (reinicio blando del terminal): apaga modifyOtherKeys. El
+            // reinicio completo (RIS, `ESC c`) lo resuelve vt100 por dentro y no
+            // avisa a los callbacks: no se puede detectar.
+            (Some(b'!'), None, 'p') => {
+                self.modos.modify_other_keys = 0;
             }
             // ED 3: borrar el historial guardado.
             (None, None, 'J') if primero == Some(3) => {
@@ -1286,6 +1322,164 @@ mod pruebas {
         assert_eq!(pantalla.columnas(), MAX_COLUMNAS);
         pantalla.procesar(b"hola");
         assert!(pantalla.screen().contents().contains("hola"));
+    }
+
+    // ------------------------------------------------------------ modifyOtherKeys
+
+    #[test]
+    fn modify_other_keys_se_activa_con_los_niveles_1_y_2_y_se_apaga() {
+        let mut pantalla = pantalla(24, 80, 0, false);
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        pantalla.procesar(b"\x1b[>4;1m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 1);
+        pantalla.procesar(b"\x1b[>4;2m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+        // `CSI > 4 m` lo apaga; también `CSI > 4 ; 0 m` (xterm).
+        pantalla.procesar(b"\x1b[>4m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        pantalla.procesar(b"\x1b[>4;2m\x1b[>4;0m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        // Un parámetro vacío tras el 4 es el nivel 0.
+        pantalla.procesar(b"\x1b[>4;2m\x1b[>4;m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+    }
+
+    #[test]
+    fn modify_other_keys_solo_cuenta_con_el_primer_parametro_4() {
+        let mut pantalla = pantalla(24, 80, 0, false);
+        // Otros recursos de teclado de `CSI > Pp ; Pv m` no son modifyOtherKeys.
+        for secuencia in [
+            &b"\x1b[>0;2m"[..],
+            b"\x1b[>1;2m",
+            b"\x1b[>2;2m",
+            b"\x1b[>3;2m",
+            b"\x1b[>5;2m",
+            b"\x1b[>m",
+        ] {
+            pantalla.procesar(secuencia);
+            assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        }
+        // El 4 en segundo lugar tampoco lo activa.
+        pantalla.procesar(b"\x1b[>1;4m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        // Ni la forma sin el `>` (SGR 4 es subrayado) ni la de consulta con `?`.
+        pantalla.procesar(b"\x1b[4;2m\x1b[?4;2m\x1b[<4;2m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        // Un 4 válido y otros parámetros detrás: solo cuenta el segundo.
+        pantalla.procesar(b"\x1b[>4;1;2;3m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 1);
+    }
+
+    #[test]
+    fn modify_other_keys_acota_los_niveles_absurdos_sin_panico() {
+        let mut pantalla = pantalla(24, 80, 0, true);
+        // Un nivel mayor que 2 se trata como 2.
+        pantalla.procesar(b"\x1b[>4;3m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+        pantalla.procesar(b"\x1b[>4;1m\x1b[>4;65535m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+        // Números que desbordan u16 y miles de parámetros: ni pánico ni nivel
+        // fuera de 0..=2.
+        pantalla.procesar(b"\x1b[>4;99999999999999999999m");
+        assert!(pantalla.emulador().modify_other_keys() <= 2);
+        let mut absurda = b"\x1b[>4;1".to_vec();
+        for _ in 0..5000 {
+            absurda.extend_from_slice(b";7");
+        }
+        absurda.push(b'm');
+        pantalla.procesar(&absurda);
+        assert!(pantalla.emulador().modify_other_keys() <= 2);
+        pantalla.procesar(b"\x1b[>4:2m\x1b[>:m\x1b[>4;;;;m");
+        assert!(pantalla.emulador().modify_other_keys() <= 2);
+        // Sin respuestas: modifyOtherKeys no se contesta.
+        assert!(pantalla.procesar(b"\x1b[>4;2m").is_empty());
+    }
+
+    #[test]
+    fn modify_other_keys_partido_entre_lotes_queda_activo() {
+        let mut pantalla = pantalla(24, 80, 0, false);
+        pantalla.procesar(b"\x1b[>4");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        pantalla.procesar(b";2");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        pantalla.procesar(b"m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+    }
+
+    #[test]
+    fn tmux_pide_modify_other_keys_despues_de_las_respuestas_de_da() {
+        // Hecho medido con tmux 3.2a a 3.7c: tmux manda DA1, DA2 y XTVERSION al
+        // enganchar y solo pide `CSI > 4 ; n m` después de recibirlas. El
+        // emulador del servidor las responde y luego atiende la petición.
+        let mut pantalla = pantalla(24, 80, 0, true);
+        pantalla.emulador_mut().fijar_version("1.5.0");
+        let respuestas = pantalla.procesar(b"\x1b[c\x1b[>c\x1b[>0q");
+        let texto = String::from_utf8(respuestas).unwrap();
+        assert!(texto.starts_with("\x1b[?62;22c\x1b[>0;10500;0c\x1bP>|MAGI 1.5.0"));
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+        for (peticion, nivel) in [(&b"\x1b[>4;1m"[..], 1), (&b"\x1b[>4;2m"[..], 2)] {
+            let respuestas = pantalla.procesar(peticion);
+            assert!(respuestas.is_empty(), "no se responde a modifyOtherKeys");
+            assert_eq!(pantalla.emulador().modify_other_keys(), nivel);
+        }
+        // Al soltar la sesión tmux lo apaga con `CSI > 4 m`.
+        pantalla.procesar(b"\x1b[>4m");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+    }
+
+    #[test]
+    fn modify_other_keys_es_de_la_pestana_no_de_cada_pantalla() {
+        let mut pantalla = pantalla(24, 80, 0, false);
+        pantalla.procesar(b"\x1b[>4;2m\x1b[?1049h");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+        pantalla.procesar(b"\x1b[?1049l");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+    }
+
+    #[test]
+    fn modify_other_keys_sobrevive_a_ed_3_y_al_redimensionar() {
+        let mut pantalla = pantalla(4, 20, 100, false);
+        pantalla.procesar(b"\x1b[>4;2m");
+        for linea in 0..20 {
+            pantalla.procesar(format!("linea {linea}\r\n").as_bytes());
+        }
+        // ED 3 rehace el parser conservando el emulador.
+        pantalla.procesar(b"\x1b[3J");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+        // Y bajar el tope del historial también.
+        for linea in 0..20 {
+            pantalla.procesar(format!("otra {linea}\r\n").as_bytes());
+        }
+        pantalla.redimensionar(4, 20, 2);
+        assert_eq!(pantalla.emulador().modify_other_keys(), 2);
+    }
+
+    #[test]
+    fn decstr_apaga_modify_other_keys() {
+        // El reinicio blando (DECSTR, `CSI ! p`) sí llega a los callbacks; el
+        // completo (RIS, `ESC c`) lo consume vt100 por dentro y no se detecta.
+        let mut pantalla = pantalla(24, 80, 0, false);
+        pantalla.procesar(b"\x1b[>4;2m");
+        pantalla.procesar(b"\x1b[!p");
+        assert_eq!(pantalla.emulador().modify_other_keys(), 0);
+    }
+
+    #[test]
+    fn el_modo_de_teclas_sale_de_la_pantalla_del_emulador() {
+        // El volcado de `Adjuntar` reinyecta el modo con un `CSI > 4 ; n m`
+        // sintético tras `state_formatted`: el emulador del cliente lo recoge
+        // aunque el parser sea nuevo.
+        let mut servidor = pantalla(24, 80, 0, true);
+        servidor.procesar(b"\x1b[?2004h\x1b[>4;2mhola");
+        let mut volcado = servidor.screen().state_formatted();
+        let nivel = servidor.emulador().modify_other_keys();
+        assert_eq!(nivel, 2);
+        volcado.extend_from_slice(format!("\x1b[>4;{nivel}m").as_bytes());
+        let mut cliente = pantalla(24, 80, 0, false);
+        cliente.procesar(&volcado);
+        assert_eq!(cliente.emulador().modify_other_keys(), 2);
+        assert!(cliente.screen().bracketed_paste());
+        assert!(cliente.screen().contents().contains("hola"));
     }
 
     #[test]

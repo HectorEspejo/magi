@@ -284,7 +284,11 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("no existe el host «{host}»");
                 std::process::exit(1);
             };
-            let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
+            // El aviso de la migración 11 sale solo en la apertura que migra.
+            let avisos: Vec<String> = [aviso_config, aviso_tema, almacen.aviso_de_migracion()]
+                .into_iter()
+                .flatten()
+                .collect();
             let aviso = if avisos.is_empty() {
                 None
             } else {
@@ -299,7 +303,11 @@ fn main() -> anyhow::Result<()> {
         None => {
             app::instalar_hook_panico();
             let almacen = crate::almacen::abrir(&rutas.base_datos())?;
-            let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
+            // El aviso de la migración 11 sale solo en la apertura que migra.
+            let avisos: Vec<String> = [aviso_config, aviso_tema, almacen.aviso_de_migracion()]
+                .into_iter()
+                .flatten()
+                .collect();
             let aviso = if avisos.is_empty() {
                 None
             } else {

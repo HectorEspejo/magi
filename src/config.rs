@@ -243,6 +243,79 @@ impl SeccionTerminal {
     }
 }
 
+/// Sección `[persistentes]` de `config.toml`: el vigilante y la lista de
+/// sesiones persistentes (Fase 16, §5.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionPersistentes {
+    /// Cada cuánto comprueba el servidor las fichas, con alguna ventana
+    /// conectada (30-600 s).
+    pub vigilar_seg: u64,
+    /// Refresco de la lista con el bloque «Persistentes» a la vista (10-300 s).
+    pub refresco_seg: u64,
+    /// Días sin actividad para marcar una sesión como «antigua» (1-365).
+    pub antigua_dias: u64,
+    /// Líneas de la vista previa de una sesión (5-100).
+    pub vista_previa_lineas: u64,
+}
+
+impl Default for SeccionPersistentes {
+    fn default() -> Self {
+        Self {
+            vigilar_seg: 60,
+            refresco_seg: 30,
+            antigua_dias: 7,
+            vista_previa_lineas: 20,
+        }
+    }
+}
+
+impl SeccionPersistentes {
+    /// Avisos por valores fuera de rango: no impiden arrancar, se acotan donde
+    /// se usan y MAGI lo dice al arrancar (D261).
+    #[must_use]
+    pub fn validar(&self) -> Vec<String> {
+        let mut avisos = Vec::new();
+        if !(30..=600).contains(&self.vigilar_seg) {
+            avisos.push("[persistentes] vigilar_seg debe estar entre 30 y 600".to_string());
+        }
+        if !(10..=300).contains(&self.refresco_seg) {
+            avisos.push("[persistentes] refresco_seg debe estar entre 10 y 300".to_string());
+        }
+        if !(1..=365).contains(&self.antigua_dias) {
+            avisos.push("[persistentes] antigua_dias debe estar entre 1 y 365".to_string());
+        }
+        if !(5..=100).contains(&self.vista_previa_lineas) {
+            avisos.push("[persistentes] vista_previa_lineas debe estar entre 5 y 100".to_string());
+        }
+        avisos
+    }
+
+    /// Segundos entre comprobaciones del vigilante, acotados a su rango.
+    #[must_use]
+    pub fn vigilar_seg_efectivo(&self) -> u64 {
+        self.vigilar_seg.clamp(30, 600)
+    }
+
+    /// Segundos de refresco de la lista, acotados a su rango.
+    #[must_use]
+    pub fn refresco_seg_efectivo(&self) -> u64 {
+        self.refresco_seg.clamp(10, 300)
+    }
+
+    /// Días sin actividad para «antigua», acotados a su rango.
+    #[must_use]
+    pub fn antigua_dias_efectivo(&self) -> u64 {
+        self.antigua_dias.clamp(1, 365)
+    }
+
+    /// Líneas de la vista previa, acotadas a su rango.
+    #[must_use]
+    pub fn vista_previa_lineas_efectivo(&self) -> usize {
+        self.vista_previa_lineas.clamp(5, 100) as usize
+    }
+}
+
 fn comando_terminal_por_defecto() -> &'static str {
     if cfg!(target_os = "macos") {
         "open -a Terminal magi"
@@ -526,6 +599,9 @@ pub struct Config {
     pub escritorio: SeccionEscritorio,
     /// Servicios, contenedores y logs: `[servicios]` (Fase 13).
     pub servicios: SeccionServicios,
+    /// Sesiones persistentes: `[persistentes]` vigilante, refresco, «antigua»
+    /// y vista previa (Fase 16).
+    pub persistentes: SeccionPersistentes,
 }
 
 impl Default for Config {
@@ -543,6 +619,7 @@ impl Default for Config {
             sincronizacion: SeccionSincronizacion::default(),
             escritorio: SeccionEscritorio::default(),
             servicios: SeccionServicios::default(),
+            persistentes: SeccionPersistentes::default(),
         }
     }
 }
@@ -554,11 +631,12 @@ impl Config {
         match fs::read_to_string(ruta) {
             Ok(texto) => match toml::from_str::<Config>(&texto) {
                 Ok(config) => {
-                    // Los valores de [servicios] y [terminal] fuera de rango
-                    // no impiden arrancar: se usan acotados donde se leen y se
-                    // avisa aquí.
+                    // Los valores de [servicios], [terminal] y [persistentes]
+                    // fuera de rango no impiden arrancar: se usan acotados
+                    // donde se leen y se avisa aquí.
                     let mut avisos = config.servicios.validar();
                     avisos.extend(config.terminal.validar());
+                    avisos.extend(config.persistentes.validar());
                     let aviso = (!avisos.is_empty()).then(|| avisos.join(" · "));
                     (config, aviso)
                 }
@@ -753,5 +831,125 @@ sudo_memoria_min = 99
             .iter()
             .any(|aviso| aviso.contains("sudo_memoria_min")));
         assert_eq!(avisos.len(), 8, "{avisos:?}");
+    }
+
+    /// Fase 16: [persistentes] se lee con sus valores por defecto, se acota
+    /// donde se usa y se avisa de lo que está fuera de rango (D261); un
+    /// config.toml anterior no trae la sección y sigue valiendo.
+    #[test]
+    fn las_claves_de_persistentes_de_la_fase_16_se_leen_se_acotan_y_se_avisa() {
+        let anterior: Config = toml::from_str("[archivos]\npager = \"less\"\n").unwrap();
+        assert_eq!(anterior.persistentes.vigilar_seg, 60);
+        assert_eq!(anterior.persistentes.refresco_seg, 30);
+        assert_eq!(anterior.persistentes.antigua_dias, 7);
+        assert_eq!(anterior.persistentes.vista_previa_lineas, 20);
+        assert!(anterior.persistentes.validar().is_empty());
+        assert_eq!(anterior.persistentes.vigilar_seg_efectivo(), 60);
+        assert_eq!(anterior.persistentes.vista_previa_lineas_efectivo(), 20);
+
+        let valida: Config = toml::from_str(
+            r#"
+[persistentes]
+vigilar_seg = 30
+refresco_seg = 300
+antigua_dias = 365
+vista_previa_lineas = 5
+"#,
+        )
+        .unwrap();
+        assert!(
+            valida.persistentes.validar().is_empty(),
+            "los límites valen"
+        );
+        assert_eq!(valida.persistentes.vigilar_seg_efectivo(), 30);
+        assert_eq!(valida.persistentes.refresco_seg_efectivo(), 300);
+        assert_eq!(valida.persistentes.antigua_dias_efectivo(), 365);
+        assert_eq!(valida.persistentes.vista_previa_lineas_efectivo(), 5);
+
+        let parcial: Config = toml::from_str("[persistentes]\nantigua_dias = 30\n").unwrap();
+        assert_eq!(parcial.persistentes.antigua_dias, 30);
+        assert_eq!(
+            parcial.persistentes.vigilar_seg, 60,
+            "lo que falta, por defecto"
+        );
+
+        let bajo: Config = toml::from_str(
+            r#"
+[persistentes]
+vigilar_seg = 1
+refresco_seg = 1
+antigua_dias = 0
+vista_previa_lineas = 1
+"#,
+        )
+        .unwrap();
+        let avisos = bajo.persistentes.validar();
+        for clave in [
+            "vigilar_seg",
+            "refresco_seg",
+            "antigua_dias",
+            "vista_previa_lineas",
+        ] {
+            assert!(
+                avisos.iter().any(|aviso| aviso.contains(clave)),
+                "falta el aviso de {clave}: {avisos:?}"
+            );
+        }
+        assert_eq!(avisos.len(), 4, "{avisos:?}");
+        assert_eq!(bajo.persistentes.vigilar_seg_efectivo(), 30);
+        assert_eq!(bajo.persistentes.refresco_seg_efectivo(), 10);
+        assert_eq!(bajo.persistentes.antigua_dias_efectivo(), 1);
+        assert_eq!(bajo.persistentes.vista_previa_lineas_efectivo(), 5);
+
+        let alto: Config = toml::from_str(
+            r#"
+[persistentes]
+vigilar_seg = 99999
+refresco_seg = 99999
+antigua_dias = 99999
+vista_previa_lineas = 99999
+"#,
+        )
+        .unwrap();
+        assert_eq!(alto.persistentes.validar().len(), 4);
+        assert_eq!(alto.persistentes.vigilar_seg_efectivo(), 600);
+        assert_eq!(alto.persistentes.refresco_seg_efectivo(), 300);
+        assert_eq!(alto.persistentes.antigua_dias_efectivo(), 365);
+        assert_eq!(alto.persistentes.vista_previa_lineas_efectivo(), 100);
+    }
+
+    /// Un valor fuera de rango de [persistentes] no impide cargar la
+    /// configuración: se devuelve entera, con el aviso de arranque.
+    #[test]
+    fn cargar_con_persistentes_fuera_de_rango_avisa_y_no_impide_arrancar() {
+        let directorio = tempfile::tempdir().unwrap();
+        let ruta = directorio.path().join("config.toml");
+        std::fs::write(&ruta, "[persistentes]\nvigilar_seg = 5\nantigua_dias = 3\n").unwrap();
+        let (config, aviso) = Config::cargar(&ruta);
+        assert_eq!(config.persistentes.antigua_dias, 3, "lo válido se respeta");
+        assert_eq!(config.persistentes.vigilar_seg_efectivo(), 30);
+        let aviso = aviso.expect("avisa del valor fuera de rango");
+        assert!(aviso.contains("[persistentes] vigilar_seg"), "{aviso}");
+        assert!(!aviso.contains("antigua_dias"), "{aviso}");
+    }
+
+    /// La sección nueva se escribe en un config.toml recién creado y se vuelve
+    /// a leer igual, sin avisos.
+    #[test]
+    fn el_config_toml_nuevo_lleva_la_seccion_persistentes_y_se_relee_sin_avisos() {
+        let directorio = tempfile::tempdir().unwrap();
+        let ruta = directorio.path().join("config.toml");
+        let (creada, aviso) = Config::cargar(&ruta);
+        assert_eq!(aviso, None);
+        let texto = std::fs::read_to_string(&ruta).unwrap();
+        assert!(texto.contains("[persistentes]"), "{texto}");
+        assert!(texto.contains("vigilar_seg = 60"), "{texto}");
+        let (leida, aviso) = Config::cargar(&ruta);
+        assert_eq!(aviso, None);
+        assert_eq!(
+            leida.persistentes.refresco_seg,
+            creada.persistentes.refresco_seg
+        );
+        assert_eq!(leida.persistentes.vista_previa_lineas, 20);
     }
 }

@@ -1,14 +1,26 @@
 //! tmux del host: nombres, argumentos del script y lectura de su salida
-//! (Fase 15).
+//! (Fase 15, ampliado en la Fase 16).
 //!
 //! Todo pasa por `scripts/terminal_tmux.sh`, embebido con `include_str!`: el
 //! nombre se valida en Rust y en el script y va siempre como argumento, nunca
-//! interpolado en una orden de tmux. Lo que devuelve `listar` es entrada no
-//! fiable: 200 sesiones como mucho y líneas de 1 KiB.
+//! interpolado en una orden de tmux.
+//!
+//! Desde la Fase 16 las órdenes son las de [`OrdenTmux`] (`comprobar`,
+//! `crear`, `enganchar`, `estado`, `vista`, `historial`, `renombrar` y
+//! `terminar`, con servidor propio o habitual) y lo que devuelven se lee con
+//! `sesiones_persistentes::lectura`, que lo trata como entrada no fiable.
+//!
+//! LEGADO-S2: [`Suborden`], [`orden`], [`leer_listado`] y [`leer_terminar`]
+//! son las subórdenes de la Fase 15 (`abrir`, `listar`, y `comprobar` y
+//! `terminar` con un solo argumento, sobre el tmux habitual). El servidor del
+//! escritorio las usa hasta el Sprint 2; después se quitan.
+
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::modelo::normalizar_busqueda;
+use crate::sesiones_persistentes::{ServidorTmux, VersionTmux};
 
 /// El script embebido.
 pub const SCRIPT: &str = include_str!("../../scripts/terminal_tmux.sh");
@@ -79,7 +91,10 @@ pub fn nombre_nuevo(equipo: &str, existentes: &[String]) -> String {
     format!("{prefijo}{numero}")
 }
 
-/// Subordenes del script.
+/// Subordenes del script de la Fase 15.
+///
+/// LEGADO-S2: las usa `src/servidor/tmux.rs` hasta el Sprint 2; las órdenes
+/// nuevas son [`OrdenTmux`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Suborden {
     Comprobar,
@@ -103,6 +118,9 @@ impl Suborden {
 /// Orden para ejecutar el script por un canal `exec`:
 /// `sh -c <script> magi-tmux <suborden> [<nombre>]`. `None` si el nombre no
 /// es válido, falta o sobra.
+///
+/// LEGADO-S2: solo la forma de la Fase 15 (sobre el tmux habitual y con un
+/// solo argumento). Las nuevas, con `OrdenTmux::argumentos`.
 #[must_use]
 pub fn orden(suborden: Suborden, nombre: Option<&str>) -> Option<Vec<String>> {
     let nombre = match suborden {
@@ -241,4 +259,319 @@ pub fn leer_terminar(salida: &str) -> ResultadoTerminar {
         }
     }
     ResultadoTerminar::NoExiste
+}
+
+// ---------------------------------------------------------------- Fase 16
+
+/// Bytes máximos de la carpeta de una sesión (el mismo tope que el script).
+pub const MAXIMO_CARPETA: usize = 1024;
+/// Bytes máximos del comando de arranque (el mismo tope que el script).
+pub const MAXIMO_COMANDO: usize = 4096;
+/// Líneas máximas de `history-limit` que acepta el script.
+pub const MAXIMO_LINEAS_HISTORIAL_TMUX: u32 = 1_000_000;
+/// Líneas máximas que se piden a `vista` y a `historial`.
+pub const MAXIMO_LINEAS_CAPTURA: u32 = 100_000;
+/// Columnas de la sesión nueva: mínimo y máximo.
+pub const COLUMNAS_TMUX: std::ops::RangeInclusive<u16> = 2..=1000;
+/// Filas de la sesión nueva: mínimo y máximo.
+pub const FILAS_TMUX: std::ops::RangeInclusive<u16> = 1..=2000;
+
+/// Códigos de salida del script (§5.1). Los de `crear` van además en
+/// `MAGI_RESULTADO`; los de `enganchar` son la única señal de cómo acabó.
+pub const SALIDA_USO: i32 = 64;
+pub const SALIDA_SIN_CARPETA: i32 = 72;
+pub const SALIDA_EXISTE: i32 = 73;
+pub const SALIDA_ANTIGUO: i32 = 74;
+pub const SALIDA_NO_EXISTE: i32 = 75;
+pub const SALIDA_SIN_TMUX: i32 = 76;
+pub const SALIDA_SOLTADA: i32 = 100;
+
+/// Plazo de las órdenes que hablan con el host (T32).
+pub const PLAZO_ORDEN: Duration = Duration::from_secs(10);
+/// Plazo de `vista` y de `historial` (T32).
+pub const PLAZO_CAPTURA: Duration = Duration::from_secs(5);
+
+/// Etiqueta del equipo en `@magi_equipo`: `^[a-z0-9-]{1,20}$`.
+#[must_use]
+pub fn equipo_valido(equipo: &str) -> bool {
+    !equipo.is_empty()
+        && equipo.len() <= MAXIMO_ETIQUETA
+        && equipo
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// Carpeta que acepta `crear`: absoluta o `~/…`, hasta 1024 bytes y sin
+/// saltos de línea ni bytes nulos. La vacía no es una carpeta (es «sin
+/// carpeta»): quien la pasa usa `None`.
+#[must_use]
+pub fn carpeta_valida(carpeta: &str) -> bool {
+    (carpeta.starts_with('/') || carpeta.starts_with("~/"))
+        && carpeta.len() <= MAXIMO_CARPETA
+        && !carpeta.contains(['\n', '\r', '\0'])
+}
+
+/// Comando de arranque que acepta `crear`: texto libre de hasta 4096 bytes y
+/// sin bytes nulos. Es el comando del usuario, como un snippet: no se escapa
+/// porque va como dato (`$1`) del envoltorio del script.
+#[must_use]
+pub fn comando_valido(comando: &str) -> bool {
+    comando.len() <= MAXIMO_COMANDO && !comando.contains('\0')
+}
+
+/// Versión de tmux a partir del texto de `tmux -V` o de `MAGI_TMUX=`:
+/// `tmux 3.3a`, `tmux next-3.6` o `tmux master`. La letra no cuenta; un tmux
+/// de desarrollo sin número (`master`, `openbsd-…`) se trata como el más
+/// nuevo. `None` si no hay número.
+#[must_use]
+pub fn version_de_texto(texto: &str) -> Option<VersionTmux> {
+    let texto = texto.trim();
+    let resto = texto
+        .strip_prefix("tmux")
+        .map_or(texto, |resto| resto.trim_start());
+    let resto = resto.strip_prefix("next-").unwrap_or(resto);
+    if resto.starts_with("master") || resto.starts_with("openbsd-") {
+        return Some(VersionTmux::nueva(99, 0));
+    }
+    let digitos = |texto: &str| -> String {
+        texto
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+    };
+    let mayor_texto = digitos(resto);
+    if mayor_texto.is_empty() || mayor_texto.len() > 4 {
+        return None;
+    }
+    let mayor = mayor_texto.parse::<u32>().ok()?;
+    let menor = match resto[mayor_texto.len()..].strip_prefix('.') {
+        Some(despues) => {
+            let menor_texto = digitos(despues);
+            if menor_texto.is_empty() {
+                0
+            } else if menor_texto.len() > 4 {
+                return None;
+            } else {
+                menor_texto.parse::<u32>().ok()?
+            }
+        }
+        None => 0,
+    };
+    Some(VersionTmux::nueva(mayor, menor))
+}
+
+/// Cómo acabó `enganchar` (§7.4), según el código de salida del script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinEnganchar {
+    /// 0: la sesión terminó.
+    Terminada,
+    /// 100: la sesión sigue viva; a este cliente lo soltó otro.
+    Soltada,
+    /// 75: la sesión no existía.
+    NoExiste,
+    /// 76: el host no tiene tmux.
+    SinTmux,
+    /// 74: tmux es anterior a 3.0.
+    Antiguo,
+    /// Cualquier otro código: el cliente de tmux no pudo engancharse.
+    Error(i32),
+}
+
+/// Interpreta el código de salida de `enganchar`.
+#[must_use]
+pub fn fin_de_enganchar(codigo: i32) -> FinEnganchar {
+    match codigo {
+        0 => FinEnganchar::Terminada,
+        SALIDA_SOLTADA => FinEnganchar::Soltada,
+        SALIDA_NO_EXISTE => FinEnganchar::NoExiste,
+        SALIDA_SIN_TMUX => FinEnganchar::SinTmux,
+        SALIDA_ANTIGUO => FinEnganchar::Antiguo,
+        otro => FinEnganchar::Error(otro),
+    }
+}
+
+/// Una orden del script de la Fase 16, ya con sus datos. Sus argumentos se
+/// validan aquí igual que en el script; los datos del usuario (carpeta,
+/// comando) van siempre como argumentos sueltos.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrdenTmux<'a> {
+    /// `comprobar <servidor> <nombre>`: versión de tmux y si existe.
+    Comprobar {
+        servidor: ServidorTmux,
+        nombre: &'a str,
+    },
+    /// `crear`: la sesión en el tmux propio, sin engancharse.
+    Crear {
+        nombre: &'a str,
+        carpeta: Option<&'a str>,
+        comando: Option<&'a str>,
+        /// `history-limit`, igual a `[terminal] historial_lineas`.
+        lineas_historial: u32,
+        columnas: u16,
+        filas: u16,
+    },
+    /// `enganchar`: va en el PTY de la pestaña.
+    Enganchar {
+        servidor: ServidorTmux,
+        nombre: &'a str,
+        /// `attach -d`: soltar a los demás (sin compartir).
+        soltar: bool,
+        /// Etiqueta de este equipo (`@magi_equipo`).
+        equipo: &'a str,
+    },
+    /// `estado`: las sesiones de los dos servidores y la hora del host.
+    Estado,
+    /// `vista`: las últimas líneas visibles, en texto plano.
+    Vista {
+        servidor: ServidorTmux,
+        nombre: &'a str,
+        lineas: u32,
+    },
+    /// `historial`: el historial con colores.
+    Historial {
+        servidor: ServidorTmux,
+        nombre: &'a str,
+        lineas: u32,
+    },
+    /// `renombrar`: solo en el tmux propio.
+    Renombrar { nombre: &'a str, nuevo: &'a str },
+    /// `terminar`.
+    Terminar {
+        servidor: ServidorTmux,
+        nombre: &'a str,
+    },
+}
+
+impl OrdenTmux<'_> {
+    /// Nombre de la suborden en el script.
+    #[must_use]
+    pub fn suborden(&self) -> &'static str {
+        match self {
+            OrdenTmux::Comprobar { .. } => "comprobar",
+            OrdenTmux::Crear { .. } => "crear",
+            OrdenTmux::Enganchar { .. } => "enganchar",
+            OrdenTmux::Estado => "estado",
+            OrdenTmux::Vista { .. } => "vista",
+            OrdenTmux::Historial { .. } => "historial",
+            OrdenTmux::Renombrar { .. } => "renombrar",
+            OrdenTmux::Terminar { .. } => "terminar",
+        }
+    }
+
+    /// Plazo de la orden (T32). `enganchar` no tiene: dura lo que la pestaña.
+    #[must_use]
+    pub fn plazo(&self) -> Option<Duration> {
+        match self {
+            OrdenTmux::Enganchar { .. } => None,
+            OrdenTmux::Vista { .. } | OrdenTmux::Historial { .. } => Some(PLAZO_CAPTURA),
+            _ => Some(PLAZO_ORDEN),
+        }
+    }
+
+    /// Argumentos para ejecutar el script: `sh -c <script> magi-tmux
+    /// <suborden> <argumentos…>`. `None` si algún dato no es válido (el
+    /// nombre, la carpeta, el comando, los números, el equipo…).
+    #[must_use]
+    pub fn argumentos(&self) -> Option<Vec<String>> {
+        let mut datos: Vec<String> = Vec::new();
+        match self {
+            OrdenTmux::Comprobar { servidor, nombre }
+            | OrdenTmux::Terminar { servidor, nombre } => {
+                if !nombre_valido(nombre) {
+                    return None;
+                }
+                datos.push(servidor.texto().to_string());
+                datos.push((*nombre).to_string());
+            }
+            OrdenTmux::Crear {
+                nombre,
+                carpeta,
+                comando,
+                lineas_historial,
+                columnas,
+                filas,
+            } => {
+                let carpeta = carpeta.unwrap_or("");
+                let comando = comando.unwrap_or("");
+                if !nombre_valido(nombre)
+                    || (!carpeta.is_empty() && !carpeta_valida(carpeta))
+                    || !comando_valido(comando)
+                    || *lineas_historial > MAXIMO_LINEAS_HISTORIAL_TMUX
+                    || !COLUMNAS_TMUX.contains(columnas)
+                    || !FILAS_TMUX.contains(filas)
+                {
+                    return None;
+                }
+                datos.push((*nombre).to_string());
+                datos.push(carpeta.to_string());
+                datos.push(comando.to_string());
+                datos.push(lineas_historial.to_string());
+                datos.push(columnas.to_string());
+                datos.push(filas.to_string());
+            }
+            OrdenTmux::Enganchar {
+                servidor,
+                nombre,
+                soltar,
+                equipo,
+            } => {
+                if !nombre_valido(nombre) || !equipo_valido(equipo) {
+                    return None;
+                }
+                datos.push(servidor.texto().to_string());
+                datos.push((*nombre).to_string());
+                datos.push(if *soltar { "1" } else { "0" }.to_string());
+                datos.push((*equipo).to_string());
+            }
+            OrdenTmux::Estado => {}
+            OrdenTmux::Vista {
+                servidor,
+                nombre,
+                lineas,
+            }
+            | OrdenTmux::Historial {
+                servidor,
+                nombre,
+                lineas,
+            } => {
+                if !nombre_valido(nombre) || !(1..=MAXIMO_LINEAS_CAPTURA).contains(lineas) {
+                    return None;
+                }
+                datos.push(servidor.texto().to_string());
+                datos.push((*nombre).to_string());
+                datos.push(lineas.to_string());
+            }
+            OrdenTmux::Renombrar { nombre, nuevo } => {
+                if !nombre_valido(nombre) || !nombre_valido(nuevo) {
+                    return None;
+                }
+                datos.push((*nombre).to_string());
+                datos.push((*nuevo).to_string());
+            }
+        }
+        let mut argumentos = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            SCRIPT.to_string(),
+            "magi-tmux".to_string(),
+            self.suborden().to_string(),
+        ];
+        argumentos.extend(datos);
+        Some(argumentos)
+    }
+
+    /// La línea que se escribe en el PTY de una pestaña para ejecutar la orden
+    /// con `exec`, de modo que el código de salida de la pestaña sea el del
+    /// script (`enganchar`: 0, 100 o 75). Cada argumento va escapado para el
+    /// shell de acceso; nada se interpola.
+    #[must_use]
+    pub fn linea_para_pty(&self) -> Option<String> {
+        let argumentos = self.argumentos()?;
+        let linea = argumentos
+            .iter()
+            .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
+            .collect::<Vec<String>>()
+            .join(" ");
+        Some(format!("exec {linea}\n"))
+    }
 }

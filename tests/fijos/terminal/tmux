@@ -1,39 +1,54 @@
 #!/bin/sh
-# tmux falso de las pruebas de MAGI (Fase 15).
+# tmux falso de las pruebas de MAGI (Fase 15, ampliado en la Fase 16).
 #
 # Responde a las órdenes que usan magi_nucleo::terminal::tmux y
-# crates/magi-nucleo/scripts/terminal_tmux.sh: -V, has-session, list-sessions
-# -F, new-session -A -s y kill-session -t. No toca ningún tmux real, ni
-# sesiones del usuario, ni la red: solo lee y escribe el fichero de estado de
-# la prueba.
+# crates/magi-nucleo/scripts/terminal_tmux.sh: -V, has-session, list-sessions,
+# list-windows -a, new-session, attach-session, kill-session, rename-session,
+# set-option, capture-pane, start-server y kill-server, con las opciones
+# globales -L y -f y las secuencias separadas por «;» (la configuración de MAGI
+# se aplica con «start-server ; set … ; new-session …»). No toca ningún tmux
+# real, ni sesiones del usuario, ni la red: solo lee y escribe los ficheros de
+# estado de la prueba. El contrato completo está en README.md, en este mismo
+# directorio.
 #
-# El estado de las sesiones vive en el fichero que indique MAGI_TMUX_ESTADO,
-# una línea por sesión con cuatro campos separados por tabuladores:
-#   nombre<TAB>adheridos<TAB>ventanas<TAB>creada
+# Sin «-L», el servidor es el habitual y su estado vive en MAGI_TMUX_ESTADO;
+# con «-L magi», el estado vive en MAGI_TMUX_ESTADO_MAGI (por defecto,
+# MAGI_TMUX_ESTADO con el sufijo «.magi»); con otro «-L nombre», en
+# MAGI_TMUX_ESTADO con el sufijo «.nombre».
+#
+# Una línea por sesión con hasta nueve campos separados por tabuladores:
+#   nombre adheridos ventanas creada [equipo [actividad [campana [titulo [creada_epoch]]]]]
+# Los cuatro primeros son los de la Fase 15; los demás valen vacío o 0 si faltan.
 # Si el fichero no existe o está vacío, no hay sesiones (como un tmux sin
-# servidor). Si MAGI_TMUX_LLAMADAS apunta a un fichero, se anota ahí cada
-# invocación (una línea con la orden completa), para las pruebas que quieran
-# comprobar qué se ejecutó.
-#
-# Engancharse (new-session -A -s <nombre>) imprime MAGI_TMUX_SESION=<nombre> y
-# se queda leyendo la entrada estándar hasta su fin, devolviendo cada línea
-# como MAGI_TMUX_ENTRADA=<línea>: así una prueba puede comprobar que el PTY le
-# llegó y que el proceso sigue vivo.
-#
-# Uso desde una prueba:
-#   MAGI_TMUX_ESTADO=/tmp/estado MAGI_TMUX_LLAMADAS=/tmp/llamadas \
-#       PATH=/ruta/al/directorio/con/el/tmux:$PATH sh -c "$SCRIPT" magi-tmux listar
+# servidor).
 #
 # Solo sh POSIX, awk y sed; pasa shellcheck.
 
 set -u
 
-FICHERO=${MAGI_TMUX_ESTADO:-}
+HABITUAL=${MAGI_TMUX_ESTADO:-}
 LLAMADAS=${MAGI_TMUX_LLAMADAS:-}
+ARGUMENTOS=${MAGI_TMUX_ARGUMENTOS:-}
+VERSION=${MAGI_TMUX_VERSION:-tmux 3.4}
+FALLAN=${MAGI_TMUX_FALLA:-}
+US=$(printf '\037')
 
 if [ -n "$LLAMADAS" ]; then
     printf '%s\n' "$*" >> "$LLAMADAS"
 fi
+if [ -n "${MAGI_TMUX_ENTORNO:-}" ]; then
+    # Qué variable TMUX veía tmux: el script la quita para no anidar.
+    printf 'TMUX=%s\n' "${TMUX:-}" >> "$MAGI_TMUX_ENTORNO"
+fi
+if [ -n "$ARGUMENTOS" ]; then
+    registro=''
+    for palabra in "$@"; do
+        registro="$registro$palabra$US"
+    done
+    printf '%s\n' "$registro" >> "$ARGUMENTOS"
+fi
+
+# ------------------------------------------------------------ estado
 
 # Exige estado y deja preparado el fichero (vacío = sin sesiones).
 preparar_estado() {
@@ -53,11 +68,56 @@ existe_sesion() {
     awk -F '\t' -v buscada="$1" '$1 == buscada { encontrada = 1 } END { exit !encontrada }' "$FICHERO"
 }
 
+# Resuelve un destino como tmux: «=nombre» solo casa exacto; sin «=», casa
+# exacto o, si no, por prefijo único (por eso magi-a-1 puede matar a
+# magi-a-10 sin el «=»). Se quita lo que sigue a «:» (ventana y panel).
+resolver_sesion() {
+    destino=${1%%:*}
+    exacto=0
+    case "$destino" in
+        =*)
+            exacto=1
+            destino=${destino#=}
+            ;;
+    esac
+    [ -s "$FICHERO" ] || return 1
+    awk -F '\t' -v destino="$destino" -v exacto="$exacto" '
+        { nombre[NR] = $1 }
+        END {
+            for (i = 1; i <= NR; i++) {
+                if (nombre[i] == destino) { print destino; exit 0 }
+            }
+            if (exacto == 1) exit 1
+            hallados = 0
+            for (i = 1; i <= NR; i++) {
+                if (index(nombre[i], destino) == 1) { hallados++; hallada = nombre[i] }
+            }
+            if (hallados == 1) { print hallada; exit 0 }
+            exit 1
+        }' "$FICHERO"
+}
+
 # Una sesión nueva empieza sin nadie enganchado y con una ventana.
 crear_sesion() {
     if ! existe_sesion "$1"; then
-        printf '%s\t0\t1\t%s\n' "$1" '2026-11-09 19:00:00' >> "$FICHERO"
+        ahora=$(date +%s 2>/dev/null || printf '0')
+        printf '%s\t0\t1\t%s\t\t%s\t0\t\t%s\n' "$1" '2026-11-09 19:00:00' "$ahora" "$ahora" >> "$FICHERO"
     fi
+}
+
+# Cambia un campo (1 = nombre) de una sesión.
+cambiar_campo() {
+    temporal="${FICHERO}.tmp.$$"
+    awk -F '\t' -v OFS='\t' -v nombre="$1" -v columna="$2" -v valor="$3" '
+        $1 == nombre { while (NF < columna) $(NF + 1) = ""; $columna = valor }
+        { print }' "$FICHERO" > "$temporal"
+    mv "$temporal" "$FICHERO"
+}
+
+quitar_sesion() {
+    temporal="${FICHERO}.tmp.$$"
+    awk -F '\t' -v quitada="$1" '$1 != quitada' "$FICHERO" > "$temporal"
+    mv "$temporal" "$FICHERO"
 }
 
 # Simula el PTY: marca la sesión, devuelve lo que llega y termina con la
@@ -69,110 +129,390 @@ enganchar() {
     done
 }
 
-# Un valor para sustituir en el formato de list-sessions, escapado para sed.
-escapar() {
-    printf '%s' "$1" | sed 's/[\\&@]/\\&/g'
+# ¿Debe fallar esta orden? (MAGI_TMUX_FALLA: órdenes separadas por espacios)
+debe_fallar() {
+    for orden in $FALLAN; do
+        if [ "$orden" = "$1" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
-# Sustituye los #{...} del formato con los campos de cada sesión.
-listar() {
-    formato=${1:-}
+# ------------------------------------------------------- formatos
+
+# Sustituye los #{…} de FALSO_FORMATO con los campos de cada sesión
+# (modo «sesiones») o con los de sus ventanas (modo «ventanas»). El formato
+# llega por el entorno para que el shell no toque sus caracteres.
+formatear() {
+    FALSO_MODO=$1 FALSO_FORMATO=${2:-} awk -F '\t' '
+        function sustituir(texto, marca, valor,   pos, salida) {
+            salida = ""
+            while ((pos = index(texto, marca)) > 0) {
+                salida = salida substr(texto, 1, pos - 1) valor
+                texto = substr(texto, pos + length(marca))
+            }
+            return salida texto
+        }
+        BEGIN { modo = ENVIRON["FALSO_MODO"]; formato = ENVIRON["FALSO_FORMATO"] }
+        {
+            nombre = $1; adheridos = $2; ventanas = $3; creada = $4
+            equipo = $5; actividad = $6 + 0; campana = $7 + 0; titulo = $8; creada_epoch = $9 + 0
+            if (modo == "sesiones") {
+                if (formato == "") {
+                    print nombre ": " ventanas " windows (created " creada ")"
+                    next
+                }
+                linea = formato
+                linea = sustituir(linea, "#{session_name}", nombre)
+                linea = sustituir(linea, "#{session_attached}", adheridos)
+                linea = sustituir(linea, "#{session_windows}", ventanas)
+                linea = sustituir(linea, "#{session_created_string}", creada)
+                linea = sustituir(linea, "#{session_created}", creada_epoch)
+                linea = sustituir(linea, "#{session_activity}", actividad)
+                linea = sustituir(linea, "#{@magi_equipo}", equipo)
+                linea = sustituir(linea, "#{pane_title}", titulo)
+                print linea
+            } else {
+                total = ventanas + 0
+                if (total < 1) total = 1
+                for (i = 1; i <= total; i++) {
+                    linea = formato
+                    linea = sustituir(linea, "#{session_name}", nombre)
+                    linea = sustituir(linea, "#{window_index}", i - 1)
+                    # La última ventana es la más reciente y la que tiene la campana.
+                    linea = sustituir(linea, "#{window_activity}", actividad - 10 * (total - i))
+                    linea = sustituir(linea, "#{window_bell_flag}", (i == total && campana == 1) ? 1 : 0)
+                    print linea
+                }
+            }
+        }' "$FICHERO"
+}
+
+# ------------------------------------------------------- órdenes
+
+orden_set() {
+    debe_fallar set && { printf '%s\n' 'tmux falso: set falla por MAGI_TMUX_FALLA' >&2; exit 1; }
+    preparar_estado
+    # Solo importa @magi_equipo de una sesión; el resto se queda en la bitácora.
+    IFS=$US
+    set -f
+    # shellcheck disable=SC2086
+    set -- $C_POS
+    set +f
+    IFS=$IFS_ORIGINAL
+    opcion=${1:-}
+    valor=${2:-}
+    if [ "$opcion" = '@magi_equipo' ] && [ -n "$V_t" ]; then
+        nombre=$(resolver_sesion "$V_t") || {
+            printf 'no such session: %s\n' "$V_t" >&2
+            exit 1
+        }
+        cambiar_campo "$nombre" 5 "$valor"
+    fi
+}
+
+orden_new_session() {
+    preparar_estado
+    if [ -z "$V_s" ]; then
+        printf '%s\n' 'tmux falso: new-session sin nombre' >&2
+        exit 2
+    fi
+    debe_fallar new-session && { printf 'duplicate session: %s\n' "$V_s" >&2; exit 1; }
+    if existe_sesion "$V_s" && ! tiene_bandera A; then
+        printf 'duplicate session: %s\n' "$V_s" >&2
+        exit 1
+    fi
+    crear_sesion "$V_s"
+    if ! tiene_bandera d; then
+        enganchar "$V_s"
+    fi
+}
+
+orden_attach() {
+    preparar_estado
+    debe_fallar attach-session && { printf '%s\n' 'tmux falso: attach falla por MAGI_TMUX_FALLA' >&2; exit 1; }
+    nombre=$(resolver_sesion "$V_t") || {
+        printf "can't find session: %s\n" "$V_t" >&2
+        exit 1
+    }
+    soltar=0
+    if tiene_bandera d; then
+        soltar=1
+    fi
+    printf 'MAGI_TMUX_ADJUNTO=%s soltar=%s\n' "$nombre" "$soltar"
+    while IFS= read -r linea; do
+        printf 'MAGI_TMUX_ENTRADA=%s\n' "$linea"
+    done
+    # El programa de la sesión termina: la sesión desaparece.
+    if [ "${MAGI_TMUX_ATTACH_MATA:-0}" = 1 ]; then
+        quitar_sesion "$nombre"
+    fi
+    exit "${MAGI_TMUX_ATTACH_ESTADO:-0}"
+}
+
+orden_kill_session() {
+    preparar_estado
+    nombre=$(resolver_sesion "$V_t") || {
+        printf "can't find session: %s\n" "$V_t" >&2
+        exit 1
+    }
+    quitar_sesion "$nombre"
+}
+
+orden_rename_session() {
+    preparar_estado
+    debe_fallar rename-session && { printf '%s\n' 'tmux falso: rename-session falla por MAGI_TMUX_FALLA' >&2; exit 1; }
+    nombre=$(resolver_sesion "$V_t") || {
+        printf "can't find session: %s\n" "$V_t" >&2
+        exit 1
+    }
+    IFS=$US
+    set -f
+    # shellcheck disable=SC2086
+    set -- $C_POS
+    set +f
+    IFS=$IFS_ORIGINAL
+    nuevo=${1:-}
+    if [ -z "$nuevo" ]; then
+        printf '%s\n' 'tmux falso: rename-session sin nombre nuevo' >&2
+        exit 2
+    fi
+    if existe_sesion "$nuevo"; then
+        printf 'duplicate session: %s\n' "$nuevo" >&2
+        exit 1
+    fi
+    cambiar_campo "$nombre" 1 "$nuevo"
+}
+
+orden_has_session() {
+    preparar_estado
+    resolver_sesion "$V_t" >/dev/null || exit 1
+}
+
+orden_list_sessions() {
+    preparar_estado
     if [ ! -s "$FICHERO" ]; then
         printf 'no server running on %s\n' "$FICHERO" >&2
-        return 1
+        exit 1
     fi
-    tabulador=$(printf '\t')
-    while IFS="$tabulador" read -r nombre adheridos ventanas creada; do
-        if [ -n "$formato" ]; then
-            linea=$formato
-            linea=$(printf '%s' "$linea" | sed \
-                -e "s@#{session_name}@$(escapar "$nombre")@g" \
-                -e "s@#{session_attached}@$(escapar "$adheridos")@g" \
-                -e "s@#{session_windows}@$(escapar "$ventanas")@g" \
-                -e "s@#{session_created_string}@$(escapar "$creada")@g")
-            printf '%s\n' "$linea"
-        else
-            printf '%s: %s windows (created %s)\n' "$nombre" "$ventanas" "$creada"
-        fi
-    done < "$FICHERO"
+    formatear sesiones "$V_F"
 }
 
-SUBORDEN=${1:-}
-if [ $# -gt 0 ]; then
-    shift
-fi
-
-case "$SUBORDEN" in
-    -V|--version)
-        printf 'tmux 3.4\n'
-        ;;
-    has-session)
-        preparar_estado
-        nombre=''
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -t) nombre=${2:-}; shift ;;
-                -t*) nombre=${1#-t} ;;
-            esac
-            shift
-        done
-        existe_sesion "$nombre"
-        ;;
-    list-sessions|ls)
-        preparar_estado
-        formato=''
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -F) formato=${2:-}; shift ;;
-                -F*) formato=${1#-F} ;;
-            esac
-            shift
-        done
-        listar "$formato"
-        ;;
-    new-session|new)
-        preparar_estado
-        nombre=''
-        adjuntar=1
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -A) adjuntar=1 ;;
-                -d) adjuntar=0 ;;
-                -s) nombre=${2:-}; shift ;;
-                -s*) nombre=${1#-s} ;;
-            esac
-            shift
-        done
-        if [ -z "$nombre" ]; then
-            printf '%s\n' 'tmux falso: new-session sin nombre' >&2
-            exit 2
-        fi
-        crear_sesion "$nombre"
-        if [ "$adjuntar" -eq 1 ]; then
-            enganchar "$nombre"
-        fi
-        ;;
-    kill-session)
-        preparar_estado
-        nombre=''
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -t) nombre=${2:-}; shift ;;
-                -t*) nombre=${1#-t} ;;
-            esac
-            shift
-        done
-        if existe_sesion "$nombre"; then
-            temporal="${FICHERO}.tmp.$$"
-            awk -F '\t' -v quitada="$nombre" '$1 != quitada' "$FICHERO" > "$temporal"
-            mv "$temporal" "$FICHERO"
-            exit 0
-        fi
-        printf "can't find session: %s\n" "$nombre" >&2
+orden_list_windows() {
+    preparar_estado
+    if [ ! -s "$FICHERO" ]; then
+        printf 'no server running on %s\n' "$FICHERO" >&2
         exit 1
+    fi
+    formatear ventanas "$V_F"
+}
+
+orden_capture_pane() {
+    preparar_estado
+    nombre=$(resolver_sesion "$V_t") || {
+        printf "can't find pane: %s\n" "$V_t" >&2
+        exit 1
+    }
+    # Con «-t =nombre» (sin «:») el tmux real no encuentra el panel.
+    case "$V_t" in
+        =*:) ;;
+        *)
+            printf "can't find pane: %s\n" "$V_t" >&2
+            exit 1
+            ;;
+    esac
+    pantalla="${FICHERO}.pantalla.${nombre}"
+    if [ -f "$pantalla" ]; then
+        cat "$pantalla"
+    else
+        # Pantalla por defecto: tres líneas, una con espacios al final y el
+        # resto vacío, como un panel de tmux sin recortar.
+        printf 'linea uno  \nlinea dos\n\nlinea tres   \n\n\n'
+    fi
+}
+
+orden_kill_server() {
+    preparar_estado
+    : > "$FICHERO"
+}
+
+# --------------------------------------------- análisis de las órdenes
+
+IFS_ORIGINAL=$IFS
+FICHERO=''
+SOCKET=''
+
+# Opciones globales de tmux antes de la primera orden.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -V)
+            printf '%s\n' "$VERSION"
+            exit 0
+            ;;
+        -L)
+            SOCKET=${2:-}
+            shift
+            ;;
+        -f|-S|-c|-T)
+            shift
+            ;;
+        -[A-Za-z0-9]*)
+            ;;
+        *)
+            break
+            ;;
+    esac
+    [ $# -gt 0 ] && shift
+done
+
+case "$SOCKET" in
+    '') FICHERO=$HABITUAL ;;
+    magi)
+        FICHERO=${MAGI_TMUX_ESTADO_MAGI:-}
+        if [ -z "$FICHERO" ] && [ -n "$HABITUAL" ]; then
+            FICHERO="${HABITUAL}.magi"
+        fi
         ;;
     *)
-        printf 'tmux falso: suborden no soportado: %s\n' "$SUBORDEN" >&2
-        exit 2
+        if [ -n "$HABITUAL" ]; then
+            FICHERO="${HABITUAL}.${SOCKET}"
+        fi
         ;;
 esac
+
+# La orden en curso de la secuencia y lo que lleva reconocido.
+C_ORDEN=''
+C_BANDERAS=''
+C_POS=''
+C_ESPERA=''
+C_FIN_OPCIONES=0
+V_s=''
+V_t=''
+V_F=''
+
+reiniciar_orden() {
+    C_ORDEN=''
+    C_BANDERAS=''
+    C_POS=''
+    C_ESPERA=''
+    C_FIN_OPCIONES=0
+    V_s=''
+    V_t=''
+    V_F=''
+}
+
+tiene_bandera() {
+    case "$C_BANDERAS" in
+        *"$1"*) return 0 ;;
+    esac
+    return 1
+}
+
+guardar_valor() {
+    case "$1" in
+        s) V_s=$2 ;;
+        t) V_t=$2 ;;
+        F) V_F=$2 ;;
+        *) ;;
+    esac
+}
+
+# Letras de opción que toman un valor, por orden.
+letras_con_valor() {
+    case "$C_ORDEN" in
+        new-session|new) printf '%s' 'scxynFte' ;;
+        set-option|set) printf '%s' 't' ;;
+        attach-session|attach|a) printf '%s' 'tcfx' ;;
+        kill-session|rename-session|has-session|has) printf '%s' 't' ;;
+        list-sessions|ls|list-windows|lsw) printf '%s' 'Ft' ;;
+        capture-pane|capturep) printf '%s' 'bEESt' ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
+# Una palabra de la orden en curso.
+consumir_palabra() {
+    palabra=$1
+    if [ -n "$C_ESPERA" ]; then
+        guardar_valor "$C_ESPERA" "$palabra"
+        C_ESPERA=''
+        return
+    fi
+    if [ "$C_FIN_OPCIONES" -eq 0 ]; then
+        case "$palabra" in
+            --)
+                C_FIN_OPCIONES=1
+                return
+                ;;
+            -?*)
+                con_valor=$(letras_con_valor)
+                resto=${palabra#-}
+                while [ -n "$resto" ]; do
+                    letra=${resto%"${resto#?}"}
+                    resto=${resto#?}
+                    case "$con_valor" in
+                        *"$letra"*)
+                            if [ -n "$resto" ]; then
+                                guardar_valor "$letra" "$resto"
+                            else
+                                C_ESPERA=$letra
+                            fi
+                            return
+                            ;;
+                        *)
+                            C_BANDERAS="$C_BANDERAS$letra"
+                            ;;
+                    esac
+                done
+                return
+                ;;
+        esac
+    fi
+    # El primer posicional de new-session ya es el programa: lo que sigue
+    # tampoco es una opción.
+    C_POS="${C_POS:+$C_POS$US}$palabra"
+    case "$C_ORDEN" in
+        new-session|new) C_FIN_OPCIONES=1 ;;
+    esac
+}
+
+ejecutar_orden() {
+    case "$C_ORDEN" in
+        '') ;;
+        -V) ;;
+        start-server|start) ;;
+        set-option|set) orden_set ;;
+        new-session|new) orden_new_session ;;
+        attach-session|attach|a) orden_attach ;;
+        kill-session) orden_kill_session ;;
+        rename-session) orden_rename_session ;;
+        has-session|has) orden_has_session ;;
+        list-sessions|ls) orden_list_sessions ;;
+        list-windows|lsw) orden_list_windows ;;
+        capture-pane|capturep) orden_capture_pane ;;
+        kill-server) orden_kill_server ;;
+        *)
+            printf 'tmux falso: suborden no soportado: %s\n' "$C_ORDEN" >&2
+            exit 2
+            ;;
+    esac
+}
+
+# La secuencia entera: las órdenes van separadas por «;». Si una falla, sale
+# con su código y no se ejecuta ninguna de las siguientes (como tmux).
+reiniciar_orden
+for palabra in "$@"; do
+    if [ "$palabra" = ';' ]; then
+        ejecutar_orden
+        reiniciar_orden
+        continue
+    fi
+    if [ -z "$C_ORDEN" ]; then
+        C_ORDEN=$palabra
+        continue
+    fi
+    consumir_palabra "$palabra"
+done
+ejecutar_orden
+exit 0

@@ -3,6 +3,13 @@
 //! ratón, OSC 52, campana y título) y deja por su salida estándar lo que ha
 //! visto, para que las pruebas de extremo a extremo lo comprueben.
 //!
+//! Desde la Fase 16 puede pedir además `modifyOtherKeys` de xterm, como hace
+//! tmux: con el argumento `--modify-other-keys` (nivel 2) o
+//! `--modify-other-keys=1`, o con la variable de entorno
+//! `MAGI_TUI_MODIFY_OTHER_KEYS` (`1` o `2`). Con ellos no empuja la bandera de
+//! kitty (tmux no se la pide al terminal de fuera). Sin ellos no pide nada de
+//! eso y se comporta como en la Fase 15.
+//!
 //! Se compila en la propia prueba con rustc y se ejecuta en el servidor SSH de
 //! pruebas como programa de la sesión. Solo usa la biblioteca estándar: un hilo
 //! lee la entrada estándar y el principal la consume con plazo, porque la
@@ -17,6 +24,8 @@
 //!   LISTO                   ya está configurado y esperando entrada
 //!   PEGADO <lineas> <hex>   llegó un pegado entre corchetes
 //!   MAYUS_INTRO             llegó CSI 13;2u (Mayús+Intro del teclado de kitty)
+//!                           o CSI 27;2;13~ (el de modifyOtherKeys de xterm)
+//!   TECLA27 <m> <k>         llegó CSI 27;<m>;<k>~ (modifyOtherKeys): modificadores y código
 //!   RATON <hex>             llegó un evento de ratón SGR
 //!   FIN                     fin de la entrada estándar
 
@@ -83,6 +92,24 @@ fn check(nombre: &str, todo: &[u8], esperado: &[u8]) {
     informar(&format!("CHECK {nombre}={}", if encontrado { "ok" } else { "no" }));
 }
 
+/// Nivel de `modifyOtherKeys` que debe pedir: el del argumento
+/// `--modify-other-keys[=N]` o el de `MAGI_TUI_MODIFY_OTHER_KEYS`. Sin ninguno
+/// de los dos, `None` y no pide nada.
+fn nivel_modify_other_keys() -> Option<u8> {
+    for argumento in std::env::args().skip(1) {
+        if argumento == "--modify-other-keys" {
+            return Some(2);
+        }
+        if let Some(nivel) = argumento.strip_prefix("--modify-other-keys=") {
+            return nivel.parse().ok().filter(|nivel| *nivel == 1 || *nivel == 2);
+        }
+    }
+    std::env::var("MAGI_TUI_MODIFY_OTHER_KEYS")
+        .ok()
+        .and_then(|nivel| nivel.parse().ok())
+        .filter(|nivel| *nivel == 1 || *nivel == 2)
+}
+
 fn main() {
     poner_modo_crudo();
     let rx = lector_de_entrada();
@@ -99,7 +126,15 @@ fn main() {
 
     // 2. Configuración: modos que usa una TUI moderna. La salida sincronizada
     //    se abre y se cierra para probar que no hay estados intermedios.
-    escribir(b"\x1b[?2004h\x1b[>1u\x1b[?1000h\x1b[?1006h");
+    //    Con `--modify-other-keys` pide modifyOtherKeys como tmux, en lugar de
+    //    la bandera de kitty (tmux no se la pide al terminal de fuera, y con
+    //    las dos puestas gana kitty).
+    match nivel_modify_other_keys() {
+        Some(nivel) => escribir(
+            format!("\x1b[?2004h\x1b[>4;{nivel}m\x1b[?1000h\x1b[?1006h").as_bytes(),
+        ),
+        None => escribir(b"\x1b[?2004h\x1b[>1u\x1b[?1000h\x1b[?1006h"),
+    }
     escribir(b"\x1b]2;Claude Code\x07");
     escribir(b"\x07");
     escribir(b"\x1b[?2026h");
@@ -128,6 +163,14 @@ fn main() {
             informar("MAYUS_INTRO");
             quitar(&mut todo, b"\x1b[13;2u");
         }
+        // modifyOtherKeys de xterm: CSI 27;<m>;<k>~. Mayús+Intro es 27;2;13.
+        while let Some((modificadores, codigo, desde, hasta)) = tecla27(&todo) {
+            if modificadores == 2 && codigo == 13 {
+                informar("MAYUS_INTRO");
+            }
+            informar(&format!("TECLA27 {modificadores} {codigo}"));
+            todo.drain(desde..hasta);
+        }
         if contiene(&todo, b"\x1b[<") {
             let desde = posicion(&todo, b"\x1b[<").unwrap_or(0);
             let hasta = todo[desde..]
@@ -140,6 +183,22 @@ fn main() {
         }
     }
     informar("FIN");
+}
+
+/// Primera secuencia `CSI 27 ; m ; k ~` de `donde`: modificadores, código y
+/// el tramo que ocupa.
+fn tecla27(donde: &[u8]) -> Option<(u32, u32, usize, usize)> {
+    let desde = posicion(donde, b"\x1b[27;")?;
+    let resto = &donde[desde + 5..];
+    let fin = resto.iter().position(|b| *b == b'~')?;
+    let texto = std::str::from_utf8(&resto[..fin]).ok()?;
+    let (modificadores, codigo) = texto.split_once(';')?;
+    Some((
+        modificadores.parse().ok()?,
+        codigo.parse().ok()?,
+        desde,
+        desde + 5 + fin + 1,
+    ))
 }
 
 fn contiene(donde: &[u8], que: &[u8]) -> bool {

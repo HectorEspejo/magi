@@ -14,9 +14,11 @@ use std::collections::BTreeMap;
 
 use magi_nucleo::escritorio::TipoHost;
 use magi_nucleo::sincronizacion::cifrado::ClaveSincronizacion;
-use magi_nucleo::sincronizacion::elementos::{DatosComprobacionServicio, DatosGrupo, DatosHost};
+use magi_nucleo::sincronizacion::elementos::{
+    DatosComprobacionServicio, DatosGrupo, DatosHost, DatosSesionPersistente,
+};
 use magi_nucleo::sincronizacion::formato::{
-    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1, FORMATO_3,
+    self, Documento, ElementoDocumento, EquipoDocumento, FORMATO_1, FORMATO_3, FORMATO_4,
 };
 
 const CLAVE: &str = "AGE-SECRET-KEY-1TSKT6QRX7APKJPLTTJUKRXVATA8H7DAX3ZZH8D5SEQ94R2G3YRDSZSYMTS";
@@ -232,6 +234,130 @@ fn generar_fixture_android_formato3() {
     std::fs::write(&ruta, &cifrado).expect("escribiendo el fichero de pruebas");
     println!(
         "fixture del formato 3 escrita en {} ({} bytes)",
+        ruta.display(),
+        cifrado.len()
+    );
+    println!("clave de la fixture: {CLAVE}");
+}
+
+// ---------------------------------------------------------------------------
+// Fixture del formato 4 (Fase 16).
+//
+// La prueba del emulador (android/app/src/androidTest/.../
+// PruebaFormato4SincronizacionAndroid.kt) la importa con el núcleo real y
+// comprueba que lee el formato 4 (una ficha de sesión persistente y un host
+// marcado), que no queda como «formato nuevo» y que el equipo queda al día. La
+// app guarda las fichas y la marca sin enseñarlas ni usarlas (D326).
+//
+//   cargo test -p magi-nucleo --test generar_fixture_android \
+//       generar_fixture_android_formato4 -- --ignored --nocapture
+// ---------------------------------------------------------------------------
+
+const UUID_EQUIPO_F4: &str = "ffffffff-aaaa-4bbb-8ccc-dddddddddddd";
+const UUID_GRUPO_F4: &str = "33333333-4444-4666-8777-888888888888";
+const UUID_WEB_F4: &str = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+const UUID_FICHA_F4: &str = "13131313-2424-4535-8646-757575757575";
+
+/// Elemento del documento del formato 4, con el vector del equipo de pruebas y
+/// una versión con la forma real (`<ms con 13 cifras>.<uuid del equipo>`).
+fn elemento_formato4(tipo: &str, uuid: &str, datos: serde_json::Value) -> ElementoDocumento {
+    let ms = 1_700_000_000_000i64;
+    let mut vector = BTreeMap::new();
+    vector.insert(UUID_EQUIPO_F4.to_string(), ms);
+    ElementoDocumento {
+        tipo: tipo.to_string(),
+        uuid: uuid.to_string(),
+        version: format!("{ms:013}.{UUID_EQUIPO_F4}"),
+        vector,
+        datos,
+    }
+}
+
+#[test]
+#[ignore = "herramienta: regenera la fixture del formato 4 que usa la prueba del emulador de Android"]
+fn generar_fixture_android_formato4() {
+    let clave = ClaveSincronizacion::desde_texto(CLAVE).expect("clave de prueba válida");
+    let mut elementos = vec![elemento_formato4(
+        "grupo",
+        UUID_GRUPO_F4,
+        serde_json::to_value(DatosGrupo {
+            nombre: "produccion".to_string(),
+            orden: 1,
+        })
+        .unwrap(),
+    )];
+    // El host va marcado «todas las sesiones persistentes»: la marca viaja
+    // desde el formato 4 y la app la guarda sin usarla.
+    elementos.push(elemento_formato4(
+        "host",
+        UUID_WEB_F4,
+        serde_json::to_value(DatosHost {
+            nombre: "web-01".to_string(),
+            direccion: "192.0.2.10".to_string(),
+            puerto: 22,
+            tipo: TipoHost::Ssh,
+            escritorio_dominio: None,
+            escritorio_opciones: serde_json::json!({}),
+            usuario: Some("usuario".to_string()),
+            identidad_ref: None,
+            salto: None,
+            grupo: Some(UUID_GRUPO_F4.to_string()),
+            multiplexar: false,
+            keepalive_seg: Some(30),
+            opciones_extra: String::new(),
+            servicios: String::new(),
+            origen: "manual".to_string(),
+            etiquetas: vec!["web".to_string()],
+            verificaciones: None,
+            snippet_al_conectar: None,
+            sesiones_persistentes: true,
+        })
+        .unwrap(),
+    ));
+    // Una ficha de sesión persistente: es lo que obliga a escribir el formato 4
+    // (Fase 16, D328); viaja con host, nombre, carpeta, comandos, nota, origen
+    // y quién la creó.
+    elementos.push(elemento_formato4(
+        "sesion_persistente",
+        UUID_FICHA_F4,
+        serde_json::to_value(DatosSesionPersistente {
+            host: UUID_WEB_F4.to_string(),
+            nombre: "agente".to_string(),
+            carpeta: Some("~/proyectos/api".to_string()),
+            comando: Some("claude".to_string()),
+            comando_reanudar: Some("claude --continue".to_string()),
+            nota: None,
+            origen: "manual".to_string(),
+            creada_por: "escritorio".to_string(),
+        })
+        .unwrap(),
+    ));
+    let documento = Documento {
+        formato: FORMATO_4,
+        app: "1.5.0".to_string(),
+        equipo: EquipoDocumento {
+            uuid: UUID_EQUIPO_F4.to_string(),
+            nombre: "escritorio-pruebas".to_string(),
+            plataforma: "linux".to_string(),
+        },
+        generado_en: magi_nucleo::modelo::fecha_ahora(),
+        reloj_ms: 1_700_000_000_000,
+        elementos,
+        lapidas: Vec::new(),
+        huellas: Vec::new(),
+        equipos_quitados: Vec::new(),
+    };
+    let json = formato::serializar(&documento).expect("JSON del documento");
+    let firma = clave.firmar(json.as_bytes()).expect("firma");
+    let plano = formato::componer(&json, &firma, FORMATO_4);
+    let cifrado = clave.cifrar(&plano).expect("cifrado");
+    let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let carpeta = raiz.join("../../android/app/src/androidTest/assets/sincronizacion");
+    std::fs::create_dir_all(&carpeta).expect("carpeta de assets de androidTest");
+    let ruta = carpeta.join(format!("magi-{UUID_EQUIPO_F4}.age"));
+    std::fs::write(&ruta, &cifrado).expect("escribiendo el fichero de pruebas");
+    println!(
+        "fixture del formato 4 escrita en {} ({} bytes)",
         ruta.display(),
         cifrado.len()
     );

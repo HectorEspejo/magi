@@ -311,6 +311,12 @@ class PruebaConversiones {
             .aVista(app = "0.2.0", codigo = 209)
         assertEquals(3, version13.formato)
         assertEquals(9, version13.userVersion)
+        // Fase 16: el núcleo declara el formato 4 y la migración 11; la app los
+        // muestra tal cual (lee las fichas de sesiones persistentes sin usarlas).
+        val version16 = VersionNucleo(nucleo = "1.5.0", formato = 4U, userVersion = 11U)
+            .aVista(app = "0.3.0", codigo = 309)
+        assertEquals(4, version16.formato)
+        assertEquals(11, version16.userVersion)
     }
 
     @Test

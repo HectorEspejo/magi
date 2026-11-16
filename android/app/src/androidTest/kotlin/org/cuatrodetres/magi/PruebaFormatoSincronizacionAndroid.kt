@@ -89,10 +89,11 @@ class PruebaFormatoSincronizacionAndroid {
             ),
         )
 
-        // El núcleo declara el formato máximo 3 (Fase 13) y la migración 10 (Fase 15).
+        // El núcleo declara el formato máximo 4 (Fase 16) y la migración 11; el
+        // fichero de esta prueba es del formato 3, que también se lee.
         val version = nucleo!!.version()
-        assertEquals(3, version.formato.toInt())
-        assertEquals(10, version.userVersion.toInt())
+        assertEquals(4, version.formato.toInt())
+        assertEquals(11, version.userVersion.toInt())
 
         // Importa la fixture del formato 3 (lleva host y comprobación propia).
         nucleo!!.elegirCarpeta(CARPETA)
