@@ -16,6 +16,11 @@ cuenta, sin suscripción y sin telemetría. Primera versión pública: **1.0.0**
 
 - Linux (Omarchy/Arch, o cualquier distribución con glibc ≥ 2.35) o macOS.
 - Opcional: `ssh-agent` en `SSH_AUTH_SOCK` para autenticar sin frase.
+- En Linux, para recordar contraseñas y para la sincronización (su clave vive
+  en el llavero): `secret-tool` y un servicio de llavero en la sesión (GNOME
+  Keyring, KWallet con «Secret Service» o KeePassXC). En Debian y Ubuntu,
+  `sudo apt install libsecret-tools gnome-keyring` y volver a iniciar sesión;
+  en Arch, `libsecret` y `gnome-keyring`. En macOS se usa el Keychain.
 - Solo para compilar desde el código: Rust stable (edición 2021, MSRV 1.86).
 
 ## Instalación

@@ -88,7 +88,69 @@ esperando a que cerrara. Ahora el copiado espera un breve plazo al proceso
 directo y, si sigue vivo, lo deja sirviendo y lo recoge en segundo plano; hay
 pruebas de regresión del caso del daemon y de `wl-copy` real con Wayland.
 
+**Tercera corrección posterior (15 de noviembre de 2026, rama
+`correccion-age-android`).** En la APK debug, sincronizar fallaba con
+`LanguageNotAvailable`. `age` mete sus textos de error (`i18n/*.ftl`) con
+`rust-embed`, que en una compilación debug no los incrusta: los lee de la ruta
+donde se compiló, que en el móvil no existe. Al formatear el primer error de
+`age`, la carga de esos textos hacía `unwrap()` y entraba en pánico. Y
+`ClaveSincronizacion::descifrar` formateaba el error aunque nadie lo usara: la
+pasada prueba cada clave y descarta el fallo. Así, cualquier fichero de la
+carpeta que no abriera con una de las claves del móvil interrumpía la unión o
+la pasada y tapaba el motivo real. La release no estaba afectada (incrusta los
+textos). El arreglo tiene dos partes: `magi-nucleo` declara `rust-embed` con
+`debug-embed` y `cifrado.rs` explica los errores de `age` con textos
+propios en castellano, sin su `Display`. Hay prueba unitaria de los
+textos y una instrumentada nueva, `PruebaSincronizacionFicheroAjeno`, que
+reproduce el pánico sin el arreglo (`InternalException: … LanguageNotAvailable("en-US/age.ftl", …)`)
+y pasa con él. Al ejecutar todas las instrumentadas salió además que
+`PruebaHumoNucleo` y `PruebaFormatoSincronizacionAndroid` esperaban
+`user_version` 9: la migración 10 de esta fase las rompió y no se habían
+ejecutado. Se actualizaron a 10.
+
+**Cuarta corrección posterior (15 de noviembre de 2026, misma rama).** Con la
+sincronización ya funcionando, Flota del móvil seguía vacía. Es un fallo de la
+Fase 14. Flota leía su lista una sola vez, al abrirse, y después solo la
+actualizaba el sondeo. La pasada de sincronización difundía el estado de la
+sincronización, pero no la lista de Flota. Al volver, al deslizar y en el
+refresco automático, Flota sondea solo los hosts de su lista; vacía, no sondeaba
+nada. Si se abría antes de tener inventario, seguía vacía hasta reiniciar la
+app. Ahora `pasada_en_segundo_plano`, `dejar_de_sincronizar` y `borrar_datos`
+llaman a `flota::emitir_flota` al terminar, y `VistaModeloFlota.alVolverALaVista`
+relee la lista (sin pisar una más nueva que llegue por el flujo). Hay prueba
+en Rust, `sincronizacion_flota_e2e` (falla sin el arreglo), y prueba JVM del
+ViewModel. Comprobado también en el móvil real del desarrollador con la APK de
+prueba: los dos arreglos (el de `age` y el de Flota) funcionan.
+
+**Mejoras posteriores (15 de noviembre de 2026, misma rama, aprobadas por el
+desarrollador).** Al unir un ordenador Ubuntu salieron dos avisos que no
+ayudaban:
+- Pegar la clave daba «invalid Bech32 encoding»: el escritorio solo quitaba
+  los espacios de los extremos. Ahora `ClaveSincronizacion::desde_texto`
+  normaliza la clave en el núcleo para los dos (sin espacios ni saltos de
+  línea y en mayúsculas, con `normalizar_clave` en `Zeroizing`). Si no vale,
+  explica en castellano qué le pasa (vacía, clave pública, prefijo o
+  incompleta). El móvil deja su copia de la normalización y no duplica el
+  prefijo del error.
+- El llavero de Linux daba «el llavero devolvió exit status: 1». Ahora
+  `src/llavero.rs` captura la salida de error de `secret-tool` (el secreto entra
+  por la entrada estándar y nunca sale por ahí), la enseña en una línea y
+  acotada, y en los casos conocidos dice qué hacer (sin servicio de llavero,
+  sin D-Bus). Si falta `secret-tool`, dice qué paquete instalar.
+
+Además, `cargo deny` fallaba por un aviso de RustSec publicado después de cerrar
+la fase (RUSTSEC-2026-0495, el servidor de agente de `russh` 0.63). Se añade la
+excepción con fecha límite en CI (2027-05-15), porque MAGI solo usa
+`agent::client`.
+
 ## Desviaciones respecto a la especificación
+
+- **Mejoras fuera del checklist (15 de noviembre de 2026).** La normalización
+  de la clave pegada en el escritorio, los mensajes propios para una clave no
+  válida y los errores del llavero con el motivo de `secret-tool` y el paquete
+  a instalar no están en el checklist de la fase. Las propuso la sesión al
+  diagnosticar la unión de un Ubuntu y el desarrollador las aprobó antes de
+  implementarlas.
 
 - **`DatosHost` no lleva los ajustes nuevos del host.** La ficha guarda
   `reconectar`, `tmux_persistente` y `portapapeles_remoto` con setters propios
@@ -189,6 +251,29 @@ Documentación y publicación: `CHANGELOG.md`, `README.md` (sección «Terminal�
 `Cargo.toml` (1.4.0), `src/lib.rs` (fecha de versión), `assets/` regenerado y
 este informe.
 
+Tercera corrección posterior (`correccion-age-android`):
+`crates/magi-nucleo/Cargo.toml` (`rust-embed` con `debug-embed`) y
+`Cargo.lock`; `crates/magi-nucleo/src/sincronizacion/cifrado.rs` (textos
+propios de los errores de `age` y su prueba); en `android/app/src/androidTest/`,
+`PruebaSincronizacionFicheroAjeno.kt` (**nuevo**), `AyudasPrueba.kt` (ficheros
+ajenos en la carpeta de prueba) y la `user_version` 10 en `PruebaHumoNucleo.kt`
+y `PruebaFormatoSincronizacionAndroid.kt`; `android/CHANGELOG.md` y `CLAUDE.md`
+(regla de `age`).
+
+Mejoras posteriores: `crates/magi-nucleo/src/sincronizacion/cifrado.rs`
+(`normalizar_clave` y mensajes de clave no válida), `crates/magi-movil/src/sincro.rs`
+(usa la del núcleo), `src/llavero.rs` (salida de error de `secret-tool`),
+`tests/sincronizacion_equipos.rs` (clave pegada en dos líneas), `README.md`
+(requisito del llavero en Linux), `CHANGELOG.md`, `deny.toml` y
+`.github/workflows/ci.yml` (excepción RUSTSEC-2026-0495 y su caducidad) y
+`CLAUDE.md` (excepción nueva y regla de Flota).
+
+Cuarta corrección posterior: `crates/magi-movil/src/sincro.rs` (difunde Flota),
+`crates/magi-movil/tests/sincronizacion_flota_e2e.rs` (**nuevo**) y
+`tests/comun/mod.rs` (`CarpetaConFicheros` y `PruebaNucleo::usar_carpeta`);
+`android/app/src/main/kotlin/.../ui/flota/VistaModeloFlota.kt` (relee al volver)
+y `PruebaVistaModeloFlota.kt`.
+
 ## Decisiones técnicas tomadas durante el desarrollo
 
 - **Un solo emulador para servidor y cliente**, con `responder` como única
@@ -222,6 +307,17 @@ este informe.
   se corrigió el desfase de una celda y el límite 223/2015.
 - **Versión del producto en el emulador**: la inyecta el servidor con
   `fijar_version(env!("CARGO_PKG_VERSION"))`; DA2 responde 10400.
+- **`rust-embed` con `debug-embed` desde `magi-nucleo`** (tercera corrección):
+  la dependencia no se usa en el código, solo activa la feature en el
+  `rust-embed` de `age` por unificación de features. Así una compilación debug
+  incrusta los `.ftl` como la release. Se descartó
+  `[profile.dev.package.age] debug-assertions = false`, que también funciona
+  pero depende de cómo genera el código la macro de `rust-embed`.
+- **Los errores de `age` se explican con textos propios** (`cifrado.rs`), con
+  `match` exhaustivo sobre `DecryptError` y `EncryptError`: si un día se activa
+  la feature `plugin` de `age`, no compila hasta darles texto. Así un fallo de
+  descifrado, que en la pasada es el camino normal, nunca pasa por los textos
+  traducidos de `age`, y el mensaje sale en castellano.
 
 ## Funcionalidades del checklist completadas
 
@@ -393,10 +489,15 @@ este informe.
 
 - **Validación manual con Claude Code real** (guion en «Ejecución y pruebas»):
   requiere el equipo y los terminales del desarrollador.
-- **Pruebas instrumentadas de Android**: no se han ejecutado en esta máquina
-  (necesitan emulador y el servidor de pruebas del anfitrión; el job `humo` de
-  CI las cubre). Las pruebas JVM y las de extremo a extremo en Rust están en
-  verde y el móvil no se ha tocado: por eso el checklist queda en 95/96.
+- **Pruebas instrumentadas de Android**: no se ejecutaron al cerrar la fase.
+  Se ejecutaron el 15 de noviembre de 2026, con la tercera corrección, en el
+  emulador `magi-api30` y con el servidor de pruebas del anfitrión: dos
+  (`PruebaHumoNucleo` y `PruebaFormatoSincronizacionAndroid`) fallaban porque
+  esperaban `user_version` 9 y la migración 10 de esta fase la sube a 10. Se
+  actualizaron y ahora pasan 13/13, sin omitir ninguna. El elemento del
+  checklist «El móvil no cambia: … instrumentadas siguen en verde sin tocarlas»
+  se deja sin marcar: hubo que tocarlas. Queda a criterio del analista si basta
+  con el estado actual (95/96).
 - Limitaciones documentadas arriba: región de scroll al rehacer el parser y
   diferencias de presentación del modo historial/enlaces.
 - Cualquier hallazgo de la revisión adversarial del servidor que no se haya
@@ -425,6 +526,25 @@ este informe.
   cinco suites de extremo a extremo en Rust en verde y
   `./gradlew testDebugUnitTest` en verde. Las instrumentadas de Android quedan
   para el emulador/CI (job `humo`).
+- Tercera corrección (15 de noviembre de 2026): `TZ=UTC cargo test --workspace
+  --locked` → **64 binarios, 1.911 pruebas pasadas, 0 fallos** (la nueva es
+  `los_errores_de_age_se_explican_sin_sus_textos_traducidos`); clippy y fmt
+  limpios; en `android/`, `./gradlew lint testDebugUnitTest` → lint sin errores
+  y 203 pruebas JVM sin fallos, y `./gradlew connectedDebugAndroidTest` en el
+  emulador `magi-api30` (desbloqueado con su PIN) con `cargo run -p magi-movil
+  --example servidor_pruebas` levantado → **13/13**. `cargo deny check` falló
+  entonces por un aviso nuevo de RustSec, RUSTSEC-2026-0495 (servidor de agente
+  de `russh` 0.63.3; el parche está en 0.65), que no era de este cambio.
+- Con la cuarta corrección y las mejoras (15 de noviembre de 2026):
+  `TZ=UTC cargo test --workspace --locked` → **65 binarios, 1.915 pruebas
+  pasadas, 0 fallos**. Las nuevas son `sincronizacion_flota_e2e`,
+  `la_clave_pegada_se_normaliza_y_sus_errores_dicen_que_pasa`,
+  `unir_acepta_la_clave_pegada_en_dos_lineas_y_en_minusculas` y las dos del
+  llavero; se quita la de normalización del móvil, que pasa al núcleo. fmt y
+  clippy limpios. `cargo deny check` en verde con la excepción RUSTSEC-2026-0495
+  y `actionlint` limpio. En `android/`: lint sin errores, **204 pruebas JVM** y
+  **13/13 instrumentadas**. Además se comprobó a mano el error del llavero con
+  un `secret-tool` falso que imita el de un Ubuntu sin servicio de llavero.
 
 ### Guion de validación manual con Claude Code real
 

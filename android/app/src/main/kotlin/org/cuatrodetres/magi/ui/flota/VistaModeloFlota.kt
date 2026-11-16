@@ -99,9 +99,13 @@ class VistaModeloFlota(
 
     private var iniciado = false
 
+    /** Listas recibidas por el flujo: una relectura no pisa una más nueva. */
+    private var listasDelNucleo = 0L
+
     init {
         alcance.launch {
             fuente.flota.collect { lista ->
+                listasDelNucleo++
                 _estado.update { it.copy(hosts = lista, cargando = false) }
                 actualizarFicha()
             }
@@ -136,7 +140,7 @@ class VistaModeloFlota(
         }
     }
 
-    /** Vuelve a Flota desde otra pantalla: sondea todos otra vez (manual). */
+    /** Vuelve a Flota desde otra pantalla: relee la lista y sondea todos (manual). */
     fun alVolverALaVista() {
         if (!iniciado) {
             iniciar()
@@ -144,7 +148,28 @@ class VistaModeloFlota(
         }
         alcance.launch {
             cargarGrupos()
+            releerHosts()
             sondearTodos()
+        }
+    }
+
+    /**
+     * Relee la lista completa del núcleo. El inventario puede haber cambiado
+     * fuera de la vista (una sincronización desde Ajustes): con la lista vieja,
+     * y vacía, Flota no sondeaba nada que la refrescara.
+     */
+    private suspend fun releerHosts() {
+        val antes = listasDelNucleo
+        val lista = try {
+            fuente.flota(null)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            avisoNucleo(e.message.orEmpty())
+            return
+        }
+        // Una lista que llegó por el flujo mientras se leía es más nueva.
+        if (listasDelNucleo == antes) {
+            _estado.update { it.copy(hosts = lista) }
         }
     }
 

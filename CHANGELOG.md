@@ -131,6 +131,22 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
+  encoding».** Copiada de la terminal, la clave suele llegar partida en dos
+  líneas o con espacios, y el escritorio solo quitaba los de los extremos.
+  Ahora quita todos los espacios y la pasa a mayúsculas, como el móvil. Si la
+  clave no vale, el aviso dice por qué en castellano: está vacía, es la clave
+  pública (`age1…`), no empieza por `AGE-SECRET-KEY-1` o está incompleta.
+
+- **Los errores del llavero en Linux no decían qué pasaba.** MAGI descartaba
+  lo que `secret-tool` escribía por la salida de error y solo enseñaba «el
+  llavero devolvió exit status: 1». Ahora el aviso lleva ese mensaje y, en los
+  casos conocidos, qué hacer: sin servicio de llavero en la sesión, instalar
+  `gnome-keyring` (o activar KWallet o KeePassXC); sin sesión de D-Bus, abrir
+  MAGI desde la sesión gráfica. Si falta `secret-tool`, dice qué paquete
+  instalar en Debian y Ubuntu, Arch o Fedora. El README lo pone en los
+  requisitos de Linux.
+
 - **Copiar colgaba la aplicación en Wayland.** `wl-copy` se queda como daemon
   sirviendo el portapapeles y hereda su salida de error; al esperar a leer su
   fin la interfaz se quedaba bloqueada para siempre (parecía un cierre). Ahora

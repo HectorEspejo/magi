@@ -105,6 +105,12 @@ mod backend {
         Fallo(String),
     }
 
+    /// Sin `secret-tool` no hay llavero: el aviso dice qué paquete instalar.
+    const FALTA_SECRET_TOOL: &str = "no se encontró secret-tool (llavero del sistema): instálalo con «sudo apt install libsecret-tools» en Debian y Ubuntu, «sudo pacman -S libsecret» en Arch o «sudo dnf install libsecret» en Fedora";
+
+    /// Tope de lo que se enseña de la salida de error de `secret-tool`.
+    const TOPE_SALIDA_ERROR: usize = 300;
+
     pub fn guardar(host: &str, usuario: &str, contrasena: &str) -> Result<(), String> {
         let mut errores: Vec<String> = Vec::new();
         let resultado = lanzar(
@@ -121,9 +127,7 @@ mod backend {
             true,
         );
         match resultado {
-            Err(Fallo::NoExiste) => {
-                return Err("no se encontró secret-tool (llavero del sistema)".to_string())
-            }
+            Err(Fallo::NoExiste) => return Err(FALTA_SECRET_TOOL.to_string()),
             Err(Fallo::Fallo(motivo)) => errores.push(motivo),
             Ok(mut proceso) => {
                 if let Some(mut entrada) = proceso.stdin.take() {
@@ -131,7 +135,7 @@ mod backend {
                         errores.push(error.to_string());
                     }
                 }
-                if let Err(Fallo::Fallo(motivo)) = comprobar(&mut proceso) {
+                if let Err(Fallo::Fallo(motivo)) = comprobar(proceso) {
                     errores.push(motivo);
                 }
                 if errores.is_empty() {
@@ -150,7 +154,7 @@ mod backend {
         let proceso = match comando.spawn() {
             Ok(proceso) => proceso,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err("no se encontró secret-tool (llavero del sistema)".to_string());
+                return Err(FALTA_SECRET_TOOL.to_string());
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -177,7 +181,7 @@ mod backend {
                 Ok(salida.success())
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err("no se encontró secret-tool (llavero del sistema)".to_string())
+                Err(FALTA_SECRET_TOOL.to_string())
             }
             Err(error) => Err(error.to_string()),
         }
@@ -192,9 +196,7 @@ mod backend {
             true,
         );
         match resultado {
-            Err(Fallo::NoExiste) => {
-                return Err("no se encontró secret-tool (llavero del sistema)".to_string())
-            }
+            Err(Fallo::NoExiste) => return Err(FALTA_SECRET_TOOL.to_string()),
             Err(Fallo::Fallo(motivo)) => errores.push(motivo),
             Ok(mut proceso) => {
                 if let Some(mut entrada) = proceso.stdin.take() {
@@ -202,7 +204,7 @@ mod backend {
                         errores.push(error.to_string());
                     }
                 }
-                if let Err(Fallo::Fallo(motivo)) = comprobar(&mut proceso) {
+                if let Err(Fallo::Fallo(motivo)) = comprobar(proceso) {
                     errores.push(motivo);
                 }
                 if errores.is_empty() {
@@ -220,7 +222,7 @@ mod backend {
         let proceso = match comando.spawn() {
             Ok(proceso) => proceso,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err("no se encontró secret-tool (llavero del sistema)".to_string());
+                return Err(FALTA_SECRET_TOOL.to_string());
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -246,7 +248,7 @@ mod backend {
                 Ok(salida.success())
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err("no se encontró secret-tool (llavero del sistema)".to_string())
+                Err(FALTA_SECRET_TOOL.to_string())
             }
             Err(error) => Err(error.to_string()),
         }
@@ -272,7 +274,9 @@ mod backend {
         if con_entrada {
             comando.stdin(Stdio::piped());
         }
-        comando.stdout(Stdio::piped()).stderr(Stdio::null());
+        // La salida de error explica el fallo; nunca lleva el secreto, que
+        // entra por la entrada estándar.
+        comando.stdout(Stdio::piped()).stderr(Stdio::piped());
         match comando.spawn() {
             Ok(proceso) => Ok(proceso),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Fallo::NoExiste),
@@ -280,11 +284,92 @@ mod backend {
         }
     }
 
-    fn comprobar(proceso: &mut std::process::Child) -> Result<(), Fallo> {
-        match proceso.wait() {
-            Ok(estado) if estado.success() => Ok(()),
-            Ok(estado) => Err(Fallo::Fallo(format!("el llavero devolvió {estado}"))),
+    /// Espera a `secret-tool` (con la entrada estándar ya cerrada) y, si falla,
+    /// explica por qué con lo que dijo por su salida de error.
+    fn comprobar(proceso: std::process::Child) -> Result<(), Fallo> {
+        match proceso.wait_with_output() {
+            Ok(salida) if salida.status.success() => Ok(()),
+            Ok(salida) => Err(Fallo::Fallo(explicar_fallo(
+                salida.status.code(),
+                &salida.stderr,
+            ))),
             Err(error) => Err(Fallo::Fallo(error.to_string())),
+        }
+    }
+
+    /// Texto del fallo de `secret-tool`: su código, su salida de error en una
+    /// línea y acotada y, en los casos conocidos, qué hacer.
+    fn explicar_fallo(codigo: Option<i32>, salida_error: &[u8]) -> String {
+        let texto = String::from_utf8_lossy(salida_error)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut recortado: String = texto.chars().take(TOPE_SALIDA_ERROR).collect();
+        if recortado.len() < texto.len() {
+            recortado.push('…');
+        }
+        let codigo = codigo.map_or_else(
+            || "sin código".to_string(),
+            |codigo| format!("código {codigo}"),
+        );
+        let mut motivo = if recortado.is_empty() {
+            format!("el llavero falló ({codigo})")
+        } else {
+            format!("el llavero falló ({codigo}): {recortado}")
+        };
+        if texto.contains("org.freedesktop.secrets") {
+            motivo.push_str(
+                " · no hay ningún servicio de llavero en la sesión: instala gnome-keyring (o activa el de KWallet o KeePassXC) y vuelve a iniciar sesión",
+            );
+        } else if texto.contains("autolaunch") || texto.contains("DBUS_SESSION_BUS_ADDRESS") {
+            motivo.push_str(" · no hay sesión de D-Bus: ejecuta MAGI desde la sesión gráfica");
+        }
+        motivo
+    }
+
+    #[cfg(test)]
+    mod pruebas {
+        use super::{explicar_fallo, FALTA_SECRET_TOOL};
+
+        #[test]
+        fn el_fallo_del_llavero_dice_el_motivo_y_que_hacer() {
+            let sin_servicio = explicar_fallo(
+                Some(1),
+                b"The name org.freedesktop.secrets was not provided by any .service files\n",
+            );
+            assert!(
+                sin_servicio.starts_with("el llavero falló (código 1): The name org.freedesktop.secrets was not provided by any .service files"),
+                "{sin_servicio}"
+            );
+            assert!(
+                sin_servicio.contains("instala gnome-keyring"),
+                "{sin_servicio}"
+            );
+
+            let sin_dbus = explicar_fallo(Some(1), b"Cannot autolaunch D-Bus without X11 $DISPLAY");
+            assert!(
+                sin_dbus.contains("ejecuta MAGI desde la sesión gráfica"),
+                "{sin_dbus}"
+            );
+
+            assert_eq!(explicar_fallo(Some(1), b""), "el llavero falló (código 1)");
+            assert_eq!(
+                explicar_fallo(None, b" \n"),
+                "el llavero falló (sin código)"
+            );
+
+            // Una salida enorme se acota y queda en una línea.
+            let larga = "x ".repeat(1_000);
+            let acotada = explicar_fallo(Some(2), larga.as_bytes());
+            assert!(acotada.ends_with('…'), "{acotada}");
+            assert!(!acotada.contains('\n'));
+            assert!(acotada.chars().count() < 400);
+        }
+
+        #[test]
+        fn sin_secret_tool_se_dice_que_paquete_instalar() {
+            assert!(FALTA_SECRET_TOOL.contains("libsecret-tools"));
+            assert!(FALTA_SECRET_TOOL.contains("pacman -S libsecret"));
         }
     }
 }
