@@ -283,6 +283,7 @@ fn host_datos(nombre: &str, direccion: &str) -> DatosHost {
         etiquetas: Vec::new(),
         verificaciones: None,
         snippet_al_conectar: None,
+        sesiones_persistentes: false,
     }
 }
 

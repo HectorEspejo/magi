@@ -122,6 +122,58 @@ async fn el_rechazo_cuenta_las_otras_ventanas() {
     let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
 }
 
+/// Regresión (carrera del saludo): la `Bienvenida` es siempre lo primero que
+/// recibe una ventana nueva, aunque otra ventana se cierre justo entonces. El
+/// cierre de una ventana difunde la lista completa de sesiones a todas las
+/// registradas; el servidor registraba a la nueva con un bloqueo del estado y
+/// mandaba su bienvenida con otro, y una difusión podía colarse en medio: el
+/// cliente la tomaba por una respuesta inesperada al saludo y la conexión
+/// fallaba.
+///
+/// Varias ventanas abren y cierran conexiones en bucle a la vez: cada cierre
+/// difunde a las que están saludando. Sin la corrección falla casi siempre en
+/// las primeras vueltas.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn la_bienvenida_no_la_adelanta_ninguna_difusion() {
+    const VENTANAS: usize = 8;
+    const VUELTAS: usize = 80;
+
+    let entorno = entorno();
+    let rutas = entorno.rutas.clone();
+    let tarea = tokio::spawn(servidor::arrancar(rutas.clone(), entorno.config.clone()));
+    let ruta = servidor::ruta_socket(&rutas);
+    esperar_socket(&ruta).await;
+
+    let mut ventanas = Vec::new();
+    for ventana in 0..VENTANAS {
+        let ruta = ruta.clone();
+        ventanas.push(tokio::spawn(async move {
+            for vuelta in 0..VUELTAS {
+                let mut lector = cliente(&ruta, VERSION_PROTOCOLO).await;
+                let primero: MensajeServidor = siguiente(&mut lector).await;
+                if !matches!(primero, MensajeServidor::Bienvenida { .. }) {
+                    return Err(format!(
+                        "ventana {ventana}, vuelta {vuelta}: lo primero fue {primero:?}"
+                    ));
+                }
+                // Se cierra sin esperar nada más: su limpieza difunde a las
+                // demás ventanas, que pueden estar saludando.
+                drop(lector);
+            }
+            Ok::<(), String>(())
+        }));
+    }
+    for ventana in ventanas {
+        if let Err(motivo) = ventana
+            .await
+            .expect("la tarea de la ventana no entra en pánico")
+        {
+            panic!("una difusión adelantó a la Bienvenida: {motivo}");
+        }
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(8), tarea).await;
+}
+
 /// Un cliente de la versión 2 (la de la Fase 4) no coopera con este servidor:
 /// la 3 cambió la `Bienvenida` y añadió los mensajes de túneles, así que el
 /// cliente viejo no entendería las respuestas.

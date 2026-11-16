@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones · 0 ventanas ────────────────────────────────────
+ PERSISTENTES · 4 ──────────────────────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+▸◆   ✕ terminada     vieja-1          dev-01     —          ↵ reabrir
+ ◆   ✕ terminada     vieja-2          dev-01     —          ↵ reabrir
+ ◆     libre         viva             dev-01     hace NN s   —
+ ◆   ✕ ┌ BORRAR FICHAS TERMINADAS ──────────────────────────────────────┐
+ PESTAÑ│                                                                │───────
+  Sin s│  Borrar 3 fichas terminadas:                                   │
+       │    vieja-1 (dev-01)                                            │
+       │    vieja-2 (dev-01)                                            │
+       │    vieja-3 (web-01)                                            │
+       │  Las sesiones ya no existen en sus hosts.                      │
+       │                                                                │
+       │  s confirmar   n / esc cancelar                                │
+       │                                                                │
+       └────────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+  vieja-1 · dev-01 · terminada: ↵ la vuelve a crear
+  servidor pid N · protocolo 10 · desde hace NN s
+
+
+ ↵ engancharse  c compartir  v vista previa  n nueva  T terminar  ? más

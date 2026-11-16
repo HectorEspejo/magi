@@ -68,6 +68,27 @@ enum Comando {
     },
     /// Abre la TUI con una sesión nueva al host indicado.
     Conectar { host: String },
+    /// Abre la TUI enganchada a una sesión persistente, soltando a los demás.
+    ///
+    /// Si el nombre está en varios hosts, indica cuál con --host.
+    Sesion {
+        /// Nombre de la sesión persistente.
+        nombre: String,
+        /// Nombre del host en el inventario.
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Lista las sesiones persistentes con su estado.
+    ///
+    /// Pregunta al servidor de sesiones (lo arranca si hace falta) y nunca
+    /// abre diálogos: un host que pide una huella, una frase o una
+    /// contraseña sale «inalcanzable», no «terminada».
+    Sesiones {
+        /// Escribe la lista en JSON (uuid, host, nombre, estado, equipo,
+        /// actividad, atencion, titulo y comprobada_en).
+        #[arg(long)]
+        json: bool,
+    },
     /// Activa o para un túnel del host indicado.
     Tunel {
         #[command(subcommand)]
@@ -284,13 +305,71 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("no existe el host «{host}»");
                 std::process::exit(1);
             };
-            let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
+            // El aviso de la migración 11 sale solo en la apertura que migra.
+            let avisos: Vec<String> = [aviso_config, aviso_tema, almacen.aviso_de_migracion()]
+                .into_iter()
+                .flatten()
+                .collect();
             let aviso = if avisos.is_empty() {
                 None
             } else {
                 Some(avisos.join(" · "))
             };
-            app::ejecutar(rutas, config, tema, almacen, aviso, Some(host.id))
+            app::ejecutar(
+                rutas,
+                config,
+                tema,
+                almacen,
+                aviso,
+                Some(app::AperturaInicial::Host(host.id)),
+            )
+        }
+        Some(Comando::Sesion { nombre, host }) => {
+            let almacen = crate::almacen::abrir(&rutas.base_datos())?;
+            let hosts = almacen.listar_hosts()?;
+            let fichas = magi_nucleo::almacen::sesiones_persistentes::listar(almacen.conexion())?;
+            let resuelta = match magi::sesiones_cli::resolver_sesion(
+                &nombre,
+                host.as_deref(),
+                &hosts,
+                &fichas,
+            ) {
+                Ok(resuelta) => resuelta,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
+            app::instalar_hook_panico();
+            // El aviso de la migración 11 sale solo en la apertura que migra.
+            let avisos: Vec<String> = [aviso_config, aviso_tema, almacen.aviso_de_migracion()]
+                .into_iter()
+                .flatten()
+                .collect();
+            let aviso = if avisos.is_empty() {
+                None
+            } else {
+                Some(avisos.join(" · "))
+            };
+            app::ejecutar(
+                rutas,
+                config,
+                tema,
+                almacen,
+                aviso,
+                Some(app::AperturaInicial::Sesion {
+                    host_id: resuelta.host_id,
+                    nombre: resuelta.nombre,
+                }),
+            )
+        }
+        Some(Comando::Sesiones { json }) => {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("creando el runtime de tokio")?;
+            let codigo = runtime.block_on(sesiones_cli(&rutas, json))?;
+            std::process::exit(codigo);
         }
         Some(Comando::Diagnostico) | Some(Comando::Autocompletado { .. }) | Some(Comando::Man) => {
             // Se atienden al principio, antes de descubrir rutas y abrir el log.
@@ -299,7 +378,11 @@ fn main() -> anyhow::Result<()> {
         None => {
             app::instalar_hook_panico();
             let almacen = crate::almacen::abrir(&rutas.base_datos())?;
-            let avisos: Vec<String> = [aviso_config, aviso_tema].into_iter().flatten().collect();
+            // El aviso de la migración 11 sale solo en la apertura que migra.
+            let avisos: Vec<String> = [aviso_config, aviso_tema, almacen.aviso_de_migracion()]
+                .into_iter()
+                .flatten()
+                .collect();
             let aviso = if avisos.is_empty() {
                 None
             } else {
@@ -948,6 +1031,143 @@ async fn esperar_tunel(
                 return Err(error_servidor_incompatible(version, pid));
             }
             _ => {}
+        }
+    }
+}
+
+/// Plazo de `magi sesiones` para que el servidor mire todos los hosts con
+/// fichas: 10 s por host, con hasta 8 a la vez, y un margen. Lo que no llegue
+/// sale «sin_comprobar».
+const PLAZO_SESIONES: Duration = Duration::from_secs(25);
+
+/// `magi sesiones [--json]`: las fichas de sesiones persistentes con su
+/// estado, que pregunta al servidor (lo autolanza si no está, como `magi
+/// tunel`; esta conexión cuenta como ventana para el vigilante). No dialoga
+/// nunca: si el host pide credenciales, sale `inalcanzable` con la instrucción
+/// en la salida de errores. Sin servidor, las fichas salen `sin_comprobar` y el
+/// código es 1.
+async fn sesiones_cli(rutas: &Rutas, json: bool) -> anyhow::Result<i32> {
+    use magi::sesiones_cli as cli;
+    let (hosts, fichas) = {
+        let almacen = crate::almacen::abrir(&rutas.base_datos())?;
+        let hosts = almacen.listar_hosts()?;
+        let fichas = magi_nucleo::almacen::sesiones_persistentes::listar(almacen.conexion())?;
+        almacen.cerrar()?;
+        (hosts, fichas)
+    };
+    // Sin fichas no hay nada que preguntar: no se arranca un servidor para
+    // decirlo.
+    if fichas.is_empty() {
+        if json {
+            print!("{}", cli::json(&[]));
+        } else {
+            print!("{}", cli::texto_tabla(&[], 0));
+        }
+        return Ok(0);
+    }
+
+    let peticion = chrono::Utc::now().timestamp();
+    let umbral = cli::umbral_de_frescura(peticion);
+    let mut codigo = 0;
+    let mut lista = None;
+    match conectar_servidor(rutas, true).await? {
+        Some(mut stream) => {
+            let resultado = consultar_sesiones(&mut stream, &fichas, umbral, &mut lista).await;
+            let _ = stream.shutdown().await;
+            if let Err(motivo) = resultado {
+                eprintln!("{motivo}");
+                codigo = 1;
+            }
+        }
+        None => {
+            eprintln!(
+                "no hay servidor de sesiones en marcha ni se pudo arrancar uno ({}): las sesiones salen «sin_comprobar».",
+                servidor::ruta_socket(rutas).display()
+            );
+            codigo = 1;
+        }
+    }
+    let filas = cli::armar_filas(&fichas, &hosts, lista.as_ref(), umbral);
+    if json {
+        print!("{}", cli::json(&filas));
+    } else {
+        print!(
+            "{}",
+            cli::texto_tabla(&filas, chrono::Utc::now().timestamp())
+        );
+    }
+    for aviso in cli::avisos(&filas, lista.as_ref(), &hosts) {
+        eprintln!("{aviso}");
+    }
+    Ok(codigo)
+}
+
+/// Saluda, pide la comprobación de los hosts con fichas y espera una lista
+/// posterior a la petición: la que ya había al irse la última ventana puede
+/// ser vieja (se mira `comprobada_en`). Deja en `ultima` la última lista vista,
+/// también cuando pasa el plazo.
+async fn consultar_sesiones(
+    stream: &mut UnixStream,
+    fichas: &[magi_nucleo::sesiones_persistentes::Ficha],
+    umbral: i64,
+    ultima: &mut Option<protocolo::ListaPersistentes>,
+) -> anyhow::Result<()> {
+    escribir(stream, &saludo()).await?;
+    let peticion_id = protocolo::RANGO_TERMINAL + 1;
+    escribir(
+        stream,
+        &MensajeCliente::ConsultarSesionesPersistentes {
+            peticion_id,
+            host_id: None,
+        },
+    )
+    .await?;
+    let espera = async {
+        let mut lector = FramedRead::new(&mut *stream, protocolo::codec());
+        loop {
+            let linea = match lector.next().await {
+                Some(Ok(linea)) => linea,
+                Some(Err(error)) => anyhow::bail!("respuesta no válida del servidor: {error}"),
+                None => anyhow::bail!("el servidor cerró la conexión"),
+            };
+            let mensaje: MensajeServidor = match protocolo::decodificar(&linea) {
+                Ok(mensaje) => mensaje,
+                Err(motivo) => anyhow::bail!("{motivo}"),
+            };
+            match mensaje {
+                MensajeServidor::SesionesPersistentes { lista } => {
+                    let completa = magi::sesiones_cli::lista_fresca(fichas, &lista, umbral);
+                    *ultima = Some(lista);
+                    if completa {
+                        return Ok(());
+                    }
+                }
+                MensajeServidor::Error {
+                    mensaje,
+                    peticion_id: Some(id),
+                } if id == peticion_id => anyhow::bail!("{mensaje}"),
+                MensajeServidor::PideContrasena { .. }
+                | MensajeServidor::PideFrase { .. }
+                | MensajeServidor::HuellaDesconocida { .. }
+                | MensajeServidor::HuellaCambiada { .. } => anyhow::bail!(
+                    "un host necesita una huella, una frase o una contraseña y esta orden no puede preguntarlas: conéctate a mano desde MAGI y vuelve a mirar."
+                ),
+                MensajeServidor::VersionIncompatible { version, pid, .. } => {
+                    return Err(error_servidor_incompatible(version, pid));
+                }
+                _ => {}
+            }
+        }
+    };
+    match tokio::time::timeout(PLAZO_SESIONES, espera).await {
+        Ok(resultado) => resultado,
+        // Pasó el plazo: lo que no llegó fresco sale «sin_comprobar».
+        Err(_) => {
+            eprintln!(
+                "el servidor no terminó de comprobar los hosts en {} s.",
+                PLAZO_SESIONES.as_secs()
+            );
+            Ok(())
         }
     }
 }

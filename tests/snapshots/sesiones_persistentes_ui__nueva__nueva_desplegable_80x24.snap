@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/nueva.rs
+---
+┌ MAGI · FLOTA ────────────────────────────────────────── 3 hosts · 0 nominal ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ─────┌ NUEVA SESIÓN PERSISTENTE ────────────────────────────────────┐─────  │
+│▸ ○ db-│                                                              │       │
+│  ○ dev│  Host      [ dev-01 ▾                       ]                │       │
+│  ○ web│      db-01                                                   │       │
+│       │    ▸ dev-01                                                  │       │
+│       │      web-01                                                  │       │
+│       │  Nombre    [ sesion-1 ]                                      │       │
+│       │  Carpeta   [ (carpeta personal) ]                            │       │
+│       │  Comando   [ (shell de acceso) ]                             │       │
+│       │  Reanudar  [ (el mismo comando) ]                            │       │
+│       │  Nota      [ (opcional) ]                                    │       │
+│       │                                                              │       │
+│       │  Vive en dev-01 aunque cierres MAGI o apagues el equipo, y   │       │
+│       │  la ves en todos tus equipos.                                │       │
+│       │  La ficha viaja cifrada a tus otros equipos: no pongas       │       │
+│       │  secretos en el comando.                                     │       │
+│       │                                                              │       │
+│       │  ↵ elegir   esc cerrar                                       │       │
+│       │                                                              │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

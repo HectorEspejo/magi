@@ -9,6 +9,41 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
+  **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
+  host (`tmux -L magi -f /dev/null`, con su configuración y sin tocar el tmux ni
+  el `~/.tmux.conf` del usuario; hace falta tmux 3.0 o posterior), se marca al
+  abrirla (nombre, carpeta, comando de arranque y de reanudación, y nota) o
+  para todo un host («Todas las sesiones persistentes» en la ficha) y se
+  retoma desde cualquier equipo de escritorio. El bloque **Persistentes** de
+  la vista Sesiones (`prefijo l`) lista las fichas de todos los hosts con su
+  estado (libre, enganchada, terminada, sin comprobar, inalcanzable o sin
+  tmux), quién la tiene, la actividad, la atención, el título y «antigua»; con
+  las sesiones del tmux de MAGI sin ficha y las del tmux de siempre; permite
+  engancharse soltando a los demás (`↵`) o compartiendo (`c`), vista previa
+  (`v`), editar, renombrar, terminar y borrar la ficha (que nunca termina la
+  sesión), reabrir una terminada con su comando de reanudación y borrar las
+  terminadas. Una pestaña cuya sesión coge otro equipo queda **soltada**, y la
+  reconexión automática nunca se la quita. Un **vigilante** en el servidor
+  comprueba las fichas con alguna ventana abierta (`[persistentes]
+  vigilar_seg`, sin diálogos: un host que pide huella, frase o contraseña sale
+  «inalcanzable», nunca «terminada») y avisa en la barra de cualquier vista
+  cuando una sesión pide **atención** con la campana de tmux (Claude Code debe
+  usar `preferredNotifChannel = "terminal_bell"`). El historial de una pestaña
+  persistente sale de tmux (`prefijo [`). Las fichas viajan con la
+  sincronización (el estado y el contenido, no); `formato` 4 solo si hay alguna
+  ficha o algún host marcado. MAGI entiende `modifyOtherKeys` (`CSI > 4 ; n m`),
+  que es como tmux pide las teclas extendidas (Mayús+Intro, Ctrl+Intro…).
+  Nuevos subcomandos `magi sesion <nombre> [--host <host>]` (abre MAGI
+  enganchado a la sesión) y `magi sesiones [--json]` (lista las fichas con su
+  estado preguntando al servidor, sin diálogos; el JSON está documentado en el
+  README) y sección `[persistentes]` en `config.toml` (`vigilar_seg`,
+  `refresco_seg`, `antigua_dias` y `vista_previa_lineas`). Migración 11
+  (tabla `SESIONES_PERSISTENTES` y `HOSTS.sesiones_persistentes`) y protocolo
+  v10. La app Android lee el `formato` 4 (guarda las fichas y la marca del host
+  sin enseñarlas ni usarlas); las sesiones persistentes en el móvil quedan
+  pendientes.
+
 - **Terminal, segunda vuelta (Fase 15).** La vista Sesión gana **paneles**
   (completa, lado a lado, apilados, 1 grande + 2 y rejilla de 4; `prefijo
   Espacio` para cambiar, flechas para mover el foco, `z` para ampliar y
@@ -111,6 +146,58 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   Android.
 
 ### Cambiado
+
+- Versión 1.5.0 (MINOR: funcionalidad nueva, migración de esquema 11,
+  protocolo 10 y `formato` 4 de sincronización solo cuando hay fichas de
+  sesiones persistentes o hosts marcados).
+
+- **La marca «sesión persistente con tmux» de la 1.4.0 pasa a «Todas las
+  sesiones persistentes» y ahora viaja (Fase 16).** `HOSTS.tmux_persistente`
+  (propio de cada equipo y sin sincronizar) queda obsoleto: al abrir la 1.5.0,
+  la migración 11 copia su valor a `HOSTS.sesiones_persistentes` por el camino
+  que sube la versión del host, apaga la antigua y avisa una vez. La marca
+  ahora se sincroniza como el resto de la ficha del host (y está en el bloque
+  SESIONES, ya no en TERMINAL). Las sesiones nuevas ya no se llaman
+  `magi-<equipo>-<n>` sino `<equipo>-<n>`, van al tmux propio de MAGI y no al
+  habitual; las que creó la 1.4.0 en el tmux de siempre se siguen viendo,
+  enganchando y terminando desde Sesiones, pero no se migran (un proceso no se
+  puede mover de un servidor de tmux a otro).
+
+- **La lista de tmux de la 1.4.0 se integra en «Persistentes» (Fase 16).** `t`
+  en «Pestañas» y la entrada de paleta «sesiones de tmux» ya no abren una lista
+  propia: comprueban el host de la pestaña y enseñan sus sesiones (las del tmux
+  de MAGI sin ficha y las del tmux de siempre, «de tu tmux») en el bloque
+  «Persistentes» de la vista Sesiones, desde donde se enganchan y se terminan
+  igual que antes.
+
+- **La tecla `N` queda reservada en Flota (Fase 16).** Abre el diálogo «Nueva
+  sesión persistente» con el host de la fila (también desde Hosts). Un atajo
+  `N` de `[flota.atajos]` en `config.toml` se ignora ahora con el aviso de
+  siempre al arrancar; usa otra letra.
+
+- **Protocolo cliente ⇄ servidor v10 (Fase 16).** `AbrirSesion.tmux` pasa a
+  llevar `servidor`, `nombre`, `crear` y `compartir` (cambia la semántica: por
+  eso sube la versión), `TerminarTmux` y `SesionesTmux` distinguen el servidor
+  de tmux y se añaden `ConsultarSesionesPersistentes`, `SesionesPersistentes`,
+  `PedirVistaPrevia`, `RenombrarTmux` y `AperturaTmuxFallida`. Un servidor de la
+  1.4.0 en marcha se sustituye al abrir la 1.5.0 como siempre: solo si no
+  custodia nada, y si no, MAGI pregunta.
+
+- **Para quien actualiza de la 1.4.0 a la 1.5.0.** La base de datos pasa sola
+  de `user_version` 10 a 11 al abrir MAGI (hacia delante: una `magi.db` migrada
+  no la abre un binario anterior). Si tenías hosts con «sesión persistente con
+  tmux», pasan a «Todas las sesiones persistentes», que ahora viaja a tus otros
+  equipos (si dos equipos tenían valores distintos, gana el último cambio).
+  Actualiza todos los equipos de escritorio: uno con MAGI 1.4.0 o anterior verá
+  el fichero de sincronización como «formato nuevo» en cuanto otro equipo cree
+  una ficha de sesión persistente o marque un host, y no importará nada de él
+  hasta que se actualice; la app Android debe ser una versión que lea el
+  `formato` 4 (la de esta fase). Si el servidor de sesiones de la 1.4.0 sigue
+  abierto, `magi` lo sustituye solo si no custodia nada y, si no, te lo
+  pregunta. En el host hace falta tmux 3.0 o posterior (MAGI no lo instala), y
+  para ver los avisos de atención de Claude Code hay que activar en su
+  configuración la campana del terminal (`preferredNotifChannel =
+  "terminal_bell"`).
 
 - Versión 1.4.0 (MINOR: funcionalidad nueva, migración de esquema 10 y
   protocolo 9; `formato` de sincronización sin cambios).

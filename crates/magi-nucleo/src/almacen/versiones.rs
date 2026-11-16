@@ -26,6 +26,8 @@ pub enum Tabla {
     SincronizacionesDir,
     /// Comprobaciones propias de servicio o proyecto (Fase 13).
     ComprobacionesServicio,
+    /// Fichas de sesiones persistentes (Fase 16).
+    SesionesPersistentes,
 }
 
 impl Tabla {
@@ -39,6 +41,7 @@ impl Tabla {
             Tabla::Snippets => "SNIPPETS",
             Tabla::SincronizacionesDir => "SINCRONIZACIONES_DIR",
             Tabla::ComprobacionesServicio => "COMPROBACIONES_SERVICIO",
+            Tabla::SesionesPersistentes => "SESIONES_PERSISTENTES",
         }
     }
 
@@ -52,6 +55,7 @@ impl Tabla {
             Tabla::Snippets => "snippet",
             Tabla::SincronizacionesDir => "sincronizacion_dir",
             Tabla::ComprobacionesServicio => "comprobacion_servicio",
+            Tabla::SesionesPersistentes => "sesion_persistente",
         }
     }
 
@@ -64,11 +68,12 @@ impl Tabla {
             "snippet" => Some(Tabla::Snippets),
             "sincronizacion_dir" => Some(Tabla::SincronizacionesDir),
             "comprobacion_servicio" => Some(Tabla::ComprobacionesServicio),
+            "sesion_persistente" => Some(Tabla::SesionesPersistentes),
             _ => None,
         }
     }
 
-    pub fn todas() -> [Tabla; 7] {
+    pub fn todas() -> [Tabla; 8] {
         [
             Tabla::Grupos,
             Tabla::Hosts,
@@ -77,6 +82,7 @@ impl Tabla {
             Tabla::Snippets,
             Tabla::SincronizacionesDir,
             Tabla::ComprobacionesServicio,
+            Tabla::SesionesPersistentes,
         ]
     }
 }

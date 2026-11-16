@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ BORRAR FICHA ──────────────────────┐─
+ │ ¿Borrar la ficha de «agente-api»   │
+ │ en web-01?                         │
+ │ La sesión seguirá viva en web-01,  │
+ │ sin ficha: la verás como «sin      │
+ │ ficha».                            │
+▸│ Borrar la ficha no toca el host;   │
+ │                                    │
+ │ s confirmar   n / esc cancelar     │─
+ └──────────────────────────── ↑↓ 1/3 ┘
+ ◆ !  ↵ engancharse  c compartir  ? más

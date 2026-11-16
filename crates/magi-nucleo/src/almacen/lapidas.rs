@@ -9,7 +9,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 /// Tipos de elemento que pueden tener lápida. Los mismos que viajan.
-pub const TIPOS: [&str; 7] = [
+pub const TIPOS: [&str; 8] = [
     "grupo",
     "host",
     "identidad",
@@ -17,6 +17,7 @@ pub const TIPOS: [&str; 7] = [
     "snippet",
     "sincronizacion_dir",
     "comprobacion_servicio",
+    "sesion_persistente",
 ];
 
 /// Fila de `LAPIDAS`.

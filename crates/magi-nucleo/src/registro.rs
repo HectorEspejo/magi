@@ -94,8 +94,21 @@ pub const ESCRITURA_VARIOS_TERMINADA: &str = "escritura_varios_terminada";
 pub const HISTORIAL_GUARDADO: &str = "historial_guardado";
 /// Fase 15: MAGI terminó una sesión de tmux del host (host y nombre).
 pub const TMUX_TERMINADA: &str = "tmux_terminada";
+// Fase 16: sesiones persistentes (§3.3). Solo metadatos: host, nombre y
+// origen; nunca comandos, títulos, vistas previas ni contenido (T44).
+/// Una sesión persistente existe ya en el host y su ficha está guardada
+/// (host, nombre y origen).
+pub const SESION_PERSISTENTE_CREADA: &str = "sesion_persistente_creada";
+/// Una ficha terminada se volvió a crear (host, nombre y si se usó el comando
+/// de reanudación).
+pub const SESION_PERSISTENTE_REABIERTA: &str = "sesion_persistente_reabierta";
+/// El usuario se enganchó desde la lista, el diálogo o la CLI, nunca en una
+/// reconexión (host, nombre y «soltando a <equipo>» o «compartiendo»).
+pub const SESION_PERSISTENTE_ENGANCHADA: &str = "sesion_persistente_enganchada";
+/// Se borró una ficha (host, nombre y «la sesión sigue en el host» si vivía).
+pub const SESION_PERSISTENTE_BORRADA: &str = "sesion_persistente_borrada";
 
-pub const TIPOS: [&str; 46] = [
+pub const TIPOS: [&str; 50] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -142,6 +155,10 @@ pub const TIPOS: [&str; 46] = [
     ESCRITURA_VARIOS_TERMINADA,
     HISTORIAL_GUARDADO,
     TMUX_TERMINADA,
+    SESION_PERSISTENTE_CREADA,
+    SESION_PERSISTENTE_REABIERTA,
+    SESION_PERSISTENTE_ENGANCHADA,
+    SESION_PERSISTENTE_BORRADA,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

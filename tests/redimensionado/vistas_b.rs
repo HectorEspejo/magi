@@ -106,9 +106,10 @@ fn etiqueta(campo: CampoFicha, estrecho: bool) -> &'static str {
         CampoFicha::Opciones => "OPCIONES EXTRA",
         CampoFicha::Tuneles => "e editar",
         CampoFicha::Comprobaciones => "COMPROBACIONES",
+        // Fase 16: bloque SESIONES.
+        CampoFicha::SesionesPersistentes => "Todas las sesiones persistentes",
         // Fase 15: bloque TERMINAL.
         CampoFicha::Reconectar => "Reconectar solo si se cae la red",
-        CampoFicha::Tmux => "Sesión persistente con tmux",
         CampoFicha::PortapapelesRemoto => "Permitir que el host copie al portapapeles",
         // Fase 12: campos de escritorio (no salen en una ficha SSH).
         CampoFicha::Tipo => "Tipo",
@@ -733,13 +734,14 @@ fn la_seleccion_de_tuneles_se_conserva_al_cambiar_de_tamano() {
 /// blanco del principio o del final del formulario no cuenta.
 #[test]
 fn las_marcas_no_senalan_solo_separadores() {
-    // 130×30: caben 22 de las 23 líneas del formulario en modo normal.
+    // 130×45: caben todas las líneas del formulario en modo normal salvo
+    // una (con el bloque SESIONES de la Fase 16 son cinco más que en 130×40).
     let sin_barra = |prueba: &AppPrueba| {
         let texto = prueba.texto();
         let lineas: Vec<&str> = texto.lines().collect();
         lineas[..lineas.len() - 1].join("\n")
     };
-    let mut prueba = ficha_de_host(130, 40);
+    let mut prueba = ficha_de_host(130, 45);
     let texto = sin_barra(&prueba);
     assert!(!texto.contains('↓') && !texto.contains('↑'), "{texto}");
     // Con el foco en los tests se esconde solo la línea en blanco de arriba.

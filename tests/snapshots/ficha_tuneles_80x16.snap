@@ -2,9 +2,9 @@
 source: tests/redimensionado/arnes.rs
 ---
 ┌ MAGI · HOST · hetzner-01 · editar · #1 ──────────────────────────────────────┐
-│ TERMINAL (solo en este equipo)                                              ↑│
+│                                                                             ↑│
+│ TERMINAL (solo en este equipo)                                               │
 │  [x] Reconectar solo si se cae la red                                        │
-│  [ ] Sesión persistente con tmux                                             │
 │  [ ] Permitir que el host copie al portapapeles  (OSC 52; leerlo, nunca)     │
 │  Espacio marca · Tab siguiente · Ctrl+S guardar                              │
 │                                                                              │

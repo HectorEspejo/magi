@@ -230,7 +230,7 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 
 | Workflow | Disparo | Qué hace |
 |---|---|---|
-| `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux, macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
+| `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux (instala `openssh-server`, por su `sftp-server`, y `tmux`: sin ellos, las pruebas de SFTP y las de sesiones persistentes con tmux de verdad se omiten), macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
 | `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` |
 | `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
 

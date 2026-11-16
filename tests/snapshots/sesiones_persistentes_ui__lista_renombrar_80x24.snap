@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones · 0 ventanas ────────────────────────────────────
+ PERSISTENTES · 5 · 2 sin ficha ───────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+ ◆   ● portatil      docs             dev-01     hace NN m   Claude Code
+ ◆   ✕ terminada     informes         dev-01     —          ↵ reabrir
+ ◆     libre         pruebas          dev-01     hace 9 d   usuario@dev… antigua
+ ◆   ● a┌ RENOMBRAR · web-01 ──────────────────────────────────────────┐
+▸◆ !   l│                                                              │ permiso
+       s│  Sesión «agente-api» en web-01.                              │
+       d│                                                              │e
+ PESTAÑA│  Nombre nuevo  [ agente-api┃ ]                               │────────
+  Sin se│                                                              │
+        │  Se renombra en el host y en la ficha; las pestañas          │
+        │  enganchadas siguen.                                         │
+        │                                                              │
+        │  ↵ renombrar   Esc cancelar                                  │
+        │                                                              │
+        └──────────────────────────────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────
+  agente-api · web-01 · libre · ! pide atención
+  servidor pid N · protocolo 10 · desde hace NN s
+
+
+ ◆ agente-api pide atención · web-01  ↵ engancharse  c compartir  ? más

@@ -17,6 +17,7 @@ pub mod lapidas;
 pub mod migraciones;
 pub mod movil;
 pub mod registro;
+pub mod sesiones_persistentes;
 pub mod sincronizaciones;
 pub mod snippets;
 pub mod sondeos;
@@ -40,6 +41,10 @@ pub fn transaccion(conexion: &Connection) -> Result<rusqlite::Transaction<'_>> {
 pub struct Almacen {
     conexion: Connection,
     ruta: Option<PathBuf>,
+    /// Hosts cuya marca `tmux_persistente` (Fase 15) pasó a
+    /// `sesiones_persistentes` al abrir (migración 11). Distinto de cero solo
+    /// en la apertura que migra: es para avisar una sola vez.
+    hosts_con_marca_migrada: usize,
 }
 
 impl Almacen {
@@ -61,9 +66,11 @@ impl Almacen {
         let mut almacen = Self {
             conexion,
             ruta: Some(ruta.to_path_buf()),
+            hosts_con_marca_migrada: 0,
         };
         almacen.ajustes(true)?;
-        migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
+        let migracion = migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
+        almacen.hosts_con_marca_migrada = migracion.hosts_con_marca_migrada;
         Ok(almacen)
     }
 
@@ -78,9 +85,11 @@ impl Almacen {
         let mut almacen = Self {
             conexion,
             ruta: None,
+            hosts_con_marca_migrada: 0,
         };
         almacen.ajustes(false)?;
-        migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
+        let migracion = migraciones::aplicar(&mut almacen.conexion, equipo, app_version)?;
+        almacen.hosts_con_marca_migrada = migracion.hosts_con_marca_migrada;
         Ok(almacen)
     }
 
@@ -113,6 +122,21 @@ impl Almacen {
 
     pub fn ruta(&self) -> Option<&Path> {
         self.ruta.as_deref()
+    }
+
+    /// Cuántos hosts migraron su marca `tmux_persistente` a
+    /// `sesiones_persistentes` al abrir (migración 11). Cero salvo en la
+    /// apertura que aplica la migración.
+    pub fn hosts_con_marca_migrada(&self) -> usize {
+        self.hosts_con_marca_migrada
+    }
+
+    /// Aviso de la migración 11 para enseñar una sola vez: la marca de
+    /// sesiones persistentes de la Fase 15 ahora viaja con la sincronización.
+    /// `None` si esta apertura no migró ningún host (también en las
+    /// siguientes, que encuentran la migración ya aplicada).
+    pub fn aviso_de_migracion(&self) -> Option<String> {
+        aviso_marca_migrada(self.hosts_con_marca_migrada)
     }
 
     // Hosts -----------------------------------------------------------------
@@ -293,6 +317,74 @@ impl Almacen {
     /// Borra una comprobación dejando su lápida (Fase 10).
     pub fn borrar_comprobacion(&self, id: i64) -> Result<()> {
         comprobaciones_servicio::borrar(&self.conexion, id)
+    }
+
+    // Sesiones persistentes (Fase 16) ----------------------------------------
+
+    /// Todas las fichas, por host y nombre. Las filas ilegibles se saltan con
+    /// un aviso en el log.
+    pub fn listar_fichas(&self) -> Result<Vec<crate::sesiones_persistentes::Ficha>> {
+        sesiones_persistentes::listar(&self.conexion)
+    }
+
+    /// Fichas de un host, por nombre.
+    pub fn fichas_de_host(&self, host_id: i64) -> Result<Vec<crate::sesiones_persistentes::Ficha>> {
+        sesiones_persistentes::de_host(&self.conexion, host_id)
+    }
+
+    pub fn obtener_ficha(&self, id: i64) -> Result<Option<crate::sesiones_persistentes::Ficha>> {
+        sesiones_persistentes::obtener(&self.conexion, id)
+    }
+
+    /// La ficha de un host con ese nombre exacto, si existe.
+    pub fn ficha_por_nombre(
+        &self,
+        host_id: i64,
+        nombre: &str,
+    ) -> Result<Option<crate::sesiones_persistentes::Ficha>> {
+        sesiones_persistentes::por_nombre(&self.conexion, host_id, nombre)
+    }
+
+    /// Nombres de todas las fichas de un host (también las que no se pueden
+    /// leer): están reservados para los nombres automáticos y propuestos.
+    pub fn nombres_de_fichas_de_host(&self, host_id: i64) -> Result<Vec<String>> {
+        sesiones_persistentes::nombres_de_host(&self.conexion, host_id)
+    }
+
+    /// Crea la ficha de una sesión que ya existe en el host. Solo hosts `ssh`.
+    pub fn crear_ficha(
+        &self,
+        host_id: i64,
+        datos: &crate::sesiones_persistentes::DatosFicha,
+    ) -> Result<i64> {
+        sesiones_persistentes::crear(&self.conexion, host_id, datos)
+    }
+
+    /// Edita la ficha (nombre, carpeta, comandos y nota): sube su versión si
+    /// algo cambió.
+    pub fn actualizar_ficha(
+        &self,
+        id: i64,
+        datos: &crate::sesiones_persistentes::DatosFicha,
+    ) -> Result<()> {
+        sesiones_persistentes::actualizar(&self.conexion, id, datos)
+    }
+
+    /// Cambia solo el nombre de la ficha. El de la sesión en el host lo
+    /// cambia el servidor, antes.
+    pub fn renombrar_ficha(&self, id: i64, nombre: &str) -> Result<()> {
+        sesiones_persistentes::renombrar(&self.conexion, id, nombre)
+    }
+
+    /// Borra la ficha dejando su lápida. Nunca termina la sesión del host.
+    pub fn borrar_ficha(&self, id: i64) -> Result<()> {
+        sesiones_persistentes::borrar(&self.conexion, id)
+    }
+
+    /// Marca o desmarca un host para que toda pestaña nueva sea persistente.
+    /// Sube la versión del host: la marca viaja.
+    pub fn fijar_sesiones_persistentes(&self, id: i64, marcado: bool) -> Result<()> {
+        hosts::fijar_sesiones_persistentes(&self.conexion, id, marcado)
     }
 
     // Verificaciones previas y deliberaciones -----------------------------
@@ -561,6 +653,22 @@ impl Almacen {
 
     pub fn contar_registro_anterior(&self, fecha_corte: &str) -> Result<i64> {
         registro::contar_anteriores(&self.conexion, fecha_corte)
+    }
+}
+
+/// Aviso de la migración 11 (§4.10 del informe de la Fase 16): la marca de
+/// sesiones persistentes de la Fase 15, que era propia del equipo, ahora viaja
+/// a los demás equipos. `None` si no se migró ningún host.
+pub fn aviso_marca_migrada(hosts: usize) -> Option<String> {
+    match hosts {
+        0 => None,
+        1 => Some(
+            "La marca de sesiones persistentes de 1 host viaja ahora a tus otros equipos"
+                .to_string(),
+        ),
+        n => Some(format!(
+            "La marca de sesiones persistentes de {n} hosts viaja ahora a tus otros equipos"
+        )),
     }
 }
 

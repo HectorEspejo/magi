@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/ficha.rs
+---
+┌ MAGI · HOST · base-01 · editar · #1 ─────────────────────────────────────────┐
+│      (último sondeo NOMINAL < 5 min)                                        ↑│
+│  [ ] backup reciente                                                         │
+│      ruta                                                                    │
+│      [  ]                                                                    │
+│      patrón  (< 24 h)                                                        │
+│      [  ]                                                                    │
+│  [ ] tests en verde                                                          │
+│      comando                                                                 │
+│      [  ]                                                                    │
+│                                                                              │
+│ SESIONES (viaja a tus equipos)                                               │
+│  [ ] Todas las sesiones persistentes (tmux en el host)                       │
+│      nombres automáticos: sobremesa-1, sobremesa-2…                          │
+│  Espacio marca · Tab siguiente · Ctrl+S guardar                             ↓│
+│  TÚNELES                                                             n nuevo │
+│    aún no hay túneles: n para crear uno                                      │
+│  COMPROBACIONES                                                      n nueva │
+│    aún no hay comprobaciones propias: n para crear una                       │
+│┌ SERVICIOS ──────────────────────────┐┌ OPCIONES EXTRA ─────────────────────┐│
+││                                     ││                                     ││
+│└─────────────────────────────────────┘└─────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
+ ⇥ campo  ↵ desplegable  espacio casilla  ^s guardar  esc descartar

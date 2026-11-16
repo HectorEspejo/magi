@@ -218,10 +218,29 @@ pub const ESTRECHO_CLAVE_SINCRONIZACION: u16 = 64;
 pub const ESTRECHO_UNIR_EQUIPO: u16 = 56;
 pub const ESTRECHO_IMPORTACION_BORRADOS: u16 = 56;
 
+/// Diálogo «Nueva sesión persistente» (Fase 16, pista A2): con este tamaño se
+/// ve el formulario entero; por debajo de `ESTRECHO_PERSISTENTES_NUEVA` el
+/// texto de ayuda y las teclas del pie se acortan.
+pub const MINIMO_PERSISTENTES_NUEVA: Tamano = Tamano::new(40, 12);
+pub const ESTRECHO_PERSISTENTES_NUEVA: u16 = 64;
+
+/// Bloque «Persistentes» de la vista Sesiones y sus diálogos (vista previa,
+/// ficha, renombrar) (Fase 16, pista A1). La vista Sesiones sigue con el
+/// mínimo global (40×12): el bloque se ve entero con cabecera, marca, nombre y
+/// host. Por debajo de `ESTRECHO_PERSISTENTES` solo se enseñan la marca, el
+/// glifo de estado, el nombre y el host; por encima, también el estado, la
+/// actividad, el título y «antigua».
+pub const MINIMO_PERSISTENTES: Tamano = Tamano::new(40, 12);
+pub const ESTRECHO_PERSISTENTES: u16 = 72;
+/// Por debajo de este ancho, los diálogos de las sesiones persistentes pierden
+/// el texto de ayuda y acortan las teclas del pie.
+pub const ESTRECHO_DIALOGO_PERSISTENTES: u16 = 60;
+
 /// Mínimo que declara el diálogo abierto, si es de los que lo declaran.
 pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
     use crate::app::Dialogo;
     match dialogo {
+        Dialogo::Persistentes(dialogo) => Some(crate::ui::persistentes::minimo(dialogo)),
         Dialogo::Edicion(dialogo) => Some(crate::ui::edicion::minimo(dialogo)),
         Dialogo::Permisos(dialogo) => Some(crate::ui::permisos::minimo(dialogo)),
         Dialogo::Sincronizar(dialogo) => Some(crate::ui::sincronizar::minimo(dialogo)),
@@ -556,6 +575,8 @@ pub fn texto_ascii(texto: &str) -> String {
             '▾' | '▼' => "v",
             '▴' | '▲' | '⇅' => "^",
             '●' | '•' | '◉' => "*",
+            // La marca de «sesión persistente» (Fase 16).
+            '◆' => "P",
             '○' | '◐' | '◑' => "o",
             '✕' | '✗' | '✘' => "x",
             '✓' | '✔' => "+",
@@ -589,6 +610,8 @@ pub enum Lista {
     Hosts,
     Flota,
     Sesiones,
+    /// Filas del bloque «Persistentes» de la vista Sesiones (Fase 16).
+    Persistentes,
     Identidades,
     Registro,
     ArchivosLocal,

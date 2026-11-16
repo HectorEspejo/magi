@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ PERSISTENTES · 1 ──────────────────────
+       NOMBRE           HOST
+▸◆   ? agente-api       web-01
+ PESTAÑAS · 0 ──────────────────────────
+  Sin sesiones abiertas. ↵ en un host,
+  prefijo c o «n» abre una nueva.
+
+
+
+
+ web-01: sin comprobar: conéctate a mano

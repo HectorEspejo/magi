@@ -14,7 +14,7 @@ use ratatui::Frame;
 use tui_term::widget::{Cursor, PseudoTerminal};
 
 use crate::app::{paneles::DisposicionPaneles, App, PestanaUI};
-use crate::protocolo::{EstadoSesionRemota, InfoReconexion};
+use crate::protocolo::{EstadoSesionRemota, InfoReconexion, Soltada, TmuxPestana};
 use crate::tema::Tema;
 use crate::ui::disposicion::{self, Disposicion};
 
@@ -263,6 +263,15 @@ fn pintar_pantalla(marco: &mut Frame, area: Rect, app: &App, pestana: &PestanaUI
         pintar_ultima_pantalla(marco, area, app, pestana);
         aviso_reconexion(marco, area, app, pestana, reconexion);
         return;
+    }
+    // Soltada (Fase 16): otro equipo se llevó la sesión. El servidor deja la
+    // pestaña caída y con la marca; aquí se enseña lo que pasó, no un error.
+    if let Some(soltada) = pestana.soltada() {
+        if pestana.estado == EstadoSesionRemota::Caida {
+            pintar_ultima_pantalla(marco, area, app, pestana);
+            aviso_soltada(marco, area, app, pestana, soltada);
+            return;
+        }
     }
     if pestana.estado == EstadoSesionRemota::Caida {
         pintar_ultima_pantalla(marco, area, app, pestana);
@@ -581,13 +590,36 @@ fn glifo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> String {
             EstadoSesionRemota::Abriendo => tema.glifos.conectado,
         }
     };
-    glifo.to_string()
+    if pestaña.sesion_persistente().is_none() {
+        return glifo.to_string();
+    }
+    // Sesión persistente (Fase 16): `◆` (en ASCII, `P`) sustituye al punto de
+    // «conectada» (el color sigue diciendo si hay actividad); en los demás
+    // estados (reconectando, caída) va detrás del glifo del estado. La soltada
+    // no es un error: lleva solo la marca.
+    let marca = super::tecla(tema, "◆", "P");
+    if pestaña.soltada().is_some()
+        || glifo == tema.glifos.conectado
+        || glifo == tema.glifos.conectando
+    {
+        marca.to_string()
+    } else {
+        format!("{glifo}{marca}")
+    }
 }
 
 fn estilo_pestaña(activa: bool, pestaña: &PestanaUI, tema: &Tema) -> Style {
     let base = Style::default();
     if pestaña.reconexion.is_some() {
         return base.fg(tema.paleta.acento);
+    }
+    // Soltada: el servidor la deja «caída», pero no es un fallo (Fase 16).
+    if pestaña.soltada().is_some() {
+        return if activa {
+            base.fg(tema.paleta.acento).add_modifier(Modifier::BOLD)
+        } else {
+            base.fg(tema.paleta.acento)
+        };
     }
     match pestaña.estado {
         EstadoSesionRemota::Caida => base.fg(tema.paleta.critico),
@@ -771,7 +803,11 @@ fn barra_estado(
         ));
     }
     let identidad = if pestaña.identidad.is_empty() {
-        pestaña.motivo.clone().unwrap_or_default()
+        pestaña
+            .motivo
+            .clone()
+            .filter(|_| pestaña.soltada().is_none())
+            .unwrap_or_default()
     } else {
         pestaña.identidad.clone()
     };
@@ -813,12 +849,23 @@ fn barra_estado(
         format!("{} ventanas", pestaña.ventanas)
     };
     elementos.push(Elemento::fijo(ventanas, 7, texto));
-    if let Some(nombre) = &pestaña.tmux {
-        elementos.push(Elemento::fijo(
-            format!("tmux {nombre}"),
-            6,
-            Style::default().fg(tema.paleta.acento),
-        ));
+    // La sesión de tmux de la pestaña. Una persistente dice «persistente ·
+    // <nombre> · tmux <versión>»; la soltada, además, «soltada», que no se quita
+    // nunca: se prueban sus formas, de la más completa a la más corta, hasta
+    // que la barra quepa.
+    let mut persistente = None;
+    if let Some(tmux) = &pestaña.tmux {
+        if tmux.servidor == crate::protocolo::ServidorTmux::Magi {
+            persistente = Some((elementos.len(), tmux));
+            elementos.push(elemento_persistente(tema, tmux, FormaPersistente::Completa));
+        } else {
+            // Una sesión del tmux de siempre conserva lo de la Fase 15.
+            elementos.push(Elemento::fijo(
+                format!("tmux {}", tmux.nombre),
+                6,
+                Style::default().fg(tema.paleta.acento),
+            ));
+        }
     }
     let prefijo = &app.config.prefijo_escape;
     elementos.push(Elemento::new(
@@ -827,7 +874,17 @@ fn barra_estado(
         1,
         tenue,
     ));
-    componer(&cabeza, &elementos, area.width, tema)
+    let mut linea = componer(&cabeza, &elementos, area.width, tema);
+    if let Some((indice, tmux)) = persistente.filter(|(_, tmux)| tmux.soltada.is_some()) {
+        for forma in [FormaPersistente::Corta, FormaPersistente::Minima] {
+            if linea.width() <= usize::from(area.width) {
+                break;
+            }
+            elementos[indice] = elemento_persistente(tema, tmux, forma);
+            linea = componer(&cabeza, &elementos, area.width, tema);
+        }
+    }
+    linea
 }
 
 fn barra_prefijo(app: &App, ancho: u16) -> Line<'static> {
@@ -1121,7 +1178,7 @@ fn aviso_reconexion(
     let tmux = pestaña
         .tmux
         .as_ref()
-        .map(|nombre| format!("tmux {nombre}: lo que corría sigue en el host"))
+        .map(|tmux| format!("tmux {}: lo que corría sigue en el host", tmux.nombre))
         .unwrap_or_default();
     let critico = Style::default()
         .fg(tema.paleta.acento)
@@ -1170,6 +1227,136 @@ fn aviso_reconexion(
         .saturating_add(4);
     let recta = disposicion::centrar_limitado(area, ancho, alto);
     marco.render_widget(super::bloque("RECONECTANDO", tema), recta);
+    let interior = Rect {
+        x: recta.x + 2,
+        y: recta.y + 1,
+        width: recta.width.saturating_sub(4),
+        height: recta.height.saturating_sub(2),
+    };
+    let lineas: Vec<Line> = orden
+        .into_iter()
+        .map(|indice| {
+            let (linea, _, estilo) = &todas[indice];
+            Line::from(Span::styled(
+                disposicion::recortar(linea, usize::from(interior.width), tema.ascii),
+                *estilo,
+            ))
+        })
+        .collect();
+    marco.render_widget(Paragraph::new(lineas), interior);
+}
+
+/// Cuánto dice el elemento de una pestaña persistente en la barra de estado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormaPersistente {
+    /// «persistente · <nombre> · tmux <versión>» (y «· soltada»).
+    Completa,
+    /// «<nombre> · soltada».
+    Corta,
+    /// «soltada», lo único que no puede faltar.
+    Minima,
+}
+
+/// El elemento de la barra de estado de una pestaña persistente: «persistente
+/// · <nombre> · tmux <versión>» y, si la tiene otro equipo, «· soltada» (la
+/// versión, por si un tmux anterior a 3.5 no entrega Mayús+Intro, R147). La
+/// marca `◆` es la cabeza de la barra.
+fn elemento_persistente(tema: &Tema, tmux: &TmuxPestana, forma: FormaPersistente) -> Elemento {
+    let separador = format!(" {} ", tema.glifos.punto_medio);
+    let mut partes = match forma {
+        FormaPersistente::Completa => {
+            let mut partes = vec!["persistente".to_string(), tmux.nombre.clone()];
+            if let Some(version) = tmux.version {
+                partes.push(format!("tmux {}.{}", version.mayor, version.menor));
+            }
+            partes
+        }
+        FormaPersistente::Corta => vec![tmux.nombre.clone()],
+        FormaPersistente::Minima => Vec::new(),
+    };
+    if tmux.soltada.is_some() {
+        partes.push("soltada".to_string());
+    }
+    let texto = partes.join(&separador);
+    let estilo = Style::default().fg(tema.paleta.acento);
+    if tmux.soltada.is_some() {
+        // Nunca se quita de la barra: es lo que dice por qué no responde.
+        Elemento::fijo(texto, 1, estilo.add_modifier(Modifier::BOLD))
+    } else {
+        Elemento::fijo(texto, 6, estilo)
+    }
+}
+
+/// «desde las 16:02», o con la fecha si no fue hoy.
+fn desde_cuando(desde: i64) -> String {
+    let Some(momento) = chrono::DateTime::from_timestamp(desde, 0) else {
+        return "hace un rato".to_string();
+    };
+    let momento = momento.with_timezone(&chrono::Local);
+    if momento.date_naive() == chrono::Local::now().date_naive() {
+        format!("desde las {}", momento.format("%H:%M"))
+    } else {
+        format!("desde el {}", momento.format("%d/%m %H:%M"))
+    }
+}
+
+/// El recuadro de una pestaña soltada (§6.4): quién la tiene ahora y qué
+/// teclas hay. Los textos se recortan por prioridad cuando falta sitio.
+fn aviso_soltada(
+    marco: &mut Frame, area: Rect, app: &App, pestaña: &PestanaUI, soltada: &Soltada
+) {
+    let tema = &app.tema;
+    let punto = tema.glifos.punto_medio;
+    let intro = super::tecla(tema, "↵", "enter");
+    let quien = soltada.por_equipo.as_deref().unwrap_or("otro equipo");
+    let interior_max = usize::from(area.width.saturating_sub(4));
+    // De cada frase, la versión más completa que quepa.
+    let la_mas_larga = |variantes: [String; 3]| {
+        variantes
+            .iter()
+            .find(|texto| texto.chars().count() <= interior_max)
+            .unwrap_or(&variantes[2])
+            .clone()
+    };
+    let usa = la_mas_larga([
+        format!("Ahora la usa {quien} ({}).", desde_cuando(soltada.desde)),
+        format!("Ahora la usa {quien}."),
+        format!("La usa {quien}."),
+    ]);
+    let viva = la_mas_larga([
+        format!("La sesión sigue viva en {}.", pestaña.host_nombre),
+        format!("Sigue viva en {}.", pestaña.host_nombre),
+        "Sigue viva.".to_string(),
+    ]);
+    let teclas = la_mas_larga([
+        format!("{intro} volver (la suelta allí) {punto} c compartir {punto} x cerrar"),
+        format!("{intro} volver {punto} c compartir {punto} x cerrar"),
+        format!("{intro} volver {punto} c {punto} x"),
+    ]);
+    let texto = Style::default().fg(tema.paleta.texto);
+    let tenue = Style::default().fg(tema.paleta.inactivo);
+    let acento = Style::default()
+        .fg(tema.paleta.acento)
+        .add_modifier(Modifier::BOLD);
+    let todas = [(usa, 1, acento), (viva, 3, texto), (teclas, 2, tenue)];
+    let alto = (todas.len() as u16 + 2).min(area.height);
+    let filas = usize::from(alto.saturating_sub(2));
+    let mut orden: Vec<usize> = (0..todas.len()).collect();
+    orden.sort_by_key(|indice| (todas[*indice].1, *indice));
+    orden.truncate(filas);
+    orden.sort_unstable();
+    let ancho_texto = orden
+        .iter()
+        .map(|indice| todas[*indice].0.chars().count())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(ancho_texto)
+        .unwrap_or(u16::MAX)
+        .saturating_add(4);
+    let recta = disposicion::centrar_limitado(area, ancho, alto);
+    // El recuadro tapa lo que hay debajo (la última pantalla, en gris).
+    marco.render_widget(ratatui::widgets::Clear, recta);
+    marco.render_widget(super::bloque("SOLTADA", tema), recta);
     let interior = Rect {
         x: recta.x + 2,
         y: recta.y + 1,

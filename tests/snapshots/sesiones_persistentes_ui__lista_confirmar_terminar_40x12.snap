@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ TERMINAR SESIÓN ───────────────────┐─
+ │                                    │
+ │ Terminar «agente-api» en web-01.   │
+ │ Se cerrará lo que corre dentro, y  │
+ │ no se puede deshacer.              │
+ │ La ficha se queda como             │
+▸│ «terminada»: puedes reabrirla.     │
+ │                                    │
+ │ s confirmar   n / esc cancelar     │─
+ └────────────────────────────────────┘
+ ◆ !  ↵ engancharse  c compartir  ? más

@@ -1,8 +1,8 @@
 # Formato del fichero de sincronización de MAGI
 
-**Formato:** 3 (el 1 y el 2 se siguen leyendo y se siguen escribiendo cuando no hacen falta las novedades)
-**Fase:** 10 (sincronización cifrada del inventario); formato 2 en la Fase 12 (escritorios remotos); formato 3 en la Fase 13 (comprobaciones propias de servicio o proyecto)
-**Lectores previstos:** MAGI de escritorio 1.1 (solo formato 1), 1.2 (formatos 1 y 2) y 1.3 (formatos 1, 2 y 3), y app Android 0.2 en adelante (formatos 1 y 2) y la actualizada para el formato 3
+**Formato:** 4 (el 1, el 2 y el 3 se siguen leyendo y se siguen escribiendo cuando no hacen falta las novedades)
+**Fase:** 10 (sincronización cifrada del inventario); formato 2 en la Fase 12 (escritorios remotos); formato 3 en la Fase 13 (comprobaciones propias de servicio o proyecto); formato 4 en la Fase 16 (fichas de sesiones persistentes y marca «todas las sesiones persistentes» del host)
+**Lectores previstos:** MAGI de escritorio 1.1 (solo formato 1), 1.2 (formatos 1 y 2), 1.3 y 1.4 (formatos 1, 2 y 3) y 1.5 (formatos 1, 2, 3 y 4), y app Android 0.2 en adelante (formatos 1 y 2), la actualizada para el formato 3 y la actualizada para el formato 4
 **Estado:** estable dentro de cada formato. Cualquier cambio de significado sube el número de formato.
 
 Este documento describe el fichero que cada equipo de MAGI escribe en la carpeta
@@ -27,14 +27,17 @@ en esa carpeta.
   llavero del sistema de cada equipo.
 - El formato está pensado para ser leído y escrito por la app Android (F11) con
   una biblioteca de age y SHA-256/HMAC/HKDF estándar.
-- **Número de formato.** La exportación escribe **formato 3** solo si hay alguna
-  comprobación propia de servicio o proyecto (elemento `comprobacion_servicio`,
-  Fase 13); si no, **formato 2** si el inventario tiene algún host que no sea
-  SSH (un escritorio RDP, VNC o voxl) y **formato 1** si todos los hosts son
-  SSH, para que MAGI 1.1 siga leyendo el fichero (D220). Al leer se aceptan los
-  tres formatos, y un formato mayor que el máximo conocido se rechaza entero
-  como `formato_nuevo`: nunca se interpreta un formato 3 como si fuera 2, ni
-  uno 2 como si fueran hosts SSH.
+- **Número de formato.** La exportación escribe **formato 4** solo si hay alguna
+  ficha de sesión persistente (elemento `sesion_persistente`, Fase 16) o algún
+  host marcado «todas las sesiones persistentes» (campo `sesiones_persistentes`
+  del host); si no, **formato 3** si hay alguna comprobación propia de servicio
+  o proyecto (elemento `comprobacion_servicio`, Fase 13); si no, **formato 2**
+  si el inventario tiene algún host que no sea SSH (un escritorio RDP, VNC o
+  voxl) y **formato 1** si todos los hosts son SSH, para que MAGI 1.1 siga
+  leyendo el fichero (D220). Al leer se aceptan los cuatro formatos, y un
+  formato mayor que el máximo conocido se rechaza entero como `formato_nuevo`:
+  nunca se interpreta un formato 4 como si fuera 3, ni uno 3 como si fuera 2,
+  ni uno 2 como si fueran hosts SSH.
 
 El fichero **no contiene** el historial (REGISTRO), los sondeos, las
 deliberaciones, `config.toml`, contraseñas del llavero, claves privadas ni la
@@ -140,7 +143,7 @@ coincide con el nombre del fichero y que el equipo no está en `equipos_quitados
 
 | Campo | Tipo | Obligatorio | Descripción |
 |---|---|---|---|
-| `formato` | entero | sí | Número de formato: 1 (todos los hosts son SSH), 2 (puede haber escritorios) o 3 (viajan comprobaciones propias de servicio o proyecto). MAGI 1.1.0 conoce solo el 1; MAGI 1.2 y la app Android anterior leen el 1 y el 2; MAGI 1.3 y la app actual leen el 1, el 2 y el 3. Un número mayor que el máximo conocido se rechaza como `formato_nuevo`. |
+| `formato` | entero | sí | Número de formato: 1 (todos los hosts son SSH), 2 (puede haber escritorios), 3 (viajan comprobaciones propias de servicio o proyecto) o 4 (viajan las fichas de sesiones persistentes y la marca del host). MAGI 1.1.0 conoce solo el 1; MAGI 1.2 y la app Android anterior leen el 1 y el 2; MAGI 1.3 y 1.4 leen hasta el 3; MAGI 1.5 y la app actual leen del 1 al 4. Un número mayor que el máximo conocido se rechaza como `formato_nuevo`. |
 | `app` | texto | sí | Versión de MAGI que escribió el fichero. Informativo. |
 | `equipo` | objeto | sí | Dueño del fichero: `uuid` (el del nombre del fichero), `nombre` y `plataforma` (`linux`, `macos`, `android`). |
 | `generado_en` | texto | sí | Fecha ISO 8601 con milisegundos y zona del momento de la exportación. |
@@ -210,7 +213,7 @@ Cada elemento de `elementos` tiene esta forma:
 
 | Campo | Descripción |
 |---|---|
-| `tipo` | `grupo`, `host`, `identidad`, `tunel`, `snippet`, `sincronizacion_dir` o `comprobacion_servicio` (formato 3). |
+| `tipo` | `grupo`, `host`, `identidad`, `tunel`, `snippet`, `sincronizacion_dir`, `comprobacion_servicio` (formato 3) o `sesion_persistente` (formato 4). |
 | `uuid` | Identificador global del elemento. En identidades es UUIDv5 de la huella (§7.3). |
 | `version` | Versión de esta edición (§6). |
 | `vector` | Vector de esta edición (§6). |
@@ -251,12 +254,16 @@ No viaja `plegado` (es propio de cada equipo).
 | `etiquetas` | array de texto | Nombres de etiquetas. |
 | `verificaciones` | objeto o null | Comprobaciones previas de la deliberación (§7.2.2). |
 | `snippet_al_conectar` | uuid o null | Snippet que se escribe en cada pestaña. |
+| `sesiones_persistentes` | booleano | **Desde el formato 4.** Toda pestaña nueva del host es una sesión persistente, con nombre automático y ficha. Solo se escribe cuando es `true`: un host sin la marca no trae el campo, y un fichero anterior al formato 4 tampoco, y en los dos casos cuenta como `false`. |
 
 No viajan: `ultimo_estado`, `ultima_conexion_en`, `sftp_dir_local`,
-`sftp_dir_remoto`, `actualizado_en` ni `huella_escritorio` (la huella del
-certificado RDP aceptado es propia de cada equipo y se descarta si viene en un
-fichero). Tampoco viajan las contraseñas: su referencia (`identidad_ref`) sí,
-el secreto no.
+`sftp_dir_remoto`, `actualizado_en`, `reconectar`, `portapapeles_remoto` ni
+`huella_escritorio` (la huella del certificado RDP aceptado es propia de cada
+equipo y se descarta si viene en un fichero; `reconectar` y
+`portapapeles_remoto` también son propios de cada equipo). El `tmux_persistente`
+de la Fase 15 está obsoleto y tampoco viaja: lo sustituye `sesiones_persistentes`.
+Tampoco viajan las contraseñas: su referencia (`identidad_ref`) sí, el secreto
+no.
 
 Los campos de escritorio son campos que viajan como cualquier otro: editarlos
 sube la versión del host con el reloj híbrido. El tipo se fija al crear el host y
@@ -413,6 +420,64 @@ Reglas:
 }
 ```
 
+### 7.8 Sesión persistente (formato 4)
+
+Ficha de una sesión persistente: una sesión con nombre que vive en el tmux
+propio de MAGI en el host (`tmux -L magi`) y sobrevive a MAGI y al equipo. La
+ficha dice qué sesión es y cómo se crea o se reabre; el host es la fuente de
+verdad de si la sesión existe.
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `host` | uuid | Host `ssh` al que pertenece. |
+| `nombre` | texto | Nombre de la sesión en tmux, `^[A-Za-z0-9_-]{1,64}$`. Único dentro del host. |
+| `carpeta` | texto o null | Carpeta del host donde arranca: absoluta o `~/…`, hasta 1 024 bytes, sin saltos de línea. `null`: la carpeta personal. |
+| `comando` | texto o null | Comando de arranque, texto libre como un snippet, hasta 4 096 bytes sin bytes nulos. `null`: el shell de acceso. |
+| `comando_reanudar` | texto o null | Comando al reabrir una sesión terminada (por ejemplo `claude --continue`). `null`: el `comando`. |
+| `nota` | texto o null | Hasta 500 caracteres. |
+| `origen` | texto | `manual` (marcada al abrir), `host` (de un host marcado) o `descubierta` (añadida desde la lista). |
+| `creada_por` | texto | Etiqueta del equipo que la creó. No cambia después de crearla. |
+
+Un texto vacío es lo mismo que `null`: al exportar, MAGI escribe `null`.
+
+No viajan: `creada_en` y `actualizado_en` (son marcas locales de cada equipo: la
+`version` ya dice cuándo se editó, y si viajaran dos equipos con la misma edición
+tendrían contenidos distintos y la fusión vería diferencias que no hay). **Nunca
+viaja el estado de la sesión** (si está viva, quién está enganchado, la atención,
+el título del programa ni su contenido): se lee del host cuando hace falta.
+
+Reglas:
+
+- Solo existe en hosts de tipo `ssh`. Si al importar el host no está vivo, o no
+  es `ssh`, el elemento se descarta como conflicto `huerfano` y el inventario
+  local no se toca.
+- Un nombre, un origen o unos campos que no validan (§7.7 del informe de la
+  Fase 16) se descartan como conflicto de `elemento`: nunca se aplica a medias.
+- La clave natural es (host, `nombre`). **Dos fichas con el mismo host y nombre
+  son la misma sesión y se unen** (§11, regla 7): no se renombran, porque
+  «agente (2)» no existe en el host.
+- Borrar una ficha deja lápida, y **nunca termina la sesión del host**: si
+  vivía, sigue allí sin ficha.
+
+```json
+{
+  "tipo": "sesion_persistente",
+  "uuid": "4d2c1b0a-6666-4f5e-8d9c-0123456789ab",
+  "version": "1793873700001.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873700001 },
+  "datos": {
+    "host": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+    "nombre": "agente",
+    "carpeta": "~/proyectos/api",
+    "comando": "claude",
+    "comando_reanudar": "claude --continue",
+    "nota": null,
+    "origen": "manual",
+    "creada_por": "sobremesa"
+  }
+}
+```
+
 ---
 
 ## 8. Lápidas
@@ -436,9 +501,11 @@ edición posterior (que resucita el elemento). El `vector` de la lápida parte d
 vector del elemento borrado y sube la entrada del equipo que borra.
 
 Los borrados en cascada dejan lápida de los hijos: borrar un host deja lápida de
-sus túneles, de sus sincronizaciones de directorio y de sus comprobaciones de
-servicio. La `lápida` de una comprobación lleva en `nombre` su `objetivo`
-(por ejemplo `nginx.service`).
+sus túneles, de sus sincronizaciones de directorio, de sus comprobaciones de
+servicio y de sus fichas de sesión persistente. La `lápida` de una comprobación
+lleva en `nombre` su `objetivo` (por ejemplo `nginx.service`) y la de una ficha,
+el nombre de la sesión (por ejemplo `agente`). Borrar un host o una ficha no
+termina ninguna sesión en el host.
 
 ---
 
@@ -508,9 +575,10 @@ seguir cualquier implementación (MAGI de escritorio y Android):
    resucitados). Un borrado gana a las ediciones anteriores y pierde ante las
    posteriores.
 6. **Referencias.** Las referencias por uuid a elementos inexistentes o borrados
-   se resuelven como vacías. Un túnel, una sincronización de directorio o una
-   comprobación de servicio cuyo host no existe (en la comprobación, o ya no es
-   `ssh`) se descarta como conflicto `huerfano`.
+   se resuelven como vacías. Un túnel, una sincronización de directorio, una
+   comprobación de servicio o una ficha de sesión persistente cuyo host no existe
+   (en la comprobación y en la ficha, o ya no es `ssh`) se descarta como
+   conflicto `huerfano`.
 7. **Nombres.** Los nombres únicos por tipo (host, grupo, snippet, alias de
    identidad; nombre de túnel o de sincronización dentro de su host) no pueden
    repetirse. Si dos elementos distintos acaban con el mismo nombre, el de
@@ -520,9 +588,37 @@ seguir cualquier implementación (MAGI de escritorio y Android):
    se renombran: su nombre es el `objetivo` y una clave natural (host,
    `objetivo_tipo`, `objetivo`) repetida entre `uuid` distintos se resuelve al
    aplicar como conflicto `nombre`, descartando la copia.
+
+   **Fichas de sesión persistente (formato 4): unión en lugar de renombrado.**
+   Tampoco se renombran, porque su nombre es el de una sesión de tmux y «x (2)»
+   no existe en el host. Dos o más fichas vivas con el mismo host y `nombre`
+   son la misma sesión y se unen, después de descartar los huérfanos y antes de
+   resolver los nombres del resto:
+
+   1. Queda la de `uuid` **menor** (comparado como texto, en minúsculas). Las
+      demás son las perdedoras.
+   2. A la ganadora se le rellena lo que le falte con lo que traigan las
+      perdedoras, por `uuid` creciente y solo si el campo está vacío o es
+      `null`: `carpeta`, `comando`, `comando_reanudar` y `nota`. Lo que ya tenía
+      no se pisa. El resto de campos (`origen`, `creada_por`) se quedan como los
+      tiene la ganadora.
+   3. Cada perdedora se borra con lápida y deja un conflicto `nombre` sin
+      versión que recuperar (recuperarla duplicaría el nombre).
+   4. Si la ganadora ha recibido algún campo, es una **edición nueva** del
+      equipo que aplica la unión (versión nueva y vector con su entrada
+      subida); si no, conserva su versión. La lápida de cada perdedora parte
+      del vector de la perdedora y sube la entrada de este equipo.
+
+   La unión es determinista: el mismo conjunto de ficheros da la misma ficha en
+   cualquier equipo y en cualquier orden. Si dos equipos la hacen a la vez, cada
+   uno edita a la ganadora con una versión suya y el mismo contenido, y la
+   siguiente pasada iguala las versiones. La fusión no usa reloj: la lápida y la
+   edición de la ganadora se escriben al aplicar el plan, como un renombrado.
 8. **Trabajo vivo.** Una importación no cierra sesiones, túneles activos,
    transferencias ni ejecuciones en curso: el borrado de un host o de un túnel
-   con trabajo vivo se aplaza y queda como conflicto `borrado`.
+   con trabajo vivo se aplaza y queda como conflicto `borrado`. La lápida de una
+   ficha de sesión persistente no se aplaza: la ficha se borra aunque haya una
+   pestaña enganchada a su sesión, y la pestaña sigue (es trabajo del servidor).
 9. **Borrados masivos.** Antes de aplicar una importación que borra más de
    `umbral_borrado_hosts` hosts o al menos `umbral_borrado_pct` % de ellos, MAGI
    hace una copia de `magi.db` y pide confirmación. En Android debe existir una
@@ -564,7 +660,7 @@ Orden obligatorio al leer un fichero ajeno:
 3. Comprobar que `equipo.uuid` coincide con el uuid del nombre del fichero y que
    el equipo no está en `equipos_quitados`.
 4. Comprobar `formato` (en la cabecera y en el JSON). Si es mayor que el
-   máximo conocido (3): `formato_nuevo`, se ignora con el aviso «actualiza
+   máximo conocido (4): `formato_nuevo`, se ignora con el aviso «actualiza
    MAGI» y no se aplica nada del fichero.
 5. Parsear el JSON y validar los campos que se usan (tipos, uuids, versiones). Un
    fichero inválido se descarta entero: nunca se aplica a medias.
@@ -586,11 +682,18 @@ Estados de un equipo conocido: `al_dia`, `ilegible`, `danado`,
   `comprobacion_servicio`. Un MAGI 1.2 lee un fichero del formato 3 como
   `formato_nuevo` (no pierde las comprobaciones sin saberlo). MAGI 1.3 y la
   app Android actualizada leen los tres formatos.
+- **Formato 3 → formato 4 (Fase 16).** Aparece el elemento `sesion_persistente`
+  y el host gana el campo `sesiones_persistentes`. Un MAGI 1.3 o 1.4 lee un
+  fichero del formato 4 como `formato_nuevo` (no pierde las fichas ni la marca
+  sin saberlo, y no importa nada de ese fichero). MAGI 1.5 y la app Android
+  actualizada leen los cuatro formatos.
 - **Qué escribe cada versión:** MAGI 1.1 escribe siempre formato 1; MAGI 1.2
   escribe formato 1 si todos los hosts son SSH y formato 2 si hay algún
   escritorio; MAGI 1.3 escribe formato 3 si hay alguna comprobación propia y,
-  si no, 2 o 1 como la 1.2 (así los inventarios que no necesitan lo nuevo
-  siguen siendo legibles por las versiones anteriores).
+  si no, 2 o 1 como la 1.2; MAGI 1.5 escribe formato 4 si hay alguna ficha de
+  sesión persistente o algún host marcado y, si no, 3, 2 o 1 como la 1.3 (así
+  los inventarios que no necesitan lo nuevo siguen siendo legibles por las
+  versiones anteriores).
 - Añadir campos opcionales nuevos o nuevos tipos de elemento no obliga a subir el
   formato, pero un lector antiguo los ignorará y un escritor nuevo no debe
   asumir que el otro los entiende.
@@ -601,9 +704,13 @@ Estados de un equipo conocido: `al_dia`, `ilegible`, `danado`,
   conectarse a ellos ni crearles túneles. Con el formato 3 guarda las
   comprobaciones de servicio en su copia (la misma tabla
   `COMPROBACIONES_SERVICIO` que crea la migración 9, con los mismos campos) y
-  no las usa: la vista de servicios del móvil llega en la F14. El QR de la
-  clave contiene el texto `AGE-SECRET-KEY-1…`, que se guarda en el Android
-  Keystore.
+  no las usa: la vista de servicios del móvil llega en la F14. Con el formato 4
+  guarda las fichas de sesiones persistentes (la tabla `SESIONES_PERSISTENTES`
+  de la migración 11) y la marca `sesiones_persistentes` del host, y no las usa
+  ni las enseña: la lista de sesiones persistentes en el móvil queda para una
+  fase futura (D326). Aplica la misma unión de fichas que el escritorio (§11,
+  regla 7), porque es el mismo código del núcleo. El QR de la clave contiene el
+  texto `AGE-SECRET-KEY-1…`, que se guarda en el Android Keystore.
 
 ---
 
@@ -685,7 +792,70 @@ Borrar una comprobación deja una lápida de tipo `comprobacion_servicio` con el
 
 ---
 
-## 18. Cómo abrir un fichero fuera de MAGI
+## 18. Ejemplo de sesión persistente y host marcado (formato 4)
+
+En un fichero del formato 4, una ficha de sesión persistente viaja como un
+elemento más y el host que tiene marcado «todas las sesiones persistentes» lleva
+el campo `sesiones_persistentes` (los demás campos del host son los de §7.2). La
+cabecera dice `MAGI-SINCRONIZACION 4` y el campo `formato` del JSON, `4`:
+
+```json
+{
+  "tipo": "host",
+  "uuid": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+  "version": "1793873700001.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873700001 },
+  "datos": {
+    "nombre": "web",
+    "direccion": "192.0.2.5",
+    "puerto": 22,
+    "tipo": "ssh",
+    "escritorio_dominio": null,
+    "escritorio_opciones": {},
+    "usuario": "deploy",
+    "identidad_ref": "fichero:~/.ssh/id_ed25519",
+    "salto": null,
+    "grupo": null,
+    "multiplexar": false,
+    "keepalive_seg": 30,
+    "opciones_extra": "",
+    "servicios": "",
+    "origen": "manual",
+    "etiquetas": ["produccion"],
+    "verificaciones": null,
+    "snippet_al_conectar": null,
+    "sesiones_persistentes": true
+  }
+}
+```
+
+```json
+{
+  "tipo": "sesion_persistente",
+  "uuid": "4d2c1b0a-6666-4f5e-8d9c-0123456789ab",
+  "version": "1793873700002.6b1e5c2a-1111-4c3a-8a2b-0123456789ab",
+  "vector": { "6b1e5c2a-1111-4c3a-8a2b-0123456789ab": 1793873700002 },
+  "datos": {
+    "host": "0f1e2d3c-2222-4b3a-9c1d-abcdef012345",
+    "nombre": "agente",
+    "carpeta": "~/proyectos/api",
+    "comando": "claude",
+    "comando_reanudar": "claude --continue",
+    "nota": null,
+    "origen": "manual",
+    "creada_por": "sobremesa"
+  }
+}
+```
+
+Borrar la ficha deja una lápida de tipo `sesion_persistente` con el nombre de la
+sesión en `nombre`, y no termina la sesión en el host. Si dos equipos crean a la
+vez una ficha con el mismo host y nombre, todos los equipos se quedan con la de
+`uuid` menor (§11, regla 7) y la otra queda como lápida.
+
+---
+
+## 19. Cómo abrir un fichero fuera de MAGI
 
 ```text
 # 1. Guardar la clave (una sola línea) en un fichero con permisos 600

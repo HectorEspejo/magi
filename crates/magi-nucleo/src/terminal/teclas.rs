@@ -2,7 +2,8 @@
 //!
 //! La misma tabla vale para la fila de teclas de la app, el teclado del sistema
 //! y el teclado físico: todo pasa por aquí. El modo de la sesión (cursor de
-//! aplicación y pegado entre corchetes) lo da el parser vt100.
+//! aplicación y pegado entre corchetes) lo da el parser vt100; las banderas del
+//! teclado de kitty y `modifyOtherKeys` (Fase 16), el emulador del núcleo.
 
 /// Una tecla física, sin depender de crossterm ni de Android.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,17 +91,23 @@ pub struct ModoTerminal {
     /// la bandera 1, Intro, Tab, Retroceso, Esc y Ctrl o Alt más tecla se
     /// codifican como `CSI ... u` (Fase 15).
     pub banderas_kitty: u16,
+    /// Nivel de `modifyOtherKeys` de xterm que pidió el remoto con `CSI > 4 ;
+    /// n m` (0 apagado, 1 o 2). tmux lo pide así a su terminal (Fase 16).
+    /// Con la bandera 1 de kitty activa, gana kitty.
+    pub modify_other_keys: u8,
 }
 
 impl ModoTerminal {
-    /// Lee el modo de la pantalla del parser vt100. Las banderas de kitty no
-    /// están en la pantalla: sin ellas, se codifica a la clásica.
+    /// Lee el modo de la pantalla del parser vt100. Las banderas de kitty y
+    /// `modifyOtherKeys` no están en la pantalla: sin ellos, se codifica a la
+    /// clásica.
     #[must_use]
     pub fn desde_pantalla(pantalla: &vt100::Screen) -> Self {
         Self {
             cursor_aplicacion: pantalla.application_cursor(),
             pegado_corchetes: pantalla.bracketed_paste(),
             banderas_kitty: 0,
+            modify_other_keys: 0,
         }
     }
 
@@ -111,13 +118,14 @@ impl ModoTerminal {
     }
 
     /// Lee el modo de una pantalla del emulador, con las banderas de kitty de
-    /// la pantalla activa.
+    /// la pantalla activa y el nivel de `modifyOtherKeys`.
     #[must_use]
     pub fn desde_emulador(pantalla: &crate::terminal::emulador::PantallaEmulada) -> Self {
         let mut modo = Self::desde_pantalla(pantalla.screen());
         modo.banderas_kitty = pantalla
             .emulador()
             .banderas_kitty(pantalla.screen().alternate_screen());
+        modo.modify_other_keys = pantalla.emulador().modify_other_keys();
         modo
     }
 }
@@ -171,6 +179,17 @@ pub fn codificar(
             _ => {}
         }
     }
+    // modifyOtherKeys de xterm (Fase 16): tmux lo pide con `CSI > 4 ; n m`.
+    // Si el programa pidió además la bandera 1 de kitty, gana kitty (la pidió
+    // de forma explícita). Sin el modo, esta rama no existe y la codificación
+    // clásica no cambia ni un byte.
+    if modo.modify_other_keys > 0 && modo.banderas_kitty & 1 == 0 {
+        if let Some(bytes) =
+            codificar_modify_other_keys(tecla, modificadores, modo.modify_other_keys)
+        {
+            return Some(bytes);
+        }
+    }
     let mut bytes = match tecla {
         Tecla::Caracter(caracter) => {
             if modificadores.ctrl {
@@ -204,6 +223,72 @@ pub fn codificar(
         return Some(con_alt);
     }
     Some(bytes)
+}
+
+/// Codificación de `modifyOtherKeys` de xterm: `CSI 27 ; m ; k ~`, con `m` el
+/// valor de los modificadores (`1 + Mayús + 2·Alt + 4·Ctrl`) y `k` el código de
+/// la tecla. Devuelve `None` si la tecla se codifica como siempre.
+///
+/// Con los niveles 1 y 2: Intro, Tab, Retroceso y Esc con Mayús o Ctrl (y sus
+/// combinaciones con Alt), y Ctrl con un carácter que no tiene byte de control.
+/// Mayús+Tab solo sigue siendo `CSI Z`; Alt solo con Intro, Tab, Retroceso o Esc
+/// se queda en la forma clásica (`ESC` y la tecla). Con el nivel 2, además,
+/// Ctrl con los caracteres que sí tienen byte de control (Ctrl+A →
+/// `CSI 27 ; 5 ; 97 ~`).
+fn codificar_modify_other_keys(
+    tecla: Tecla,
+    modificadores: Modificadores,
+    nivel: u8,
+) -> Option<Vec<u8>> {
+    let valor = modificadores.valor_xterm();
+    let extendida = modificadores.mayusculas || modificadores.ctrl;
+    let forma_27 = |codigo: u32, valor: u8| Some(format!("\x1b[27;{valor};{codigo}~").into_bytes());
+    match tecla {
+        Tecla::Intro if extendida => forma_27(13, valor),
+        Tecla::Tabulador
+            if modificadores.mayusculas && !modificadores.ctrl && !modificadores.alt =>
+        {
+            Some(vec![ESC, b'[', b'Z'])
+        }
+        Tecla::Tabulador if extendida => forma_27(9, valor),
+        // Mayús+Tab con Ctrl: Mayús ya va implícito en la tecla.
+        Tecla::TabuladorInverso if modificadores.ctrl => forma_27(
+            9,
+            Modificadores {
+                mayusculas: true,
+                ..modificadores
+            }
+            .valor_xterm(),
+        ),
+        Tecla::Retroceso if extendida => forma_27(127, valor),
+        Tecla::Escape if extendida => forma_27(27, valor),
+        Tecla::Caracter(caracter) if modificadores.ctrl => match codigo_de_control(caracter) {
+            // Con byte de control: solo el nivel 2 lo cambia.
+            Some(codigo) => (nivel >= 2).then(|| forma_27(codigo, valor)).flatten(),
+            // Sin byte de control, Ctrl+tecla no tenía codificación.
+            None if !caracter.is_control() => forma_27(u32::from(caracter), valor),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// Código de la tecla de un carácter que tiene byte de control (`byte_de_control`),
+/// para `modifyOtherKeys`. Los dígitos `2` a `8` son como entrega crossterm los
+/// bytes `0x1C`-`0x1F` y los demás de la tabla: se codifican con la tecla que
+/// representan (`Ctrl+5` es `Ctrl+]`).
+fn codigo_de_control(caracter: char) -> Option<u32> {
+    byte_de_control(caracter)?;
+    Some(match caracter {
+        ' ' | '2' => 32,
+        '[' | '3' => 91,
+        '\\' | '4' => 92,
+        ']' | '5' => 93,
+        '^' | '6' => 94,
+        '_' | '7' => 95,
+        '?' | '8' => 63,
+        otro => u32::from(otro),
+    })
 }
 
 /// Código Unicode que el teclado de kitty usa para una tecla con Ctrl o Alt:
@@ -300,8 +385,7 @@ mod pruebas {
     fn aplicacion() -> ModoTerminal {
         ModoTerminal {
             cursor_aplicacion: true,
-            pegado_corchetes: false,
-            banderas_kitty: 0,
+            ..ModoTerminal::default()
         }
     }
 
@@ -534,9 +618,8 @@ mod pruebas {
         let entre_corchetes = pegar(
             texto,
             ModoTerminal {
-                cursor_aplicacion: false,
                 pegado_corchetes: true,
-                banderas_kitty: 0,
+                ..ModoTerminal::default()
             },
         );
         assert_eq!(
@@ -629,6 +712,78 @@ mod pruebas {
         assert_eq!(
             codificar(Tecla::Retroceso, mods(false, false, true), kitty()).unwrap(),
             b"\x1b[127;5u".to_vec()
+        );
+    }
+
+    fn con_mok(nivel: u8) -> ModoTerminal {
+        ModoTerminal {
+            modify_other_keys: nivel,
+            ..normal()
+        }
+    }
+
+    #[test]
+    fn modify_other_keys_codifica_mayus_intro_como_xterm() {
+        // AC del checklist: con el modo activo, Mayús+Intro es exactamente
+        // ESC [ 2 7 ; 2 ; 1 3 ~; sin él, CR; Ctrl+Intro, CSI 27;5;13~.
+        let mayus = mods(true, false, false);
+        for nivel in [1, 2] {
+            assert_eq!(
+                codificar(Tecla::Intro, mayus, con_mok(nivel)).unwrap(),
+                b"\x1b[27;2;13~".to_vec()
+            );
+            assert_eq!(
+                codificar(Tecla::Intro, mods(false, false, true), con_mok(nivel)).unwrap(),
+                b"\x1b[27;5;13~".to_vec()
+            );
+        }
+        assert_eq!(codificar(Tecla::Intro, mayus, normal()).unwrap(), b"\r");
+        // Alt+Intro solo y Mayús+Tab solo no cambian de forma.
+        assert_eq!(
+            codificar(Tecla::Intro, mods(false, true, false), con_mok(2)).unwrap(),
+            b"\x1b\r".to_vec()
+        );
+        assert_eq!(
+            codificar(Tecla::TabuladorInverso, mayus, con_mok(2)).unwrap(),
+            b"\x1b[Z".to_vec()
+        );
+    }
+
+    #[test]
+    fn modify_other_keys_ctrl_letra_solo_cambia_en_el_nivel_2() {
+        let ctrl = mods(false, false, true);
+        assert_eq!(
+            codificar(Tecla::Caracter('a'), ctrl, con_mok(1)).unwrap(),
+            vec![0x01]
+        );
+        assert_eq!(
+            codificar(Tecla::Caracter('a'), ctrl, con_mok(2)).unwrap(),
+            b"\x1b[27;5;97~".to_vec()
+        );
+    }
+
+    #[test]
+    fn la_bandera_1_de_kitty_gana_a_modify_other_keys() {
+        let modo = ModoTerminal {
+            banderas_kitty: 1,
+            modify_other_keys: 2,
+            ..normal()
+        };
+        assert_eq!(
+            codificar(Tecla::Intro, mods(true, false, false), modo).unwrap(),
+            b"\x1b[13;2u".to_vec()
+        );
+    }
+
+    #[test]
+    fn modify_other_keys_viene_del_emulador_y_no_de_la_pantalla_sola() {
+        let mut pantalla = crate::terminal::emulador::PantallaEmulada::nueva(2, 10, 0, false);
+        pantalla.procesar(b"\x1b[>4;2m");
+        assert_eq!(ModoTerminal::desde_emulador(&pantalla).modify_other_keys, 2);
+        // Solo con la pantalla de vt100 no hay forma de saberlo.
+        assert_eq!(
+            ModoTerminal::desde_pantalla(pantalla.screen()).modify_other_keys,
+            0
         );
     }
 

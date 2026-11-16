@@ -109,6 +109,7 @@ fn host_de_prueba(puerto: u16) -> Host {
         reconectar: true,
         tmux_persistente: false,
         portapapeles_remoto: false,
+        sesiones_persistentes: false,
     }
 }
 

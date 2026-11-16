@@ -3,14 +3,14 @@ source: tests/redimensionado/vistas_g.rs
 ---
 ┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
 │  HOSTS                                                            ⇥ detalle  │
-│  ──────────────────────────────────────────────────────────────────────────  │
-│▸ ◐ back┌ AYUDA · FLOTA ─────────────────────────────────────────────┐        │
-│  ○ dgx-│                                                            │        │
-│  ● hetz│  ↑ ↓ / j k     mover la selección                          │        │
+│  ──────┌ AYUDA · FLOTA ─────────────────────────────────────────────┐──────  │
+│▸ ◐ back│                                                            │        │
+│  ○ dgx-│  ↑ ↓ / j k     mover la selección                          │        │
 │  ● hetz│  ↵             conectar con el host                        │        │
-│  ◐ mac-│  r             sondear el host seleccionado                │        │
-│  ✕ rinc│  R             sondear todos los visibles                  │        │
-│  ● vps-│  e             editar la ficha                             │        │
+│  ● hetz│  r             sondear el host seleccionado                │        │
+│  ◐ mac-│  R             sondear todos los visibles                  │        │
+│  ✕ rinc│  e             editar la ficha                             │        │
+│  ● vps-│  N             nueva sesión persistente en este host       │        │
 │        │  /             filtrar                                     │        │
 │        │  a             activar o pausar el auto-refresco           │        │
 │        │  !             snippets que apuntan al host                │        │

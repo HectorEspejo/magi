@@ -1,10 +1,14 @@
 ---
 source: tests/terminal_ui.rs
 ---
- MAGI · TMUX · web-01 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  SESIÓN                       ENGANCHADA   VENTANAS  CREADA
-▸ magi-portatil-1              sí           2         hace 3 h
-  despliegue                   no           1         ayer
+ MAGI · SESIONES · 1 sesiones · 1 ventanas ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PERSISTENTES · 0 · 2 sin ficha ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+▸      de tu tmux    despliegue       web-01     hace 1 d   ↵ engancharse
+     ● de tu tmux    magi-portatil-1  web-01     hace NN m   ↵ engancharse
+ PESTAÑAS · 1 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ESTADO PESTAÑA            TIPO  HOST             TIEMPO     TÍTULO                                                                                                              IDENTIDAD        VENT.
+  ● !    web-01             SSH   web-01           2 h 03 m   Claude Code                                                                                                         clave            1
 
 
 
@@ -51,13 +55,9 @@ source: tests/terminal_ui.rs
 
 
 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  despliegue · web-01 · de tu tmux de siempre · ↵ engancharse · T terminar
+  servidor pid N · protocolo 10 · desde hace NN s
 
 
-
-
-
-
-
-
-  ↵ abrir · T terminar · r refrescar · Esc volver
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ sesiones de tmux en web-01

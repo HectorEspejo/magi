@@ -26,8 +26,8 @@ use crate::modelo::Direccion;
 use crate::modelo::{fecha_ahora, IdentidadRef, Origen, OrigenIdentidad, TipoTunel};
 use crate::sincronizacion::elementos::{
     opciones_desde_valor, ruta_desde_home, DatosComprobacionServicio, DatosGrupo, DatosHost,
-    DatosIdentidad, DatosSincronizacion, DatosSnippet, DatosTunel, DatosVerificaciones,
-    DestinoSnippet,
+    DatosIdentidad, DatosSesionPersistente, DatosSincronizacion, DatosSnippet, DatosTunel,
+    DatosVerificaciones, DestinoSnippet,
 };
 use crate::sincronizacion::fusion::{ConflictoFusion, PlanFusion};
 
@@ -80,6 +80,7 @@ struct VivosPlan {
     snippets: BTreeMap<String, VivoPlan<DatosSnippet>>,
     sincronizaciones: BTreeMap<String, VivoPlan<DatosSincronizacion>>,
     comprobaciones: BTreeMap<String, VivoPlan<DatosComprobacionServicio>>,
+    fichas: BTreeMap<String, VivoPlan<DatosSesionPersistente>>,
 }
 
 impl VivosPlan {
@@ -118,6 +119,10 @@ impl VivosPlan {
             .expect("tabla creada")
             .extend(self.comprobaciones.keys().cloned());
         mapas
+            .get_mut(&Tabla::SesionesPersistentes)
+            .expect("tabla creada")
+            .extend(self.fichas.keys().cloned());
+        mapas
     }
 
     /// Versión y vector del candidato vivo de esa tabla, para decidir si una
@@ -152,6 +157,10 @@ impl VivosPlan {
                 .comprobaciones
                 .get(uuid)
                 .map(|vivo| (vivo.version.as_str(), &vivo.vector)),
+            Tabla::SesionesPersistentes => self
+                .fichas
+                .get(uuid)
+                .map(|vivo| (vivo.version.as_str(), &vivo.vector)),
         }
     }
 }
@@ -162,7 +171,9 @@ struct PlanLeido {
     vivos: VivosPlan,
     /// Lápidas del plan por uuid (todas las del universo).
     lapidas: BTreeMap<String, Lapida>,
-    /// uuids que hay que tratar como edición nueva al escribir (renombrados).
+    /// uuids que hay que tratar como edición nueva al escribir: los
+    /// renombrados por colisión de nombre y las fichas de sesión persistente
+    /// que reciben campos de otra con la que se unen (D337).
     renombrados: HashMap<Tabla, BTreeSet<String>>,
     /// Hosts cuyo tipo (o cuyas opciones de escritorio) no se puede validar.
     /// No se aplican: dejan un conflicto de elemento para que el usuario lo
@@ -198,6 +209,9 @@ pub fn aplicar(
     versiones::al_importar(&transaccion, plan.reloj_ms)?;
 
     let mut leido = leer_plan(plan)?;
+    // Uniones de fichas (D337): la lápida de cada perdedora y la edición nueva
+    // de la ganadora, antes de decidir qué se reescribe y qué se borra.
+    materializar_uniones(&transaccion, plan, &mut leido)?;
     let vivos_uuids = leido.vivos.uuids_por_tabla();
     // Hosts que el fichero trae con un tipo o unas opciones que no se pueden
     // validar: no se aplican y su fila local, si la hay, se conserva.
@@ -293,6 +307,7 @@ pub fn aplicar(
     //    y después el DELETE, que arrastra en cascada los hijos de SQLite.
     //    Los hijos van antes que los padres para contarlos una sola vez.
     let orden_borrado = [
+        Tabla::SesionesPersistentes,
         Tabla::ComprobacionesServicio,
         Tabla::Tuneles,
         Tabla::SincronizacionesDir,
@@ -417,6 +432,20 @@ pub fn aplicar(
     )?;
     if !conflictos_de_comprobacion.is_empty() {
         leido.invalidos.extend(conflictos_de_comprobacion);
+    }
+    // Lo mismo con las fichas de sesión persistente: la unión por (host,
+    // nombre) ya las ha resuelto en la fusión, así que un choque aquí solo
+    // viene de una fila local que no participó en ella.
+    let conflictos_de_ficha = escribir_fichas(
+        &transaccion,
+        &leido.vivos,
+        &locales,
+        &a_actualizar,
+        &ids,
+        &mut resumen,
+    )?;
+    if !conflictos_de_ficha.is_empty() {
+        leido.invalidos.extend(conflictos_de_ficha);
     }
 
     // 5. Hijos que viajan dentro del padre: destinos, etiquetas y
@@ -605,6 +634,28 @@ pub fn recuperar_version(conexion: &Connection, conflicto: &Conflicto, hogar: &P
             };
             escribir_comprobacion(&transaccion, &uuid, &version, &vector, &datos, host_id)?;
         }
+        Tabla::SesionesPersistentes => {
+            let datos: DatosSesionPersistente = serde_json::from_value(contenido)
+                .context("la versión perdedora no son datos de ficha de sesión persistente")?;
+            datos.validar().map_err(|motivo| {
+                anyhow!("la versión perdedora de la ficha no es válida: {motivo}")
+            })?;
+            let host_uuid = texto_no_vacio(&datos.host)
+                .context("la versión perdedora de la ficha no dice a qué host pertenece")?;
+            let Some(host_id) = id_por_uuid(&transaccion, Tabla::Hosts, host_uuid)? else {
+                bail!(
+                    "no se puede recuperar la ficha «{}»: su host ya no existe",
+                    conflicto.nombre
+                );
+            };
+            if clave_de_ficha_ocupada(&transaccion, host_id, &datos.nombre, &uuid)? {
+                bail!(
+                    "no se puede recuperar la ficha «{}»: ya hay otra con ese nombre en el host",
+                    conflicto.nombre
+                );
+            }
+            escribir_ficha(&transaccion, &uuid, &version, &vector, &datos, host_id)?;
+        }
     }
 
     conflictos::resolver(
@@ -643,7 +694,10 @@ pub fn unir_por_nombre(
                 };
                 let depende_del_host = matches!(
                     tabla,
-                    Tabla::Tuneles | Tabla::SincronizacionesDir | Tabla::ComprobacionesServicio
+                    Tabla::Tuneles
+                        | Tabla::SincronizacionesDir
+                        | Tabla::ComprobacionesServicio
+                        | Tabla::SesionesPersistentes
                 );
                 if depende_del_host != segunda_pasada {
                     continue;
@@ -704,8 +758,8 @@ fn unir_elemento(
 }
 
 /// Fila local con la misma clave natural que los datos del fichero, si la hay:
-/// nombre (identidades por huella; túneles y sincronizaciones por nombre y
-/// host).
+/// nombre (identidades por huella; túneles, sincronizaciones y fichas de
+/// sesión persistente por nombre y host).
 fn id_local_por_clave_natural(
     conexion: &Connection,
     tabla: Tabla,
@@ -852,6 +906,30 @@ fn id_local_por_clave_natural(
                 )
                 .optional()?
         }
+        Tabla::SesionesPersistentes => {
+            let datos: DatosSesionPersistente = match serde_json::from_value(datos.clone()) {
+                Ok(datos) => datos,
+                Err(error) => {
+                    tracing::warn!("ficha de sesión ilegible en el fichero para unir: {error}");
+                    return Ok(None);
+                }
+            };
+            let (Some(host_uuid), Some(nombre)) =
+                (texto_no_vacio(&datos.host), texto_no_vacio(&datos.nombre))
+            else {
+                return Ok(None);
+            };
+            let Some(host_id) = id_por_uuid(conexion, Tabla::Hosts, host_uuid)? else {
+                return Ok(None);
+            };
+            conexion
+                .query_row(
+                    "SELECT id FROM SESIONES_PERSISTENTES WHERE host_id = ?1 AND nombre = ?2",
+                    params![host_id, nombre],
+                    |fila| fila.get(0),
+                )
+                .optional()?
+        }
     };
     Ok(consulta)
 }
@@ -983,6 +1061,27 @@ fn leer_plan(plan: &PlanFusion) -> Result<PlanLeido> {
                     invalidos.push(conflicto_de_comprobacion_invalida(uuid, contenido));
                 }
             },
+            Tabla::SesionesPersistentes => match leer_ficha_de_plan(contenido, uuid) {
+                Ok(datos) => {
+                    vivos.fichas.insert(
+                        uuid.to_string(),
+                        VivoPlan {
+                            version,
+                            vector,
+                            datos,
+                        },
+                    );
+                }
+                Err(motivo) => {
+                    // Una ficha que no se puede validar no se aplica: queda
+                    // como conflicto de elemento (entrada no fiable, §7.7).
+                    tracing::warn!(
+                        uuid,
+                        "ficha de sesión del plan con datos no válidos: {motivo}"
+                    );
+                    invalidos.push(conflicto_de_ficha_invalida(uuid, contenido));
+                }
+            },
         }
     }
 
@@ -1102,6 +1201,29 @@ fn conflicto_de_comprobacion_invalida(
     }
 }
 
+/// Datos de una ficha de sesión persistente del fichero, validados según §7.7.
+fn leer_ficha_de_plan(contenido: &serde_json::Value, uuid: &str) -> Result<DatosSesionPersistente> {
+    let datos = leer_datos::<DatosSesionPersistente>(contenido, uuid, "ficha de sesión")?;
+    datos
+        .validar()
+        .map_err(|motivo| anyhow!("la ficha de sesión {uuid} del plan no es válida: {motivo}"))?;
+    Ok(datos)
+}
+
+/// Conflicto de elemento de una ficha que no se puede aplicar. No guarda
+/// versión perdedora: el contenido recibido no es recuperable.
+fn conflicto_de_ficha_invalida(uuid: &str, contenido: &serde_json::Value) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_ELEMENTO.to_string(),
+        elemento_tipo: "sesion_persistente".to_string(),
+        uuid: uuid.to_string(),
+        nombre: crate::sincronizacion::fusion::nombre_de_contenido("sesion_persistente", contenido),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
+}
+
 /// Conflicto de elemento de un host que no se puede aplicar. No guarda versión
 /// perdedora: el contenido recibido no es recuperable.
 fn conflicto_de_host_invalido(uuid: &str, contenido: &serde_json::Value) -> ConflictoFusion {
@@ -1130,7 +1252,10 @@ where
 fn leer_locales(conexion: &Connection, tabla: Tabla) -> Result<BTreeMap<String, FilaLocal>> {
     let con_host = matches!(
         tabla,
-        Tabla::Tuneles | Tabla::SincronizacionesDir | Tabla::ComprobacionesServicio
+        Tabla::Tuneles
+            | Tabla::SincronizacionesDir
+            | Tabla::ComprobacionesServicio
+            | Tabla::SesionesPersistentes
     );
     let consulta = format!(
         "SELECT id, uuid, version, vector, {}{} FROM {} ORDER BY id",
@@ -1277,7 +1402,8 @@ fn columna_nombre(tabla: Tabla) -> &'static str {
         | Tabla::Hosts
         | Tabla::Tuneles
         | Tabla::Snippets
-        | Tabla::SincronizacionesDir => "nombre",
+        | Tabla::SincronizacionesDir
+        | Tabla::SesionesPersistentes => "nombre",
     }
 }
 
@@ -1732,6 +1858,239 @@ fn escribir_comprobacion(
     }
 }
 
+// ------------------------------------------------- fichas de sesión persistente
+
+/// Materializa las uniones de fichas del plan (D337, §7.5). La fusión es pura y
+/// no tiene reloj, así que deja dicho quién gana y quién pierde; aquí se
+/// escribe lo que necesita una versión de este equipo:
+///
+/// - la lápida de cada perdedora, partiendo de su vector para dominar las
+///   ediciones que ya se habían visto (como el borrado de cualquier elemento), y
+/// - la marca de «edición nueva» de la ganadora que ha recibido campos de otra,
+///   que se aplica como un renombrado: se escribe con el contenido del plan y
+///   después sube su versión.
+///
+/// La lápida entra en las del plan, así que el borrado de la fila local de la
+/// perdedora (si la hay) la usa en vez de una lápida mínima con la versión
+/// vieja, que no dominaría a la perdedora que sigue viva en otros ficheros.
+fn materializar_uniones(
+    conexion: &Connection,
+    plan: &PlanFusion,
+    leido: &mut PlanLeido,
+) -> Result<()> {
+    for union in &plan.unidas {
+        let (Some(ganadora), Some(perdedora)) = (
+            texto_no_vacio(&union.ganadora),
+            texto_no_vacio(&union.perdedora),
+        ) else {
+            tracing::warn!("unión de fichas sin uuid en el plan; se ignora");
+            continue;
+        };
+        let vector_anterior = versiones::vector_a_json(&union.vector_perdedora);
+        let (version, vector) = versiones::version_de_lapida(conexion, &vector_anterior)?;
+        leido.lapidas.insert(
+            perdedora.to_string(),
+            Lapida {
+                uuid: perdedora.to_string(),
+                tipo: Tabla::SesionesPersistentes.tipo_elemento().to_string(),
+                nombre: union.nombre.clone(),
+                version,
+                vector,
+                borrado_en: fecha_ahora(),
+            },
+        );
+        if union.ganadora_editada && leido.vivos.fichas.contains_key(ganadora) {
+            leido
+                .renombrados
+                .entry(Tabla::SesionesPersistentes)
+                .or_default()
+                .insert(ganadora.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Escribe las fichas de sesión persistente del plan. Devuelve los conflictos
+/// de nombre de las copias que no se pueden escribir porque otra fila local,
+/// con otro uuid y fuera de la fusión, ya ocupa su host y nombre.
+fn escribir_fichas(
+    conexion: &Connection,
+    vivos: &VivosPlan,
+    locales: &HashMap<Tabla, BTreeMap<String, FilaLocal>>,
+    a_actualizar: &HashMap<Tabla, BTreeSet<String>>,
+    ids: &HashMap<Tabla, HashMap<String, i64>>,
+    resumen: &mut ResumenAplicacion,
+) -> Result<Vec<ConflictoFusion>> {
+    let ids_hosts = ids.get(&Tabla::Hosts).cloned().unwrap_or_default();
+    let locales_tabla = locales.get(&Tabla::SesionesPersistentes);
+    let actualizar = a_actualizar.get(&Tabla::SesionesPersistentes);
+    let mut conflictos = Vec::new();
+    for (uuid, vivo) in &vivos.fichas {
+        // El host de una ficha viva puede no estar en `ids` aunque exista aquí:
+        // si el fichero lo trae con datos que no se pueden leer, no se aplica y
+        // su fila local se conserva (queda como conflicto de elemento). La ficha
+        // sí se aplica sobre esa fila: si no, una ficha local ya apartada con el
+        // nombre temporal (`apartar_nombres`) se quedaría con él para siempre.
+        let host_id = match resolver_uuid(&ids_hosts, Some(vivo.datos.host.as_str())) {
+            Some(host_id) => Some(host_id),
+            None => resolver_uuid_actual(conexion, Tabla::Hosts, Some(vivo.datos.host.as_str()))?,
+        };
+        let Some(host_id) = host_id else {
+            // Huérfana: la fusión (§7.5) ya la descarta y deja conflicto.
+            tracing::warn!(uuid, "ficha de sesión cuyo host no está vivo; no se aplica");
+            continue;
+        };
+        if clave_de_ficha_ocupada(conexion, host_id, &vivo.datos.nombre, uuid)? {
+            conflictos.push(conflicto_de_nombre_de_ficha(uuid, &vivo.datos));
+            continue;
+        }
+        match locales_tabla.and_then(|mapa| mapa.get(uuid)) {
+            None => {
+                escribir_ficha(
+                    conexion,
+                    uuid,
+                    &vivo.version,
+                    &vivo.vector,
+                    &vivo.datos,
+                    host_id,
+                )?;
+                resumen.creados += 1;
+            }
+            Some(fila) => {
+                let cambiar = actualizar.is_some_and(|uuids| uuids.contains(uuid))
+                    || fila.host_id != Some(host_id);
+                if cambiar {
+                    escribir_ficha(
+                        conexion,
+                        uuid,
+                        &vivo.version,
+                        &vivo.vector,
+                        &vivo.datos,
+                        host_id,
+                    )?;
+                    resumen.actualizados += 1;
+                }
+            }
+        }
+    }
+    Ok(conflictos)
+}
+
+/// ¿Hay ya otra ficha con el mismo host y nombre y otro uuid? Las filas que se
+/// van a reescribir o borrar ya están apartadas con un nombre temporal, así que
+/// solo choca lo que se queda.
+fn clave_de_ficha_ocupada(
+    conexion: &Connection,
+    host_id: i64,
+    nombre: &str,
+    uuid: &str,
+) -> Result<bool> {
+    let existe: i64 = conexion.query_row(
+        "SELECT COUNT(*) FROM SESIONES_PERSISTENTES
+          WHERE host_id = ?1 AND nombre = ?2 AND (uuid IS NULL OR uuid <> ?3)",
+        params![host_id, nombre, uuid],
+        |fila| fila.get(0),
+    )?;
+    Ok(existe > 0)
+}
+
+fn conflicto_de_nombre_de_ficha(uuid: &str, datos: &DatosSesionPersistente) -> ConflictoFusion {
+    ConflictoFusion {
+        tipo: conflictos::TIPO_NOMBRE.to_string(),
+        elemento_tipo: "sesion_persistente".to_string(),
+        uuid: uuid.to_string(),
+        nombre: datos.nombre.clone(),
+        version_perdedora_json: None,
+        version_ganadora: None,
+        equipo_ganador: None,
+    }
+}
+
+/// Escribe una ficha de sesión persistente con la versión y el vector que
+/// vienen. `creada_en` y `actualizado_en` no viajan: al insertar se rellenan con
+/// ahora y al actualizar solo se toca `actualizado_en`. El estado de la sesión
+/// no se guarda en ningún sitio.
+fn escribir_ficha(
+    conexion: &Connection,
+    uuid: &str,
+    version: &str,
+    vector: &BTreeMap<String, i64>,
+    datos: &DatosSesionPersistente,
+    host_id: i64,
+) -> Result<i64> {
+    datos
+        .validar()
+        .map_err(|motivo| anyhow!("la ficha de sesión {uuid} del plan no es válida: {motivo}"))?;
+    let origen = crate::sesiones_persistentes::OrigenFicha::desde_texto(&datos.origen)
+        .with_context(|| format!("la ficha de sesión {uuid} del plan tiene un origen desconocido"))?
+        .texto();
+    let nombre = datos.nombre.as_str();
+    // Un texto vacío es lo mismo que NULL (forma canónica de lo que viaja).
+    fn sin_vacios(texto: &Option<String>) -> Option<&str> {
+        texto.as_deref().filter(|texto| !texto.is_empty())
+    }
+    let carpeta = sin_vacios(&datos.carpeta);
+    let comando = sin_vacios(&datos.comando);
+    let comando_reanudar = sin_vacios(&datos.comando_reanudar);
+    let nota = sin_vacios(&datos.nota);
+    let vector = versiones::vector_a_json(vector);
+    let ahora = fecha_ahora();
+    match id_por_uuid(conexion, Tabla::SesionesPersistentes, uuid)? {
+        Some(id) => {
+            conexion
+                .execute(
+                    "UPDATE SESIONES_PERSISTENTES SET host_id = ?1, nombre = ?2,
+                        carpeta = ?3, comando = ?4, comando_reanudar = ?5, nota = ?6,
+                        origen = ?7, creada_por = ?8, actualizado_en = ?9,
+                        version = ?10, vector = ?11
+                      WHERE id = ?12",
+                    params![
+                        host_id,
+                        nombre,
+                        carpeta,
+                        comando,
+                        comando_reanudar,
+                        nota,
+                        origen,
+                        datos.creada_por,
+                        ahora,
+                        version,
+                        vector,
+                        id
+                    ],
+                )
+                .map_err(|error| conflicto_de_nombre("ficha de sesión", nombre, error))?;
+            Ok(id)
+        }
+        None => {
+            conexion
+                .execute(
+                    "INSERT INTO SESIONES_PERSISTENTES (
+                        host_id, nombre, carpeta, comando, comando_reanudar, nota,
+                        origen, creada_por, creada_en, actualizado_en, uuid, version,
+                        vector
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12)",
+                    params![
+                        host_id,
+                        nombre,
+                        carpeta,
+                        comando,
+                        comando_reanudar,
+                        nota,
+                        origen,
+                        datos.creada_por,
+                        ahora,
+                        uuid,
+                        version,
+                        vector
+                    ],
+                )
+                .map_err(|error| conflicto_de_nombre("ficha de sesión", nombre, error))?;
+            Ok(conexion.last_insert_rowid())
+        }
+    }
+}
+
 // --------------------------------------------------------- escrituras de fila
 
 fn escribir_grupo(
@@ -1869,6 +2228,9 @@ fn escribir_host(
     let identidad_ref = identidad_ref_para_guardar(datos.identidad_ref.as_deref(), hogar);
     let origen = Origen::desde_texto(&datos.origen).como_texto();
     let multiplexar = datos.multiplexar as i64;
+    // Desde el formato 4 viaja la marca «todas las sesiones persistentes». En un
+    // fichero anterior no viene y cuenta como falsa.
+    let sesiones_persistentes = datos.sesiones_persistentes as i64;
     let keepalive = datos.keepalive_seg.map(i64::from);
     let opciones_extra = &datos.opciones_extra;
     let servicios = &datos.servicios;
@@ -1899,8 +2261,8 @@ fn escribir_host(
                         opciones_extra = ?8, origen = ?9, servicios = ?10,
                         tipo = ?11, escritorio_dominio = ?12,
                         escritorio_opciones = ?13, actualizado_en = ?14,
-                        version = ?15, vector = ?16
-                      WHERE id = ?17",
+                        version = ?15, vector = ?16, sesiones_persistentes = ?17
+                      WHERE id = ?18",
                     params![
                         nombre,
                         direccion,
@@ -1918,6 +2280,7 @@ fn escribir_host(
                         ahora,
                         version,
                         vector,
+                        sesiones_persistentes,
                         id
                     ],
                 )
@@ -1931,9 +2294,9 @@ fn escribir_host(
                         nombre, direccion, puerto, usuario, identidad_ref, multiplexar,
                         keepalive_seg, opciones_extra, origen, servicios, tipo,
                         escritorio_dominio, escritorio_opciones, creado_en,
-                        actualizado_en, uuid, version, vector
+                        actualizado_en, uuid, version, vector, sesiones_persistentes
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                               ?14, ?14, ?15, ?16, ?17)",
+                               ?14, ?14, ?15, ?16, ?17, ?18)",
                     params![
                         nombre,
                         direccion,
@@ -1951,7 +2314,8 @@ fn escribir_host(
                         ahora,
                         uuid,
                         version,
-                        vector
+                        vector,
+                        sesiones_persistentes
                     ],
                 )
                 .map_err(|error| conflicto_de_nombre("host", nombre, error))?;
@@ -2523,7 +2887,14 @@ fn aplicar_renombrado(
         );
         return Ok(false);
     }
-    let Some(id) = ids.get(&tabla).and_then(|mapa| mapa.get(uuid)) else {
+    // `ids` se calcula antes de escribir las tablas que cuelgan de un host
+    // (túneles, sincronizaciones, comprobaciones y fichas de sesión): una fila
+    // nueva de esas tablas aún no está ahí, pero ya existe en la base de datos.
+    let id = match ids.get(&tabla).and_then(|mapa| mapa.get(uuid)) {
+        Some(id) => Some(*id),
+        None => id_por_uuid(conexion, tabla, uuid)?,
+    };
+    let Some(id) = id else {
         tracing::warn!(
             tabla = tabla.nombre(),
             uuid,

@@ -23,6 +23,9 @@ use crate::ui::hosts::{anchos_tabla, celdas};
 
 /// Alto del panel inferior (separador, sesión seleccionada, servidor y aire).
 const ALTO_PANEL: u16 = 5;
+/// La marca de «sesión persistente» y, sola, la de una pestaña soltada. En
+/// ASCII la degrada `disposicion::texto_ascii` (`P`), como todo glifo.
+const MARCA_PERSISTENTE: &str = "◆";
 /// Cabeceras de las columnas, en orden.
 const CABECERAS: [&str; 8] = [
     "ESTADO",
@@ -36,11 +39,6 @@ const CABECERAS: [&str; 8] = [
 ];
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
-    // La lista de sesiones de tmux del host manda sobre la de sesiones.
-    if let Some(tmux) = &app.tmux {
-        dibujar_tmux(marco, area, app, tmux);
-        return;
-    }
     let alto_panel = if disp.bajo { 0 } else { ALTO_PANEL };
     let trozos = Layout::default()
         .direction(Direction::Vertical)
@@ -58,46 +56,132 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         )),
         trozos[0],
     );
-    if app.pestanas.is_empty() {
-        let tema = &app.tema;
-        let aviso = if let Some(motivo) =
-            crate::app::servidor_anterior::motivo_sin_servidor(app.servidor_incompatible.as_ref())
-        {
-            format!("El servidor de sesiones no está disponible: {motivo}.")
-        } else if app.servidor_caido {
-            let (abre, cierra) = (super::tecla(tema, "«", "\""), super::tecla(tema, "»", "\""));
-            format!(
-                "El servidor de sesiones no está disponible.\nRelánzalo desde el diálogo o ejecuta {abre}magi servidor parar{cierra} y vuelve a abrir."
-            )
+    // Sin servidor no hay lista de sesiones persistentes: solo el aviso (o las
+    // pestañas que queden).
+    if app.servidor_caido || app.servidor_incompatible.is_some() {
+        if app.pestanas.is_empty() {
+            let tema = &app.tema;
+            let aviso = if let Some(motivo) = crate::app::servidor_anterior::motivo_sin_servidor(
+                app.servidor_incompatible.as_ref(),
+            ) {
+                format!("El servidor de sesiones no está disponible: {motivo}.")
+            } else {
+                let (abre, cierra) = (super::tecla(tema, "«", "\""), super::tecla(tema, "»", "\""));
+                format!(
+                    "El servidor de sesiones no está disponible.\nRelánzalo desde el diálogo o ejecuta {abre}magi servidor parar{cierra} y vuelve a abrir."
+                )
+            };
+            let lineas: Vec<Line> = aviso
+                .lines()
+                .map(|texto| {
+                    Line::from(Span::styled(
+                        texto.to_string(),
+                        Style::default().fg(tema.paleta.inactivo),
+                    ))
+                })
+                .collect();
+            // Sangría de dos columnas también en las líneas partidas.
+            let zona = Rect {
+                x: trozos[1].x + 2,
+                width: trozos[1].width.saturating_sub(2),
+                ..trozos[1]
+            };
+            marco.render_widget(Paragraph::new(lineas).wrap(Wrap { trim: true }), zona);
         } else {
-            format!(
-                "Sin sesiones abiertas. {} en un host, prefijo c o {}n{} abre una nueva.",
-                tema.glifos.intro,
-                super::tecla(tema, "«", "\""),
-                super::tecla(tema, "»", "\""),
-            )
-        };
-        let lineas: Vec<Line> = aviso
-            .lines()
-            .map(|texto| {
-                Line::from(Span::styled(
-                    texto.to_string(),
-                    Style::default().fg(tema.paleta.inactivo),
-                ))
-            })
-            .collect();
-        // Sangría de dos columnas también en las líneas partidas.
-        let zona = Rect {
-            x: trozos[1].x + 2,
-            width: trozos[1].width.saturating_sub(2),
-            ..trozos[1]
-        };
-        marco.render_widget(Paragraph::new(lineas).wrap(Wrap { trim: true }), zona);
+            lista(marco, trozos[1], app, disp, true);
+        }
     } else {
-        lista(marco, trozos[1], app, disp);
+        bloques(marco, trozos[1], app, disp);
     }
     if alto_panel > 0 {
         panel_inferior(marco, trozos[2], app);
+    }
+}
+
+/// Reparte el alto entre el bloque «Persistentes» (arriba) y el de «Pestañas».
+/// Cada uno pide su cabecera, la de sus columnas y sus filas (las pestañas,
+/// hasta seis); mientras quepan los dos, «Persistentes» se queda con lo que
+/// necesita y «Pestañas» con el resto. Si no caben, «Pestañas» cede: el bloque
+/// de arriba conserva al menos cabecera, columnas y dos filas.
+fn repartir_alto(total: u16, filas: usize, pestanas: usize) -> (u16, u16) {
+    let minimo_persistentes = 4.min(total);
+    let pide = |filas: usize, vacio: u16| {
+        if filas == 0 {
+            vacio
+        } else {
+            2 + u16::try_from(filas).unwrap_or(u16::MAX)
+        }
+    };
+    let quiere_persistentes = pide(filas, 2);
+    let quiere_pestanas = pide(pestanas.min(6), 2);
+    if quiere_persistentes + quiere_pestanas <= total {
+        return (quiere_persistentes, total - quiere_persistentes);
+    }
+    let pestanas = quiere_pestanas.min(total - minimo_persistentes);
+    (total - pestanas, pestanas)
+}
+
+/// Los dos bloques de la vista: «Persistentes» arriba y «Pestañas» debajo.
+fn bloques(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+    let filas = app.filas_persistentes().len();
+    let (alto_persistentes, alto_pestanas) = repartir_alto(area.height, filas, app.pestanas.len());
+    let trozos = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(alto_persistentes),
+            Constraint::Length(alto_pestanas),
+        ])
+        .split(area);
+    super::persistentes::dibujar_bloque(marco, trozos[0], app, disp);
+    if alto_pestanas > 0 {
+        bloque_pestanas(marco, trozos[1], app, disp);
+    }
+}
+
+/// El bloque «Pestañas»: su cabecera y la tabla de siempre (o, sin pestañas,
+/// cómo abrir una).
+fn bloque_pestanas(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+    let tema = &app.tema;
+    let enfocado = !app.persistentes_enfocado();
+    let punto = tema.glifos.punto_medio;
+    let cabecera = super::persistentes::cabecera_de_bloque(
+        &format!("PESTAÑAS {punto} {}", app.pestanas.len()),
+        None,
+        area.width,
+        enfocado,
+        tema,
+    );
+    marco.render_widget(Paragraph::new(cabecera), Rect { height: 1, ..area });
+    if area.height <= 1 {
+        return;
+    }
+    let resto = Rect {
+        y: area.y + 1,
+        height: area.height - 1,
+        ..area
+    };
+    if app.pestanas.is_empty() {
+        let aviso = format!(
+            "Sin sesiones abiertas. {} en un host, prefijo c o {}n{} abre una nueva.",
+            tema.glifos.intro,
+            super::tecla(tema, "«", "\""),
+            super::tecla(tema, "»", "\""),
+        );
+        let zona = Rect {
+            x: resto.x + 2,
+            width: resto.width.saturating_sub(2),
+            ..resto
+        };
+        marco.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                aviso,
+                Style::default().fg(tema.paleta.inactivo),
+            )))
+            .wrap(Wrap { trim: true }),
+            zona,
+        );
+    } else {
+        lista(marco, resto, app, disp, enfocado);
     }
 }
 
@@ -143,7 +227,7 @@ fn columnas(ancho_vista: u16, ancho_tabla: u16) -> [Columna; 8] {
     ]
 }
 
-fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
+fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion, enfocado: bool) {
     let tema = &app.tema;
     let ascii = tema.ascii;
     // La marca de selección va delante de la tabla.
@@ -177,9 +261,19 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let mut lineas = vec![Line::from(cabecera)];
     for (indice, pestaña) in app.pestanas.iter().enumerate().skip(inicio).take(visibles) {
         let elegida = indice == app.seleccion_sesiones;
-        let marca = if elegida { tema.glifos.seleccion } else { " " };
+        let marca = if elegida && enfocado {
+            tema.glifos.seleccion
+        } else {
+            " "
+        };
+        let soltada = pestaña.soltada().is_some();
         let (glifo, color) = if pestaña.reconexion.is_some() {
             (tema.glifos.reconectando, tema.paleta.acento)
+        } else if soltada {
+            // Soltada (Fase 16): otro equipo se llevó la sesión. El servidor
+            // deja la pestaña «caída», pero no es un fallo: como en la vista
+            // Sesión, solo la marca de persistente y el acento, sin aspa.
+            (MARCA_PERSISTENTE, tema.paleta.acento)
         } else {
             match pestaña.estado {
                 EstadoSesionRemota::Caida => (tema.glifos.error, tema.paleta.critico),
@@ -188,12 +282,17 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
                 EstadoSesionRemota::Cerrada => (tema.glifos.desconectado, tema.paleta.inactivo),
             }
         };
-        // Los avisos sin ver y la escritura en varios se marcan con texto.
-        let glifo = if pestaña.aviso.is_some() {
-            format!("{glifo} {}", tema.glifos.aviso)
-        } else {
-            glifo.to_string()
-        };
+        // Los avisos sin ver y las sesiones persistentes (`◆`, `P` en ASCII) se
+        // marcan con texto.
+        // La soltada no tiene conexión: lleva solo la marca de persistente.
+        let mut glifo = disposicion::adaptar(glifo, ascii);
+        if !soltada && pestaña.sesion_persistente().is_some() {
+            glifo.push(' ');
+            glifo.push_str(&disposicion::adaptar(MARCA_PERSISTENTE, ascii));
+        }
+        if pestaña.aviso.is_some() {
+            glifo = format!("{glifo} {}", tema.glifos.aviso);
+        }
         let estilo = if elegida {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
@@ -202,6 +301,8 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
         let texto = estilo.fg(tema.paleta.texto);
         let tiempo = if let Some(reconexion) = &pestaña.reconexion {
             format!("intento {}", reconexion.intento)
+        } else if soltada {
+            "soltada".to_string()
         } else if pestaña.estado == EstadoSesionRemota::Caida {
             "caída".to_string()
         } else {
@@ -273,10 +374,32 @@ fn panel_inferior(marco: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(tema.paleta.inactivo),
     ));
     let mut lineas = vec![separador];
+    let fila_persistente = if app.persistentes_enfocado() {
+        app.fila_persistente_elegida()
+    } else {
+        None
+    };
     match app.pestanas.get(app.seleccion_sesiones) {
+        _ if fila_persistente.is_some() => {
+            let detalle = fila_persistente
+                .as_ref()
+                .map(|fila| super::persistentes::detalle_de_fila(app, fila))
+                .unwrap_or_default();
+            lineas.push(Line::from(Span::styled(
+                ajustar(format!("  {detalle}")),
+                Style::default().fg(tema.paleta.texto),
+            )));
+        }
         Some(pestaña) => {
             let es_escritorio = pestaña.escritorio_id.is_some();
-            let detalle = if pestaña.estado == EstadoSesionRemota::Caida {
+            let detalle = if let Some(soltada) = pestaña.soltada() {
+                // No es una caída: la sesión sigue viva y la usa otro equipo.
+                format!(
+                    "{} {punto} soltada: la usa {}",
+                    pestaña.nombre,
+                    soltada.por_equipo.as_deref().unwrap_or("otro equipo")
+                )
+            } else if pestaña.estado == EstadoSesionRemota::Caida {
                 format!(
                     "{} {punto} caída: {}",
                     pestaña.nombre,
@@ -329,109 +452,4 @@ fn panel_inferior(marco: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(tema.paleta.inactivo),
     )));
     marco.render_widget(Paragraph::new(lineas), area);
-}
-
-/// La lista de sesiones de tmux del host (Fase 15): nombre, enganchada,
-/// ventanas y cuándo se creó. Se abre con \`t\` en Sesiones.
-fn dibujar_tmux(marco: &mut Frame, area: Rect, app: &App, tmux: &crate::app::sesion::EstadoTmux) {
-    let tema = &app.tema;
-    let punto = tema.glifos.punto_medio;
-    let trozos = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(2),
-            Constraint::Length(1),
-        ])
-        .split(area);
-    marco.render_widget(
-        Paragraph::new(super::linea_marco(
-            &format!("MAGI {punto} TMUX {punto} {}", tmux.host_nombre),
-            area.width,
-            tema,
-        )),
-        trozos[0],
-    );
-    if tmux.cargando {
-        marco.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  listando las sesiones de tmux…",
-                Style::default().fg(tema.paleta.inactivo),
-            ))),
-            trozos[1],
-        );
-    } else if let Some(motivo) = &tmux.sin_tmux {
-        let lineas = vec![
-            Line::from(Span::styled(
-                "  no hay tmux en el host (o no se pudo listar)",
-                Style::default().fg(tema.paleta.critico),
-            )),
-            Line::from(Span::styled(
-                format!("  {motivo}"),
-                Style::default().fg(tema.paleta.inactivo),
-            )),
-        ];
-        marco.render_widget(Paragraph::new(lineas), trozos[1]);
-    } else if tmux.sesiones.is_empty() {
-        marco.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  el host no tiene sesiones de tmux",
-                Style::default().fg(tema.paleta.inactivo),
-            ))),
-            trozos[1],
-        );
-    } else {
-        let visibles = usize::from(trozos[1].height.saturating_sub(1));
-        let inicio = disposicion::ventana(
-            tmux.desplazamiento,
-            tmux.seleccion,
-            visibles,
-            tmux.sesiones.len(),
-        );
-        let inactivo = Style::default().fg(tema.paleta.inactivo);
-        let mut lineas = vec![Line::from(Span::styled(
-            format!(
-                "  {:<28} {:<12} {:<9} {}",
-                "SESIÓN", "ENGANCHADA", "VENTANAS", "CREADA"
-            ),
-            inactivo,
-        ))];
-        for (indice, sesion) in tmux.sesiones.iter().enumerate().skip(inicio).take(visibles) {
-            let elegida = indice == tmux.seleccion;
-            let marca = if elegida { tema.glifos.seleccion } else { " " };
-            let estilo = if elegida {
-                Style::default()
-                    .fg(tema.paleta.texto)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(tema.paleta.texto)
-            };
-            let enganchada = if sesion.enganchada { "sí" } else { "no" };
-            lineas.push(Line::from(Span::styled(
-                format!(
-                    "{marca} {:<28} {:<12} {:<9} {}",
-                    disposicion::recortar(&sesion.nombre, 28, tema.ascii),
-                    enganchada,
-                    sesion.ventanas,
-                    sesion.creada
-                ),
-                estilo,
-            )));
-        }
-        marco.render_widget(Paragraph::new(lineas), trozos[1]);
-    }
-    marco.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            disposicion::recortar(
-                &format!(
-                    "  {}{} abrir · T terminar · r refrescar · Esc volver",
-                    tema.glifos.intro, ""
-                ),
-                usize::from(area.width),
-                tema.ascii,
-            ),
-            Style::default().fg(tema.paleta.inactivo),
-        ))),
-        trozos[2],
-    );
 }

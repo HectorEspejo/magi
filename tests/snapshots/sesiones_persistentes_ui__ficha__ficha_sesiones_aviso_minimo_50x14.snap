@@ -1,0 +1,17 @@
+---
+source: tests/sesiones_persistentes_ui/ficha.rs
+---
+┌ MAGI · HOST · base-01 · editar · #1 ───────────┐
+│  [x] Todas las sesiones persistentes          ↑│
+│      (tmux en el host)                         │
+│      aviso: el snippet «arranque» arranca      │
+│      tmux; quedaría tmux dentro de tmux       ↓│
+│  TÚNELES                               n nuevo │
+│    aún no hay túneles: n para crear uno        │
+│  COMPROBACIONES                        n nueva │
+│    aún no hay comprobaciones propias: n para c…│
+│┌ SERVICIOS ───────────┐┌ OPCIONES EXTRA ──────┐│
+││                      ││                      ││
+│└──────────────────────┘└──────────────────────┘│
+└────────────────────────────────────────────────┘
+ ⇥ campo  ^s guardar  esc descartar

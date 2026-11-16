@@ -851,7 +851,10 @@ async fn el_comando_inicial_se_escribe_y_solo_el_que_repite_al_reconectar() {
             .await
     );
     escenario
-        .enviar(&MensajeCliente::Reconectar { sesion_id })
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id,
+            compartir: false,
+        })
         .await;
     assert!(
         escenario

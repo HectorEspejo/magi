@@ -24,9 +24,14 @@ source: tests/terminal_ui.rs
 │                                         [ ] backup reciente   ruta [  ]                                                                                                                              │
 │                                                               patrón [  ]  (< 24 h)                                                                                                                  │
 │                                         [ ] tests en verde    [  ]                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│                                        SESIONES (viaja a tus equipos)                                                                                                                                │
+│                                         [ ] Todas las sesiones persistentes (tmux en el host)                                                                                                        │
+│                                             nombres automáticos: sobremesa-1, sobremesa-2…                                                                                                           │
+│                                         Espacio marca · Tab siguiente · Ctrl+S guardar                                                                                                               │
+│                                                                                                                                                                                                      │
 │                                        TERMINAL (solo en este equipo)                                                                                                                                │
 │                                         [x] Reconectar solo si se cae la red                                                                                                                         │
-│                                         [ ] Sesión persistente con tmux                                                                                                                              │
 │                                         [ ] Permitir que el host copie al portapapeles  (OSC 52; leerlo, nunca)                                                                                      │
 │                                         Espacio marca · Tab siguiente · Ctrl+S guardar                                                                                                               │
 │                                                                                                                                                                                                      │
@@ -35,11 +40,6 @@ source: tests/terminal_ui.rs
 │                                         COMPROBACIONES                                                                                                n nueva                                        │
 │                                           aún no hay comprobaciones propias: n para crear una                                                                                                        │
 │                                       ┌ SERVICIOS (systemd, una por línea) ──────────────────────┐┌ OPCIONES EXTRA (ssh_config, una por línea) ──────────────┐                                       │
-│                                       │                                                          ││                                                          │                                       │
-│                                       │                                                          ││                                                          │                                       │
-│                                       │                                                          ││                                                          │                                       │
-│                                       │                                                          ││                                                          │                                       │
-│                                       │                                                          ││                                                          │                                       │
 │                                       │                                                          ││                                                          │                                       │
 │                                       │                                                          ││                                                          │                                       │
 │                                       │                                                          ││                                                          │                                       │

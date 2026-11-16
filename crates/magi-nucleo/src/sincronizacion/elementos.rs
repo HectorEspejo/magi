@@ -28,7 +28,8 @@ use serde_json::Value;
 
 use crate::almacen::versiones::{vector_desde_json, Tabla};
 use crate::escritorio::{OpcionesEscritorio, TipoHost};
-use crate::sincronizacion::formato::{FORMATO_1, FORMATO_2, FORMATO_3};
+use crate::sesiones_persistentes::OrigenFicha;
+use crate::sincronizacion::formato::{FORMATO_1, FORMATO_2, FORMATO_3, FORMATO_4};
 use crate::sincronizacion::fusion::{nombre_de_contenido, Candidato};
 
 /// Datos de un grupo que viajan (sin `plegado`).
@@ -74,6 +75,16 @@ pub struct DatosHost {
     pub etiquetas: Vec<String>,
     pub verificaciones: Option<DatosVerificaciones>,
     pub snippet_al_conectar: Option<String>,
+    /// Toda pestaña nueva del host es una sesión persistente (desde el
+    /// formato 4). Solo se escribe cuando es verdadero: así el JSON canónico
+    /// de un host sin la marca no cambia y la fusión no ve diferencias.
+    #[serde(default, skip_serializing_if = "no_es_verdadero")]
+    pub sesiones_persistentes: bool,
+}
+
+/// `skip_serializing_if` de los booleanos que solo viajan cuando valen `true`.
+fn no_es_verdadero(valor: &bool) -> bool {
+    !*valor
 }
 
 /// Tipo por defecto de un host que no lo trae: un fichero del formato 1 es
@@ -102,11 +113,27 @@ pub fn opciones_desde_valor(valor: &Value, tipo: TipoHost) -> Result<OpcionesEsc
 
 /// Formato que se escribe en el fichero propio.
 ///
-/// - 3 si hay alguna comprobación propia (Fase 13, D249): un MAGI 1.2 lo verá
-///   como formato_nuevo en vez de perderla sin saberlo.
+/// - 4 si hay alguna ficha de sesión persistente o algún host con la marca
+///   `sesiones_persistentes` (Fase 16, T68): un MAGI anterior lo verá como
+///   formato_nuevo en vez de perder las fichas o la marca sin saberlo. Un
+///   inventario sin fichas ni hosts marcados no pasa al 4.
+/// - si no, 3 si hay alguna comprobación propia (Fase 13, D249): un MAGI 1.2 lo
+///   verá como formato_nuevo en vez de perderla sin saberlo.
 /// - si no, 2 si el inventario tiene algún host que no es SSH (Fase 12, D220).
 /// - si no, 1 para que MAGI 1.1 siga leyendo los inventarios sin escritorios.
 pub fn formato_a_escribir(conexion: &Connection) -> Result<u32> {
+    let fichas: i64 =
+        conexion.query_row("SELECT COUNT(*) FROM SESIONES_PERSISTENTES", [], |fila| {
+            fila.get(0)
+        })?;
+    let marcados: i64 = conexion.query_row(
+        "SELECT COUNT(*) FROM HOSTS WHERE sesiones_persistentes <> 0",
+        [],
+        |fila| fila.get(0),
+    )?;
+    if fichas > 0 || marcados > 0 {
+        return Ok(FORMATO_4);
+    }
     let comprobaciones: i64 =
         conexion.query_row("SELECT COUNT(*) FROM COMPROBACIONES_SERVICIO", [], |fila| {
             fila.get(0)
@@ -193,6 +220,66 @@ pub struct DatosComprobacionServicio {
     pub comando: String,
 }
 
+/// Datos de una ficha de sesión persistente que viajan (Fase 16, §3.1 y §7.5).
+/// El host va por uuid.
+///
+/// Con el criterio de `DatosTunel`, no viajan las fechas (`creada_en` y
+/// `actualizado_en`): son marcas locales de cada equipo, la versión ya dice
+/// cuándo se editó y, si viajaran, dos equipos con la misma edición tendrían
+/// contenidos distintos y la fusión vería diferencias que no hay. Sí viaja
+/// `creada_por` (la etiqueta del equipo que la creó): es un dato de la ficha,
+/// no del equipo que la importa, y no cambia después de crearla. El estado de
+/// la sesión (viva, enganchada, atención) nunca se guarda ni viaja: el host es
+/// la fuente de verdad.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatosSesionPersistente {
+    /// uuid del host ssh al que pertenece.
+    pub host: String,
+    /// Nombre de la sesión en el tmux de MAGI, único dentro del host.
+    pub nombre: String,
+    #[serde(default)]
+    pub carpeta: Option<String>,
+    #[serde(default)]
+    pub comando: Option<String>,
+    #[serde(default)]
+    pub comando_reanudar: Option<String>,
+    #[serde(default)]
+    pub nota: Option<String>,
+    /// `manual`, `host` o `descubierta`.
+    pub origen: String,
+    /// Etiqueta del equipo que la creó.
+    pub creada_por: String,
+}
+
+impl DatosSesionPersistente {
+    /// Comprueba lo que llega de otro equipo antes de aplicarlo (§7.7): el
+    /// fichero es entrada no fiable. Los campos de texto se validan con los
+    /// mismos validadores que el diálogo, el almacén y el servidor. Devuelve el
+    /// motivo si no vale.
+    pub fn validar(&self) -> std::result::Result<(), String> {
+        use crate::sesiones_persistentes::validadores;
+        if self.host.trim().is_empty() {
+            return Err("no dice a qué host pertenece".to_string());
+        }
+        validadores::validar_nombre(&self.nombre).map_err(|error| error.to_string())?;
+        if OrigenFicha::desde_texto(&self.origen).is_none() {
+            return Err(format!("el origen «{}» no se entiende", self.origen));
+        }
+        if self.creada_por.trim().is_empty() {
+            return Err("no dice qué equipo la creó".to_string());
+        }
+        validadores::validar_carpeta(self.carpeta.as_deref().unwrap_or(""))
+            .map_err(|error| error.to_string())?;
+        validadores::validar_comando(self.comando.as_deref().unwrap_or(""))
+            .map_err(|error| error.to_string())?;
+        validadores::validar_comando_reanudar(self.comando_reanudar.as_deref().unwrap_or(""))
+            .map_err(|error| error.to_string())?;
+        validadores::validar_nota(self.nota.as_deref().unwrap_or(""))
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
 /// Datos de una sincronización de directorio que viajan (sin último
 /// resultado ni fecha de ejecución).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,6 +337,7 @@ fn valor_de_fila(
         Tabla::Snippets => a_valor(datos_snippet(conexion, id)?),
         Tabla::SincronizacionesDir => a_valor(datos_sincronizacion(conexion, id, hogar)?),
         Tabla::ComprobacionesServicio => a_valor(datos_comprobacion_servicio(conexion, id)?),
+        Tabla::SesionesPersistentes => a_valor(datos_sesion_persistente(conexion, id)?),
     }
 }
 
@@ -295,6 +383,7 @@ struct FilaHost {
     tipo: String,
     escritorio_dominio: Option<String>,
     escritorio_opciones: Option<String>,
+    sesiones_persistentes: bool,
 }
 
 fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Option<DatosHost>> {
@@ -303,7 +392,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
             "SELECT nombre, grupo_id, direccion, puerto, usuario, identidad_ref,
                     salto_host_id, multiplexar, keepalive_seg, opciones_extra,
                     servicios, origen, snippet_al_conectar_id, tipo,
-                    escritorio_dominio, escritorio_opciones
+                    escritorio_dominio, escritorio_opciones, sesiones_persistentes
                FROM HOSTS WHERE id = ?1",
             params![id],
             |fila| {
@@ -324,6 +413,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
                     tipo: fila.get(13)?,
                     escritorio_dominio: fila.get(14)?,
                     escritorio_opciones: fila.get(15)?,
+                    sesiones_persistentes: fila.get::<_, i64>(16)? != 0,
                 })
             },
         )
@@ -373,6 +463,7 @@ fn datos_host(conexion: &Connection, id: i64, hogar: Option<&Path>) -> Result<Op
         etiquetas: crate::almacen::etiquetas::de_host(conexion, id)?,
         verificaciones: verificaciones_de_host(conexion, id)?,
         snippet_al_conectar: uuid_de(conexion, Tabla::Snippets, fila.snippet_al_conectar_id)?,
+        sesiones_persistentes: fila.sesiones_persistentes,
     }))
 }
 
@@ -615,6 +706,57 @@ fn datos_comprobacion_servicio(
     }))
 }
 
+fn datos_sesion_persistente(
+    conexion: &Connection,
+    id: i64,
+) -> Result<Option<DatosSesionPersistente>> {
+    let fila = conexion
+        .query_row(
+            "SELECT host_id, nombre, carpeta, comando, comando_reanudar, nota, origen,
+                    creada_por
+               FROM SESIONES_PERSISTENTES WHERE id = ?1",
+            params![id],
+            |fila| {
+                Ok((
+                    fila.get::<_, i64>(0)?,
+                    fila.get::<_, String>(1)?,
+                    fila.get::<_, Option<String>>(2)?,
+                    fila.get::<_, Option<String>>(3)?,
+                    fila.get::<_, Option<String>>(4)?,
+                    fila.get::<_, Option<String>>(5)?,
+                    fila.get::<_, String>(6)?,
+                    fila.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((host_id, nombre, carpeta, comando, comando_reanudar, nota, origen, creada_por)) =
+        fila
+    else {
+        return Ok(None);
+    };
+    let host = uuid_de(conexion, Tabla::Hosts, Some(host_id))?
+        .ok_or_else(|| anyhow!("la ficha de sesión {id} apunta a un host sin uuid"))?;
+    // El origen se valida en código (sin CHECK en SQLite): una ficha con un
+    // origen desconocido no se exporta, porque ningún lector la aplicaría.
+    if OrigenFicha::desde_texto(&origen).is_none() {
+        anyhow::bail!("la ficha de sesión {id} tiene un origen desconocido: {origen}");
+    }
+    // Se comparan y se exportan en la forma canónica: un texto vacío es lo
+    // mismo que NULL.
+    let sin_vacios = |texto: Option<String>| texto.filter(|texto| !texto.is_empty());
+    Ok(Some(DatosSesionPersistente {
+        host,
+        nombre,
+        carpeta: sin_vacios(carpeta),
+        comando: sin_vacios(comando),
+        comando_reanudar: sin_vacios(comando_reanudar),
+        nota: sin_vacios(nota),
+        origen,
+        creada_por,
+    }))
+}
+
 /// `uuid` de una fila referenciada por id. `None` si la referencia es nula,
 /// si la fila no existe o si todavía no tiene uuid: la fusión resuelve las
 /// referencias vacías.
@@ -634,7 +776,7 @@ fn uuid_de(conexion: &Connection, tabla: Tabla, id: Option<i64>) -> Result<Optio
 }
 
 /// Lee el inventario completo como candidatos: todos los elementos vivos de
-/// las seis tablas que viajan y todas las lápidas.
+/// las tablas que viajan y todas las lápidas.
 ///
 /// El contenido de cada vivo es el mismo JSON canónico que devuelve
 /// `datos_de_fila_con_hogar` (misma función interna), que es lo que compara la

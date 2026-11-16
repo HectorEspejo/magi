@@ -1102,6 +1102,243 @@ fn el_lector_lee_el_formato_3_y_guarda_las_comprobaciones() {
     assert!(movil.conflictos().is_empty());
 }
 
+/// Inserta una ficha de sesión persistente con SQL y los ayudantes de versiones
+/// (sin el CRUD del almacén) y devuelve su uuid.
+fn insertar_ficha_de_prueba(
+    entorno: &Entorno,
+    host_id: i64,
+    nombre: &str,
+    carpeta: Option<&str>,
+    comando: Option<&str>,
+    uuid: Option<&str>,
+) -> String {
+    let ahora = magi_nucleo::modelo::fecha_ahora();
+    entorno
+        .conexion()
+        .execute(
+            "INSERT INTO SESIONES_PERSISTENTES (
+                host_id, nombre, carpeta, comando, comando_reanudar, nota, origen,
+                creada_por, creada_en, actualizado_en
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 'manual', 'omarchy', ?5, ?5)",
+            rusqlite::params![host_id, nombre, carpeta, comando, ahora],
+        )
+        .expect("insertando la ficha");
+    let id = entorno.conexion().last_insert_rowid();
+    versiones::registrar_nuevo(
+        entorno.conexion(),
+        versiones::Tabla::SesionesPersistentes,
+        id,
+        uuid,
+    )
+    .expect("uuid, versión y vector de la ficha")
+}
+
+fn fichas_de(entorno: &Entorno) -> Vec<(String, String, Option<String>, Option<String>)> {
+    let mut sentencia = entorno
+        .conexion()
+        .prepare("SELECT uuid, nombre, carpeta, comando FROM SESIONES_PERSISTENTES ORDER BY uuid")
+        .expect("preparando fichas");
+    let filas = sentencia
+        .query_map([], |fila| {
+            Ok((fila.get(0)?, fila.get(1)?, fila.get(2)?, fila.get(3)?))
+        })
+        .expect("leyendo fichas");
+    filas
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("fichas legibles")
+}
+
+#[test]
+fn el_lector_lee_el_formato_4_y_guarda_las_fichas_y_la_marca_del_host() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let escritorio = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+
+    // El escritorio tiene un host marcado con una ficha, y además otro host y
+    // un túnel: el resto del inventario tiene que llegar igual.
+    escritorio.crear_host("web", "192.0.2.10");
+    escritorio.crear_host("db", "192.0.2.11");
+    let web = escritorio.host_por_nombre("web").expect("host web").id;
+    let db = escritorio.host_por_nombre("db").expect("host db").id;
+    escritorio.crear_tunel(db, "db-local");
+    let uuid_ficha = insertar_ficha_de_prueba(
+        &escritorio,
+        web,
+        "agente",
+        Some("~/proyectos/api"),
+        Some("claude"),
+        None,
+    );
+    escritorio
+        .conexion()
+        .execute(
+            "UPDATE HOSTS SET sesiones_persistentes = 1 WHERE id = ?1",
+            [web],
+        )
+        .expect("marcando el host");
+    versiones::subir(escritorio.conexion(), versiones::Tabla::Hosts, web)
+        .expect("subiendo la versión del host");
+    escritorio.exportar();
+
+    // El fichero del escritorio ha subido a formato 4.
+    let ruta = carpeta.join(carpeta::nombre_fichero(&escritorio.uuid_este()));
+    let bytes = std::fs::read(&ruta).expect("leyendo el fichero del escritorio");
+    let plano = escritorio
+        .clave()
+        .descifrar(&bytes)
+        .expect("descifrando el fichero del escritorio");
+    let en_claro = formato::separar(&plano).expect("separando el fichero del escritorio");
+    assert_eq!(en_claro.formato, formato::FORMATO_4);
+
+    // El móvil es lector: importa el resto del inventario y no se queda en
+    // «formato nuevo».
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_ne!(
+        movil.estado_equipo(&escritorio.uuid_este()),
+        "formato_nuevo",
+        "el formato 4 no puede quedar como formato nuevo"
+    );
+    assert_eq!(
+        resultado.resumen.as_ref().expect("hay resumen").creados,
+        4,
+        "el móvil importa los dos hosts, el túnel y la ficha"
+    );
+    assert!(movil.host_por_nombre("web").is_some());
+    assert!(movil.host_por_nombre("db").is_some());
+    assert_eq!(movil.tuneles().len(), 1, "el túnel llega");
+
+    // Guarda la ficha, con su uuid, y la marca del host; no los usa.
+    assert_eq!(
+        fichas_de(&movil),
+        vec![(
+            uuid_ficha,
+            "agente".to_string(),
+            Some("~/proyectos/api".to_string()),
+            Some("claude".to_string())
+        )]
+    );
+    assert!(
+        movil
+            .host_por_nombre("web")
+            .expect("el host web llega")
+            .sesiones_persistentes,
+        "la marca del host se guarda"
+    );
+    assert!(
+        !movil
+            .host_por_nombre("db")
+            .expect("el host db llega")
+            .sesiones_persistentes
+    );
+    // El móvil no resuelve conflictos: tampoco guarda ninguno.
+    assert_eq!(resultado.conflictos_pendientes, 0);
+    assert!(movil.conflictos().is_empty());
+}
+
+#[test]
+fn el_lector_une_las_fichas_con_el_mismo_host_y_nombre_como_el_escritorio() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let b = Entorno::nuevo(&carpeta, "mac-mini", "macos", &clave);
+    a.crear_host("web", "192.0.2.10");
+    a.exportar();
+    // B recibe el host y los dos crean «agente» sin conexión.
+    b.pasada_escritora();
+    let host_a = a.host_por_nombre("web").expect("host en a").id;
+    let host_b = b.host_por_nombre("web").expect("host en b").id;
+    insertar_ficha_de_prueba(
+        &a,
+        host_a,
+        "agente",
+        Some("~/proyectos/api"),
+        None,
+        Some("66666666-6666-4666-8666-666666666666"),
+    );
+    insertar_ficha_de_prueba(
+        &b,
+        host_b,
+        "agente",
+        None,
+        Some("claude"),
+        Some("22222222-2222-4222-8222-222222222222"),
+    );
+    a.exportar();
+    b.exportar();
+
+    // El móvil lee los dos ficheros: una sola ficha, la de uuid menor, con lo
+    // que le faltaba, y sin conflictos que guardar (son de los escritores).
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_eq!(
+        fichas_de(&movil),
+        vec![(
+            "22222222-2222-4222-8222-222222222222".to_string(),
+            "agente".to_string(),
+            Some("~/proyectos/api".to_string()),
+            Some("claude".to_string())
+        )]
+    );
+    assert_eq!(resultado.conflictos_pendientes, 0);
+    assert!(movil.conflictos().is_empty());
+    let lapida: i64 = movil
+        .conexion()
+        .query_row(
+            "SELECT COUNT(*) FROM LAPIDAS WHERE uuid = '66666666-6666-4666-8666-666666666666'",
+            [],
+            |fila| fila.get(0),
+        )
+        .expect("contando lápidas");
+    assert_eq!(lapida, 1, "la perdedora deja su lápida también en el móvil");
+
+    // Un escritorio limpio llega a la misma ficha con los mismos ficheros.
+    let otro = Entorno::nuevo(&carpeta, "otro", "linux", &clave);
+    let escritor = otro.pasada_escritora();
+    assert_eq!(escritor.estado, EstadoPasada::AlDia);
+    assert_eq!(fichas_de(&otro), fichas_de(&movil));
+}
+
+/// La fixture del formato 4 que usa la prueba del emulador de Android se lee
+/// en modo lector con el núcleo real: importa el resto del inventario, guarda la
+/// ficha y la marca del host y el equipo queda al día (no «formato nuevo»).
+#[test]
+fn la_fixture_android_del_formato_4_se_lee_en_modo_lector() {
+    const CLAVE_FIXTURE: &str =
+        "AGE-SECRET-KEY-1TSKT6QRX7APKJPLTTJUKRXVATA8H7DAX3ZZH8D5SEQ94R2G3YRDSZSYMTS";
+    const UUID_EQUIPO_FIXTURE: &str = "ffffffff-aaaa-4bbb-8ccc-dddddddddddd";
+    let fixture: &[u8] = include_bytes!(
+        "../../../android/app/src/androidTest/assets/sincronizacion/magi-ffffffff-aaaa-4bbb-8ccc-dddddddddddd.age"
+    );
+    let (_temporal, carpeta) = carpeta_compartida();
+    std::fs::write(
+        carpeta.join(carpeta::nombre_fichero(UUID_EQUIPO_FIXTURE)),
+        fixture,
+    )
+    .expect("copiando la fixture");
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", CLAVE_FIXTURE);
+
+    let resultado = movil.pasada(&SinTrabajo);
+    assert_eq!(resultado.estado, EstadoLectura::AlDia);
+    assert_eq!(movil.estado_equipo(UUID_EQUIPO_FIXTURE), "al_dia");
+    let web = movil
+        .host_por_nombre("web-01")
+        .expect("el host del fichero del formato 4 se importa");
+    assert!(web.sesiones_persistentes, "la marca del host se guarda");
+    assert_eq!(
+        fichas_de(&movil),
+        vec![(
+            "13131313-2424-4535-8646-757575757575".to_string(),
+            "agente".to_string(),
+            Some("~/proyectos/api".to_string()),
+            Some("claude".to_string())
+        )]
+    );
+    assert_eq!(resultado.conflictos_pendientes, 0);
+}
+
 #[test]
 fn sin_clave_no_toca_nada_y_lo_dice() {
     let (_temporal, carpeta) = carpeta_compartida();

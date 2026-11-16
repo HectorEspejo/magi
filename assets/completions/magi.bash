@@ -43,6 +43,12 @@ _magi() {
             magi,servidor)
                 cmd="magi__subcmd__servidor"
                 ;;
+            magi,sesion)
+                cmd="magi__subcmd__sesion"
+                ;;
+            magi,sesiones)
+                cmd="magi__subcmd__sesiones"
+                ;;
             magi,sincronizaciones)
                 cmd="magi__subcmd__sincronizaciones"
                 ;;
@@ -87,6 +93,12 @@ _magi() {
                 ;;
             magi__subcmd__help,servidor)
                 cmd="magi__subcmd__help__subcmd__servidor"
+                ;;
+            magi__subcmd__help,sesion)
+                cmd="magi__subcmd__help__subcmd__sesion"
+                ;;
+            magi__subcmd__help,sesiones)
+                cmd="magi__subcmd__help__subcmd__sesiones"
                 ;;
             magi__subcmd__help,sincronizaciones)
                 cmd="magi__subcmd__help__subcmd__sincronizaciones"
@@ -191,7 +203,7 @@ _magi() {
 
     case "${cmd}" in
         magi)
-            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
+            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -261,7 +273,7 @@ _magi() {
             return 0
             ;;
         magi__subcmd__help)
-            opts="importar exportar sondear registro servidor conectar tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
+            opts="importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -431,6 +443,34 @@ _magi() {
         magi__subcmd__help__subcmd__servidor__subcmd__parar)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__sesion)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__sesiones)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -757,6 +797,38 @@ _magi() {
         magi__subcmd__servidor__subcmd__parar)
             opts="-h --si --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sesion)
+            opts="-h --host --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --host)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__sesiones)
+            opts="-h --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

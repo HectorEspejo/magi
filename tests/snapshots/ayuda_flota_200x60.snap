@@ -21,7 +21,6 @@ source: tests/redimensionado/vistas_g.rs
 │                                                              │                                                                                                                                       │
 │                                                              │                                                                                                                                       │
 │                                                              │                                                                                                                                       │
-│                                                              │                                                                                                                                       │
 │                                                              │     ┌ AYUDA · FLOTA ─────────────────────────────────────────────┐                                                                    │
 │                                                              │     │                                                            │                                                                    │
 │                                                              │     │  ↑ ↓ / j k     mover la selección                          │                                                                    │
@@ -29,6 +28,7 @@ source: tests/redimensionado/vistas_g.rs
 │                                                              │     │  r             sondear el host seleccionado                │                                                                    │
 │                                                              │     │  R             sondear todos los visibles                  │                                                                    │
 │                                                              │     │  e             editar la ficha                             │                                                                    │
+│                                                              │     │  N             nueva sesión persistente en este host       │                                                                    │
 │                                                              │     │  /             filtrar                                     │                                                                    │
 │                                                              │     │  a             activar o pausar el auto-refresco           │                                                                    │
 │                                                              │     │  !             snippets que apuntan al host                │                                                                    │

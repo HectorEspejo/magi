@@ -372,7 +372,7 @@ pub fn hash_canonico(documento: &Documento) -> Result<String> {
 /// ¿El plan cambia algo del inventario local? La comparten las pasadas en
 /// modo escritor y en modo lector.
 pub(crate) fn plan_cambia(plan: &fusion::PlanFusion, local: &[fusion::Candidato]) -> bool {
-    if !plan.renombrados.is_empty() || !plan.conflictos.is_empty() {
+    if !plan.renombrados.is_empty() || !plan.conflictos.is_empty() || !plan.unidas.is_empty() {
         return true;
     }
     // Un mismo uuid puede tener a la vez un vivo y su lápida histórica (si

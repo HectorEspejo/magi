@@ -157,12 +157,15 @@ pub struct Host {
     /// Reconexión automática de las pestañas de este host (Fase 15). Propia
     /// del equipo: no viaja.
     pub reconectar: bool,
-    /// Las pestañas de este host abren o recuperan una sesión de tmux (Fase
-    /// 15). Propia del equipo: no viaja.
+    /// Obsoleto desde la Fase 16: lo sustituye `sesiones_persistentes`. Al
+    /// abrir la 1.5.0 su valor se copia allí y se pone a 0; nadie lo escribe.
     pub tmux_persistente: bool,
     /// El host puede escribir en el portapapeles con OSC 52 (Fase 15).
     /// Propia del equipo: no viaja. Leerlo, nunca.
     pub portapapeles_remoto: bool,
+    /// Toda pestaña nueva del host es una sesión persistente con nombre
+    /// automático y ficha (Fase 16). Viaja y sube la versión del host.
+    pub sesiones_persistentes: bool,
 }
 
 /// Datos editables de un host (ficha), sin id ni marcas de tiempo.
@@ -1064,6 +1067,7 @@ pub fn host_de_prueba() -> Host {
         reconectar: true,
         tmux_persistente: false,
         portapapeles_remoto: false,
+        sesiones_persistentes: false,
     }
 }
 

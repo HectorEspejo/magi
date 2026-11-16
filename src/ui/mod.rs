@@ -17,6 +17,8 @@ pub mod identidades;
 pub mod pager;
 pub mod paleta;
 pub mod permisos;
+pub mod persistentes;
+pub mod persistentes_nueva;
 pub mod registro;
 pub mod resultados;
 pub mod servicios;

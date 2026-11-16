@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones · 0 ventanas ────────────────────────────────────
+ PERSISTENTES · 5 · 2 sin ficha ───────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+ ◆   ● portatil      docs             dev-01     hace NN m   Claude Code
+ ◆  ┌ FICHA DE LA SESIÓN ──────────────────────────────────────────────────┐
+ ◆  │                                                                      │igua
+ ◆  │  agente-api · web-01                                                 │
+▸◆ !│                                                                      │miso
+    │  Carpeta  [ ~/proyectos/api┃ ]                                       │
+    │  Comando  [ claude ]                                                 │
+ PES│  Reanudar [ claude --continue ]                                      │────
+  Si│  Nota     [  ]                                                       │
+    │                                                                      │
+    │  Carpeta absoluta o ~/…; vacía, la carpeta personal del host.        │
+    │  No pongas secretos en el comando: la ficha viaja cifrada a tus      │
+    │  otros equipos.                                                      │
+    │                                                                      │
+    │  ↵ guardar   Tab siguiente   Esc cancelar                            │
+────│                                                                      │────
+  ag└──────────────────────────────────────────────────────────────────────┘
+  servidor pid N · protocolo 10 · desde hace NN s
+
+
+ ◆ agente-api pide atención · web-01  ↵ engancharse  c compartir  ? más

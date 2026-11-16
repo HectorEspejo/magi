@@ -12,7 +12,7 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::almacen::Almacen;
-use crate::app::sesion::{EstadoTmux, PeticionTerminal};
+use crate::app::sesion::PeticionTerminal;
 use crate::cliente;
 use crate::conexion::{self, ComandoConexion, EventoConexion, PlanConexion};
 use crate::config::{Config, Rutas};
@@ -47,6 +47,8 @@ pub mod lanzar;
 pub mod paneles;
 pub mod pegado;
 pub mod permisos;
+pub mod persistentes;
+pub mod persistentes_nueva;
 pub mod portapapeles;
 pub mod raton;
 pub mod rejilla;
@@ -62,6 +64,9 @@ pub mod teclado;
 pub use dialogo_magi::DeliberacionAbierta;
 pub use geometria::Geometria;
 pub use lanzar::{AccionLanzar, AccionPaletaLanzar, DialogoEjecutar, EstadoLanzar};
+pub use persistentes::{
+    AccionPaletaPersistentes, AccionPersistentes, DialogoPersistentes, EstadoPersistentes,
+};
 pub use resultados::{AccionResultados, EstadoResultados};
 pub use snippets::{AccionPaletaSnippets, AccionSnippets, DialogoSnippets, EstadoSnippets};
 
@@ -671,11 +676,13 @@ pub enum CampoFicha {
     OlvidarHuella,
     /// Olvidar la contraseña del llavero (con confirmación).
     OlvidarContrasena,
+    // ------------------------------------------------ sesiones (Fase 16)
+    /// «Todas las sesiones persistentes» del bloque SESIONES: la marca del
+    /// host, que viaja a los demás equipos.
+    SesionesPersistentes,
     // ------------------------------------------------ terminal (Fase 15)
     /// Reconexión automática de las pestañas de este host.
     Reconectar,
-    /// Sesión persistente con tmux.
-    Tmux,
     /// Permitir que el host escriba en el portapapeles (OSC 52).
     PortapapelesRemoto,
 }
@@ -703,9 +710,10 @@ pub const ORDEN_CAMPOS: [CampoFicha; 25] = [
     CampoFicha::Opciones,
     CampoFicha::Tuneles,
     CampoFicha::Comprobaciones,
-    // Fase 15: bloque TERMINAL, propio del equipo y solo en hosts SSH.
+    // Fase 16: bloque SESIONES (la marca viaja) y, tras él, el bloque TERMINAL
+    // de la Fase 15 (propio del equipo). Los dos, solo en hosts SSH.
+    CampoFicha::SesionesPersistentes,
     CampoFicha::Reconectar,
-    CampoFicha::Tmux,
     CampoFicha::PortapapelesRemoto,
 ];
 
@@ -744,6 +752,8 @@ pub struct SelectorSnippet {
     /// ha dejado de ser apto o ya no existe. Se ve para poder quitarlo, pero
     /// en cuanto se elige otra cosa desaparece y no se puede volver a elegir.
     no_apto: Option<usize>,
+    /// Ids de los snippets aptos cuyo comando arranca tmux (Fase 16, R143).
+    arrancan_tmux: Vec<i64>,
 }
 
 impl SelectorSnippet {
@@ -755,12 +765,16 @@ impl SelectorSnippet {
             valor: ValorOpcion::Ninguno,
         }];
         let mut ids = vec![None];
+        let mut arrancan_tmux = Vec::new();
         for snippet in snippets.iter().filter(|snippet| snippet.apto_al_conectar()) {
             opciones.push(Opcion {
                 etiqueta: crate::ui::snippets::limpio(&snippet.nombre),
                 valor: ValorOpcion::Ninguno,
             });
             ids.push(Some(snippet.id));
+            if comando_arranca_tmux(&snippet.comando) {
+                arrancan_tmux.push(snippet.id);
+            }
         }
         let mut no_apto = None;
         let seleccion = match actual {
@@ -795,7 +809,22 @@ impl SelectorSnippet {
             desplegable,
             ids,
             no_apto,
+            arrancan_tmux,
         }
+    }
+
+    /// Nombre del snippet elegido si arranca tmux (R143): MAGI lo escribe en
+    /// cada pestaña del host, también en las de una sesión persistente, y
+    /// quedaría tmux dentro de tmux. El «(no apto)» no cuenta: no se ejecuta.
+    pub fn arranca_tmux(&self) -> Option<&str> {
+        let id = self.seleccionado()?;
+        if self.en_no_apto() || !self.arrancan_tmux.contains(&id) {
+            return None;
+        }
+        self.desplegable
+            .opciones
+            .get(self.desplegable.seleccion)
+            .map(|opcion| opcion.etiqueta.as_str())
     }
 
     /// Id del snippet elegido; `None` es «ninguno».
@@ -825,6 +854,107 @@ impl SelectorSnippet {
         self.desplegable.resaltado = 0;
         self.no_apto = None;
     }
+}
+
+/// ¿Este comando arranca tmux? (Fase 16, R143: la ficha avisa de tmux dentro
+/// de tmux cuando el snippet al conectar del host lo arranca).
+///
+/// Es un criterio de lectura, no un intérprete de shell: cuenta si alguna
+/// orden del texto (tras `;`, `&&`, `||`, `|`, paréntesis o un salto de
+/// línea, y saltándose asignaciones de entorno y envoltorios como `exec`,
+/// `sudo` o `env`) es `tmux`, con o sin ruta, y abre un cliente: sin orden
+/// (`tmux`), `new`/`new-session` o `attach`/`attach-session` (o sus
+/// abreviaturas). Las demás órdenes de tmux (`ls`, `send-keys`, `-V`…) no
+/// cuentan.
+#[must_use]
+pub fn comando_arranca_tmux(comando: &str) -> bool {
+    const ENVOLTORIOS: [&str; 10] = [
+        "exec", "sudo", "command", "env", "nohup", "time", "then", "do", "else", "!",
+    ];
+    // Opciones de `tmux` que llevan un valor detrás.
+    const OPCIONES_CON_VALOR: [&str; 5] = ["-L", "-f", "-S", "-c", "-T"];
+    fn abre_cliente(orden: &str) -> bool {
+        "attach-session".starts_with(orden)
+            || (orden.len() >= 3 && "new-session".starts_with(orden))
+    }
+    /// Las opciones de `new-session` tras su nombre: con `-d` y sin `-A`, la
+    /// sesión se crea sin engancharse (con `-A`, `-d` solo suelta a los demás
+    /// y sí engancha). Solo cuentan las opciones previas al comando que corre
+    /// dentro: lo que va detrás (`top -d 1`) no es de tmux.
+    fn crea_sin_enganchar<'a>(mut argumentos: impl Iterator<Item = &'a str>) -> bool {
+        // Opciones de `new-session` que llevan un valor.
+        const CON_VALOR: &str = "cefFnstxy";
+        let (mut sin_enganchar, mut reutiliza) = (false, false);
+        while let Some(argumento) = argumentos.next() {
+            let Some(banderas) = argumento.strip_prefix('-') else {
+                break;
+            };
+            for (indice, bandera) in banderas.char_indices() {
+                if CON_VALOR.contains(bandera) {
+                    // El valor es el resto del argumento o, si no queda, el
+                    // siguiente.
+                    if indice + bandera.len_utf8() == banderas.len() {
+                        argumentos.next();
+                    }
+                    break;
+                }
+                sin_enganchar |= bandera == 'd';
+                reutiliza |= bandera == 'A';
+            }
+        }
+        sin_enganchar && !reutiliza
+    }
+    comando.lines().any(|linea| {
+        if linea.trim_start().starts_with('#') {
+            return false;
+        }
+        linea
+            .split([';', '&', '|', '(', ')', '{', '}', '`'])
+            .any(|orden| {
+                let mut palabras = orden.split_whitespace();
+                let mut tras_envoltorio = false;
+                while let Some(palabra) = palabras.next() {
+                    if ENVOLTORIOS.contains(&palabra) {
+                        tras_envoltorio = true;
+                        continue;
+                    }
+                    // `VAR=valor orden` y las opciones de `sudo` o `env`.
+                    let asignacion = palabra.split_once('=').is_some_and(|(nombre, _)| {
+                        !nombre.is_empty()
+                            && nombre
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    });
+                    if asignacion || (tras_envoltorio && palabra.starts_with('-')) {
+                        continue;
+                    }
+                    if palabra.rsplit('/').next() != Some("tmux") {
+                        return false;
+                    }
+                    // La primera palabra que no es opción (ni valor de una) es
+                    // la orden de tmux; sin ninguna, tmux abre una sesión nueva.
+                    let mut resto = palabras.clone();
+                    while let Some(siguiente) = resto.next() {
+                        if siguiente == "-V" {
+                            return false;
+                        }
+                        if OPCIONES_CON_VALOR.contains(&siguiente) {
+                            resto.next();
+                            continue;
+                        }
+                        if siguiente.starts_with('-') {
+                            continue;
+                        }
+                        // `new -d` crea la sesión sin engancharse: no hay
+                        // tmux dentro de tmux.
+                        return abre_cliente(siguiente)
+                            && !(siguiente.starts_with('n') && crea_sin_enganchar(resto));
+                    }
+                    return true;
+                }
+                false
+            })
+    })
 }
 
 pub struct Ficha {
@@ -901,16 +1031,25 @@ pub struct Ficha {
     pub comprobaciones: Vec<magi_nucleo::modelo::ComprobacionServicio>,
     /// Comprobación seleccionada en su bloque.
     pub indice_comprobacion: usize,
+    // ------------------------------------------------ sesiones (Fase 16)
+    /// «Todas las sesiones persistentes»: la marca del host
+    /// (`HOSTS.sesiones_persistentes`). A diferencia del bloque TERMINAL,
+    /// viaja a los demás equipos y sube la versión del host.
+    pub sesiones_persistentes: bool,
+    /// Valor con el que se abrió la ficha, para saber si cambió.
+    pub sesiones_original: bool,
+    /// Etiqueta de este equipo, para enseñar cómo se llamarán las sesiones
+    /// automáticas (`<etiqueta>-1`, `<etiqueta>-2`…). Vacía: «equipo».
+    pub etiqueta_equipo: String,
     // ------------------------------------------------ terminal (Fase 15)
     /// Reconectar solo si se cae la red (propio del equipo).
     pub reconectar: bool,
-    /// Sesión persistente con tmux (propio del equipo).
-    pub tmux_persistente: bool,
     /// Permitir que el host copie al portapapeles con OSC 52 (propio del
     /// equipo; leerlo, nunca).
     pub portapapeles_remoto: bool,
-    /// Valores con los que se abrió la ficha, para saber si cambiaron.
-    pub terminal_original: (bool, bool, bool),
+    /// Valores con los que se abrió la ficha (reconectar y portapapeles
+    /// remoto), para saber si cambiaron.
+    pub terminal_original: (bool, bool),
 }
 
 impl Ficha {
@@ -1113,16 +1252,16 @@ impl Ficha {
             || self.snippet_al_conectar() != self.snippet_original
             || self.datos_verificaciones() != self.verificaciones_original
             || self.terminal_actual() != self.terminal_original
+            // La marca solo se ve (y solo se guarda) en un host SSH.
+            || (self.tipo.es_ssh() && self.sesiones_persistentes != self.sesiones_original)
     }
 
-    /// Los tres ajustes del bloque TERMINAL, en el orden del formulario.
+    /// Los dos ajustes del bloque TERMINAL (propios del equipo), en el orden
+    /// del formulario. La marca de sesiones persistentes ya no va aquí: viaja
+    /// y se guarda por otro camino.
     #[must_use]
-    pub fn terminal_actual(&self) -> (bool, bool, bool) {
-        (
-            self.reconectar,
-            self.tmux_persistente,
-            self.portapapeles_remoto,
-        )
+    pub fn terminal_actual(&self) -> (bool, bool) {
+        (self.reconectar, self.portapapeles_remoto)
     }
 
     fn campo_texto_mut(&mut self, campo: CampoFicha) -> Option<&mut CampoTexto> {
@@ -1166,8 +1305,8 @@ impl Ficha {
                 | CampoFicha::Backup
                 | CampoFicha::Tests
                 | CampoFicha::Portapapeles
+                | CampoFicha::SesionesPersistentes
                 | CampoFicha::Reconectar
-                | CampoFicha::Tmux
                 | CampoFicha::PortapapelesRemoto
         )
     }
@@ -1472,7 +1611,9 @@ impl Ficha {
                     CampoFicha::Tests => self.tests = !self.tests,
                     CampoFicha::Portapapeles => self.portapapeles = !self.portapapeles,
                     CampoFicha::Reconectar => self.reconectar = !self.reconectar,
-                    CampoFicha::Tmux => self.tmux_persistente = !self.tmux_persistente,
+                    CampoFicha::SesionesPersistentes => {
+                        self.sesiones_persistentes = !self.sesiones_persistentes
+                    }
                     CampoFicha::PortapapelesRemoto => {
                         self.portapapeles_remoto = !self.portapapeles_remoto
                     }
@@ -2100,6 +2241,8 @@ pub enum AccionDialogo {
         id: i64,
         host_id: i64,
     },
+    /// Acciones confirmadas de las sesiones persistentes (Fase 16).
+    Persistentes(AccionPersistentes),
     /// Acciones confirmadas de la vista Snippets (Fase 6).
     Snippets(AccionSnippets),
     /// Lanzamiento de snippets (Fase 6): `p` con más de cinco hosts.
@@ -2138,11 +2281,8 @@ pub enum AccionDialogo {
     CerrarPestanaTerminandoTmux {
         sesion_id: u32,
         host_id: i64,
-        nombre: String,
-    },
-    /// Terminar una sesión de tmux (ya confirmado).
-    TerminarTmux {
-        host_id: i64,
+        /// El servidor de tmux de la pestaña (el propio de MAGI o el habitual).
+        servidor: protocolo::ServidorTmux,
         nombre: String,
     },
 }
@@ -2203,6 +2343,9 @@ pub enum EntradaTextoAccion {
 }
 
 pub enum Dialogo {
+    /// Diálogos de las sesiones persistentes (Fase 16): nueva, ficha,
+    /// renombrar, terminar, borrar y limpiar.
+    Persistentes(DialogoPersistentes),
     /// Diálogos de la vista Snippets (formulario).
     Snippets(DialogoSnippets),
     /// Edición remota (Fase 8): subir, conflicto, fallo de la subida…
@@ -2408,6 +2551,7 @@ impl Dialogo {
                 campo.insertar_texto(texto);
                 true
             }
+            Dialogo::Persistentes(dialogo) => dialogo.pegar_texto(texto),
             Dialogo::ExportarRegistro { estado } => {
                 estado.campo.insertar_texto(texto);
                 true
@@ -2478,8 +2622,9 @@ pub struct PestanaUI {
     pub titulo: Option<String>,
     /// Último aviso del remoto sin ver (campana, OSC 9 u OSC 777).
     pub aviso: Option<protocolo::InfoAviso>,
-    /// Nombre de la sesión de tmux de la pestaña, si es persistente.
-    pub tmux: Option<String>,
+    /// La sesión de tmux de la pestaña, tal como la difunde el servidor:
+    /// servidor (`magi` o habitual), nombre, versión de tmux y si está soltada.
+    pub tmux: Option<protocolo::TmuxPestana>,
     /// La pestaña está en una escritura en varios de alguna ventana (la
     /// marca `»`; también la ven las demás ventanas).
     pub escritura_varios: bool,
@@ -2578,6 +2723,8 @@ pub enum AccionPaleta {
     IrATuneles,
     /// Abrir el diálogo de túnel nuevo.
     NuevoTunel,
+    /// Entradas de las sesiones persistentes (Fase 16).
+    Persistentes(AccionPaletaPersistentes),
     /// Entradas de la vista Snippets (Fase 6).
     Snippets(AccionPaletaSnippets),
     /// `snippet · <nombre>` y `snippet · <nombre> · <host>`.
@@ -2667,8 +2814,8 @@ pub struct App {
     abrir_al_cerrar: Option<i64>,
     /// Mensaje sobre sesiones que siguen abiertas, mostrado al salir.
     pub aviso_al_salir: Option<String>,
-    /// Host cuyo `AbrirSesion` se envía nada más conectar con el servidor.
-    pub abrir_al_arrancar: Option<i64>,
+    /// Lo que se abre nada más conectar con el servidor.
+    pub abrir_al_arrancar: Option<AperturaInicial>,
     pub vista: Vista,
     /// Vista desde la que se entró en Sesión (para `prefijo q`).
     pub vista_previa: Option<Vista>,
@@ -2706,6 +2853,11 @@ pub struct App {
     pub pantallas: cliente::pantallas::Pantallas,
     /// Hosts cuyo `AbrirSesion` está en vuelo (se activa al aparecer).
     pub aperturas_pendientes: HashSet<i64>,
+    /// Hora del último aviso que el usuario ya vio en cada pestaña (por
+    /// `sesion_id`). El servidor conserva el aviso hasta que una ventana
+    /// enfoca la pestaña; sin esto, la siguiente difusión devolvería a la
+    /// pestaña un aviso que ya se vio aquí (Fase 16, pista C).
+    avisos_vistos: HashMap<u32, i64>,
     /// Contraseñas a guardar en el llavero cuando la sesión abra.
     contrasenas_pendientes: HashMap<u32, (protocolo::Secreto, bool)>,
     /// Datos de la bienvenida del servidor para la vista Sesiones.
@@ -2841,8 +2993,9 @@ pub struct App {
     pub escritura_varios: escritura_varios::EscrituraVarios,
     /// Peticiones pendientes del portapapeles del remoto (OSC 52).
     pub portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto,
-    /// Lista de sesiones de tmux del host elegido en Sesiones, si se pidió.
-    pub tmux: Option<EstadoTmux>,
+    /// Sesiones persistentes (Fase 16): lista del servidor, bloque, vista
+    /// previa y creaciones pendientes.
+    pub persistentes: EstadoPersistentes,
     /// Peticiones del terminal en vuelo, por peticion_id (desde 2^49).
     pub peticiones_terminal: HashMap<u64, PeticionTerminal>,
     siguiente_peticion_terminal: u64,
@@ -2987,6 +3140,7 @@ impl App {
             sesiones_perdidas: 0,
             pantallas: cliente::pantallas::Pantallas::default(),
             aperturas_pendientes: HashSet::new(),
+            avisos_vistos: HashMap::new(),
             contrasenas_pendientes: HashMap::new(),
             servidor_pid: None,
             cliente_id: None,
@@ -3066,7 +3220,7 @@ impl App {
             enlaces: enlaces::EstadoEnlaces::default(),
             escritura_varios: escritura_varios::EscrituraVarios::default(),
             portapapeles_remoto: portapapeles::EstadoPortapapelesRemoto::default(),
-            tmux: None,
+            persistentes: EstadoPersistentes::default(),
             peticiones_terminal: HashMap::new(),
             siguiente_peticion_terminal: RANGO_TERMINAL,
             foco_exterior: true,
@@ -3243,6 +3397,39 @@ impl App {
         }
     }
 
+    /// Abre lo que pidió la línea de órdenes al arrancar (`magi conectar
+    /// <host>` y `magi sesion <nombre>`), una sola vez.
+    #[doc(hidden)]
+    pub fn abrir_lo_del_arranque(&mut self) {
+        match self.abrir_al_arrancar.take() {
+            Some(AperturaInicial::Host(host_id)) => self.conectar(host_id),
+            // `magi sesion <nombre>`: engancharse soltando a los demás.
+            Some(AperturaInicial::Sesion { host_id, nombre }) => {
+                let host = self
+                    .hosts
+                    .iter()
+                    .find(|host| host.id == host_id)
+                    .map_or_else(|| "el host".to_string(), |host| host.nombre.clone());
+                let hecho = self.abrir_sesion_persistente(sesion::DestinoPersistente {
+                    host_id,
+                    servidor: protocolo::ServidorTmux::Magi,
+                    nombre: nombre.clone(),
+                    crear: None,
+                    compartir: false,
+                });
+                // Informe §3.3: `sesion_persistente_enganchada` vale también
+                // para la CLI. Se anota cuando aparece la pestaña (el efecto),
+                // como con `↵` en la lista. Al arrancar no se sabe quién la
+                // tenía: el detalle solo dice que se suelta a los demás.
+                if hecho {
+                    let detalle = format!("«{host}» · {nombre} · soltando a los demás");
+                    self.apuntar_enganche(host_id, protocolo::ServidorTmux::Magi, &nombre, detalle);
+                }
+            }
+            None => {}
+        }
+    }
+
     pub fn ejecutar(mut self) -> Result<()> {
         let mut terminal = crate::ui::iniciar_terminal()?;
         // MAGI pide al terminal exterior pegado entre corchetes, foco y, si se
@@ -3250,9 +3437,7 @@ impl App {
         crate::ui::activar_extras(&self.config.terminal);
         // Primero el tamaño: la pestaña que se abra al arrancar lo necesita.
         self.iniciar_pintado(&mut terminal)?;
-        if let Some(host_id) = self.abrir_al_arrancar.take() {
-            self.conectar(host_id);
-        }
+        self.abrir_lo_del_arranque();
         while !self.salir {
             if !self.ciclo(&mut terminal)? {
                 break;
@@ -3440,6 +3625,9 @@ impl App {
         if let Some(inicio) = inicio(Lista::Sesiones) {
             self.desplazamiento_sesiones = inicio;
         }
+        if let Some(inicio) = inicio(Lista::Persistentes) {
+            self.persistentes.desplazamiento = inicio;
+        }
         if let Some(inicio) = inicio(Lista::Identidades) {
             self.desplazamiento_identidades = inicio;
         }
@@ -3572,6 +3760,9 @@ impl App {
     pub fn procesar_en(&mut self, evento: Evento, ahora: Instant) {
         self.despachar(evento, ahora);
         self.vigilar_modales();
+        // Sesiones persistentes (Fase 16): con la lista a la vista, consulta al
+        // abrirla y cada `[persistentes] refresco_seg`.
+        self.vigilar_persistentes();
     }
 
     /// Un diálogo nuevo (o la ayuda recién abierta) empieza sin desplazar.
@@ -3726,6 +3917,9 @@ impl App {
     fn tick(&mut self) {
         self.tick_sincronizacion();
         self.tick_servicios();
+        // Las aperturas de sesiones persistentes que nunca recibieron pestaña
+        // ni fallo caducan (Fase 16).
+        self.caducar_creaciones(Instant::now());
         if self.vista == Vista::Servicios && self.contador_ticks % 4 == 0 {
             // «hace N s» de la cabecera cambia solo.
             self.sucio = true;
@@ -4084,6 +4278,21 @@ impl App {
                 }
             }
             KeyCode::Char('g') => self.abrir_menu_grupo(),
+            // Nueva sesión persistente en el host de la fila (Fase 16).
+            KeyCode::Char('N') => match self.host_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_dialogo_nueva_sesion(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!(
+                        "«{}» es un escritorio: no tiene sesiones persistentes",
+                        host.nombre
+                    ),
+                    true,
+                ),
+                None => self.abrir_dialogo_nueva_sesion(None),
+            },
             KeyCode::Char('?') => self.ayuda = true,
             KeyCode::Char('I') => self.importar_ssh_config(),
             KeyCode::Char('E') => self.exportar(true, false),
@@ -4410,7 +4619,12 @@ impl App {
         {
             // Al verla se limpian también la marca de actividad y el aviso.
             pestaña.actividad_no_vista = false;
-            pestaña.aviso = None;
+            // Se recuerda la hora del aviso visto: el servidor lo conserva
+            // hasta que una ventana enfoca la pestaña y la difusión siguiente
+            // lo traería de vuelta (`reconciliar_sesiones`).
+            if let Some(aviso) = pestaña.aviso.take() {
+                self.avisos_vistos.insert(sesion_id, aviso.hora);
+            }
         }
     }
 
@@ -4474,14 +4688,22 @@ impl App {
 
     /// Reconecta una sesión caída (pestaña o lista).
     fn reconectar_sesion(&mut self, sesion_id: u32) {
-        self.servidor
-            .enviar(protocolo::MensajeCliente::Reconectar { sesion_id });
+        self.servidor.enviar(protocolo::MensajeCliente::Reconectar {
+            sesion_id,
+            compartir: false,
+        });
         self.mensaje("reconectando…", false);
     }
 
     /// Mensajes del servidor de sesiones que no resuelve la tarea de lectura.
     fn evento_servidor(&mut self, mensaje: protocolo::MensajeServidor) {
         if self.evento_servicios(&mensaje) {
+            return;
+        }
+        // Las sesiones persistentes van antes que el terminal: la terminación de
+        // una sesión pedida desde su lista y los errores de sus peticiones son
+        // suyos; los demás mensajes pasan de largo.
+        if self.evento_persistentes(&mensaje) {
             return;
         }
         if self.evento_terminal(&mensaje) {
@@ -4814,13 +5036,21 @@ impl App {
             | protocolo::MensajeServidor::SinSesion { .. }
             | protocolo::MensajeServidor::PantallaCompleta { .. }
             | protocolo::MensajeServidor::Datos { .. } => {}
+            // Las sesiones persistentes las resuelve `evento_persistentes`.
+            protocolo::MensajeServidor::SesionesPersistentes { .. }
+            | protocolo::MensajeServidor::VistaPrevia { .. }
+            | protocolo::MensajeServidor::TmuxRenombrada { .. } => {}
+            // `SesionesTmux` responde a `ListarTmux`, que el cliente ya no manda
+            // (Fase 16: sondea con `ConsultarSesionesPersistentes`); el protocolo
+            // lo conserva y aquí se ignora.
+            protocolo::MensajeServidor::SesionesTmux { .. } => {}
             // Los del terminal (F15) los resuelve `evento_terminal`.
-            protocolo::MensajeServidor::HistorialLote { .. }
+            protocolo::MensajeServidor::AperturaTmuxFallida { .. }
+            | protocolo::MensajeServidor::HistorialLote { .. }
             | protocolo::MensajeServidor::EscrituraVariosIniciada { .. }
             | protocolo::MensajeServidor::EscrituraVariosTerminada { .. }
             | protocolo::MensajeServidor::TunelTemporal { .. }
             | protocolo::MensajeServidor::TunelesTemporales { .. }
-            | protocolo::MensajeServidor::SesionesTmux { .. }
             | protocolo::MensajeServidor::TmuxTerminada { .. }
             | protocolo::MensajeServidor::Portapapeles { .. }
             | protocolo::MensajeServidor::PortapapelesPedido { .. } => {}
@@ -4889,12 +5119,46 @@ impl App {
         for sesion_id in desaparecidas {
             self.quitar_pestaña(sesion_id);
         }
+        // Pestañas que acaban de enseñar una sesión persistente (Fase 16): la
+        // ficha de un host marcado y la creación pendiente se resuelven al verla.
+        let mut persistentes_nuevas: Vec<(i64, String)> = Vec::new();
         for info in lista {
+            // La pestaña que se está mirando ya ve sus avisos (como con los
+            // datos, `Evento::Pantallas`).
+            let viendo = self.vista == Vista::Sesion && self.pestana_activa_id() == Some(info.id);
+            let persistente = info
+                .tmux
+                .as_ref()
+                .filter(|tmux| tmux.servidor == protocolo::ServidorTmux::Magi)
+                .map(|tmux| (info.host_id, tmux.nombre.clone()));
+            let mut aviso_del_servidor: Option<String> = None;
             if let Some(pestaña) = self
                 .pestanas
                 .iter_mut()
                 .find(|pestaña| pestaña.sesion_id == info.id)
             {
+                // Un aviso nuevo que llega a la pestaña que se mira mientras aún
+                // se abre (o está caída) no sale del remoto, sino del servidor
+                // («no tiene tmux: esta pestaña no es persistente»): se enseña
+                // aunque se esté mirando, porque en pantalla no hay nada que lo
+                // diga.
+                if viendo
+                    && (pestaña.estado != EstadoSesionRemota::Abierta
+                        || info.estado != EstadoSesionRemota::Abierta)
+                {
+                    let visto = self.avisos_vistos.get(&info.id).copied();
+                    if let Some(aviso) = &info.aviso {
+                        if visto.is_none_or(|hora| aviso.hora > hora) {
+                            aviso_del_servidor = Some(aviso.texto.clone());
+                        }
+                    }
+                }
+                let ya_persistente = pestaña.sesion_persistente().is_some();
+                // Lo que cambia con la pestaña ya abierta lo difunde el
+                // servidor en cada lista: nombre (`RenombrarSesion`), estado,
+                // reconexión, título, aviso y la sesión de tmux (con la
+                // pestaña soltada), y se copia aquí en cada una.
+                pestaña.nombre = info.nombre;
                 pestaña.estado = info.estado;
                 pestaña.motivo = info.motivo;
                 pestaña.identidad = info.identidad;
@@ -4904,7 +5168,19 @@ impl App {
                 pestaña.actividad_no_vista = pestaña.actividad_no_vista || info.actividad_no_vista;
                 pestaña.abierta_en = info.abierta_en;
                 pestaña.escritura_varios = info.escritura_varios;
+                pestaña.reconexion = info.reconexion;
+                pestaña.titulo = info.titulo;
+                pestaña.tmux = info.tmux;
+                if !ya_persistente {
+                    persistentes_nuevas.extend(persistente);
+                }
+                let mut visto = self.avisos_vistos.get(&info.id).copied();
+                conciliar_aviso(&mut pestaña.aviso, &mut visto, info.aviso, viendo);
+                if let Some(hora) = visto {
+                    self.avisos_vistos.insert(info.id, hora);
+                }
             } else {
+                persistentes_nuevas.extend(persistente);
                 let pantalla = self.pantallas.crear(info.id, 24, 80);
                 let activar = self.aperturas_pendientes.contains(&info.host_id);
                 self.pestanas.push(PestanaUI {
@@ -4953,6 +5229,12 @@ impl App {
                     self.mensaje(format!("sesión abierta con «{nombre}»"), false);
                 }
             }
+            if let Some(texto) = aviso_del_servidor {
+                self.mensaje(texto, true);
+            }
+        }
+        for (host_id, nombre) in persistentes_nuevas {
+            self.pestana_persistente_abierta(host_id, &nombre);
         }
         if self.pestanas.is_empty() {
             self.pestana_activa = None;
@@ -5044,6 +5326,7 @@ impl App {
     /// vista Sesión: nunca se queda una vista Sesión sin pestaña que pintar.
     fn quitar_pestaña(&mut self, sesion_id: u32) {
         self.pantallas.quitar(sesion_id);
+        self.avisos_vistos.remove(&sesion_id);
         let Some(indice) = self
             .pestanas
             .iter()
@@ -5187,6 +5470,8 @@ impl App {
         // «desconectado»; ninguna respuesta de servicios va a llegar.
         self.servicios_desconectado();
         self.peticiones_servicio.clear();
+        // Sesiones persistentes: su lista y lo que estaba en vuelo (Fase 16).
+        self.persistentes_servidor_caido();
         // Las peticiones de escritorio en vuelo y sus enlaces ya no valen.
         self.peticiones_escritorio.clear();
         self.aperturas_escritorio.clear();
@@ -5220,6 +5505,7 @@ impl App {
     /// Respuesta al diálogo SERVIDOR CAÍDO: `s` relanza, `n` sigue sin sesiones.
     fn resolver_servidor_caido(&mut self, relanzar: bool) {
         self.pestanas.clear();
+        self.avisos_vistos.clear();
         self.escritorios.clear();
         self.peticiones_escritorio.clear();
         self.aperturas_escritorio.clear();
@@ -5388,7 +5674,21 @@ impl App {
                 .comprobaciones_de_host(host.id)
                 .unwrap_or_default();
         }
+        ficha.etiqueta_equipo = self.etiqueta_equipo_para_ficha();
         ficha
+    }
+
+    /// Etiqueta de este equipo con la que se nombran las sesiones persistentes
+    /// automáticas (`<etiqueta>-1`…): la misma que calcula el servidor a
+    /// partir del nombre del equipo de la sincronización o, sin él, el del
+    /// sistema. La ficha la enseña en el bloque SESIONES.
+    fn etiqueta_equipo_para_ficha(&self) -> String {
+        let nombre = crate::almacen::equipos::este(self.almacen.conexion())
+            .ok()
+            .map(|equipo| equipo.nombre)
+            .filter(|nombre| !nombre.trim().is_empty())
+            .unwrap_or_else(crate::config::nombre_actual);
+        magi_nucleo::terminal::tmux::etiqueta_equipo(&nombre)
     }
 
     /// La ficha de `host` (o una nueva en `grupo_id`) a partir de lo que la
@@ -5541,12 +5841,14 @@ impl App {
             contrasena_guardada: false,
             comprobaciones: Vec::new(),
             indice_comprobacion: 0,
+            sesiones_persistentes: host.is_some_and(|host| host.sesiones_persistentes),
+            sesiones_original: host.is_some_and(|host| host.sesiones_persistentes),
+            // `construir_ficha` la pone con la de este equipo.
+            etiqueta_equipo: String::new(),
             reconectar: host.is_none_or(|host| host.reconectar),
-            tmux_persistente: host.is_some_and(|host| host.tmux_persistente),
             portapapeles_remoto: host.is_some_and(|host| host.portapapeles_remoto),
             terminal_original: (
                 host.is_none_or(|host| host.reconectar),
-                host.is_some_and(|host| host.tmux_persistente),
                 host.is_some_and(|host| host.portapapeles_remoto),
             ),
         }
@@ -5879,6 +6181,9 @@ impl App {
         let verificaciones_original = ficha.verificaciones_original.clone();
         let terminal = ficha.terminal_actual();
         let terminal_original = ficha.terminal_original;
+        // La marca de sesiones persistentes viaja: tiene su propio camino.
+        let sesiones = ficha.sesiones_persistentes;
+        let sesiones_original = ficha.sesiones_original;
         let mut datos = ficha.datos();
         let datos_formulario = datos.clone();
         if tipo.es_escritorio() && tamano_fijo {
@@ -5974,8 +6279,28 @@ impl App {
                 self.recargar_snippets();
             }
             fallos_aparte = escrito.fallos;
+            // Bloque SESIONES: la marca viaja, así que sube la versión del
+            // host (`fijar_sesiones_persistentes`). Es la única que lo hace;
+            // la reconexión y el portapapeles remoto, de abajo, son propios
+            // del equipo y no la tocan.
+            if sesiones != sesiones_original {
+                match crate::almacen::hosts::fijar_sesiones_persistentes(
+                    self.almacen.conexion(),
+                    id,
+                    sesiones,
+                ) {
+                    Ok(()) => {
+                        if let Some(ficha) = &mut self.ficha {
+                            ficha.sesiones_original = sesiones;
+                        }
+                    }
+                    Err(error) => fallos_aparte.push(format!(
+                        "no se pudo guardar la marca de sesiones persistentes: {error}"
+                    )),
+                }
+            }
             if terminal != terminal_original {
-                let (reconectar, tmux, portapapeles) = terminal;
+                let (reconectar, portapapeles) = terminal;
                 let conexion = self.almacen.conexion();
                 let mut fallos = Vec::new();
                 if reconectar != terminal_original.0 {
@@ -5985,14 +6310,7 @@ impl App {
                         fallos.push(format!("no se pudo guardar la reconexión: {error}"));
                     }
                 }
-                if tmux != terminal_original.1 {
-                    if let Err(error) =
-                        crate::almacen::hosts::fijar_tmux_persistente(conexion, id, tmux)
-                    {
-                        fallos.push(format!("no se pudo guardar el tmux: {error}"));
-                    }
-                }
-                if portapapeles != terminal_original.2 {
+                if portapapeles != terminal_original.1 {
                     if let Err(error) =
                         crate::almacen::hosts::fijar_portapapeles_remoto(conexion, id, portapapeles)
                     {
@@ -6140,6 +6458,7 @@ impl App {
             reconectar: true,
             tmux_persistente: false,
             portapapeles_remoto: false,
+            sesiones_persistentes: false,
         };
         self.mensaje("probando la conexión…", false);
         self.iniciar_conexion(host, true);
@@ -6498,6 +6817,7 @@ impl App {
             accion: AccionPaleta::NuevoTunel,
         });
         entradas.extend(self.entradas_paleta_snippets());
+        entradas.extend(self.entradas_paleta_persistentes());
         entradas.extend(self.entradas_paleta_lanzar());
         entradas.extend(self.entradas_paleta_archivos());
         entradas.push(EntradaPaleta {
@@ -6824,6 +7144,11 @@ impl App {
                         self.paleta = None;
                         self.ir_a_vista(Vista::Tuneles);
                         self.nuevo_tunel();
+                    }
+                    Some(AccionPaleta::Persistentes(accion)) => {
+                        let accion = accion.clone();
+                        self.paleta = None;
+                        self.accion_paleta_persistentes(accion);
                     }
                     Some(AccionPaleta::Snippets(accion)) => {
                         let accion = accion.clone();
@@ -8372,6 +8697,21 @@ impl App {
                     self.mensaje("auto-refresco desactivado", false);
                 }
             }
+            // Nueva sesión persistente en el host seleccionado (Fase 16).
+            KeyCode::Char('N') => match self.host_flota_seleccionado() {
+                Some(host) if host.tipo.es_ssh() => {
+                    let host_id = host.id;
+                    self.abrir_dialogo_nueva_sesion(Some(host_id));
+                }
+                Some(host) => self.mensaje(
+                    format!(
+                        "«{}» es un escritorio: no tiene sesiones persistentes",
+                        host.nombre
+                    ),
+                    true,
+                ),
+                None => self.abrir_dialogo_nueva_sesion(None),
+            },
             KeyCode::Char('?') => self.ayuda = true,
             KeyCode::Char('q') => self.intentar_salir(),
             KeyCode::Esc if !self.filtro.is_empty() => {
@@ -8806,9 +9146,8 @@ impl App {
 
     /// Vista Sesiones: lista de sesiones del servidor (F3 sin pestaña activa).
     fn tecla_sesiones(&mut self, tecla: KeyEvent) {
-        // La lista de tmux se maneja encima de la lista de sesiones.
-        if self.tmux.is_some() {
-            self.tecla_tmux(tecla);
+        // El bloque «Persistentes» (Fase 16) maneja sus teclas si tiene el foco.
+        if self.tecla_persistentes_sesiones(tecla) {
             return;
         }
         match tecla.code {
@@ -8891,44 +9230,6 @@ impl App {
         }
     }
 
-    /// Teclas de la lista de sesiones de tmux del host (Fase 15): `↑` `↓`
-    /// eligen, `↵` abre una pestaña enganchada, `T` termina (confirmación),
-    /// `r` refresca y `Esc` la cierra.
-    fn tecla_tmux(&mut self, tecla: KeyEvent) {
-        let Some(estado) = &mut self.tmux else {
-            return;
-        };
-        match tecla.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.tmux = None,
-            KeyCode::Up | KeyCode::Char('k') => {
-                estado.seleccion = estado.seleccion.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if estado.seleccion + 1 < estado.sesiones.len() {
-                    estado.seleccion += 1;
-                }
-            }
-            KeyCode::Enter => {
-                let host_id = estado.host_id;
-                let nombre = estado
-                    .sesiones
-                    .get(estado.seleccion)
-                    .map(|sesion| sesion.nombre.clone());
-                match nombre {
-                    Some(nombre) if magi_nucleo::terminal::tmux::nombre_valido(&nombre) => {
-                        self.abrir_sesion_tmux(host_id, Some(nombre));
-                    }
-                    Some(_) => self.mensaje("nombre de tmux no admitido", true),
-                    None => {}
-                }
-            }
-            KeyCode::Char('T') => self.preguntar_terminar_tmux(),
-            KeyCode::Char('r') => self.pedir_lista_tmux(),
-            _ => {}
-        }
-        self.sucio = true;
-    }
-
     /// Pestaña seleccionada en la vista Sesiones.
     fn pestana_seleccionada(&self) -> Option<&PestanaUI> {
         self.pestanas.get(self.seleccion_sesiones)
@@ -8996,6 +9297,7 @@ impl App {
             return;
         };
         match dialogo {
+            Dialogo::Persistentes(dialogo) => self.tecla_dialogo_persistentes(dialogo, tecla),
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Edicion(dialogo) => self.tecla_dialogo_edicion(dialogo, tecla),
@@ -11121,15 +11423,14 @@ impl App {
             AccionDialogo::CerrarPestanaTerminandoTmux {
                 sesion_id,
                 host_id,
+                servidor,
                 nombre,
             } => {
                 self.servidor
                     .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
-                self.terminar_tmux(host_id, nombre);
+                self.terminar_tmux(host_id, servidor, nombre);
             }
-            AccionDialogo::TerminarTmux { host_id, nombre } => {
-                self.terminar_tmux(host_id, nombre);
-            }
+            AccionDialogo::Persistentes(accion) => self.ejecutar_accion_persistentes(accion),
             AccionDialogo::Snippets(accion) => self.ejecutar_accion_snippets(accion),
             AccionDialogo::Lanzar(accion) => self.ejecutar_accion_lanzar(accion),
             AccionDialogo::Resultados(accion) => self.ejecutar_accion_resultados(accion),
@@ -11187,6 +11488,7 @@ impl App {
                 // El servidor cierra las sesiones (anotándolas) y se apaga.
                 self.servidor.enviar(protocolo::MensajeCliente::Parar);
                 self.pestanas.clear();
+                self.avisos_vistos.clear();
                 self.escritorios.clear();
                 self.peticiones_escritorio.clear();
                 self.aperturas_escritorio.clear();
@@ -11370,6 +11672,31 @@ fn lanzar_tick(runtime: &tokio::runtime::Runtime, tx: mpsc::UnboundedSender<Even
     });
 }
 
+/// Decide el aviso de una pestaña tras una difusión del servidor. El servidor
+/// conserva el aviso hasta que una ventana enfoca la pestaña, pero cada
+/// ventana lo da por visto al entrar en ella (`limpiar_actividad`): un aviso
+/// cuya hora ya se vio aquí, o que llega a la pestaña que se está mirando, no
+/// vuelve a aparecer; uno más nuevo, sí. Si el servidor ya no lo tiene
+/// (alguna ventana lo vio), se quita.
+fn conciliar_aviso(
+    actual: &mut Option<protocolo::InfoAviso>,
+    visto: &mut Option<i64>,
+    difundido: Option<protocolo::InfoAviso>,
+    viendo: bool,
+) {
+    match difundido {
+        None => *actual = None,
+        Some(aviso) => {
+            if viendo || visto.is_some_and(|hora| aviso.hora <= hora) {
+                *visto = Some(visto.map_or(aviso.hora, |hora| hora.max(aviso.hora)));
+                *actual = None;
+            } else {
+                *actual = Some(aviso);
+            }
+        }
+    }
+}
+
 fn usuario_local() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -11513,14 +11840,23 @@ pub fn instalar_hook_panico() {
 }
 
 /// Arranca el runtime de tokio, construye la app y ejecuta el bucle de la UI.
-/// Con `abrir_al_arrancar`, se abre una sesión nueva a ese host al empezar.
+/// Lo que MAGI abre al arrancar (`magi <host>` y `magi sesion <nombre>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AperturaInicial {
+    /// Una pestaña nueva a ese host.
+    Host(i64),
+    /// Engancharse a una sesión persistente existente del tmux propio.
+    Sesion { host_id: i64, nombre: String },
+}
+
+/// Con `abrir_al_arrancar`, se abre lo indicado al empezar.
 pub fn ejecutar(
     rutas: Rutas,
     config: Config,
     tema: Tema,
     almacen: Almacen,
     aviso: Option<String>,
-    abrir_al_arrancar: Option<i64>,
+    abrir_al_arrancar: Option<AperturaInicial>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

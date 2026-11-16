@@ -70,9 +70,8 @@ mod pruebas {
 
     fn modo(pegado_corchetes: bool) -> ModoTerminal {
         ModoTerminal {
-            cursor_aplicacion: false,
             pegado_corchetes,
-            banderas_kitty: 0,
+            ..ModoTerminal::default()
         }
     }
 

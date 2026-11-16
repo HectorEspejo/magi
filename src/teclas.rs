@@ -146,6 +146,38 @@ mod pruebas {
     }
 
     #[test]
+    fn modify_other_keys_codifica_las_teclas_de_crossterm_como_xterm() {
+        let modo = ModoTerminal {
+            modify_other_keys: 2,
+            ..ModoTerminal::default()
+        };
+        let mayus_intro = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(
+            bytes_de_tecla_con_modo(mayus_intro, modo),
+            Some(b"\x1b[27;2;13~".to_vec())
+        );
+        // Sin el modo, Mayús+Intro sigue siendo un CR.
+        assert_eq!(bytes_de_tecla(mayus_intro), Some(b"\r".to_vec()));
+        let ctrl_intro = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            bytes_de_tecla_con_modo(ctrl_intro, modo),
+            Some(b"\x1b[27;5;13~".to_vec())
+        );
+        // Mayús+Tab (crossterm lo entrega como BackTab) sigue siendo CSI Z.
+        let mayus_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(
+            bytes_de_tecla_con_modo(mayus_tab, modo),
+            Some(b"\x1b[Z".to_vec())
+        );
+        // Alt+Intro solo se queda como ESC CR.
+        let alt_intro = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        assert_eq!(
+            bytes_de_tecla_con_modo(alt_intro, modo),
+            Some(b"\x1b\r".to_vec())
+        );
+    }
+
+    #[test]
     fn parsear_prefijo_valida_el_texto() {
         assert_eq!(
             parsear_prefijo("Ctrl+b").unwrap(),

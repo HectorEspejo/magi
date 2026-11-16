@@ -69,11 +69,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: tests-${{ matrix.os }}
-      - name: Instalar el sftp-server de OpenSSH
+      - name: Instalar el sftp-server de OpenSSH y tmux
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-server
+          sudo apt-get install -y openssh-server tmux
           test -x /usr/lib/openssh/sftp-server
+          tmux -V
       - name: TZ=UTC cargo test --workspace --locked
         env:
           TZ: UTC

@@ -2,6 +2,9 @@
 source: tests/terminal_ui.rs
 ---
  MAGI · SESIONES · 1 sesiones · 1 ventanas ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PERSISTENTES · 0 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── comprobando…
+
+ PESTAÑAS · 1 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   ESTADO PESTAÑA            TIPO  HOST             TIEMPO     TÍTULO                                                                                                              IDENTIDAD        VENT.
 ▸ ● !    web-01             SSH   web-01           2 h 03 m   Claude Code                                                                                                         clave            1
 
@@ -52,12 +55,9 @@ source: tests/terminal_ui.rs
 
 
 
-
-
-
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   web-01 · clave
-  servidor pid N · protocolo 9 · desde hace NN s
+  servidor pid N · protocolo 10 · desde hace NN s
 
 
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ⇥ persistentes  t tmux  ? ayuda

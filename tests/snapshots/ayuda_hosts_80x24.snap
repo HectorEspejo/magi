@@ -9,9 +9,10 @@ source: tests/redimensionado/vistas_g.rs
 │  ▼ casa│  ↵             conectar con el host                        │        │
 │    ○ dg│  e             editar la ficha                             │        │
 │    ○ ma│  n             nuevo host                                  │        │
-│  ▼ sin │  g             menú de grupos                              │        │
-│    ○ ba│  x             borrar host                                 │        │
-│    ○ ri│  ⇥             alternar usuario·puerto / etiquetas         │        │
+│  ▼ sin │  N             nueva sesión persistente en este host       │        │
+│    ○ ba│  g             menú de grupos                              │        │
+│    ○ ri│  x             borrar host                                 │        │
+│        │  ⇥             alternar usuario·puerto / etiquetas         │        │
 │        │  /             filtro incremental                          │        │
 │        │  !             snippets que apuntan al host                │        │
 │        │  I             importar ~/.ssh/config                      │        │
@@ -22,6 +23,5 @@ source: tests/redimensionado/vistas_g.rs
 │        │  ↑↓ PgUp PgDn  desplazar diálogos y esta ayuda             │        │
 │        │                                                            │        │
 │        │  esc o ? para cerrar                                       │        │
-│        │                                                            │        │
 └────────└────────────────────────────────────────────────────────────┘────────┘
  ↵ conectar  →← plegar  e editar  n nuevo  g grupo  x borrar  / filtrar  ? más

@@ -19,28 +19,44 @@ use crate::app::{
 };
 use crate::protocolo::{self, EstadoSesionRemota, MensajeCliente, MensajeServidor};
 
-/// Lista de sesiones de tmux de un host, en la vista Sesiones.
-#[derive(Debug, Clone, Default)]
-pub struct EstadoTmux {
+/// A qué sesión persistente se abre una pestaña (`abrir_sesion_persistente`).
+#[derive(Debug, Clone)]
+pub struct DestinoPersistente {
     pub host_id: i64,
-    pub host_nombre: String,
-    /// La petición está en vuelo.
-    pub cargando: bool,
-    /// El host no tiene tmux (o falló): el motivo.
-    pub sin_tmux: Option<String>,
-    pub sesiones: Vec<protocolo::InfoSesionTmux>,
-    pub seleccion: usize,
-    pub desplazamiento: usize,
+    pub servidor: protocolo::ServidorTmux,
+    pub nombre: String,
+    /// Crear la sesión antes de engancharse (solo en el servidor propio).
+    pub crear: Option<protocolo::CrearTmux>,
+    /// Engancharse sin soltar a los demás.
+    pub compartir: bool,
 }
 
 /// Una petición del terminal en vuelo (rango 2^49).
 #[derive(Debug, Clone)]
 pub enum PeticionTerminal {
     Historial(u32),
-    TmuxLista(i64),
-    TmuxTerminar { host_id: i64, nombre: String },
+    TmuxTerminar { nombre: String },
     EscrituraVarios(Peticion),
     TunelTemporal { sesion_id: u32, url: String },
+}
+
+impl crate::app::PestanaUI {
+    /// La sesión de tmux de la pestaña si es persistente (el tmux propio de
+    /// MAGI, Fase 16); `None` en una pestaña normal o del tmux habitual.
+    #[must_use]
+    pub fn sesion_persistente(&self) -> Option<&protocolo::TmuxPestana> {
+        self.tmux
+            .as_ref()
+            .filter(|tmux| tmux.servidor == protocolo::ServidorTmux::Magi)
+    }
+
+    /// La pestaña está soltada: otro equipo se enganchó a su sesión y ella
+    /// conserva la última pantalla. Solo la limpia el servidor al volver.
+    #[must_use]
+    pub fn soltada(&self) -> Option<&protocolo::Soltada> {
+        self.sesion_persistente()
+            .and_then(|tmux| tmux.soltada.as_ref())
+    }
 }
 
 /// Texto de un pegado para un campo de una línea: sin controles (los saltos
@@ -561,69 +577,29 @@ impl App {
 
     // ------------------------------------------------------------ tmux
 
-    /// `t` en Sesiones: pide la lista de tmux del host de la pestaña elegida.
+    /// `t` en Sesiones: comprueba el host de la pestaña elegida y enseña sus
+    /// sesiones de tmux en el bloque «Persistentes» (Fase 16; la lista propia
+    /// de la Fase 15 desaparece).
     pub(crate) fn pedir_lista_tmux(&mut self) {
-        let Some(pestana) = self.pestana_seleccionada() else {
-            self.mensaje("no hay ninguna pestaña elegida", true);
-            return;
-        };
-        let (host_id, host_nombre) = (pestana.host_id, pestana.host_nombre.clone());
-        let peticion_id = self.siguiente_peticion_terminal;
-        self.siguiente_peticion_terminal += 1;
-        self.servidor.enviar(MensajeCliente::ListarTmux {
-            peticion_id,
-            host_id,
-        });
-        self.peticiones_terminal
-            .insert(peticion_id, PeticionTerminal::TmuxLista(host_id));
-        self.tmux = Some(EstadoTmux {
-            host_id,
-            host_nombre,
-            cargando: true,
-            ..EstadoTmux::default()
-        });
-        self.sucio = true;
+        self.pedir_sesiones_del_host_de_la_pestana();
     }
 
-    /// `T` en la lista de tmux: pregunta antes de terminarla.
-    pub(crate) fn preguntar_terminar_tmux(&mut self) {
-        let Some(estado) = &self.tmux else {
-            return;
-        };
-        let Some(sesion) = estado.sesiones.get(estado.seleccion).cloned() else {
-            return;
-        };
-        let host_id = estado.host_id;
-        let host_nombre = estado.host_nombre.clone();
-        self.dialogo = Some(Dialogo::Confirmar {
-            titulo: "TERMINAR SESIÓN DE TMUX".to_string(),
-            lineas: vec![
-                format!(
-                    "Se terminará la sesión «{}» de tmux en {host_nombre}.",
-                    sesion.nombre
-                ),
-                "Lo que corra dentro se perderá.".to_string(),
-            ],
-            peligro: true,
-            accion: AccionDialogo::TerminarTmux {
-                host_id,
-                nombre: sesion.nombre,
-            },
-        });
-    }
-
-    pub(crate) fn terminar_tmux(&mut self, host_id: i64, nombre: String) {
+    pub(crate) fn terminar_tmux(
+        &mut self,
+        host_id: i64,
+        servidor: protocolo::ServidorTmux,
+        nombre: String,
+    ) {
         let peticion_id = self.siguiente_peticion_terminal;
         self.siguiente_peticion_terminal += 1;
         self.servidor.enviar(MensajeCliente::TerminarTmux {
             peticion_id,
             host_id,
+            servidor,
             nombre: nombre.clone(),
         });
-        self.peticiones_terminal.insert(
-            peticion_id,
-            PeticionTerminal::TmuxTerminar { host_id, nombre },
-        );
+        self.peticiones_terminal
+            .insert(peticion_id, PeticionTerminal::TmuxTerminar { nombre });
     }
 
     // ------------------------------------------------------------ rejilla
@@ -762,20 +738,21 @@ impl App {
                 self.tuneles_temporales = lista.clone();
                 true
             }
-            MensajeServidor::SesionesTmux {
-                peticion_id,
-                host_id,
-                sesiones,
-                sin_tmux,
-            } => {
-                self.sesiones_tmux(*peticion_id, *host_id, sesiones.clone(), sin_tmux.clone());
-                true
-            }
             MensajeServidor::TmuxTerminada {
                 peticion_id,
+                servidor: _,
                 resultado,
             } => {
                 self.tmux_terminada(*peticion_id, *resultado);
+                true
+            }
+            MensajeServidor::AperturaTmuxFallida {
+                host_id,
+                nombre,
+                causa,
+                mensaje,
+            } => {
+                self.apertura_tmux_fallida(*host_id, nombre, *causa, mensaje);
                 true
             }
             MensajeServidor::Portapapeles { sesion_id, texto } => {
@@ -875,57 +852,17 @@ impl App {
         }
     }
 
-    fn sesiones_tmux(
-        &mut self,
-        peticion_id: u64,
-        host_id: i64,
-        sesiones: Vec<protocolo::InfoSesionTmux>,
-        sin_tmux: Option<String>,
-    ) {
-        if self.peticiones_terminal.remove(&peticion_id).is_none() {
-            return;
-        }
-        let Some(estado) = &mut self.tmux else {
-            return;
-        };
-        if estado.host_id != host_id {
-            return;
-        }
-        estado.cargando = false;
-        estado.sin_tmux = sin_tmux.clone();
-        estado.seleccion = estado.seleccion.min(sesiones.len().saturating_sub(1));
-        estado.sesiones = sesiones;
-        self.sucio = true;
-    }
-
     fn tmux_terminada(&mut self, peticion_id: u64, resultado: protocolo::ResultadoTmux) {
-        let Some(PeticionTerminal::TmuxTerminar { host_id, nombre }) =
+        let Some(PeticionTerminal::TmuxTerminar { nombre }) =
             self.peticiones_terminal.remove(&peticion_id)
         else {
             return;
         };
         match resultado {
             protocolo::ResultadoTmux::Ok => {
-                let host = self
-                    .hosts
-                    .iter()
-                    .find(|host| host.id == host_id)
-                    .map(|host| host.nombre.clone())
-                    .unwrap_or_default();
-                self.anotar(
-                    crate::registro::TMUX_TERMINADA,
-                    Some(host_id),
-                    None,
-                    &format!("{host} · {nombre}"),
-                    crate::modelo::ResultadoRegistro::Ok,
-                );
+                // `tmux_terminada` la anota el servidor, donde ocurre el
+                // efecto (`servidor/tmux.rs`): aquí no se anota otra vez.
                 self.mensaje(format!("sesión de tmux «{nombre}» terminada"), false);
-                if let Some(estado) = &mut self.tmux {
-                    estado.sesiones.retain(|sesion| sesion.nombre != nombre);
-                    estado.seleccion = estado
-                        .seleccion
-                        .min(estado.sesiones.len().saturating_sub(1));
-                }
             }
             protocolo::ResultadoTmux::NoExiste => {
                 self.mensaje(format!("la sesión «{nombre}» ya no existía"), true);
@@ -934,9 +871,6 @@ impl App {
         self.sucio = true;
     }
 
-    /// Abre una pestaña enganchada a una sesión de tmux (o una nueva, con
-    /// `tmux` a `None`). El servidor solo escribe los comandos iniciales si la
-    /// sesión es nueva (§7.10).
     /// Abre una sesión sin cambiar de vista (para la rejilla y las pestañas en
     /// segundo plano).
     fn abrir_sesion_en_segundo_plano(&mut self, host_id: i64) {
@@ -944,19 +878,155 @@ impl App {
         self.abrir_sesion_con_opciones(host_id, comandos, None, false);
     }
 
-    pub(crate) fn abrir_sesion_tmux(&mut self, host_id: i64, tmux: Option<String>) {
-        let comandos = self.comandos_al_conectar(host_id);
-        let (cols, filas) = self.tamano_pty();
+    /// Abre una pestaña enganchada a una sesión persistente, creándola antes si
+    /// `destino.crear` lo pide. Es el único camino del cliente para abrir una
+    /// sesión del tmux propio: la lista, los diálogos y `magi sesion` llaman
+    /// aquí. Devuelve si hizo algo (una petición al servidor o ir a la pestaña
+    /// que ya existía): con `false` no hay nada en vuelo y quien llama no debe
+    /// dejar una creación pendiente.
+    ///
+    /// Si esta ventana ya ve una pestaña enganchada a esa sesión (§4.3), va a
+    /// ella en vez de abrir otra; si está soltada, vuelve con `Reconectar`
+    /// (soltando a los demás o compartiendo, según lo pedido).
+    #[doc(hidden)]
+    pub fn abrir_sesion_persistente(&mut self, destino: DestinoPersistente) -> bool {
+        if let Some(motivo) = self.motivo_servidor_incompatible() {
+            self.mensaje(motivo, true);
+            return false;
+        }
+        if self.servidor_caido {
+            self.mensaje("el servidor de sesiones ha caído; relánzalo primero", true);
+            return false;
+        }
+        if destino.crear.is_none() {
+            let existente = self.pestanas.iter().position(|pestana| {
+                pestana.escritorio_id.is_none()
+                    && pestana.host_id == destino.host_id
+                    && pestana.tmux.as_ref().is_some_and(|tmux| {
+                        tmux.servidor == destino.servidor && tmux.nombre == destino.nombre
+                    })
+            });
+            if let Some(indice) = existente {
+                self.ir_a_la_pestana(indice);
+                let suelta = self.pestanas[indice].soltada().is_some();
+                if suelta {
+                    let sesion_id = self.pestanas[indice].sesion_id;
+                    self.volver_a_la_sesion(sesion_id, destino.compartir);
+                }
+                return true;
+            }
+        }
+        if self.aperturas_pendientes.contains(&destino.host_id) {
+            self.mensaje("ya hay una conexión en curso con ese host", true);
+            return false;
+        }
+        let comandos = if destino.crear.is_some() {
+            self.comandos_al_conectar(destino.host_id)
+        } else {
+            Vec::new()
+        };
+        let (cols, filas) = self.tamano_pty_inicial();
+        let host = self.nombre_de_host(destino.host_id);
+        let texto = if destino.crear.is_some() {
+            format!("creando «{}» en «{host}»…", destino.nombre)
+        } else {
+            format!("enganchándose a «{}» en «{host}»…", destino.nombre)
+        };
         self.servidor.enviar(MensajeCliente::AbrirSesion {
-            host_id,
+            host_id: destino.host_id,
             cols,
             filas,
             comandos_iniciales: comandos,
             orden: None,
-            tmux,
+            tmux: Some(protocolo::PeticionTmux {
+                servidor: destino.servidor,
+                nombre: destino.nombre,
+                crear: destino.crear,
+                compartir: destino.compartir,
+            }),
         });
-        self.aperturas_pendientes.insert(host_id);
-        self.tmux = None;
+        self.aperturas_pendientes.insert(destino.host_id);
+        self.mensaje(texto, false);
+        self.sucio = true;
+        true
+    }
+
+    /// Nombre de un host del inventario, o un texto neutro si ya no está.
+    fn nombre_de_host(&self, host_id: i64) -> String {
+        self.hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .map(|host| host.nombre.clone())
+            .unwrap_or_else(|| "el host".to_string())
+    }
+
+    /// Lleva a la pestaña de `indice` y entra en la vista Sesión, como el `↵`
+    /// de la lista de Sesiones.
+    fn ir_a_la_pestana(&mut self, indice: usize) {
+        if indice >= self.pestanas.len() {
+            return;
+        }
+        self.activar_pestaña(indice);
+        if self.vista != Vista::Sesion {
+            self.vista_previa = Some(self.vista);
+            self.vista = Vista::Sesion;
+            if let Some(sesion_id) = self.pestana_activa_id() {
+                self.limpiar_actividad(sesion_id);
+            }
+            self.adjuntar_pestaña_activa();
+        }
+        self.sucio = true;
+    }
+
+    /// `↵` y `c` en una pestaña soltada: vuelve a engancharse (con `Reconectar`),
+    /// soltando a los demás o compartiendo. El servidor quita la marca de
+    /// «soltada» al volver; el cliente solo copia lo que difunde.
+    pub(crate) fn volver_a_la_sesion(&mut self, sesion_id: u32, compartir: bool) {
+        self.servidor.enviar(MensajeCliente::Reconectar {
+            sesion_id,
+            compartir,
+        });
+        self.mensaje(
+            if compartir {
+                "volviendo a la sesión, sin soltar a los demás…"
+            } else {
+                "volviendo a la sesión, soltando a los demás…"
+            },
+            false,
+        );
+        self.sucio = true;
+    }
+
+    /// `prefijo N`: diálogo «Nueva sesión persistente» con el host de la
+    /// pestaña enfocada (una de escritorio no vale: su host no es `ssh`).
+    fn nueva_sesion_persistente_del_panel(&mut self) {
+        let host_id = self
+            .pestana_enfocada()
+            .filter(|pestana| pestana.escritorio_id.is_none())
+            .map(|pestana| pestana.host_id);
+        self.abrir_dialogo_nueva_sesion(host_id);
+    }
+
+    /// El servidor no abrió la pestaña de tmux que se pidió (sin tmux, tmux
+    /// antiguo, carpeta que no existe, la sesión ya no existe…): no hay pestaña
+    /// que esperar. Se libera el host (si no, «ya hay una conexión en curso» lo
+    /// bloquearía) y se dice el motivo con su instrucción, sin perder el texto
+    /// que da el servidor. El nombre ocupado lo atiende el diálogo de la nueva
+    /// sesión (engancharse a la existente o cambiar el nombre).
+    fn apertura_tmux_fallida(
+        &mut self,
+        host_id: i64,
+        nombre: &str,
+        causa: protocolo::CausaAperturaTmux,
+        motivo: &str,
+    ) {
+        self.aperturas_pendientes.remove(&host_id);
+        if self.persistentes_apertura_fallida(host_id, nombre, causa) {
+            self.sucio = true;
+            return;
+        }
+        let host = self.nombre_de_host(host_id);
+        self.mensaje(texto_apertura_fallida(causa, nombre, &host, motivo), true);
         self.sucio = true;
     }
 
@@ -1045,16 +1115,17 @@ impl App {
         match peticion {
             PeticionTerminal::Historial(_) => {
                 self.historial = None;
-                self.mensaje(format!("no se pudo capturar el historial: {mensaje}"), true);
+                // El del tmux de la pestaña lo dice el servidor con su propio
+                // texto («no se pudo leer el historial de tmux: …»): no se
+                // repite con otro encabezado.
+                let texto = if mensaje.starts_with("no se pudo leer el historial de tmux") {
+                    mensaje.to_string()
+                } else {
+                    format!("no se pudo capturar el historial: {mensaje}")
+                };
+                self.mensaje(texto, true);
             }
-            PeticionTerminal::TmuxLista(host_id) => {
-                if let Some(estado) = &mut self.tmux {
-                    estado.cargando = false;
-                    estado.sin_tmux = Some(mensaje.to_string());
-                    let _ = host_id;
-                }
-            }
-            PeticionTerminal::TmuxTerminar { nombre, .. } => {
+            PeticionTerminal::TmuxTerminar { nombre } => {
                 self.mensaje(format!("no se pudo terminar «{nombre}»: {mensaje}"), true);
             }
             PeticionTerminal::EscrituraVarios(_) => {
@@ -1116,6 +1187,27 @@ impl App {
                 KeyCode::Enter => self.abrir_visor_activo(),
                 KeyCode::Char('y') => self.copiar_enlace_activo(),
                 _ => {}
+            }
+            return;
+        }
+        // Pestaña soltada (Fase 16): no hay canal al que mandar teclas; `↵`
+        // vuelve soltando a los demás, `c` vuelve compartiendo y `x` la cierra.
+        // Lo demás no se manda a ninguna parte. Solo valen las teclas sin
+        // modificadores: Ctrl+C (el reflejo ante una pestaña que no responde) o
+        // Mayús+Intro (el salto de línea de Claude Code) no pueden quitarle la
+        // sesión al otro equipo ni abrir un enganche a medias.
+        if let Some(sesion_id) = self
+            .pestana_enfocada()
+            .filter(|pestana| pestana.soltada().is_some())
+            .map(|pestana| pestana.sesion_id)
+        {
+            if tecla.modifiers.is_empty() {
+                match tecla.code {
+                    KeyCode::Enter => self.volver_a_la_sesion(sesion_id, false),
+                    KeyCode::Char('c') => self.volver_a_la_sesion(sesion_id, true),
+                    KeyCode::Char('x') => self.preguntar_cerrar_panel(),
+                    _ => {}
+                }
             }
             return;
         }
@@ -1225,6 +1317,7 @@ impl App {
             }
             KeyCode::Char('o') => self.abrir_enlaces(),
             KeyCode::Char('E') => self.alternar_escritura_varios(),
+            KeyCode::Char('N') => self.nueva_sesion_persistente_del_panel(),
             KeyCode::Char('P') => self.permitir_portapapeles(),
             KeyCode::Char(',') => self.renombrar_pestana_enfocada(),
             KeyCode::Char('<') => self.mover_pestana_enfocada(-1),
@@ -1264,17 +1357,27 @@ impl App {
             return;
         }
         let sesion_id = pestana.sesion_id;
-        match pestana.tmux.clone() {
-            Some(nombre) => {
+        match pestana
+            .tmux
+            .as_ref()
+            .map(|tmux| (tmux.servidor, tmux.nombre.clone()))
+        {
+            Some((servidor, nombre)) => {
+                let mut lineas = vec![
+                    format!(
+                        "La sesión «{nombre}» sigue viva en {}.",
+                        pestana.host_nombre
+                    ),
+                    "Puedes dejarla para volver desde Sesiones o terminarla.".to_string(),
+                ];
+                // Una soltada la usa otro equipo: terminarla se la cierra a él.
+                if let Some(soltada) = pestana.soltada() {
+                    let quien = soltada.por_equipo.as_deref().unwrap_or("otro equipo");
+                    lineas.insert(1, format!("Ahora la usa {quien}: terminarla se la cierra."));
+                }
                 self.dialogo = Some(Dialogo::Elegir {
                     titulo: "CERRAR PESTAÑA CON TMUX".to_string(),
-                    lineas: vec![
-                        format!(
-                            "La sesión «{nombre}» sigue viva en {}.",
-                            pestana.host_nombre
-                        ),
-                        "Puedes dejarla para volver desde Sesiones o terminarla.".to_string(),
-                    ],
+                    lineas,
                     peligro: false,
                     opciones: vec![
                         (
@@ -1288,6 +1391,7 @@ impl App {
                             AccionDialogo::CerrarPestanaTerminandoTmux {
                                 sesion_id,
                                 host_id: pestana.host_id,
+                                servidor,
                                 nombre,
                             },
                         ),
@@ -1311,7 +1415,6 @@ impl App {
         self.terminar_escritura_varios(MotivoFin::SalidaDeLaVista);
         self.cerrar_historial();
         self.enlaces.cerrar();
-        self.tmux = None;
         self.desadjuntar_paneles();
         if self.raton_capturado {
             self.raton_capturado = false;
@@ -1377,11 +1480,34 @@ impl App {
             self.mensaje("no hay ningún terminal en el panel enfocado", true);
             return;
         };
-        if self.pantalla_alternativa(sesion_id) {
-            self.mensaje(
-                "este programa tiene su propio historial (pantalla alternativa)",
-                true,
-            );
+        // Con tmux la pantalla alternativa es la de tmux, no la de un programa:
+        // el historial que importa es el que lee el servidor de tmux (Fase 16,
+        // §4.6), así que la pestaña abierta con tmux siempre puede abrirlo.
+        let con_historial_de_tmux = self.pestana_enfocada().is_some_and(|pestana| {
+            pestana.tmux.is_some() && pestana.estado == EstadoSesionRemota::Abierta
+        });
+        if self.pantalla_alternativa(sesion_id) && !con_historial_de_tmux {
+            // Una pestaña de tmux sin conexión no tiene «un programa con su
+            // propio historial»: lo que falta es la conexión para leer el de
+            // tmux, y el texto dice cómo recuperarla.
+            let intro = self.tema.glifos.intro;
+            let texto = match self.pestana_enfocada() {
+                Some(pestana) if pestana.tmux.is_some() => {
+                    if pestana.soltada().is_some() {
+                        format!(
+                            "la sesión está soltada: vuelve a engancharla ({intro}) para leer su historial de tmux"
+                        )
+                    } else if pestana.reconexion.is_some()
+                        || pestana.estado == EstadoSesionRemota::Abriendo
+                    {
+                        "la sesión aún no está conectada: espera a que conecte para leer su historial de tmux".to_string()
+                    } else {
+                        "la sesión está caída: reconéctala (prefijo r) para leer su historial de tmux".to_string()
+                    }
+                }
+                _ => "este programa tiene su propio historial (pantalla alternativa)".to_string(),
+            };
+            self.mensaje(texto, true);
             return;
         }
         if self.config.terminal.historial_lineas_efectivo() == 0 {
@@ -2019,6 +2145,49 @@ impl App {
 
     pub(crate) fn cancelar_pegado_en_espera(&mut self) {
         self.pegado_en_espera = None;
+    }
+}
+
+/// Texto de una apertura de tmux fallida (Fase 16): lo que dice el servidor y,
+/// donde ayuda, qué hacer. Sin texto del servidor, uno propio de la causa. El
+/// servidor no manda contenido de las sesiones: solo nombres de host, sesión y
+/// carpeta, y el motivo de tmux.
+fn texto_apertura_fallida(
+    causa: protocolo::CausaAperturaTmux,
+    nombre: &str,
+    host: &str,
+    motivo: &str,
+) -> String {
+    use protocolo::CausaAperturaTmux as Causa;
+    let motivo = motivo.trim();
+    let base = |defecto: String| {
+        if motivo.is_empty() {
+            defecto
+        } else {
+            motivo.to_string()
+        }
+    };
+    match causa {
+        Causa::SinTmux => base(format!("instala tmux en el host «{host}»")),
+        Causa::TmuxAntiguo => format!(
+            "{} · actualiza tmux en el host",
+            base(format!(
+                "tmux demasiado antiguo (3.0 o posterior) en «{host}»"
+            ))
+        ),
+        Causa::SinCarpeta => format!(
+            "{} · créala o elige otra carpeta",
+            base(format!("la carpeta indicada no existe en «{host}»"))
+        ),
+        Causa::Conexion => format!(
+            "{} · comprueba la conexión (si el host pide huella o contraseña, conéctate a mano)",
+            base(format!("no se pudo hablar con «{host}»"))
+        ),
+        Causa::Existe => format!(
+            "{} · engánchate a la existente o cambia el nombre",
+            base(format!("ya hay una sesión «{nombre}» en «{host}»"))
+        ),
+        Causa::Otra => base(format!("no se pudo abrir la sesión de tmux «{nombre}»")),
     }
 }
 

@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 
 use crate::almacen::conflictos::{TIPO_ELEMENTO, TIPO_HUERFANO, TIPO_NOMBRE};
+use crate::sesiones_persistentes::union::{self, FichaUnible};
+use crate::sincronizacion::elementos::DatosSesionPersistente;
 use crate::sincronizacion::formato::Documento;
 use crate::sincronizacion::reloj;
 
@@ -75,8 +77,32 @@ pub struct PlanFusion {
     pub renombrados: Vec<(String, String)>,
     /// Conflictos que hay que guardar.
     pub conflictos: Vec<ConflictoFusion>,
+    /// Fichas de sesión persistente unidas por tener el mismo host y nombre
+    /// (D337). La ganadora ya está en `vivos` con sus campos completados y la
+    /// perdedora ya no está; la lápida de la perdedora y la edición de la
+    /// ganadora las escribe la aplicación (aquí no hay reloj).
+    pub unidas: Vec<UnionFicha>,
     /// Mayor milisegundo visto entre todas las versiones.
     pub reloj_ms: i64,
+}
+
+/// Una ficha de sesión persistente absorbida por otra con el mismo host y
+/// nombre (§7.5, D337). Con tres o más fichas iguales hay una entrada por cada
+/// perdedora.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnionFicha {
+    /// uuid de la ficha que se queda (el menor).
+    pub ganadora: String,
+    /// uuid de la ficha que se borra con lápida.
+    pub perdedora: String,
+    /// Nombre de la sesión (el de tmux), para la lápida y el conflicto.
+    pub nombre: String,
+    /// Vector de la perdedora tal como se fusionó: la lápida parte de él para
+    /// dominar las ediciones que ya se habían visto.
+    pub vector_perdedora: BTreeMap<String, i64>,
+    /// La ganadora ha recibido campos de la perdedora: al aplicar es una
+    /// edición nueva de este equipo.
+    pub ganadora_editada: bool,
 }
 
 /// Un candidato del universo con su origen. Solo los locales pueden dejar
@@ -140,7 +166,9 @@ pub fn nombre_de_contenido(tipo: &str, contenido: &serde_json::Value) -> String 
 pub fn clave_natural(tipo: &str, uuid_host: Option<&str>, contenido: &serde_json::Value) -> String {
     let nombre = nombre_de_contenido(tipo, contenido);
     match tipo {
-        "tunel" | "sincronizacion_dir" => format!("{}|{}", uuid_host.unwrap_or(""), nombre),
+        "tunel" | "sincronizacion_dir" | "sesion_persistente" => {
+            format!("{}|{}", uuid_host.unwrap_or(""), nombre)
+        }
         "comprobacion_servicio" => format!(
             "{}|{}|{}",
             uuid_host.unwrap_or(""),
@@ -161,8 +189,9 @@ fn host_de_contenido(candidato: &Candidato) -> Option<&str> {
     candidato.contenido.as_ref()?.get("host")?.as_str()
 }
 
-/// ¿El host de un candidato vivo es SSH? Solo los hosts SSH tienen servicios,
-/// así que una comprobación que cuelga de otro tipo es huérfana (§7.10). Un
+/// ¿El host de un candidato vivo es SSH? Solo los hosts SSH tienen servicios y
+/// sesiones persistentes, así que una comprobación o una ficha que cuelga de
+/// otro tipo es huérfana (§7.10 de la Fase 13 y §3.1 de la Fase 16). Un
 /// host sin campo `tipo` viene de un fichero del formato 1 (todos eran SSH).
 fn host_es_ssh(candidato: &Candidato) -> bool {
     match candidato
@@ -369,9 +398,10 @@ pub fn fusionar(local: &[Candidato], documentos: &[Documento]) -> Result<PlanFus
         }
     }
 
-    // 3. Huérfanos: un túnel, una sincronización o una comprobación de servicio
-    //    cuyo host ya no está vivo (en la comprobación, o ya no es SSH) se
-    //    descarta; su lápida, si la hay, se queda en `lapidas`.
+    // 3. Huérfanos: un túnel, una sincronización, una comprobación de servicio o
+    //    una ficha de sesión persistente cuyo host ya no está vivo (en la
+    //    comprobación y en la ficha, o ya no es SSH) se descarta; su lápida, si
+    //    la hay, se queda en `lapidas`.
     let hosts_vivos: BTreeMap<String, bool> = vivos
         .iter()
         .filter(|candidato| candidato.tipo == "host")
@@ -380,13 +410,18 @@ pub fn fusionar(local: &[Candidato], documentos: &[Documento]) -> Result<PlanFus
     vivos.retain(|candidato| {
         if !matches!(
             candidato.tipo.as_str(),
-            "tunel" | "sincronizacion_dir" | "comprobacion_servicio"
+            "tunel" | "sincronizacion_dir" | "comprobacion_servicio" | "sesion_persistente"
         ) {
             return true;
         }
         let host = host_de_contenido(candidato).unwrap_or("");
         let sirve = match hosts_vivos.get(host) {
-            Some(es_ssh) => candidato.tipo != "comprobacion_servicio" || *es_ssh,
+            Some(es_ssh) => {
+                !matches!(
+                    candidato.tipo.as_str(),
+                    "comprobacion_servicio" | "sesion_persistente"
+                ) || *es_ssh
+            }
             None => false,
         };
         if sirve {
@@ -396,8 +431,15 @@ pub fn fusionar(local: &[Candidato], documentos: &[Documento]) -> Result<PlanFus
         false
     });
 
+    // 3b. Fichas de sesión persistente con el mismo host y nombre: son la misma
+    //     sesión de tmux y se unen en la de uuid menor (D337, §7.5). Va antes
+    //     de los nombres, que no las renombran: «x (2)» no es una sesión que
+    //     exista en el host.
+    let unidas = unir_fichas(&mut vivos, &mut conflictos);
+
     // 4. Nombres: se resuelven sobre los vivos que quedan, después de los
-    //    huérfanos, y cada renombrado deja un conflicto de tipo nombre.
+    //    huérfanos y de las uniones, y cada renombrado deja un conflicto de
+    //    tipo nombre.
     let renombrados = resolver_nombres(&mut vivos);
     for (tipo, uuid) in &renombrados {
         let Some(candidato) = vivos
@@ -428,8 +470,151 @@ pub fn fusionar(local: &[Candidato], documentos: &[Documento]) -> Result<PlanFus
         lapidas,
         renombrados,
         conflictos,
+        unidas,
         reloj_ms,
     })
+}
+
+/// Campo de texto opcional del contenido de una ficha; vacío cuenta como falta.
+fn texto_de_ficha(contenido: &serde_json::Value, campo: &str) -> Option<String> {
+    contenido
+        .get(campo)
+        .and_then(serde_json::Value::as_str)
+        .filter(|texto| !texto.is_empty())
+        .map(str::to_string)
+}
+
+/// ¿Los datos de la ficha son los de una ficha válida (§7.7)? Es lo mismo que
+/// comprueba la aplicación antes de escribirla.
+fn ficha_valida(candidato: &Candidato) -> bool {
+    candidato
+        .contenido
+        .as_ref()
+        .and_then(|contenido| {
+            serde_json::from_value::<DatosSesionPersistente>(contenido.clone()).ok()
+        })
+        .is_some_and(|datos| datos.validar().is_ok())
+}
+
+/// Une las fichas de sesión persistente vivas que comparten host y nombre
+/// (D337, §7.5): queda la de `uuid` menor con lo que le falte de las demás, y
+/// las otras desaparecen del plan. Cada perdedora deja un conflicto de tipo
+/// `nombre` (sin versión que recuperar: recuperarla duplicaría el nombre).
+///
+/// Es pura y determinista: el resultado no depende del orden de los vivos. La
+/// lápida de la perdedora y la edición nueva de la ganadora se materializan al
+/// aplicar el plan, porque aquí no hay reloj.
+fn unir_fichas(
+    vivos: &mut Vec<Candidato>,
+    conflictos: &mut Vec<ConflictoFusion>,
+) -> Vec<UnionFicha> {
+    // Grupos por (host, nombre) con el índice de cada ficha en `vivos`.
+    let mut grupos: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for (indice, candidato) in vivos.iter().enumerate() {
+        // Una ficha que no valida (la aplicación la descartará como conflicto
+        // de elemento) no se une: si no, podría llevarse por delante a una
+        // ficha buena con el mismo nombre.
+        if candidato.tipo != "sesion_persistente" || !ficha_valida(candidato) {
+            continue;
+        }
+        let host = host_de_contenido(candidato).unwrap_or("").to_string();
+        grupos
+            .entry((host, candidato.nombre.clone()))
+            .or_default()
+            .push(indice);
+    }
+
+    let mut unidas: Vec<UnionFicha> = Vec::new();
+    let mut perdedoras: BTreeSet<String> = BTreeSet::new();
+    for ((_host, nombre), indices) in grupos {
+        if indices.len() < 2 {
+            continue;
+        }
+        let fichas: Vec<FichaUnible> = indices
+            .iter()
+            .map(|&indice| {
+                let candidato = &vivos[indice];
+                let contenido = candidato.contenido.clone().unwrap_or_default();
+                FichaUnible {
+                    uuid: candidato.uuid.clone(),
+                    carpeta: texto_de_ficha(&contenido, "carpeta"),
+                    comando: texto_de_ficha(&contenido, "comando"),
+                    comando_reanudar: texto_de_ficha(&contenido, "comando_reanudar"),
+                    nota: texto_de_ficha(&contenido, "nota"),
+                }
+            })
+            .collect();
+        let Some(resultado) = union::unir_grupo(&fichas) else {
+            continue;
+        };
+        let Some(indice_ganadora) = indices
+            .iter()
+            .copied()
+            .find(|&indice| vivos[indice].uuid == resultado.ganadora.uuid)
+        else {
+            continue;
+        };
+        // La ganadora se queda con los campos que le faltaban. Solo se toca el
+        // contenido si ha cambiado algo: una unión sin aportaciones deja la
+        // ficha ganadora tal cual y no es una edición.
+        if resultado.editada {
+            if let Some(serde_json::Value::Object(mapa)) = vivos[indice_ganadora].contenido.as_mut()
+            {
+                for campo in union::CAMPOS_UNIBLES {
+                    let valor = resultado.ganadora.valor(campo);
+                    let actual = mapa
+                        .get(campo)
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|texto| !texto.is_empty());
+                    if valor != actual {
+                        mapa.insert(
+                            campo.to_string(),
+                            valor.map_or(serde_json::Value::Null, |texto| {
+                                serde_json::Value::String(texto.to_string())
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        let version_ganadora = vivos[indice_ganadora].version.clone();
+        let equipo_ganador = vivos[indice_ganadora].equipo().map(str::to_string);
+        for &indice in &indices {
+            if indice == indice_ganadora {
+                continue;
+            }
+            let perdedora = &vivos[indice];
+            unidas.push(UnionFicha {
+                ganadora: resultado.ganadora.uuid.clone(),
+                perdedora: perdedora.uuid.clone(),
+                nombre: nombre.clone(),
+                vector_perdedora: perdedora.vector.clone(),
+                ganadora_editada: resultado.editada,
+            });
+            anyadir_conflicto(
+                conflictos,
+                ConflictoFusion {
+                    tipo: TIPO_NOMBRE.to_string(),
+                    elemento_tipo: perdedora.tipo.clone(),
+                    uuid: perdedora.uuid.clone(),
+                    nombre: nombre.clone(),
+                    version_perdedora_json: None,
+                    version_ganadora: Some(version_ganadora.clone()),
+                    equipo_ganador: equipo_ganador.clone(),
+                },
+            );
+            perdedoras.insert(perdedora.uuid.clone());
+        }
+    }
+    vivos.retain(|candidato| {
+        candidato.tipo != "sesion_persistente" || !perdedoras.contains(&candidato.uuid)
+    });
+    unidas.sort_by(|a, b| {
+        a.perdedora
+            .cmp(&b.perdedora)
+            .then_with(|| a.ganadora.cmp(&b.ganadora))
+    });
+    unidas
 }
 
 /// Escribe el nombre nuevo en el candidato y en su contenido (`nombre` o
@@ -462,11 +647,18 @@ fn ambito_de_nombre(candidato: &Candidato) -> (String, String) {
 /// (una unidad o un proyecto) y un nombre inventado dejaría de ser un objetivo
 /// válido. Una colisión real entre dos comprobaciones se resuelve al aplicar,
 /// como conflicto de nombre, sin tocar el contenido.
+///
+/// Las fichas de sesión persistentes tampoco: su nombre es el de una sesión de
+/// tmux y «x (2)» no existe en el host. Dos con el mismo host y nombre se unen
+/// antes (D337, `unir_fichas`).
 pub fn resolver_nombres(vivos: &mut [Candidato]) -> Vec<(String, String)> {
     // Agrupa los índices por ámbito de unicidad.
     let mut ambitos: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (indice, candidato) in vivos.iter().enumerate() {
-        if candidato.tipo == "comprobacion_servicio" {
+        if matches!(
+            candidato.tipo.as_str(),
+            "comprobacion_servicio" | "sesion_persistente"
+        ) {
             continue;
         }
         ambitos

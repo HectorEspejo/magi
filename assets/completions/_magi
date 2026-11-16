@@ -166,6 +166,21 @@ _arguments "${_arguments_options[@]}" : \
 ':host:_default' \
 && ret=0
 ;;
+(sesion)
+_arguments "${_arguments_options[@]}" : \
+'--host=[Nombre del host en el inventario]:HOST:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':nombre -- Nombre de la sesión persistente:_default' \
+&& ret=0
+;;
+(sesiones)
+_arguments "${_arguments_options[@]}" : \
+'--json[Escribe la lista en JSON (uuid, host, nombre, estado, equipo, actividad, atencion, titulo y comprobada_en)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (tunel)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -385,6 +400,14 @@ esac
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(sesion)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sesiones)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (tunel)
 _arguments "${_arguments_options[@]}" : \
 ":: :_magi__subcmd__help__subcmd__tunel_commands" \
@@ -475,6 +498,8 @@ _magi_commands() {
 'registro:Exporta el historial de MAGI' \
 'servidor:El servidor de sesiones\: estado o parada' \
 'conectar:Abre la TUI con una sesión nueva al host indicado' \
+'sesion:Abre la TUI enganchada a una sesión persistente, soltando a los demás' \
+'sesiones:Lista las sesiones persistentes con su estado' \
 'tunel:Activa o para un túnel del host indicado' \
 'tuneles:Lista los túneles definidos y activos' \
 'snippets:Lista los snippets con sus destinos resueltos, si son críticos y su último uso' \
@@ -516,6 +541,8 @@ _magi__subcmd__help_commands() {
 'registro:Exporta el historial de MAGI' \
 'servidor:El servidor de sesiones\: estado o parada' \
 'conectar:Abre la TUI con una sesión nueva al host indicado' \
+'sesion:Abre la TUI enganchada a una sesión persistente, soltando a los demás' \
+'sesiones:Lista las sesiones persistentes con su estado' \
 'tunel:Activa o para un túnel del host indicado' \
 'tuneles:Lista los túneles definidos y activos' \
 'snippets:Lista los snippets con sus destinos resueltos, si son críticos y su último uso' \
@@ -592,6 +619,16 @@ _magi__subcmd__help__subcmd__servidor__subcmd__estado_commands() {
 _magi__subcmd__help__subcmd__servidor__subcmd__parar_commands() {
     local commands; commands=()
     _describe -t commands 'magi help servidor parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__sesion_commands] )) ||
+_magi__subcmd__help__subcmd__sesion_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help sesion commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__help__subcmd__sesiones_commands] )) ||
+_magi__subcmd__help__subcmd__sesiones_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi help sesiones commands' commands "$@"
 }
 (( $+functions[_magi__subcmd__help__subcmd__sincronizaciones_commands] )) ||
 _magi__subcmd__help__subcmd__sincronizaciones_commands() {
@@ -726,6 +763,16 @@ _magi__subcmd__servidor__subcmd__help__subcmd__parar_commands() {
 _magi__subcmd__servidor__subcmd__parar_commands() {
     local commands; commands=()
     _describe -t commands 'magi servidor parar commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__sesion_commands] )) ||
+_magi__subcmd__sesion_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi sesion commands' commands "$@"
+}
+(( $+functions[_magi__subcmd__sesiones_commands] )) ||
+_magi__subcmd__sesiones_commands() {
+    local commands; commands=()
+    _describe -t commands 'magi sesiones commands' commands "$@"
 }
 (( $+functions[_magi__subcmd__sincronizaciones_commands] )) ||
 _magi__subcmd__sincronizaciones_commands() {

@@ -13,6 +13,7 @@ pub mod escritura_varios;
 pub mod historial;
 pub mod servicios;
 pub mod sesiones;
+pub mod sesiones_persistentes;
 pub mod sftp;
 pub mod tmux;
 pub mod transferencias;
@@ -168,6 +169,9 @@ pub struct EstadoServidor {
     /// del mismo cliente podían ejecutarse a la vez y dejar una suscripción de
     /// log huérfana (M1 de la revisión adversarial).
     pub servicios_tx: HashMap<u32, mpsc::UnboundedSender<MensajeCliente>>,
+    /// Vigilante de las sesiones persistentes (Fase 16): lo que se sabe de
+    /// cada host y la lista que se difunde. Solo memoria.
+    pub persistentes: sesiones_persistentes::Persistentes,
 }
 
 impl EstadoServidor {
@@ -308,6 +312,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         tuneles_temporales: tuneles_temporales::Temporales::default(),
         capturas_en_vuelo: std::collections::HashSet::new(),
         difusion_sesiones: difusion::DifusionSesiones::default(),
+        persistentes: sesiones_persistentes::Persistentes::default(),
     }));
 
     let (tx_cola, rx_cola) = mpsc::unbounded_channel::<()>();
@@ -335,6 +340,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(revisar_cola(estado.clone()));
     tokio::spawn(transferencias::supervisor(estado.clone(), rx_cola));
     tokio::spawn(tuneles::revisar(estado.clone()));
+    tokio::spawn(sesiones_persistentes::revisar(estado.clone()));
     tokio::spawn(escritura_varios::revisar(estado.clone()));
     tokio::spawn(tuneles_temporales::revisar(estado.clone()));
     tokio::spawn(revisar_sesiones(estado.clone()));
@@ -815,7 +821,12 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
         }
     };
 
-    // Cliente admitido: registro y bienvenida con el estado del servidor.
+    // Cliente admitido: registro y bienvenida con el estado del servidor, en
+    // el mismo bloqueo. Si la `Bienvenida` saliera en otro, una difusión de
+    // lista completa (otra ventana que se cierra, el vigilante...) podría
+    // colarse entre el registro y ella, y el cliente la tomaría por una
+    // respuesta inesperada al saludo. La cola hacia el socket no está acotada:
+    // enviar con el bloqueo tomado no espera nunca.
     let cliente_id = {
         let mut estado_bloqueado = estado.lock().await;
         let cliente_id = estado_bloqueado.siguiente_cliente_id;
@@ -830,10 +841,10 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 pendientes,
             ),
         );
+        enviar_bienvenida(&estado_bloqueado, cliente_id);
         cliente_id
     };
     info!(cliente = cliente_id, pid = pid_cliente, "cliente conectado");
-    bienvenida(&estado, cliente_id).await;
 
     // Bucle de mensajes: un mensaje desconocido o mal formado cierra solo a
     // este cliente, nunca el servidor.
@@ -906,9 +917,11 @@ async fn encolar_servicios(
 }
 
 /// `Bienvenida` con la versión, el pid del servidor, las sesiones vivas y la
-/// cola de transferencias (para que una ventana nueva la vea entera).
-async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id: u32) {
-    let estado_bloqueado = estado.lock().await;
+/// cola de transferencias (para que una ventana nueva la vea entera). Se manda
+/// con el mismo bloqueo del estado que registra al cliente: ninguna difusión
+/// puede adelantarla, y es síncrona a propósito para que no pueda volver a
+/// separarse del registro con un `await`.
+fn enviar_bienvenida(estado_bloqueado: &EstadoServidor, cliente_id: u32) {
     let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) else {
         return;
     };
@@ -920,10 +933,10 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         clientes: estado_bloqueado.clientes.len() as u32,
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
         transferencias: estado_bloqueado.transferencias.info(),
-        tuneles: tuneles::lista(&estado_bloqueado),
+        tuneles: tuneles::lista(estado_bloqueado),
         ejecuciones: estado_bloqueado.ejecuciones.info(),
         acciones_servicio: estado_bloqueado.servicios.acciones(),
-        tuneles_temporales: tuneles_temporales::lista(&estado_bloqueado),
+        tuneles_temporales: tuneles_temporales::lista(estado_bloqueado),
     };
     difusion::enviar(cliente, mensaje);
     // La lista de escritorios va detrás de la Bienvenida cuando hay alguna
@@ -932,6 +945,11 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
     let lista = estado_bloqueado.escritorios.lista();
     if !lista.is_empty() {
         difusion::enviar(cliente, MensajeServidor::Escritorios { lista });
+    }
+    // Y la de sesiones persistentes (Fase 16), si el vigilante ya sabe algo:
+    // otra difusión completa (T27), detrás de la de escritorios.
+    if let Some(lista) = sesiones_persistentes::lista_para_ventana_nueva(estado_bloqueado) {
+        difusion::enviar(cliente, MensajeServidor::SesionesPersistentes { lista });
     }
 }
 
@@ -1000,8 +1018,13 @@ async fn manejar_mensaje(
         MensajeCliente::Cerrar { sesion_id } => {
             cerrar_sesion(estado, cliente_id, sesion_id).await;
         }
-        MensajeCliente::Reconectar { sesion_id } => {
-            reconectar(estado, cliente_id, sesion_id).await;
+        // `compartir`: volver a una pestaña de tmux soltada sin soltar a los
+        // demás (Fase 16).
+        MensajeCliente::Reconectar {
+            sesion_id,
+            compartir,
+        } => {
+            reconectar(estado, cliente_id, sesion_id, compartir).await;
         }
         MensajeCliente::DecisionHuella {
             sesion_id,
@@ -1474,15 +1497,72 @@ async fn manejar_mensaje(
                 tmux::manejar_listar(&estado_tarea, cliente_id, peticion_id, host_id).await;
             });
         }
+        // Terminar una sesión de cualquiera de los dos servidores, siempre por
+        // el nombre exacto (Fase 16).
         MensajeCliente::TerminarTmux {
             peticion_id,
             host_id,
+            servidor,
             nombre,
         } => {
             let estado_tarea = estado.clone();
             tokio::spawn(async move {
-                tmux::manejar_terminar(&estado_tarea, cliente_id, peticion_id, host_id, &nombre)
-                    .await;
+                tmux::manejar_terminar(
+                    &estado_tarea,
+                    cliente_id,
+                    peticion_id,
+                    host_id,
+                    servidor,
+                    &nombre,
+                )
+                .await;
+            });
+        }
+        // Sesiones persistentes (Fase 16): la consulta despierta al vigilante;
+        // la vista previa y el renombrado hablan con el host y van en su
+        // propia tarea (los atiende `sesiones_persistentes`).
+        MensajeCliente::ConsultarSesionesPersistentes {
+            peticion_id: _,
+            host_id,
+        } => {
+            sesiones_persistentes::consultar(estado, cliente_id, host_id).await;
+        }
+        MensajeCliente::PedirVistaPrevia {
+            peticion_id,
+            host_id,
+            servidor,
+            nombre,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                sesiones_persistentes::pedir_vista_previa(
+                    &estado_tarea,
+                    cliente_id,
+                    peticion_id,
+                    host_id,
+                    servidor,
+                    nombre,
+                )
+                .await;
+            });
+        }
+        MensajeCliente::RenombrarTmux {
+            peticion_id,
+            host_id,
+            nombre,
+            nuevo,
+        } => {
+            let estado_tarea = estado.clone();
+            tokio::spawn(async move {
+                sesiones_persistentes::renombrar(
+                    &estado_tarea,
+                    cliente_id,
+                    peticion_id,
+                    host_id,
+                    nombre,
+                    nuevo,
+                )
+                .await;
             });
         }
         MensajeCliente::PortapapelesPermitido { sesion_id } => {
@@ -1612,25 +1692,33 @@ async fn abrir_sesion(
     filas: u16,
     comandos_iniciales: Vec<crate::protocolo::ComandoInicial>,
     orden: Option<crate::protocolo::OrdenPestana>,
-    tmux: Option<String>,
+    tmux: Option<crate::protocolo::PeticionTmux>,
 ) {
-    // El nombre de tmux se valida antes de crear nada: un nombre raro no
-    // llega ni a la shell ni al script (§7.10).
-    if let Some(nombre) = &tmux {
-        if !magi_nucleo::terminal::tmux::nombre_valido(nombre) {
-            let estado_bloqueado = estado.lock().await;
-            if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
-                difusion::enviar(
-                    cliente,
-                    MensajeServidor::Error {
-                        mensaje: format!("nombre de tmux no admitido: «{nombre}»"),
-                        peticion_id: None,
-                    },
-                );
+    // La sesión de tmux que se pide se valida antes de crear nada (repite lo
+    // que valida el cliente): un nombre, una carpeta o un comando raros no
+    // llegan ni a la shell ni al script (§7.10). Un fallo no deja pestaña y el
+    // solicitante lo recibe tipado.
+    let tmux = match tmux {
+        None => None,
+        Some(peticion) => match sesiones::validar_peticion_tmux(peticion) {
+            Ok(peticion) => Some(peticion),
+            Err((nombre, mensaje)) => {
+                let estado_bloqueado = estado.lock().await;
+                if let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) {
+                    difusion::enviar(
+                        cliente,
+                        MensajeServidor::AperturaTmuxFallida {
+                            host_id,
+                            nombre,
+                            causa: crate::protocolo::CausaAperturaTmux::Otra,
+                            mensaje,
+                        },
+                    );
+                }
+                return;
             }
-            return;
-        }
-    }
+        },
+    };
     // Lo que se escribe en la shell viene del cliente: se acota.
     let comandos_iniciales: Vec<crate::protocolo::ComandoInicial> = comandos_iniciales
         .into_iter()
@@ -1767,6 +1855,10 @@ async fn abrir_sesion(
             aviso: None,
             ultimo_aviso_en: 0,
             tmux: None,
+            tmux_servidor: crate::protocolo::ServidorTmux::Habitual,
+            tmux_version: None,
+            tmux_compartir: false,
+            soltada: None,
             reconexion: None,
             enfocadas: std::collections::HashSet::new(),
             ventana_enfocada: None,
@@ -1914,6 +2006,16 @@ async fn adjuntar(
                 if banderas != 0 {
                     bytes.extend_from_slice(format!("\x1b[>{banderas}u").as_bytes());
                 }
+                // `modifyOtherKeys` (Fase 16) tampoco va en el volcado de vt100:
+                // se reinyecta con su petición, detrás de lo anterior, para que
+                // la ventana que se adjunta ahora codifique igual las teclas.
+                // Se manda siempre, también con nivel 0: la ventana puede
+                // conservar el emulador de una adjunción anterior (el cliente
+                // reutiliza el parser de la pestaña) con un nivel que el
+                // remoto apagó mientras estaba soltada, y sin el `CSI > 4 ; 0
+                // m` seguiría codificando las teclas con él en el shell.
+                let modify_other_keys = pantalla.emulador().modify_other_keys();
+                bytes.extend_from_slice(format!("\x1b[>4;{modify_other_keys}m").as_bytes());
                 (bytes, (cols, filas))
             })
             .unwrap_or((Vec::new(), tamano_sesion))
@@ -2053,11 +2155,14 @@ async fn cerrar_recursos_de_pestana(
 }
 
 /// Reconecta una sesión caída: conexión nueva, mismo id y nombre. Si el host
-/// ya no existe, se rechaza y la pestaña solo puede cerrarse.
+/// ya no existe, se rechaza y la pestaña solo puede cerrarse. En una pestaña de
+/// tmux (también la soltada), el usuario vuelve a engancharse soltando a los
+/// demás salvo que `compartir`.
 async fn reconectar(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     cliente_id: u32,
     sesion_id: u32,
+    compartir: bool,
 ) {
     let (nombre_host, estado_actual, reconectando_auto, rutas) = {
         let estado_bloqueado = estado.lock().await;
@@ -2077,6 +2182,7 @@ async fn reconectar(
         let mut estado_bloqueado = estado.lock().await;
         if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
             sesion.solicitante = cliente_id;
+            sesion.tmux_compartir = compartir;
             if let Some(adelanto) = &sesion.adelantar {
                 let siguiente = adelanto.borrow().wrapping_add(1);
                 let _ = adelanto.send(siguiente);
@@ -2133,7 +2239,7 @@ async fn reconectar(
     // `Reconectar` seguidos no pueden lanzar dos aperturas.
     let (tx_comandos, rx_comandos) = mpsc::unbounded_channel();
     let cancelar = tokio_util::sync::CancellationToken::new();
-    let (cols, filas, pantalla, comandos, tmux, historial_lineas, historial_mib) = {
+    let (cols, filas, pantalla, comandos, historial_lineas, historial_mib) = {
         let mut estado_bloqueado = estado.lock().await;
         if estado_bloqueado.apagando {
             return;
@@ -2156,12 +2262,17 @@ async fn reconectar(
         sesion.handle = None;
         sesion.solicitante = cliente_id;
         sesion.tx_comandos = tx_comandos;
+        // Al volver a una sesión de tmux es el usuario quien decide si suelta a
+        // los demás (la reconexión automática respeta lo que se pidió aquí).
+        sesion.tmux_compartir = compartir;
+        // Deja de estar soltada: si este intento falla, la pestaña queda caída
+        // por otra razón y no puede seguir enseñando la marca de antes.
+        sesion.soltada = None;
         (
             cols,
             filas,
             pantalla,
             sesion.comandos_iniciales.clone(),
-            sesion.tmux.clone(),
             config_terminal.historial_lineas_efectivo() as u64,
             config_terminal.historial_mib_efectivo(),
         )
@@ -2178,7 +2289,9 @@ async fn reconectar(
         sesion_id,
         solicitante: cliente_id,
         reconexion: true,
-        tmux,
+        // Una reconexión no lleva petición: manda el estado vivo de la
+        // pestaña (`Sesion.tmux`).
+        tmux: None,
         cancelar,
         comandos,
     };

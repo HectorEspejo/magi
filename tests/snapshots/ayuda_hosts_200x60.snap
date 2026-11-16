@@ -19,7 +19,6 @@ source: tests/redimensionado/vistas_g.rs
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 │                                                                    ┌ AYUDA · HOSTS ─────────────────────────────────────────────┐                                                                    │
 │                                                                    │                                                            │                                                                    │
 │                                                                    │  ↑ ↓ / j k     mover la selección                          │                                                                    │
@@ -27,6 +26,7 @@ source: tests/redimensionado/vistas_g.rs
 │                                                                    │  ↵             conectar con el host                        │                                                                    │
 │                                                                    │  e             editar la ficha                             │                                                                    │
 │                                                                    │  n             nuevo host                                  │                                                                    │
+│                                                                    │  N             nueva sesión persistente en este host       │                                                                    │
 │                                                                    │  g             menú de grupos                              │                                                                    │
 │                                                                    │  x             borrar host                                 │                                                                    │
 │                                                                    │  ⇥             alternar usuario·puerto / etiquetas         │                                                                    │

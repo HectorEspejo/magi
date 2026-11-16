@@ -301,7 +301,10 @@ async fn reconectar_una_pestana_caida_vuelve_a_abrirla() {
             .await
     );
     escenario
-        .enviar(&MensajeCliente::Reconectar { sesion_id })
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id,
+            compartir: false,
+        })
         .await;
     assert!(
         escenario

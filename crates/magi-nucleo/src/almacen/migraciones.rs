@@ -23,8 +23,9 @@ pub const MIGRACIONES: &[&str] = &[
 
 /// Versión de esquema que conoce este binario (las migraciones SQL de la lista,
 /// más la 7, que necesita Rust para rellenar uuid, versión y vector, la 8 de
-/// los escritorios remotos y la 9 de los servicios de la Fase 13).
-pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 4;
+/// los escritorios remotos, la 9 de los servicios de la Fase 13, la 10 del
+/// terminal de la Fase 15 y la 11 de las sesiones persistentes de la Fase 16).
+pub const VERSION_BD: i64 = MIGRACIONES.len() as i64 + 5;
 
 /// Rechaza una base de datos creada por una versión más nueva de MAGI: las
 /// migraciones solo van hacia delante y el fichero no se toca. Se llama antes
@@ -463,6 +464,37 @@ ALTER TABLE HOSTS ADD COLUMN tmux_persistente INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE HOSTS ADD COLUMN portapapeles_remoto INTEGER NOT NULL DEFAULT 0;
 "#;
 
+/// Fase 16: sesiones persistentes. La columna `HOSTS.sesiones_persistentes`
+/// viaja con el inventario y sustituye a `tmux_persistente` (que queda
+/// obsoleta y a 0), y SESIONES_PERSISTENTES guarda las fichas, que también
+/// viajan. El valor de `tmux_persistente` se copia en Rust al abrir (por el
+/// camino que sube la versión del host), no aquí. Sin `CHECK` sobre
+/// `origen`: se valida en código.
+const MIGRACION_11_SESIONES: &str = r#"
+ALTER TABLE HOSTS ADD COLUMN sesiones_persistentes INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE SESIONES_PERSISTENTES (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id          INTEGER NOT NULL REFERENCES HOSTS(id) ON DELETE CASCADE,
+    nombre           TEXT    NOT NULL,
+    carpeta          TEXT,
+    comando          TEXT,
+    comando_reanudar TEXT,
+    nota             TEXT,
+    origen           TEXT    NOT NULL,
+    creada_por       TEXT    NOT NULL,
+    creada_en        TEXT    NOT NULL,
+    actualizado_en   TEXT    NOT NULL,
+    uuid             TEXT,
+    version          TEXT,
+    vector           TEXT,
+    UNIQUE(host_id, nombre)
+);
+
+CREATE INDEX idx_sesiones_persistentes_host ON SESIONES_PERSISTENTES(host_id);
+CREATE UNIQUE INDEX idx_sesiones_persistentes_uuid ON SESIONES_PERSISTENTES(uuid);
+"#;
+
 /// Rellena la migración 7: crea la fila de este equipo y da uuid, versión y
 /// vector a todo lo que ya existía. En las identidades el uuid es UUIDv5 de la
 /// huella; en el resto, un v4 nuevo. Se ejecuta dentro de la transacción de
@@ -521,12 +553,66 @@ fn migracion_7(
     Ok(())
 }
 
+/// Lo que hicieron las migraciones al abrir la base de datos, para avisar al
+/// usuario una sola vez.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultadoMigracion {
+    /// Hosts cuya marca `tmux_persistente` (Fase 15) pasó a
+    /// `sesiones_persistentes` (Fase 16). Solo es distinto de cero en la
+    /// apertura que aplica la migración 11: las siguientes la encuentran ya
+    /// aplicada y no cambian nada.
+    pub hosts_con_marca_migrada: usize,
+}
+
+/// Paso en Rust de la migración 11 (D327): cada host `ssh` con
+/// `tmux_persistente = 1` pasa a `sesiones_persistentes = 1` por el camino
+/// que sube la versión del host (así la marca viaja a los demás equipos; un
+/// `UPDATE` en el SQL de la migración no la subiría: el fallo de R84) y
+/// `tmux_persistente` vuelve a 0, que ya nadie escribe. Se ejecuta dentro de
+/// la transacción que sube `user_version` a 11, así que o se aplica todo o
+/// nada, y no se repite. Devuelve cuántos hosts migró.
+///
+/// Un host que no es `ssh` no puede tener sesiones persistentes: solo se le
+/// apaga la marca antigua y no cuenta.
+fn migracion_11_marca(conexion: &Connection) -> Result<usize> {
+    let marcados: Vec<(i64, String)> = {
+        let mut sentencia = conexion
+            .prepare("SELECT id, tipo FROM HOSTS WHERE tmux_persistente <> 0 ORDER BY id")?;
+        let filas = sentencia.query_map([], |fila| Ok((fila.get(0)?, fila.get(1)?)))?;
+        filas.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut migrados = 0;
+    for (id, tipo) in marcados {
+        if tipo == "ssh" {
+            conexion.execute(
+                "UPDATE HOSTS SET sesiones_persistentes = 1, tmux_persistente = 0 WHERE id = ?1",
+                params![id],
+            )?;
+            // La columna acaba de nacer con 0, así que lo que viaja del host
+            // cambia siempre: se sube la versión sin comparar antes y después.
+            // Comparar con `datos_de` leería y validaría el resto de la fila
+            // (puerto, keepalive, opciones del escritorio…) y una fila
+            // corrupta haría fallar la migración entera, dejando la base sin
+            // poder abrirse en cada arranque.
+            versiones::subir(conexion, versiones::Tabla::Hosts, id)?;
+            migrados += 1;
+        } else {
+            conexion.execute(
+                "UPDATE HOSTS SET tmux_persistente = 0 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+    }
+    Ok(migrados)
+}
+
 pub fn aplicar(
     conexion: &mut Connection,
     equipo: &crate::rutas::Equipo,
     app_version: &str,
-) -> Result<()> {
+) -> Result<ResultadoMigracion> {
     comprobar_version(conexion)?;
+    let mut resultado = ResultadoMigracion::default();
     let version: i64 = conexion.query_row("PRAGMA user_version", [], |fila| fila.get(0))?;
     for (indice, sql) in MIGRACIONES.iter().enumerate() {
         let numero = indice as i64 + 1;
@@ -562,5 +648,12 @@ pub fn aplicar(
         transaccion.pragma_update(None, "user_version", 10)?;
         transaccion.commit()?;
     }
-    Ok(())
+    if version < 11 {
+        let transaccion = conexion.transaction()?;
+        transaccion.execute_batch(MIGRACION_11_SESIONES)?;
+        resultado.hosts_con_marca_migrada = migracion_11_marca(&transaccion)?;
+        transaccion.pragma_update(None, "user_version", 11)?;
+        transaccion.commit()?;
+    }
+    Ok(resultado)
 }

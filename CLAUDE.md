@@ -11,6 +11,7 @@ Desde la Fase 12 abre escritorios remotos: RDP con IronRDP, VNC con un cliente R
 Desde la Fase 13 maneja los servicios y timers de systemd, sus logs y los contenedores de Docker o Podman (con Compose) en la vista Servicios (`F9`): todo lo remoto va por el servidor con el script embebido `servicios.sh`.
 Desde la Fase 14 la app Android es también el móvil de guardia: Flota con sondeo (su pantalla de inicio), Servicios, snippets con deliberación y Registro, con la lógica del núcleo; sigue siendo lectora de la sincronización.
 Desde la Fase 15 la vista Sesión tiene paneles, historial con búsqueda y copia, enlaces, escritura en varios, reconexión automática y sesión persistente con tmux, y MAGI se comporta como un terminal de verdad para lo que corre dentro (Claude Code incluido).
+Desde la Fase 16 hay sesiones persistentes: viven en un tmux propio de MAGI en el host (`tmux -L magi`), se marcan al abrirlas o para todo un host, sus fichas viajan con la sincronización y se retoman desde cualquier equipo de escritorio.
 
 ## Documentación del proyecto
 
@@ -59,7 +60,8 @@ coméntalo con el desarrollador.
 - Comandos: `cargo run` arranca la TUI; `cargo run -- importar [ruta]`,
   `cargo run -- exportar`, `cargo run -- sincronizaciones`, `cargo run --
   diagnostico`, `cargo run -- autocompletado <shell>`, `cargo run -- man` y
-  `cargo run -- sincronizar [estado]` (desde la Fase 10) son subcomandos;
+  `cargo run -- sincronizar [estado]` (desde la Fase 10), `cargo run -- sesion
+  <nombre>` y `cargo run -- sesiones` (desde la Fase 16) son subcomandos;
   `scripts/generar-recursos.sh` regenera `assets/`.
   `TZ=UTC cargo test --workspace --locked` ejecuta todos los tests (el
   paquete `magi-ssh` expone `src/lib.rs` para los de `tests/`; las pruebas de pintado necesitan
@@ -124,8 +126,9 @@ coméntalo con el desarrollador.
   el llavero: `FuenteContrasena::Solicitante`.
 - El estado cliente-servidor se sincroniza solo por difusión de listas
   completas (`Sesiones{lista}`); no añadas mensajes de sincronización finos.
-- Sanea todo tamaño de terminal que llegue de fuera (mín. 2×1) y calcula el
-  alto del PTY con `alto_pty`; `vt100` entra en pánico con un 0.
+- Sanea todo tamaño de terminal que llegue de fuera (mín. 2×1 y, desde la
+  Fase 15, máx. 1000×2000) y calcula el alto del PTY con `alto_pty`; `vt100`
+  entra en pánico con un 0 y reserva sin medida con tamaños enormes.
 - SFTP y transferencias (`src/servidor/sftp.rs`, `transferencias.rs`): todo lo
   remoto en el servidor sobre el pool; la cola es FIFO con una transferencia
   en curso por host; nunca preguntes desde el servidor: el cliente decide
@@ -166,7 +169,7 @@ coméntalo con el desarrollador.
 - `peticion_id` por rangos: Archivos (panel) desde 0, túneles 2^40,
   operaciones de Archivos en la `App` (edición, permisos, sincronización) 2^42,
   ejecuciones 2^44, servicios 2^45 (desde la Fase 13), escritorios 2^46 y
-  diálogos que el servidor inicia desde el visor 2^47 (desde la Fase 12), peticiones esperables del cliente 2^48 y terminal (capturas, tmux y túneles temporales) 2^49 (desde la Fase 15). El contador del
+  diálogos que el servidor inicia desde el visor 2^47 (desde la Fase 12), peticiones esperables del cliente 2^48 y terminal (capturas, tmux, túneles temporales y, desde la Fase 16, sesiones persistentes) 2^49 (desde la Fase 15). El contador del
   panel se reinicia al cambiar de host: lo que deba sobrevivir a eso vive en la
   `App` y usa su propio rango. Un `Hecho` que implica filas de
   `REGISTRO` se envía después de `OrdenBd::Barrera`.
@@ -217,10 +220,11 @@ coméntalo con el desarrollador.
   `.` ni `..`, colgando estrictamente de la raíz. No te fíes de `starts_with`
   sobre rutas sin normalizar.
 - Una deliberación autoriza una sola acción: la validación es común a
-  ejecuciones y transferencias y «ya usada» vale en los dos sentidos. Para una
-  acción nueva, añade una variante a `PlanDeliberado`. Desde la Fase 14 hay dos:
-  el del núcleo (`Snippet` y `Servicio`, el que usa el móvil) y el del escritorio,
-  que añade `Sincronizacion`; cambia los dos a la vez (R135).
+  ejecuciones, transferencias y escritura en varios, y «ya usada» vale en todos
+  los sentidos. Para una acción nueva, añade una variante a `PlanDeliberado`.
+  Desde la Fase 14 hay dos: el del núcleo (`Snippet` y `Servicio`, el que usa el
+  móvil) y el del escritorio, que añade `Sincronizacion` y, desde la Fase 15,
+  `EscrituraVarios`; cambia los dos a la vez (R135).
 - Tests aislados: `directories` resuelve el home por uid, así que fija
   `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_RUNTIME_DIR`,
   no solo `HOME`. La ruta de `XDG_RUNTIME_DIR` debe ser corta: el socket no
@@ -354,7 +358,9 @@ coméntalo con el desarrollador.
   `ultima_conexion_en` y, desde la Fase 14, `SNIPPETS.usado_veces` y
   `ultimo_uso_en`), huellas en su `known_hosts`, REGISTRO, SONDEOS,
   DELIBERACIONES y conflictos de huella y de borrado. Nunca crea ni edita
-  snippets, comprobaciones propias ni verificaciones.
+  snippets, comprobaciones propias ni verificaciones. Desde la Fase 16 lee el
+  `formato` 4 (fichas de sesiones persistentes y la marca del host), pero no
+  enseña ni usa nada de esa fase: queda pendiente.
 - Secretos en Android solo por `LlaveroMovil` (AES-GCM con una clave del
   Keystore). La clave del móvil nunca sale del Keystore: el núcleo firma a
   través de `Firmante`. Nada secreto en logcat, DataStore, `magi.db` ni
@@ -425,8 +431,8 @@ coméntalo con el desarrollador.
   `android-release.yml` a partir de sus secretos. Una release compilada en local
   sale sin firmar y nunca se publica.
 - La fixture `.age` de la prueba de humo se regenera con `cargo test -p
-  magi-nucleo --test generar_fixture_android -- --ignored` (también la del
-  `formato` 3, en `android/app/src/androidTest/assets/`), y la del túnel, con
+  magi-nucleo --test generar_fixture_android -- --ignored` (también las de los
+  `formato` 3 y 4, en `android/app/src/androidTest/assets/`), y la del túnel, con
   `cargo test -p magi-nucleo --test generar_fixture_tunel_android -- --ignored`;
   la de Flota (desde la Fase 14), con `cargo test -p magi-nucleo --test
   generar_fixture_flota_android -- --ignored`.
@@ -514,7 +520,9 @@ coméntalo con el desarrollador.
 - La sincronización escribe `formato` 2 solo si hay hosts que no son `ssh`;
   viajan `tipo`, `escritorio_dominio` y `escritorio_opciones`. Desde la Fase 13
   escribe `formato` 3 solo si hay alguna comprobación de servicio propia
-  (elemento `comprobacion_servicio`). Mantén `docs/formato-sincronizacion.md` al
+  (elemento `comprobacion_servicio`), y desde la Fase 16 `formato` 4 solo si hay
+  alguna ficha de sesión persistente (elemento `sesion_persistente`) o algún host
+  con `sesiones_persistentes = 1`. Mantén `docs/formato-sincronizacion.md` al
   día.
 - Las pruebas de escritorio no usan red externa (servidor RFB de prueba,
   `ironrdp-server` y el servidor SSH de prueba con un `voxl` falso):
@@ -651,40 +659,97 @@ coméntalo con el desarrollador.
   detrás. Nunca mandes un pegado como teclas sueltas.
 - Las teclas y el ratón se codifican con los modos de cada pestaña (cursor de
   aplicación, bandera 1 de kitty, modo y codificación del ratón); en la
-  escritura en varios, cada pestaña recibe sus propios bytes.
+  escritura en varios, cada pestaña recibe sus propios bytes. La codificación
+  clásica del ratón es 32 + coordenada (desde 1), como xterm: más allá de 223
+  (2015 con la de UTF-8) no se envía nada.
 - Historial: lo guarda el servidor (el de vt100) con los topes `[terminal]
   historial_lineas` e `historial_mib`; el cliente solo lo ve en capturas
   temporales y `CSI 3 J` lo vacía. Va a disco solo con «guardar», por orden del
   usuario (`ficheros.rs`, `create_new`, 600). Ni el historial, ni las capturas,
   ni títulos, avisos, URLs o el portapapeles van al log o a REGISTRO.
+- Topes y rehaceres del terminal (entrada no fiable): OSC y DCS de hasta 1 MiB,
+  cortados antes de vte; capturas de hasta 8 MiB y 64 tramos por fila. Un lote
+  con varios `CSI 3 J` rehace el parser una sola vez y conserva las respuestas
+  anteriores; en la pantalla alternativa, el borrado y los rehaceres se aplazan
+  hasta volver a la principal, y al bajar el tope se reinyectan las líneas más
+  nuevas. El volcado de `Adjuntar` activa la pantalla alternativa antes de
+  `state_formatted`.
 - Portapapeles del remoto (OSC 52): solo con `HOSTS.portapapeles_remoto` y
   siempre con aviso; sin permiso, se guarda solo la última petición, 60 s.
 - Enlaces: solo `http` y `https`, a la vista antes de abrirlos, con `[terminal]
   abrir_enlaces` desde el cliente y sin shell. Los túneles temporales van solo a
   `localhost`, `127.0.0.1` o `::1` del host, escuchan en `127.0.0.1`, son trabajo
-  del servidor (`TrabajoServidor.tuneles_temporales`) y se cierran con su pestaña.
+  del servidor (`TrabajoServidor.tuneles_temporales`), no abren conexiones ni
+  dialogan (`SoloViva`) y se cierran con su pestaña o al caer su conexión.
 - Escribir en varios: el servidor concede (`IniciarEscrituraVarios`),
   recomprueba la deliberación (`PlanDeliberado::EscrituraVarios`, solo en el
   escritorio) y escribe solo en las pestañas concedidas; termina con su ventana
-  y a los 10 min sin envíos.
+  y a los 10 min sin envíos. Las demás ventanas ven la marca `»` por
+  `InfoSesion.escritura_varios`, en la lista completa de sesiones.
 - Reconexión automática: la hace el servidor, sin diálogos (T15, T49), solo para
   caídas de red y con las esperas de `crates/magi-nucleo/src/conexion/reconexion.rs`.
   `prefijo r` es la reconexión a mano, con diálogos.
 - tmux, solo con `crates/magi-nucleo/scripts/terminal_tmux.sh` (`include_str!`),
   con nombres validados en Rust y en el script (`^[A-Za-z0-9_-]{1,64}$`); nunca
-  texto interpolado en una orden de tmux.
-- `HOSTS.reconectar`, `tmux_persistente` y `portapapeles_remoto` (migración 10)
-  son propios del equipo: no viajan ni suben la versión del host.
+  texto interpolado en una orden de tmux. tmux casa prefijos en `-t`: comprueba
+  si una sesión existe con la lista exacta de `list-sessions` (nunca con
+  `has-session -t`) y apunta toda orden con `-t` a `=<nombre>` (R146). Desde la
+  Fase 16, las sesiones nuevas van siempre al servidor propio (`tmux -L magi -f
+  /dev/null`), con la configuración de MAGI aplicada con `set` al crear y al
+  enganchar; nunca cargues `~/.tmux.conf` ni cambies opciones del tmux habitual
+  del usuario (solo se lista, se engancha y se termina a petición). tmux 3.0 o
+  posterior; las opciones más nuevas, según la versión que da `comprobar`.
+- `HOSTS.reconectar` y `portapapeles_remoto` (migración 10) son propios del
+  equipo: no viajan ni suben la versión del host. Se guardan con
+  `almacen::hosts::fijar_*`, fuera de `DatosHost`, para que la importación de
+  `~/.ssh/config` no los pise; el servidor solo los lee. Desde la Fase 16,
+  `tmux_persistente` está obsoleto (no lo escribas): lo sustituye
+  `HOSTS.sesiones_persistentes` (migración 11), que viaja y sube la versión.
 - Paneles: la disposición es de la ventana y no se guarda; cada panel pasa su
   tamaño por `Geometria` (T46). Toda disposición o modo nuevo lleva sus
   instantáneas.
-- Pruebas del terminal (sin red externa ni Claude Code): `cargo test -p
-  magi-nucleo --test terminal_emulador --test terminal_teclas --test
+- Pruebas del terminal (sin red externa ni Claude Code): las unitarias del
+  emulador y de las teclas van en sus módulos (`cargo test -p magi-nucleo --lib
+  terminal::`); las de integración, con `cargo test -p magi-nucleo --test
   terminal_raton --test terminal_pegado --test terminal_historial --test
   terminal_enlaces --test tmux_script --test reconexion` y `TZ=UTC cargo test -p
   magi-ssh --test terminal_servidor --test terminal_ui --test terminal_e2e --test
   redimensionado`. `tui_prueba` (en `tests/fijos/terminal/`) hace lo que Claude
   Code: si cambias lo que MAGI responde o le pasa al remoto, amplíalo.
+- Sesiones persistentes (desde la Fase 16): lo común (validadores, nombres
+  automáticos, estado derivado, unión de fichas y lectura de `estado`) vive en
+  `crates/magi-nucleo/src/sesiones_persistentes/`; el vigilante, la vista previa
+  y renombrar, en `src/servidor/sesiones_persistentes.rs`; la lista, en el
+  bloque «Persistentes» de la vista Sesiones.
+- El host es la fuente de verdad: las fichas (SESIONES_PERSISTENTES) viajan; el
+  estado de una sesión (viva, clientes, equipo, actividad, atención, título) y
+  su contenido (vista previa, historial de tmux) no: se leen del host cuando
+  hace falta, viven en memoria y nunca van a disco, al log ni a REGISTRO. Un
+  host que no responde deja sus fichas «sin comprobar», nunca «terminadas».
+- El cliente guarda una ficha solo cuando la sesión ya existe en el host.
+  Borrar una ficha nunca termina la sesión; terminar (`T`) siempre pide
+  confirmación. Dos fichas con el mismo host y nombre se unen (queda la de
+  `uuid` menor): no se renombran.
+- Engancharse sin compartir suelta a los demás (`attach -d`) y pone
+  `@magi_equipo`; el script sale de `enganchar` con 100 si te sueltan, con 0 si
+  la sesión terminó y con 75 si no existía. La reconexión automática nunca
+  quita una sesión a otro equipo: si la tiene otro, la pestaña queda soltada.
+- El vigilante es una operación automática: solo con alguna ventana conectada,
+  sin diálogos, por el pool o una conexión efímera no interactiva, 8 hosts a la
+  vez y 10 s de plazo; solo hosts con fichas o marcados. La atención es la
+  campana de tmux (OSC 9 y 777 no pasan por tmux).
+- El comando de arranque de una sesión es texto del usuario, como un snippet:
+  llega al script como argumento, corre con el shell de acceso del usuario
+  dentro del envoltorio fijo del script y nunca va a REGISTRO.
+- `modifyOtherKeys` (`CSI > 4 ; n m`) se codifica en la tabla de teclas del
+  núcleo, por pestaña y solo mientras el remoto lo pide: es como tmux pide las
+  teclas extendidas.
+- Pruebas de las sesiones persistentes: `cargo test -p magi-nucleo --test
+  sesiones_persistentes --test tmux_script --test tmux_real --test
+  sincronizacion_sesiones` y `TZ=UTC cargo test -p magi-ssh --test
+  sesiones_persistentes_servidor --test sesiones_persistentes_ui --test
+  sesiones_persistentes_e2e --test redimensionado`. `tmux_real` y la de extremo
+  a extremo necesitan tmux (en CI, `apt install tmux`) y se omiten sin él.
 
 ## Al terminar una fase (o al pausar la sesión)
 

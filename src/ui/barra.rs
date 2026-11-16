@@ -56,6 +56,10 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
             ajustar(&format!(" {glifo}{}", mensaje.texto), ancho, tema),
             Style::default().fg(color),
         ))
+    } else if let Some(variantes) = aviso_atencion(app) {
+        // Una sesión persistente pide atención (Fase 16): se ve desde
+        // cualquier vista, con los atajos importantes detrás.
+        linea_con_atencion(app, disponible, disp, &variantes)
     } else if let Some(info) = app
         .servicios
         .acciones
@@ -265,6 +269,102 @@ fn linea_atajos(app: &App, ancho: u16, disp: &Disposicion) -> Line<'static> {
     Line::from(spans)
 }
 
+/// El aviso de atención de las sesiones persistentes (D335), de la frase más
+/// completa a la más corta, o `None` si ninguna lo pide. Sale de la última
+/// lista del servidor (`persistentes_con_atencion`), así que se quita solo
+/// cuando la sesión deja de pedirla. La que se está mirando en la vista Sesión
+/// no cuenta: ya se ve.
+fn aviso_atencion(app: &App) -> Option<Vec<String>> {
+    let mut atencion = app.persistentes_con_atencion();
+    if app.vista == Vista::Sesion {
+        if let Some(pestana) = app.pestana_enfocada() {
+            if let Some(tmux) = pestana.sesion_persistente() {
+                atencion.retain(|sesion| {
+                    !(sesion.host_id == pestana.host_id && sesion.nombre == tmux.nombre)
+                });
+            }
+        }
+    }
+    let marca = super::tecla(&app.tema, "◆", "P");
+    let punto = app.tema.glifos.punto_medio;
+    let aviso = app.tema.glifos.aviso;
+    let variantes = match atencion.as_slice() {
+        [] => return None,
+        [sesion] => vec![
+            format!(
+                "{marca} {} pide atención {punto} {}",
+                sesion.nombre, sesion.host_nombre
+            ),
+            format!("{marca} {} pide atención", sesion.nombre),
+            format!("{marca} {} {aviso}", sesion.nombre),
+            format!("{marca} {aviso}"),
+        ],
+        varias => vec![
+            format!("{marca} {} sesiones piden atención", varias.len()),
+            format!("{marca} {} piden atención", varias.len()),
+            format!("{marca} {} {aviso}", varias.len()),
+            format!("{marca} {aviso}"),
+        ],
+    };
+    Some(
+        variantes
+            .into_iter()
+            .map(|texto| disposicion::adaptar(&texto, app.tema.ascii))
+            .collect(),
+    )
+}
+
+/// La línea de atajos con el aviso de atención delante. Se elige la frase más
+/// completa que deje sitio a los atajos de prioridad 1 y a `? más`: en una
+/// barra estrecha el aviso se acorta antes que quitar un atajo importante.
+fn linea_con_atencion(
+    app: &App,
+    ancho: u16,
+    disp: &Disposicion,
+    variantes: &[String],
+) -> Line<'static> {
+    // Los dos primeros atajos de prioridad 1 (y `? más`) no se tapan nunca.
+    let minimo_atajos: u16 = atajos(app, disp)
+        .iter()
+        .filter(|atajo| atajo.prioridad <= 1)
+        .take(2)
+        .map(Atajo::ancho)
+        .sum::<u16>()
+        .saturating_add(if tiene_ayuda(app.vista) {
+            disposicion::ANCHO_MAS
+        } else {
+            0
+        });
+    // Un espacio delante, el aviso, un espacio de separación y los atajos. El
+    // ancho es el de pantalla, no el de caracteres: el nombre de un host con
+    // caracteres anchos (CJK, emoji) ocupa dos columnas por cada uno.
+    let ancho_de = |texto: &str| Span::raw(texto).width();
+    let cabe =
+        |texto: &String| 1 + ancho_de(texto) + 1 + usize::from(minimo_atajos) <= usize::from(ancho);
+    let Some(elegida) = variantes
+        .iter()
+        .find(|texto| cabe(texto))
+        .or_else(|| variantes.last())
+    else {
+        return linea_atajos(app, ancho, disp);
+    };
+    let usado = 1 + ancho_de(elegida) + 1;
+    let resto = ancho.saturating_sub(u16::try_from(usado).unwrap_or(u16::MAX));
+    let tema = &app.tema;
+    let mut linea = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            elegida.clone(),
+            Style::default()
+                .fg(tema.paleta.acento)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+    linea.spans.extend(linea_atajos(app, resto, disp).spans);
+    linea
+}
+
 /// Los últimos `ancho` caracteres de un texto, con la marca de recorte
 /// delante si no cabe entero.
 fn final_visible(texto: &str, ancho: usize, ascii: bool) -> String {
@@ -461,14 +561,8 @@ pub fn atajos(app: &App, disp: &Disposicion) -> Vec<Atajo> {
             Atajo::new("C", "limpiar", 3),
             Atajo::new("q", "volver", 2),
         ],
-        Vista::Sesiones => vec![
-            Atajo::new(intro, "entrar", 1),
-            Atajo::new("n", "nueva", 1),
-            Atajo::new("r", "reconectar", 2),
-            Atajo::new("x", "cerrar", 2),
-            Atajo::new("S", "apagar", 3),
-            Atajo::new(format!("{} l", app.config.prefijo_escape), "pestañas", 3),
-        ],
+        // Los atajos son los del bloque con el foco (Fase 16).
+        Vista::Sesiones => crate::ui::persistentes::atajos_sesiones(app),
         Vista::Sincronizacion => {
             let mut atajos = vec![
                 Atajo::new("s", "sincronizar", 1),

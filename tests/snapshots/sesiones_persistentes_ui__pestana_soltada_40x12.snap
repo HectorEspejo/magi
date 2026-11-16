@@ -1,0 +1,14 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+ MAGI · SESIÓN ────────────── refactor ─
+▸◆ 1 refactor │ ● 2 │ +
+▸◆ refactor─────────────────────────────
+usuario@dev-01:~/proyectos/api$ claude
+ ┌ SOLTADA ──────────────────────────┐
+ │ Ahora la usa portátil.            │
+ │ La sesión sigue viva en dev-01.   │
+ │ ↵ volver · c compartir · x cerrar │
+ └───────────────────────────────────┘
+
+ ◆ 1/2 · refactor · soltada · ^] ?

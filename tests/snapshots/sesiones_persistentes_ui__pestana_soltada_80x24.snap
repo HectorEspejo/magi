@@ -1,0 +1,26 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+ MAGI · SESIÓN ────────────────────────────────────────────────────── refactor ─
+▸◆ 1 refactor │ ● 2 │ +
+▸◆ refactor─────────────────────────────────────────────────────────────────────
+usuario@dev-01:~/proyectos/api$ claude
+
+
+
+
+
+
+             ┌ SOLTADA ───────────────────────────────────────────┐
+             │ Ahora la usa portátil (desde el 14/11 22:13).      │
+             │ La sesión sigue viva en dev-01.                    │
+             │ ↵ volver (la suelta allí) · c compartir · x cerrar │
+             └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ ◆ 1/2 · dev-01 · 2 h 03 m · persistente · refactor · tmux 3.5 · soltada · ^] ?

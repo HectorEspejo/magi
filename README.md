@@ -8,7 +8,9 @@ huellas, **flota con sondeo de carga/memoria/disco/red/servicios**,
 **identidades** (generar, importar, copiar, revocar), **registro** de todo lo
 que hace MAGI, **pestañas con servidor de sesiones** (las sesiones sobreviven
 a la ventana y se comparten entre terminales), **túneles** local, remoto y
-SOCKS5 que también siguen vivos al cerrarla, y reconexión tras caída. Sin
+SOCKS5 que también siguen vivos al cerrarla, **sesiones persistentes** que
+sobreviven a MAGI y al equipo (en un tmux propio del host, retomables desde
+cualquier equipo) y reconexión tras caída. Sin
 cuenta, sin suscripción y sin telemetría. Primera versión pública: **1.0.0**
 (30 de octubre de 2026), software libre bajo MIT OR Apache-2.0.
 
@@ -16,6 +18,8 @@ cuenta, sin suscripción y sin telemetría. Primera versión pública: **1.0.0**
 
 - Linux (Omarchy/Arch, o cualquier distribución con glibc ≥ 2.35) o macOS.
 - Opcional: `ssh-agent` en `SSH_AUTH_SOCK` para autenticar sin frase.
+- Opcional, en los hosts: **tmux 3.0 o posterior** para las
+  [sesiones persistentes](#sesiones-persistentes) (MAGI no lo instala).
 - En Linux, para recordar contraseñas y para la sincronización (su clave vive
   en el llavero): `secret-tool` y un servicio de llavero en la sesión (GNOME
   Keyring, KWallet con «Secret Service» o KeePassXC). En Debian y Ubuntu,
@@ -237,6 +241,7 @@ El prefijo (por defecto `Ctrl+]`) manda:
 | `prefijo n` / `prefijo p` | pestaña siguiente / anterior |
 | `prefijo l` | lista de sesiones |
 | `prefijo c` | nueva sesión (paleta filtrada a hosts) |
+| `prefijo N` | nueva [sesión persistente](#sesiones-persistentes) (diálogo) |
 | `prefijo x` | cerrar la pestaña (confirma) |
 | `prefijo r` | reconectar la pestaña caída |
 | `prefijo w` | ventana nueva de terminal (`[terminal] comando`) |
@@ -247,7 +252,8 @@ El prefijo (por defecto `Ctrl+]`) manda:
 servidor: `↵` adjuntar · `n` nueva · `r` reconectar · `x` cerrar · `S`
 apagar el servidor. `↵` en Hosts y Flota abre siempre una sesión nueva; `q`
 sale sin confirmar avisando de las sesiones que siguen abiertas.
-`magi conectar <host>` abre una sesión desde un lanzador o atajo.
+`magi conectar <host>` abre una sesión desde un lanzador o atajo, y
+`magi sesion <nombre>` engancha una [sesión persistente](#sesiones-persistentes).
 
 ## Tamaño de la terminal
 
@@ -374,10 +380,12 @@ enseña `↻` con la cuenta atrás y `prefijo r` reintenta a mano; `prefijo x`
 cierra. Tras `exit`, credenciales rechazadas, huella nueva o frase pendiente
 no se reintenta y se dice por qué.
 
-En la ficha, «sesión persistente con tmux» hace que la pestaña abra o recupere
-`magi-<equipo>-<n>` en el host; cerrar la pestaña la deja viva y la vista
-Sesiones (`prefijo l`, `t`) lista las sesiones de tmux para volver a
-engancharse (`↵`) o terminarlas (`T`). MAGI no instala tmux.
+Las sesiones que sobreviven a la ventana y al equipo, con nombre y retomables
+desde otro equipo, son las [sesiones persistentes](#sesiones-persistentes) de
+la 1.5.0 (la marca «sesión persistente con tmux» de la 1.4.0 pasó a «Todas las
+sesiones persistentes» de la ficha del host). Las sesiones que hubiera creado
+la 1.4.0 en tu tmux de siempre se siguen viendo, enganchando y terminando desde
+Sesiones, pero no se migran. MAGI no instala tmux.
 
 ### Claude Code y el terminal exterior
 
@@ -416,9 +424,186 @@ Además de `comando`, la sección `[terminal]` admite:
 | `reconexion_max_min` | `15` | minutos de reconexión automática antes de rendirse (1-120) |
 
 Un valor fuera de rango no impide arrancar: se acota y MAGI avisa al
-empezar. Los tres ajustes del host del bloque **TERMINAL** de la ficha
-(reconectar, tmux y portapapeles del remoto) son de este equipo: no viajan
-con la sincronización.
+empezar. Los dos ajustes del host del bloque **TERMINAL** de la ficha
+(reconectar y portapapeles del remoto) son de este equipo: no viajan con la
+sincronización. «Todas las sesiones persistentes», del bloque **SESIONES**,
+sí viaja (ver [Sesiones persistentes](#sesiones-persistentes)).
+
+## Sesiones persistentes
+
+Desde la 1.5.0, una sesión de terminal puede **sobrevivir a MAGI y al equipo**.
+Una *sesión persistente* tiene nombre y vive en un **tmux propio de MAGI** en
+el host (`tmux -L magi`, aparte del tmux que ya uses): cierras MAGI, apagas el
+portátil o cambias de equipo y, al volver, te enganchas a la misma sesión. Está
+pensada para agentes que siguen trabajando (Claude Code) mientras no estás. Lo
+que corre en tu propio equipo no se puede salvar: tiene que correr en un host.
+
+Hace falta **tmux 3.0 o posterior en el host** (MAGI no lo instala). Con uno
+anterior, o sin tmux, no se crea la sesión y MAGI dice por qué («instala tmux en
+el host», «tmux demasiado antiguo»); en un host marcado, la pestaña se abre
+normal, con ese aviso. Para que **Mayús+Intro** llegue a
+Claude Code (salto de línea sin enviar) conviene tmux 3.5; la barra de la
+pestaña enseña la versión del host. El tmux de tu usuario no se toca: MAGI usa
+su propio servidor, con su configuración (sin barra, sin prefijo, ratón,
+portapapeles, foco, color completo y la campana) y no carga tu `~/.tmux.conf`.
+
+### Crear una sesión
+
+- **Una sesión con nombre:** `n` en el bloque «Persistentes» de Sesiones,
+  `prefijo N`, o «nueva sesión persistente» en la paleta, en Hosts o en Flota.
+  El diálogo pide el host (solo SSH), el **nombre** (letras sin tilde, números,
+  `-` y `_`, hasta 64), la **carpeta** del host (absoluta o `~/…`; vacía es la
+  personal), el **comando de arranque** (vacío es el shell de acceso), el
+  **comando de reanudación** (el que se usa al reabrir una terminada, por
+  ejemplo `claude --continue`) y una nota. Propone como nombre el de la carpeta.
+- **Todo un host:** «Todas las sesiones persistentes» en el bloque SESIONES de
+  la ficha del host. Cada pestaña nueva a ese host es persistente, con nombre
+  automático `<equipo>-<n>`. Esta marca viaja con la sincronización (la
+  «sesión persistente con tmux» de la 1.4.0 pasa a ella al abrir la 1.5.0, con
+  un aviso, y deja de ser propia de cada equipo).
+- El comando de arranque es **texto tuyo, como un snippet**: corre en el host
+  con tu shell de acceso, y al acabar escribe «[MAGI] <comando> terminó con
+  código N» y deja un shell en la carpeta. Como la ficha viaja cifrada con la
+  sincronización, **no pongas secretos en el comando**.
+- La ficha solo se guarda cuando la sesión ya existe en el host: si falta tmux,
+  la carpeta no existe o el nombre ya está en uso, no queda ficha y el mensaje
+  dice qué hacer (con el nombre en uso, MAGI ofrece engancharse a la existente
+  o cambiar el nombre).
+
+### La lista
+
+`prefijo l` (o `F3` sin pestañas) abre Sesiones, con el bloque **Persistentes**
+arriba: las fichas de todos los hosts con `◆` (en ASCII, `P`), su estado
+(**libre**, **enganchada**, **terminada**, **sin comprobar**, **inalcanzable** o
+**sin tmux**), el nombre, el host, quién la tiene, la última actividad, `!` si
+pide atención, el título del programa y «antigua» si lleva más de
+`antigua_dias` sin actividad. Bajo cada host comprobado salen las sesiones del
+tmux de MAGI sin ficha («sin ficha»: `a` las añade) y las de tu tmux de siempre
+(«de tu tmux»: se enganchan y se terminan, sin ficha). `Tab` pasa a «Pestañas» y
+vuelve.
+
+| Tecla (bloque Persistentes) | Acción |
+|---|---|
+| `↵` | engancharse, soltando a los demás; en una terminada, reabrirla |
+| `c` | engancharse compartiendo |
+| `v` | vista previa de las últimas líneas (`↵` engancharse, `r` refrescar, `Esc` volver) |
+| `n` · `e` | nueva sesión · editar la ficha (carpeta, comando, reanudar y nota) |
+| `,` | renombrar, en el host y en la ficha |
+| `T` | terminar (confirmación: se cierra lo que corre dentro) |
+| `x` | borrar la ficha (confirmación; **nunca** termina la sesión) |
+| `a` | añadir a la lista una sesión sin ficha |
+| `C` | borrar las fichas terminadas (confirmación con recuento) |
+| `r` · `/` | refrescar · filtrar |
+| `t` (en Pestañas) | comprobar el host de la pestaña elegida |
+
+El estado de una sesión **no se guarda ni viaja**: el host es la fuente de
+verdad y MAGI lo lee de él. Un host que no responde, o que pediría una huella,
+una frase o una contraseña, deja sus fichas «inalcanzable» (conéctate a mano):
+una ficha nunca pasa a «terminada» por no haber podido mirar.
+
+### Engancharse, soltar y compartir
+
+`↵` engancha **soltando a los demás**: quien la tuviera ve su pestaña como
+«soltada» («Ahora la usa <equipo> · `↵` volver · `c` compartir · `x` cerrar») y
+la recupera con `↵`. Con `c` os enganchais a la vez y el tamaño lo marca el
+último que escribe. Si la red cae, la reconexión automática vuelve sola solo si
+nadie más la tiene; si la tiene otro equipo, la pestaña queda soltada y la
+recuperas tú a mano. Cerrar la pestaña (`prefijo x`) no termina la sesión.
+
+### Retomarla desde otro equipo
+
+Las **fichas** (host, nombre, carpeta, comandos y nota) viajan con la
+[sincronización del inventario](#sincronización-del-inventario), cifradas; el
+estado y el contenido, no. En el otro equipo la sesión aparece en la lista y
+`↵` la engancha. Con un reinicio del host, tmux termina sus sesiones: la ficha
+queda «terminada» y `↵` la reabre con su comando de reanudación.
+
+### Avisos de atención
+
+La atención es la **campana** del terminal: tmux marca la sesión cuando el
+programa de dentro la toca, también sin nadie enganchado. Mientras haya alguna
+ventana de MAGI abierta, el servidor comprueba las sesiones cada `vigilar_seg`
+y la barra de cualquier vista avisa («◆ agente-api pide atención · web-01») y
+lo quita cuando deja de pedirla. **Claude Code** debe avisar con la campana: en
+su configuración, `preferredNotifChannel` a `terminal_bell`. Los avisos OSC 9 y
+OSC 777 no atraviesan tmux, así que no valen como canal.
+
+### Historial
+
+`prefijo [` en una pestaña persistente abre el modo historial con el historial
+**de tmux** (búsqueda, selección, copia y guardado como en una pestaña normal).
+MAGI no pide el prefijo de tmux: el multiplexor eres tú desde MAGI, y la rueda
+llega al modo copia de tmux o al programa que pide el ratón.
+
+### Desde la línea de órdenes
+
+```sh
+magi sesion agente-api                 # abre MAGI enganchado a esa sesión
+magi sesion agente-api --host web-01   # si el nombre está en varios hosts
+magi sesiones                          # las fichas con su estado
+magi sesiones --json                   # lo mismo, para scripts
+```
+
+`magi sesion <nombre> [--host <host>]` abre MAGI enganchado a la sesión,
+soltando a los demás. Si el nombre está en varios hosts pide `--host` y dice
+cuáles; si no hay ficha lo dice y sugiere las de nombre parecido. Si la sesión
+ya no existe en el host (terminada), MAGI dice que ya no existe y no la
+vuelve a crear: reábrela desde la lista con `↵`. Sale con código 1 si no puede
+resolver la sesión (un nombre que no vale, ninguna ficha o varios hosts).
+
+`magi sesiones [--json]` lista las fichas con su estado. Pregunta al servidor de
+sesiones (lo arranca si hace falta, como `magi tunel`; esta orden cuenta como
+una ventana conectada para el vigilante) y espera a que cada host se haya
+comprobado **después** de la pregunta: lo que no llega a tiempo sale
+`sin_comprobar`, nunca un estado viejo. **No abre diálogos**: un host que pide
+huella, frase o contraseña sale `inalcanzable` y la salida de errores dice que
+te conectes a mano desde MAGI. Sin servidor sale con código 1. Sin fichas no
+arranca nada y dice cómo crearlas.
+
+La salida de `--json` es una lista (vacía si no hay fichas), ordenada por host y
+nombre, con un objeto por ficha. Los campos son estables; solo se añadirán
+campos nuevos al final:
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `uuid` | texto | identidad de la ficha, la misma en todos los equipos |
+| `host` | texto | nombre del host en el inventario |
+| `nombre` | texto | nombre de la sesión en el tmux de MAGI |
+| `estado` | texto | `viva_libre`, `viva_enganchada`, `terminada`, `sin_comprobar`, `inalcanzable` o `sin_tmux` |
+| `equipo` | texto o `null` | quién la tiene: la etiqueta del equipo si está enganchada; `null` si está libre o no consta |
+| `actividad` | entero o `null` | última actividad en segundos Unix según el reloj de este equipo (corregida con la hora del host); `null` si no vive o el host no la dio |
+| `atencion` | booleano | la sesión pide atención (la campana de tmux) |
+| `titulo` | texto o `null` | título del programa que corre dentro, si vive |
+| `comprobada_en` | entero o `null` | cuándo se miró su host, en segundos Unix; `null` si `sin_comprobar` |
+
+La salida no lleva comandos, carpetas ni notas, ni nada de lo que pasa dentro
+de la sesión más allá de su título.
+
+### Configuración
+
+En `config.toml`, la sección `[persistentes]`:
+
+| Clave | Por defecto | Uso |
+|---|---|---|
+| `vigilar_seg` | `60` | cada cuánto comprueba el servidor las sesiones, con alguna ventana conectada (30-600) |
+| `refresco_seg` | `30` | refresco con la lista a la vista (10-300) |
+| `antigua_dias` | `7` | días sin actividad para marcar una sesión «antigua» (1-365) |
+| `vista_previa_lineas` | `20` | líneas de la vista previa (5-100) |
+
+Un valor fuera de rango no impide arrancar: se acota y MAGI avisa al empezar.
+`[terminal] historial_lineas` fija también el `history-limit` de las sesiones
+nuevas.
+
+### Límites
+
+- Un reinicio del host termina sus sesiones: se reabren con su comando de
+  reanudación (`claude --continue`, por ejemplo).
+- Una pestaña que ya está abierta no se puede hacer persistente: un proceso en
+  marcha no se puede meter dentro de tmux.
+- Con tmux anterior a 3.5, Mayús+Intro puede no llegar a Claude Code.
+- La app Android lee el formato de sincronización que lleva las fichas, pero no
+  las enseña ni las usa todavía.
+
 ## Archivos
 
 `F4` (o `s` en Hosts y Flota, o el prefijo `f` en Sesión, o `sftp · <host>` en
@@ -1044,7 +1229,11 @@ El fichero de sincronización sube a `formato` 3 en cuanto hay alguna
 comprobación de servicio propia: los equipos con MAGI 1.2 lo verán como
 «formato nuevo» hasta que se actualicen. La app Android ya lee el formato 3 y
 guarda las comprobaciones en su copia sin usarlas; la vista de servicios del
-móvil llega en la Fase 14.
+móvil llega en la Fase 14. Desde la 1.5.0 sube a `formato` 4 en cuanto hay
+alguna ficha de [sesión persistente](#sesiones-persistentes) o algún host con
+«Todas las sesiones persistentes»; el 4 incluye lo del 3, y los equipos con
+una versión anterior lo verán como «formato nuevo» hasta que se actualicen. La
+app Android lee el formato 4 y guarda las fichas sin enseñarlas.
 
 ## App Android
 
@@ -1138,6 +1327,13 @@ Sesión: todas las teclas van al host remoto salvo el prefijo configurado
 reconectar (`r`), ventana nueva (`w`), volver (`q`/`Esc`) y el prefijo
 literal (`prefijo prefijo`). Las sesiones viven en el servidor: cerrar la
 ventana no las cierra.
+
+Sesiones (`prefijo l`), bloque Persistentes: `↵` engancharse soltando a los
+demás · `c` compartir · `v` vista previa · `n` nueva · `e` editar la ficha · `,`
+renombrar · `T` terminar · `x` borrar la ficha · `a` añadir una sin ficha · `C`
+borrar las terminadas · `r` refrescar · `/` filtrar · `Tab` pasa a Pestañas y
+vuelve. Con pestañas, `prefijo N` abre una sesión persistente nueva. Una
+pestaña soltada: `↵` volver · `c` compartir · `x` cerrar.
 
 Archivos: `Tab` panel · `↑` `↓` / `j` `k` mover · `PgUp` `PgDn` página ·
 `Home` `End` extremos · `↵` entrar o ver · `⌫` / `-` subir · `Espacio` marcar y
@@ -1256,6 +1452,16 @@ normal, legible y reimportable con `magi importar ~/.ssh/magi_config`.
 - Un mensaje desconocido en el protocolo produce error y desconexión de ese
   cliente, nunca un fallo del servidor; un servidor de otra versión de
   protocolo se rechaza en el saludo.
+- Las sesiones persistentes usan un servidor de tmux propio (`tmux -L magi`:
+  su socket se llama `magi` y vive en el directorio de sockets de tmux del
+  usuario del host, que tmux crea con modo 700) y
+  nunca cambian opciones del tmux habitual. Todo nombre se valida (`[A-Za-z0-9_-]`
+  hasta 64) en MAGI y en el script, y se apunta a la sesión por nombre exacto
+  (`=<nombre>`): tmux casa prefijos y `agente` no puede tocar `agente-api`. El
+  comando de arranque es texto del usuario, llega al script como argumento y no
+  va a REGISTRO. Ni la salida de las sesiones, ni sus títulos, ni la vista
+  previa ni el historial de tmux van al log ni al registro; REGISTRO guarda solo
+  el host y el nombre. El vigilante no abre diálogos.
 - Sin telemetría: las únicas conexiones salientes son a los hosts del
   usuario.
 
@@ -1312,6 +1518,15 @@ Podman 5. Cubren el núcleo y el script (`servicios_lectura`,
 `servicios_script`), la sincronización de las comprobaciones
 (`sincronizacion_comprobaciones`), el servidor (`servicios_servidor`) y la
 interfaz con sus instantáneas (`servicios_ui`, `redimensionado`).
+
+Las de las sesiones persistentes tampoco usan red externa: el núcleo
+(`sesiones_persistentes`, `tmux_script` con un tmux falso, `sincronizacion_sesiones`),
+el servidor y su vigilante (`sesiones_persistentes_servidor`), la interfaz
+(`sesiones_persistentes_ui`), la CLI (`sesiones_persistentes_cli`) y
+`sesiones_persistentes_e2e`, que con **tmux de verdad** crea, engancha, suelta
+desde otro cliente, atiende la campana y termina. `tmux_real` ejercita el script
+de tmux contra el tmux del sistema. Las que necesitan tmux se saltan con un
+aviso si no está (en CI se instala con `apt`).
 
 ## Autocompletado y man en macOS
 

@@ -1471,3 +1471,59 @@ impl Escenario {
         }
     }
 }
+
+// ------------------------------------------- host que cae (Fase 16, e2e)
+
+impl Escenario {
+    /// Apaga el servidor SSH de pruebas: deja de escuchar y tira todas las
+    /// conexiones abiertas, como un host que se cae. Después de esto nadie
+    /// puede conectar a él (conexión rechazada), y no hay forma de volver a
+    /// levantarlo en el mismo escenario.
+    pub async fn apagar_servidor_ssh(&self) {
+        self.tarea_ssh.abort();
+        self.observado.tirar_conexiones().await;
+    }
+}
+
+// --------------------------------------- tui_prueba (Fases 15 y 16, e2e)
+
+/// Compila `tests/fijos/terminal/tui_prueba.rs` y devuelve la ruta del
+/// binario. Se compila una sola vez por proceso (las pruebas corren en
+/// paralelo y comparten el binario) con el `rustc` del toolchain que ejecuta
+/// los tests: el programa solo usa la biblioteca estándar.
+///
+/// El binario vive en el directorio de temporales de cargo (`target/tmp`), no
+/// en `/tmp`: allí nadie lo borraría y cada ejecución dejaría otro de varios
+/// MiB. Se reutiliza mientras no sea más viejo que su fuente, y se compila a un
+/// nombre propio del proceso y se renombra, para que otro `cargo test` en
+/// paralelo nunca ejecute un binario a medio escribir.
+pub fn compilar_tui_prueba() -> PathBuf {
+    static COMPILADO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    COMPILADO
+        .get_or_init(|| {
+            let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("tui_prueba");
+            std::fs::create_dir_all(&dir).expect("directorio del programa de prueba");
+            let fuente =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fijos/terminal/tui_prueba.rs");
+            let salida = dir.join("tui_prueba");
+            let modificado = |ruta: &Path| std::fs::metadata(ruta).and_then(|m| m.modified()).ok();
+            let al_dia = match (modificado(&salida), modificado(&fuente)) {
+                (Some(binario), Some(fuente)) => binario >= fuente,
+                _ => false,
+            };
+            if !al_dia {
+                let temporal = dir.join(format!("tui_prueba.{}.tmp", std::process::id()));
+                let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+                let estado = std::process::Command::new(rustc)
+                    .args(["--edition=2021", "-O", "-o"])
+                    .arg(&temporal)
+                    .arg(&fuente)
+                    .status()
+                    .expect("compilando tui_prueba con rustc");
+                assert!(estado.success(), "tui_prueba no compila");
+                std::fs::rename(&temporal, &salida).expect("colocando el programa de prueba");
+            }
+            salida
+        })
+        .clone()
+}

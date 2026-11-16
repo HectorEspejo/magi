@@ -14,8 +14,15 @@ en [`docs/publicar.md`](../docs/publicar.md).
 - La app lee el `formato` 3 de la sincronización (Fase 13): guarda en su copia
   las comprobaciones de configuración de servicio que crea el escritorio, sin
   usarlas todavía (la vista de servicios del móvil llega en la Fase 14). Los
-  ficheros del `formato` 1 y 2 se siguen leyendo igual, y uno con un formato
-  mayor que 3 sigue avisando de que hay que actualizar MAGI.
+  ficheros del `formato` 1 y 2 se siguen leyendo igual.
+- La app lee el `formato` 4 de la sincronización (Fase 16): guarda en su copia
+  las fichas de sesiones persistentes y la marca «todas las sesiones
+  persistentes» de cada host que crean los equipos de escritorio, sin
+  enseñarlas ni usarlas (la lista de sesiones persistentes en el móvil queda
+  para una fase futura). Con un fichero del `formato` 4 el móvil ya no se queda
+  en «formato nuevo»: importa el resto del inventario. Los ficheros de los
+  `formato` 1, 2 y 3 se siguen leyendo igual, y uno con un formato mayor que 4
+  sigue avisando de que hay que actualizar MAGI.
 - **Flota (Fase 14).** Sustituye a Hosts y es la pantalla de inicio: grupos
   plegables, búsqueda, estado de cada host (FRÍA, sondeando, CAÍDA, ALCANZABLE,
   CARGA o NOMINAL) con sus culpables, métricas, fallos y sesiones; sondeo al

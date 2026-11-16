@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH magi 1 2026-11-09 "magi 1.4.0" MAGI
+.TH magi 1 2026-11-16 "magi 1.5.0" MAGI
 .SH NOMBRE
 magi \- Gestor SSH de terminal (TUI) con estética de cabina técnica
 .SH SINOPSIS
@@ -37,6 +37,12 @@ El servidor de sesiones: estado o parada
 magi conectar
 Abre la TUI con una sesión nueva al host indicado
 .TP
+magi sesion
+Abre la TUI enganchada a una sesión persistente, soltando a los demás
+.TP
+magi sesiones
+Lista las sesiones persistentes con su estado
+.TP
 magi tunel
 Activa o para un túnel del host indicado
 .TP
@@ -64,4 +70,4 @@ Escribe la página man de MAGI en la salida estándar
 magi help
 Muestra este mensaje o la ayuda del subcomando indicado
 .SH VERSIÓN
-v1.4.0
+v1.5.0
