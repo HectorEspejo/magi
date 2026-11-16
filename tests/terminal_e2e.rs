@@ -479,9 +479,16 @@ fn modify_other_keys_apagado_mientras_estaba_soltada_se_apaga_al_volver_a_adjunt
                 )
             })
             .await;
-        assert_eq!(
-            modo_del_cliente(&escenario.vistos, sesion_id).modify_other_keys,
-            2,
+        // `esperar_programa` solo dice que el programa escribió la secuencia, no
+        // que el servidor la haya procesado: en un runner lento el volcado puede
+        // salir antes y el nivel llega después por el flujo de datos.
+        let recogido = escenario
+            .hasta(Duration::from_secs(10), |escenario| {
+                modo_del_cliente(&escenario.vistos, sesion_id).modify_other_keys == 2
+            })
+            .await;
+        assert!(
+            recogido,
             "la ventana debería tener el nivel 2 tras el primer volcado"
         );
 
@@ -512,10 +519,20 @@ fn modify_other_keys_apagado_mientras_estaba_soltada_se_apaga_al_volver_a_adjunt
                 )
             })
             .await;
+        // Misma carrera que arriba, a la inversa: si el servidor aún no había
+        // procesado el apagado, el volcado trae el nivel viejo y el apagado llega
+        // después por los datos. Si el volcado no lo apagara con el servidor ya
+        // al día (el defecto que esta prueba vigila), el nivel no baja nunca.
+        let apagado = escenario
+            .hasta(Duration::from_secs(10), |escenario| {
+                modo_del_cliente(&escenario.vistos, sesion_id).modify_other_keys == 0
+            })
+            .await;
         let modo = modo_del_cliente(&escenario.vistos, sesion_id);
-        assert_eq!(
-            modo.modify_other_keys, 0,
-            "la ventana conserva un modifyOtherKeys que el remoto ya apagó"
+        assert!(
+            apagado,
+            "la ventana conserva un modifyOtherKeys que el remoto ya apagó: nivel {}",
+            modo.modify_other_keys
         );
         // Y con el modo apagado, Mayús+Intro vuelve a ser un CR.
         assert_eq!(
