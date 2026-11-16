@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ SESIONES · VISTA PREVIA ───────────┐─
+ │  ¿Ejecuto las pruebas?             │
+ │  ❯ 1. Sí                           │
+ │    2. Sí, y no vuelvas a preguntar │
+ │    3. No, dime qué cambiar         │
+ │                                    │
+▸│ últimas 20 líneas · 22:13:20       │
+ │ ↵ engancharse   r leer             │
+ │ esc volver                         │─
+ └─────────────────────────────── 6/6 ┘
+ ◆ !  ↵ engancharse  c compartir  ? más

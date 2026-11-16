@@ -264,6 +264,34 @@ pub async fn historial(
     }
 }
 
+/// `vista`: lo que muestra ahora la sesión (las últimas `lineas` visibles, en
+/// texto plano), ya acotado y sin caracteres de control salvo el salto de
+/// línea. Lo usa una pestaña soltada para conservar su última pantalla. El
+/// contenido nunca va al log: los errores solo dicen el motivo.
+pub async fn vista(
+    handle: &Arc<Handle<Cliente>>,
+    servidor: ServidorTmux,
+    nombre: &str,
+    lineas: u32,
+) -> Result<String, String> {
+    let (salida, codigo) = ejecutar_orden(
+        handle,
+        &OrdenTmux::Vista {
+            servidor,
+            nombre,
+            lineas,
+        },
+    )
+    .await?;
+    match codigo {
+        0 => Ok(lectura::acotar_vista(&String::from_utf8_lossy(&salida))),
+        tmux::SALIDA_NO_EXISTE => Err(format!("la sesión «{nombre}» ya no existe")),
+        tmux::SALIDA_SIN_TMUX => Err("el host ya no tiene tmux".to_string()),
+        tmux::SALIDA_ANTIGUO => Err("tmux demasiado antiguo (3.0 o posterior)".to_string()),
+        otro => Err(format!("tmux no pudo leer la pantalla (código {otro})")),
+    }
+}
+
 /// La etiqueta de este equipo para `@magi_equipo` (la misma que ponen los
 /// nombres automáticos).
 pub async fn etiqueta_del_equipo(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) -> String {

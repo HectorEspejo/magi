@@ -66,6 +66,10 @@ pub struct PosicionCampo {
     /// Columna en la que empieza el valor: ahí se anclan los desplegables y
     /// las sugerencias.
     pub columna: u16,
+    /// Líneas que cuelgan de la del valor y se ven con él al llevar el foco
+    /// (la pista de la salud, el patrón bajo la ruta, las notas y el aviso de
+    /// la casilla de sesiones). Por defecto, una.
+    pub cola: u16,
 }
 
 /// Las líneas del formulario (sin túneles ni áreas de texto) para un ancho y
@@ -90,8 +94,9 @@ impl Formulario {
     }
 
     /// Primera línea visible cuando solo caben `alto` líneas: el campo con el
-    /// foco (etiqueta y valor) y la línea siguiente (el patrón bajo la ruta,
-    /// la pista de la salud) quedan dentro; si no cabe todo, manda el valor.
+    /// foco (etiqueta y valor) y las líneas que cuelgan de él (el patrón bajo
+    /// la ruta, la pista de la salud, el aviso de las sesiones) quedan
+    /// dentro; si no cabe todo, manda el valor.
     /// Se desplaza lo justo desde arriba y nunca se pasa del final. Con el
     /// foco fuera del formulario (túneles, áreas de texto) se ve el final, que
     /// es lo que queda junto a ellos.
@@ -100,9 +105,13 @@ impl Formulario {
         let Some(posicion) = self.posicion(campo) else {
             return maximo;
         };
-        let con_siguiente = (posicion.linea + 2).saturating_sub(alto);
-        let desde = if con_siguiente <= posicion.primera {
-            con_siguiente
+        let con_cola = (posicion.linea + 1 + posicion.cola).saturating_sub(alto);
+        let desde = if con_cola <= posicion.primera {
+            con_cola
+        } else if posicion.linea < posicion.primera + alto {
+            // Etiqueta y valor caben pero no todo lo que cuelga de ellos:
+            // arriba, para ver cuanto más mejor.
+            posicion.primera
         } else {
             (posicion.linea + 1).saturating_sub(alto)
         };
@@ -153,6 +162,7 @@ pub fn formulario(
         constructor.acceso(agente_no_disponible);
         constructor.al_conectar();
         constructor.verificaciones(deliberacion);
+        constructor.sesiones();
         constructor.terminal();
     }
     constructor.vacia();
@@ -218,6 +228,7 @@ impl Constructor<'_> {
             primera,
             linea,
             columna: columna as u16,
+            cola: 1,
         });
     }
 
@@ -764,8 +775,94 @@ impl Constructor<'_> {
         self.vacia();
     }
 
-    /// Bloque TERMINAL (Fase 15): los tres ajustes propios de este equipo.
-    /// No viajan con la sincronización y solo tienen sentido en hosts SSH.
+    /// Bloque SESIONES (Fase 16): la marca «todas las sesiones persistentes»
+    /// del host. Viaja a los demás equipos (por eso lo dice la cabecera) y
+    /// solo tiene sentido en hosts SSH. Con el snippet al conectar
+    /// arrancando tmux, avisa de tmux dentro de tmux (R143).
+    fn sesiones(&mut self) {
+        let ficha = self.ficha;
+        let tema = self.tema;
+        let ascii = tema.ascii;
+        let campo = CampoFicha::SesionesPersistentes;
+        self.vacia();
+        self.cabecera("SESIONES (viaja a tus equipos)");
+        let titulo = "Todas las sesiones persistentes";
+        let aclaracion = "(tmux en el host)";
+        // Con sitio, la aclaración va en la línea de la casilla; en el mínimo
+        // de la ficha pasa a las notas de debajo.
+        let junto =
+            SANGRIA + 4 + titulo.chars().count() + 1 + aclaracion.chars().count() <= self.ancho;
+        let texto = if junto {
+            format!("{titulo} {aclaracion}")
+        } else {
+            titulo.to_string()
+        };
+        let spans = inicio_verificacion(
+            ficha,
+            tema,
+            campo,
+            ficha.sesiones_persistentes,
+            &texto,
+            false,
+        );
+        let linea = self.siguiente();
+        self.lineas.push(Line::from(spans));
+        self.anotar(campo, linea, linea, SANGRIA);
+
+        let etiqueta = if ficha.etiqueta_equipo.is_empty() {
+            "equipo"
+        } else {
+            ficha.etiqueta_equipo.as_str()
+        };
+        let estilo_nota = Style::default().fg(tema.paleta.texto);
+        let mut notas: Vec<(String, Style)> = Vec::new();
+        if !junto {
+            notas.push((aclaracion.to_string(), estilo_nota));
+        }
+        // El aviso va antes que los nombres y es corto: en el mínimo de la
+        // ficha solo se ven cuatro filas del bloque con la casilla enfocada
+        // y es lo que más importa de ese foco (R143).
+        if let Some(snippet) = ficha.snippet.arranca_tmux() {
+            notas.push((
+                format!("aviso: el snippet «{snippet}» arranca tmux; quedaría tmux dentro de tmux"),
+                Style::default().fg(tema.paleta.acento),
+            ));
+        }
+        notas.push((
+            format!("nombres automáticos: {etiqueta}-1, {etiqueta}-2…"),
+            estilo_nota,
+        ));
+        let ancho_nota = self.ancho.saturating_sub(SANGRIA_VERIFICACION).max(1);
+        for (nota, estilo) in notas {
+            let nota = disposicion::adaptar(&nota, ascii);
+            for trozo in crate::ui::snippets::partir(&nota, ancho_nota) {
+                self.lineas.push(Line::from(vec![
+                    Span::raw(" ".repeat(SANGRIA_VERIFICACION)),
+                    Span::styled(trozo, estilo),
+                ]));
+            }
+        }
+        let pie = disposicion::recortar(
+            "Espacio marca · Tab siguiente · Ctrl+S guardar",
+            self.ancho.saturating_sub(SANGRIA),
+            ascii,
+        );
+        self.lineas.push(Line::from(vec![
+            Span::raw(" ".repeat(SANGRIA)),
+            self.pista(pie),
+        ]));
+        // Las notas, el aviso y el pie se ven con la casilla cuando hay
+        // sitio: el aviso es lo que más importa de ese foco.
+        let cola = self.siguiente() - 1 - linea;
+        if let Some(posicion) = self.posiciones.iter_mut().find(|p| p.campo == campo) {
+            posicion.cola = cola;
+        }
+        self.vacia();
+    }
+
+    /// Bloque TERMINAL (Fase 15): los dos ajustes propios de este equipo. No
+    /// viajan con la sincronización y solo tienen sentido en hosts SSH. Desde
+    /// la Fase 16 la sesión persistente ya no está aquí: está en SESIONES.
     fn terminal(&mut self) {
         let ficha = self.ficha;
         self.cabecera("TERMINAL (solo en este equipo)");
@@ -774,11 +871,6 @@ impl Constructor<'_> {
                 CampoFicha::Reconectar,
                 ficha.reconectar,
                 "Reconectar solo si se cae la red",
-            ),
-            (
-                CampoFicha::Tmux,
-                ficha.tmux_persistente,
-                "Sesión persistente con tmux",
             ),
             (
                 CampoFicha::PortapapelesRemoto,
@@ -2073,8 +2165,9 @@ mod pruebas {
     use crate::app::pruebas_ficha::{ficha_con, snippets, verificaciones};
     use crate::app::ORDEN_CAMPOS;
 
-    /// Alto del formulario en modo normal: los campos y sus cabeceras.
-    const ALTO_NORMAL: u16 = 28;
+    /// Alto del formulario en modo normal: los campos y sus cabeceras (con el
+    /// bloque SESIONES de la Fase 16, sin su aviso).
+    const ALTO_NORMAL: u16 = 33;
 
     fn construir(ficha: &Ficha, ancho: u16, estrecho: bool, tema: &Tema) -> Formulario {
         formulario(
@@ -2252,7 +2345,7 @@ mod pruebas {
         assert_eq!(desplazamiento(CampoFicha::Snippet), 5);
         assert_eq!(desplazamiento(CampoFicha::BackupRuta), 11);
         assert_eq!(desplazamiento(CampoFicha::TestsComando), 13);
-        assert_eq!(desplazamiento(CampoFicha::Tuneles), 18);
+        assert_eq!(desplazamiento(CampoFicha::Tuneles), 23);
         for campo in ORDEN_CAMPOS {
             let desde = desplazamiento(campo);
             assert!(desde + 10 <= ALTO_NORMAL);
@@ -2482,5 +2575,196 @@ mod pruebas {
         // Índice fuera de la lista (tras borrar) y lista vacía.
         assert_eq!(inicio_ventana(5, 3, 2), 1);
         assert_eq!(inicio_ventana(0, 0, 0), 0);
+    }
+
+    fn posicion_de(filas: &[String], texto: &str) -> usize {
+        filas
+            .iter()
+            .position(|fila| fila == texto)
+            .unwrap_or_else(|| panic!("no está «{texto}»:\n{}", filas.join("\n")))
+    }
+
+    /// Ficha con el snippet al conectar que arranca tmux (id 5).
+    fn ficha_con_snippet_de_tmux() -> Ficha {
+        let mut lista = snippets();
+        lista.push(crate::app::pruebas_ficha::snippet(
+            5,
+            "tmux",
+            "tmux new -As main",
+            false,
+        ));
+        let mut host = crate::modelo::host_de_prueba();
+        host.snippet_al_conectar_id = Some(5);
+        ficha_con(Some(&host), &lista, None)
+    }
+
+    #[test]
+    fn el_bloque_sesiones_va_antes_del_terminal_y_sin_la_sesion_persistente_vieja() {
+        let mut ficha = ficha_de_prueba();
+        ficha.etiqueta_equipo = "sobremesa".to_string();
+        ficha.sesiones_persistentes = true;
+        let filas = pintar_con(&ficha, 140, false, &Tema::respaldo());
+        let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+        assert_eq!(
+            filas[cabecera + 1],
+            "  [x] Todas las sesiones persistentes (tmux en el host)"
+        );
+        assert_eq!(
+            filas[cabecera + 2],
+            "      nombres automáticos: sobremesa-1, sobremesa-2…"
+        );
+        assert_eq!(
+            filas[cabecera + 3],
+            "  Espacio marca · Tab siguiente · Ctrl+S guardar"
+        );
+        assert_eq!(filas[cabecera + 4], "");
+        // Sin marcar, la casilla sale vacía; sin etiqueta, «equipo».
+        ficha.sesiones_persistentes = false;
+        ficha.etiqueta_equipo = String::new();
+        let filas = pintar_con(&ficha, 140, false, &Tema::respaldo());
+        let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+        assert!(filas[cabecera + 1].starts_with("  [ ] Todas las sesiones"));
+        assert!(filas[cabecera + 2].contains("equipo-1, equipo-2…"));
+        // El bloque TERMINAL sigue después, con los dos ajustes del equipo.
+        let terminal = posicion_de(&filas, " TERMINAL (solo en este equipo)");
+        assert!(terminal > cabecera);
+        assert!(filas[terminal + 1].contains("Reconectar solo si se cae la red"));
+        assert!(filas[terminal + 2].contains("Permitir que el host copie al portapapeles"));
+        assert!(!filas
+            .iter()
+            .any(|fila| fila.contains("Sesión persistente con tmux")));
+        // La casilla es un campo del formulario, entre verificaciones y terminal.
+        let casilla = linea_de(&ficha, CampoFicha::SesionesPersistentes);
+        assert_eq!(casilla, cabecera + 1);
+        assert!(casilla < linea_de(&ficha, CampoFicha::Reconectar));
+    }
+
+    #[test]
+    fn el_bloque_sesiones_cabe_en_el_minimo_de_la_ficha_y_en_estrecho() {
+        let mut ficha = ficha_de_prueba();
+        ficha.etiqueta_equipo = "abcdefghijklmnopqrst".to_string();
+        let tema = Tema::respaldo();
+        // 47 es el formulario de una ficha en su mínimo (50 columnas).
+        for ancho in [47u16, 52, 58, 79] {
+            let filas = pintar_con(&ficha, ancho, true, &tema);
+            let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+            let fin = filas[cabecera..]
+                .iter()
+                .position(|fila| fila.contains("Espacio marca"))
+                .unwrap()
+                + cabecera;
+            for fila in &filas[cabecera..=fin] {
+                assert!(
+                    fila.chars().count() <= usize::from(ancho),
+                    "{ancho}: se sale: {fila}"
+                );
+            }
+            // Todas las palabras del bloque siguen ahí aunque se parta en filas.
+            let bloque = filas[cabecera..=fin].join(" ");
+            assert!(
+                bloque.contains("Todas las sesiones persistentes"),
+                "{bloque}"
+            );
+            assert!(bloque.contains("tmux en el host"), "{bloque}");
+            assert!(bloque.contains("nombres automáticos:"), "{bloque}");
+            assert!(bloque.contains("abcdefghijklmnopqrst-2"), "{bloque}");
+        }
+        // En el mínimo, la aclaración baja a su propia línea.
+        let filas = pintar_con(&ficha, 47, true, &tema);
+        let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+        assert_eq!(filas[cabecera + 1], "  [ ] Todas las sesiones persistentes");
+        assert_eq!(filas[cabecera + 2], "      (tmux en el host)");
+    }
+
+    #[test]
+    fn el_aviso_de_tmux_dentro_de_tmux_sale_solo_con_un_snippet_que_arranca_tmux() {
+        let tema = Tema::respaldo();
+        // Sin snippet, o con uno que no arranca tmux, no hay aviso.
+        let filas = pintar_con(&ficha_de_prueba(), 140, false, &tema);
+        assert!(!filas.iter().any(|fila| fila.contains("aviso:")));
+        // Con el snippet de tmux, el aviso va dentro del bloque SESIONES.
+        let ficha = ficha_con_snippet_de_tmux();
+        assert_eq!(ficha.snippet.arranca_tmux(), Some("tmux"));
+        let filas = pintar_con(&ficha, 140, false, &tema);
+        let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+        let aviso = filas
+            .iter()
+            .position(|fila| fila.contains("aviso: el snippet «tmux» arranca tmux"))
+            .expect("sin aviso");
+        let pie = filas[cabecera..]
+            .iter()
+            .position(|fila| fila.contains("Espacio marca"))
+            .unwrap()
+            + cabecera;
+        assert!(
+            aviso > cabecera && aviso < pie,
+            "el aviso va dentro del bloque"
+        );
+        let texto = filas[cabecera..].join(" ");
+        assert!(texto.contains("tmux dentro de tmux"), "{texto}");
+        // En estrecho se parte en varias filas y ninguna se sale.
+        let filas = pintar_con(&ficha, 47, true, &tema);
+        let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
+        for fila in &filas[cabecera..] {
+            assert!(fila.chars().count() <= 47, "se sale: {fila}");
+        }
+        assert!(filas.join(" ").contains("tmux dentro de tmux"));
+    }
+
+    #[test]
+    fn con_el_foco_en_la_casilla_se_ve_el_bloque_entero_si_cabe() {
+        let mut ficha = ficha_con_snippet_de_tmux();
+        ficha.campo = CampoFicha::SesionesPersistentes;
+        let tema = Tema::respaldo();
+        let formulario = construir(&ficha, 77, true, &tema);
+        let filas = pintar_con(&ficha, 77, true, &tema);
+        let pie = filas
+            .iter()
+            .position(|fila| fila.contains("Espacio marca"))
+            .unwrap() as u16;
+        let casilla = formulario
+            .posicion(CampoFicha::SesionesPersistentes)
+            .unwrap();
+        assert!(
+            casilla.cola > 1,
+            "las notas y el aviso cuelgan de la casilla"
+        );
+        assert_eq!(casilla.linea + casilla.cola, pie);
+        // Con 14 filas de formulario (80×24) se ven la casilla, las notas, el
+        // aviso y el pie; con muy pocas manda el valor de la casilla.
+        let desde = formulario.desplazamiento(CampoFicha::SesionesPersistentes, 14);
+        assert!(
+            desde <= casilla.primera && pie < desde + 14,
+            "desde {desde}"
+        );
+        for alto in 2..=4 {
+            let desde = formulario.desplazamiento(CampoFicha::SesionesPersistentes, alto);
+            assert!(casilla.linea >= desde && casilla.linea < desde + alto);
+        }
+    }
+
+    #[test]
+    fn el_bloque_sesiones_en_ascii_no_lleva_glifos_unicode() {
+        let mut ficha = ficha_con_snippet_de_tmux();
+        ficha.etiqueta_equipo = "sobremesa".to_string();
+        ficha.campo = CampoFicha::SesionesPersistentes;
+        let mut tema = Tema::respaldo();
+        tema.ascii = true;
+        tema.glifos = crate::tema::Glifos::ascii();
+        for (ancho, estrecho) in [(140, false), (100, false), (58, true), (47, true)] {
+            let filas = pintar_con(&ficha, ancho, estrecho, &tema);
+            for fila in &filas {
+                assert!(
+                    fila.chars().all(|c| c.is_ascii() || c.is_alphabetic()),
+                    "glifo Unicode a {ancho}: {fila}"
+                );
+            }
+            let texto = filas.join("\n");
+            assert!(
+                texto.contains("nombres automaticos:") || texto.contains("nombres automáticos:")
+            );
+            assert!(texto.contains("sobremesa-2~"), "{texto}");
+            assert!(texto.contains("\"tmux\""), "{texto}");
+        }
     }
 }

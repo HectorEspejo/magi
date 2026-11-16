@@ -3,11 +3,11 @@
 //! instantáneas a 40×12, 80×24 y 200×60 (T45). Las de pintado corren con
 //! `TZ=UTC`.
 //!
-//! Cada pista del Sprint 3 tiene su módulo (CONTRATO-S3):
+//! Cada pista del Sprint 3 tiene su módulo:
 //! - `lista`: bloque «Persistentes», vista previa, diálogos y acciones (pista A1);
 //! - `nueva`: diálogo «Nueva sesión persistente» y la ficha que se guarda al
 //!   existir la sesión (pista A2);
-//! - `ficha`: bloque SESIONES de la ficha del host (pista A2);
+//! - `ficha`: bloque SESIONES de la ficha del host (pista A3);
 //! - `pestana`: pestaña persistente y soltada, barra de la pestaña, aviso de la
 //!   barra global, historial de tmux y REGISTRO (pista B).
 

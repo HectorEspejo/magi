@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+┌ MAGI · HOSTS ────────────── 2 hosts ─┐
+│▸ ▼ sin grupo                (2)      │
+│    ○ dev-01                          │
+│    ○ web-01                          │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+└──────────────────────────────────────┘
+ ◆ !  ↵ conectar  / filtrar  ? más

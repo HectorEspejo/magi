@@ -2344,8 +2344,10 @@ async fn marcar_soltada(
 }
 
 /// El script de enganche salió con 100: otro equipo se llevó la sesión. La
-/// pestaña pasa a soltada (con su última pantalla) y se difunde ya; después se
-/// mira con `estado`, por la misma conexión, quién la tiene ahora.
+/// pestaña pasa a soltada y se difunde ya; después, por la misma conexión y a la
+/// vez, se mira con `estado` quién la tiene ahora y con `vista` qué muestra. La
+/// última pantalla se deja en el emulador de la pestaña antes de difundir quién
+/// la tiene (si la captura falla, la pestaña queda soltada como estaba).
 async fn sesion_soltada(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
@@ -2353,21 +2355,22 @@ async fn sesion_soltada(
     plan: &PlanEnganche,
 ) {
     let desde = marcar_soltada(estado, sesion_id, None).await;
-    let por_equipo = match super::tmux::estado(handle).await {
-        Ok(lectura) => lectura
-            .sesiones
-            .iter()
-            .find(|sesion| sesion.servidor == plan.servidor && sesion.nombre == plan.nombre)
-            .filter(|sesion| sesion.clientes > 0)
-            .and_then(|sesion| sesion.equipo.clone()),
-        Err(motivo) => {
-            warn!(
-                sesion = sesion_id,
-                "no se pudo ver quién tiene la sesión: {motivo}"
-            );
-            None
-        }
+    let Some(filas) = filas_de_la_pantalla(estado, sesion_id).await else {
+        // La pestaña se cerró mientras tanto: no queda nada que actualizar.
+        return;
     };
+    let (por_equipo, vista) = tokio::join!(
+        equipo_que_la_tiene(sesion_id, handle, plan),
+        super::tmux::vista(handle, plan.servidor, &plan.nombre, filas)
+    );
+    match vista {
+        Ok(texto) => pintar_ultima_pantalla(estado, sesion_id, desde, &texto).await,
+        // No es un error: la pestaña queda soltada como estaba.
+        Err(motivo) => warn!(
+            sesion = sesion_id,
+            "no se pudo leer la última pantalla de la sesión soltada: {motivo}"
+        ),
+    }
     if por_equipo.is_none() {
         return;
     }
@@ -2388,6 +2391,120 @@ async fn sesion_soltada(
     soltada.por_equipo = por_equipo.clone();
     sesion.motivo = Some(motivo_soltada(por_equipo.as_deref()));
     difundir_lista(&mut estado_bloqueado);
+}
+
+/// El equipo que tiene ahora la sesión de una pestaña soltada, si se sabe:
+/// el que dejó su marca en `@magi_equipo` y tiene algún cliente enganchado.
+async fn equipo_que_la_tiene(
+    sesion_id: u32,
+    handle: &Arc<Handle<Cliente>>,
+    plan: &PlanEnganche,
+) -> Option<String> {
+    match super::tmux::estado(handle).await {
+        Ok(lectura) => lectura
+            .sesiones
+            .iter()
+            .find(|sesion| sesion.servidor == plan.servidor && sesion.nombre == plan.nombre)
+            .filter(|sesion| sesion.clientes > 0)
+            .and_then(|sesion| sesion.equipo.clone()),
+        Err(motivo) => {
+            warn!(
+                sesion = sesion_id,
+                "no se pudo ver quién tiene la sesión: {motivo}"
+            );
+            None
+        }
+    }
+}
+
+/// Las filas del emulador de la pestaña, que son las que se piden a `vista`.
+/// `None` si la pestaña ya no existe.
+async fn filas_de_la_pantalla(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+) -> Option<u32> {
+    let pantalla = estado
+        .lock()
+        .await
+        .sesiones
+        .get(&sesion_id)?
+        .pantalla
+        .clone();
+    let filas = pantalla.lock().ok()?.filas();
+    Some(u32::from(filas).max(1))
+}
+
+/// Los bytes que dejan en un emulador la última pantalla de una sesión: salir
+/// de la pantalla alternativa si estaba activa (así la vista cae en la
+/// principal, que sobrevive a los volcados de `Adjuntar` y a los rehaceres
+/// aplazados), borrar la pantalla (con el `[detached (from session …)]` que
+/// escribió el cliente de tmux al soltarlo) y pintar las últimas `filas` líneas
+/// de la vista desde arriba. La vista ya viene sin caracteres de control.
+fn bytes_de_vista(vista: &str, filas: u16, alternativa: bool) -> Vec<u8> {
+    let mut lineas: Vec<&str> = vista.lines().collect();
+    while lineas.last().is_some_and(|linea| linea.trim().is_empty()) {
+        lineas.pop();
+    }
+    let maximo = usize::from(filas.max(1));
+    if lineas.len() > maximo {
+        lineas.drain(..lineas.len() - maximo);
+    }
+    let mut bytes = Vec::with_capacity(vista.len() + 32);
+    if alternativa {
+        bytes.extend_from_slice(b"\x1b[?1049l");
+    }
+    bytes.extend_from_slice(b"\x1b[0m\x1b[2J\x1b[H");
+    bytes.extend_from_slice(lineas.join("\r\n").as_bytes());
+    bytes
+}
+
+/// Deja la última pantalla de la sesión en el emulador de la pestaña soltada
+/// y se la manda a las ventanas adjuntas (el mismo texto, como la línea de
+/// reconexión). El cliente de tmux al que le quitaron la sesión salió de la
+/// pantalla alternativa y escribió su `[detached …]` en la normal: el host es
+/// la fuente de verdad de lo que muestra la sesión, así que se sustituye por su
+/// vista. Solo si la pestaña sigue soltada por la misma soltada: si el usuario
+/// ya volvió (o cerró, o la soltaron otra vez), esta captura llegó tarde y no
+/// debe pisar lo que pinta tmux. Se hace con el bloqueo del estado tomado para
+/// que `Reconectar` no pueda colarse entre la comprobación y el pintado.
+async fn pintar_ultima_pantalla(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    sesion_id: u32,
+    desde: i64,
+    vista: &str,
+) {
+    let estado_bloqueado = estado.lock().await;
+    let Some(sesion) = estado_bloqueado.sesiones.get(&sesion_id) else {
+        return;
+    };
+    let sigue_soltada = sesion.estado == EstadoSesionRemota::Caida
+        && sesion
+            .soltada
+            .as_ref()
+            .is_some_and(|soltada| soltada.desde == desde);
+    if !sigue_soltada {
+        return;
+    }
+    let bytes = {
+        let Ok(mut parser) = sesion.pantalla.lock() else {
+            return;
+        };
+        let alternativa = parser.screen().alternate_screen();
+        let bytes = bytes_de_vista(vista, parser.filas(), alternativa);
+        // El texto es nuestro y no lleva consultas: no hay respuestas que
+        // escribir al remoto (que además ya no tiene canal).
+        let _ = parser.procesar(&bytes);
+        bytes
+    };
+    let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
+    if ids.is_empty() {
+        return;
+    }
+    difusion::difundir_a_adjuntos(
+        &estado_bloqueado.clientes,
+        &ids,
+        MensajeServidor::Datos { sesion_id, bytes },
+    );
 }
 
 // ---------------------------------------------------------------- foco y portapapeles
@@ -3037,5 +3154,85 @@ mod pruebas {
             Some(2),
             "empate: id menor"
         );
+    }
+
+    // ------------------------------------------------ última pantalla soltada
+
+    /// Un emulador con lo que deja el cliente de tmux al que le quitan la
+    /// sesión: sale de la pantalla alternativa y escribe su aviso en la normal.
+    fn pantalla_tras_soltar() -> PantallaEmulada {
+        let mut pantalla = PantallaEmulada::nueva(24, 80, 1000, true);
+        pantalla.procesar(b"antes de tmux\r\n");
+        pantalla.procesar(b"\x1b[?1049h\x1b[2J\x1b[Hlo que pintaba tmux");
+        pantalla.procesar(b"\x1b[?1049l\x1b[2J\x1b[H[detached (from session magi-a-1)]\r\n");
+        pantalla
+    }
+
+    #[test]
+    fn la_vista_sustituye_al_aviso_de_soltado() {
+        let mut pantalla = pantalla_tras_soltar();
+        assert!(pantalla.screen().contents().contains("[detached"));
+        let bytes = bytes_de_vista("$ make test\nok 12 tests\n", 24, false);
+        pantalla.procesar(&bytes);
+        let contenido = pantalla.screen().contents();
+        assert_eq!(contenido, "$ make test\nok 12 tests");
+        assert!(!pantalla.screen().alternate_screen());
+    }
+
+    #[test]
+    fn la_vista_se_pinta_desde_arriba_y_solo_con_las_ultimas_filas() {
+        let mut pantalla = PantallaEmulada::nueva(3, 20, 100, true);
+        let bytes = bytes_de_vista("uno\ndos\ntres\ncuatro\n\n   \n", 3, false);
+        pantalla.procesar(&bytes);
+        assert_eq!(pantalla.screen().contents(), "dos\ntres\ncuatro");
+        assert_eq!(pantalla.screen().cell(0, 0).unwrap().contents(), "d");
+    }
+
+    #[test]
+    fn una_vista_vacia_solo_borra_la_pantalla() {
+        let mut pantalla = pantalla_tras_soltar();
+        let bytes = bytes_de_vista("", 24, false);
+        pantalla.procesar(&bytes);
+        assert_eq!(pantalla.screen().contents(), "");
+    }
+
+    #[test]
+    fn solo_sale_de_la_pantalla_alternativa_si_estaba_en_ella() {
+        assert!(!bytes_de_vista("x", 24, false)
+            .windows(8)
+            .any(|ventana| ventana == b"\x1b[?1049l"));
+        assert!(bytes_de_vista("x", 24, true).starts_with(b"\x1b[?1049l"));
+    }
+
+    /// Una vista capturada con la pantalla alternativa activa cae en la
+    /// principal y no se pierde: ni con los borrados y rehaceres que quedaron
+    /// aplazados mientras estaba activa, ni en el volcado de `Adjuntar`.
+    #[test]
+    fn una_vista_pintada_con_la_alternativa_activa_no_se_pierde() {
+        let mut pantalla = PantallaEmulada::nueva(24, 80, 1000, true);
+        pantalla.procesar(b"principal\r\n");
+        // La pantalla alternativa activa, con un ED 3 y un rehacer aplazados.
+        pantalla.procesar(b"\x1b[?1049h\x1b[2J\x1b[Hpintaba tmux\x1b[3J");
+        pantalla.redimensionar(24, 80, 10);
+        assert!(pantalla.screen().alternate_screen());
+
+        let bytes = bytes_de_vista("$ make test\nok 12 tests\n", 24, true);
+        pantalla.procesar(&bytes);
+        assert!(!pantalla.screen().alternate_screen());
+        assert_eq!(pantalla.screen().contents(), "$ make test\nok 12 tests");
+
+        // Lo siguiente que procese el parser aplica lo aplazado: la vista sigue.
+        pantalla.procesar(b"");
+        assert_eq!(pantalla.screen().contents(), "$ make test\nok 12 tests");
+        // El volcado de `Adjuntar`, que es lo que ve una ventana nueva.
+        let volcado = pantalla.screen().state_formatted();
+        let mut ventana = PantallaEmulada::nueva(24, 80, 1000, false);
+        ventana.procesar(&volcado);
+        assert_eq!(ventana.screen().contents(), "$ make test\nok 12 tests");
+        // Y las ventanas adjuntas, que reciben los mismos bytes, quedan igual.
+        let mut adjunta = PantallaEmulada::nueva(24, 80, 1000, false);
+        adjunta.procesar(b"\x1b[?1049hotra cosa");
+        adjunta.procesar(&bytes);
+        assert_eq!(adjunta.screen().contents(), "$ make test\nok 12 tests");
     }
 }

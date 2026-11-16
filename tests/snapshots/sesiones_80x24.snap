@@ -2,13 +2,13 @@
 source: tests/redimensionado/arnes.rs
 ---
  MAGI · SESIONES · 3 sesiones · 4 ventanas ────────────────────────────────────
+ PERSISTENTES · 0 ──────────────────────────────────────────────── comprobando…
+
+ PESTAÑAS · 3 ──────────────────────────────────────────────────────────────────
   ESTADO PESTAÑA            TIPO  HOST             TIEMPO     IDENTIDAD
 ▸ ●      hetzner-01         SSH   hetzner-01       18 m       clave
   ✕      hetzner-02         SSH   hetzner-02       caída      clave
   ●      mac-mini-m1        SSH   mac-mini-m1      3 m        yubikey
-
-
-
 
 
 
@@ -24,4 +24,4 @@ source: tests/redimensionado/arnes.rs
   servidor pid 4242 · protocolo 10 · desde hace N s
 
 
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? más

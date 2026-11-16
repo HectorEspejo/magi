@@ -2,20 +2,20 @@
 source: tests/terminal_ui.rs
 ---
 ┌ MAGI · HOST · web-01 · editar · #1 ──────────────────────────────────────────┐
-│ VERIFICACIONES PREVIAS (deliberación MAGI)                                  ↑│
-│  [ ] salud del host                                                          │
-│      (último sondeo NOMINAL < 5 min)                                         │
-│  [ ] backup reciente                                                         │
-│      ruta                                                                    │
-│      [  ]                                                                    │
-│      patrón  (< 24 h)                                                        │
+│      patrón  (< 24 h)                                                       ↑│
 │      [  ]                                                                    │
 │  [ ] tests en verde                                                          │
 │      comando                                                                 │
 │      [  ]                                                                    │
+│                                                                              │
+│ SESIONES (viaja a tus equipos)                                               │
+│  [ ] Todas las sesiones persistentes (tmux en el host)                       │
+│      nombres automáticos: sobremesa-1, sobremesa-2…                          │
+│  Espacio marca · Tab siguiente · Ctrl+S guardar                              │
+│                                                                              │
 │ TERMINAL (solo en este equipo)                                               │
 │  [x] Reconectar solo si se cae la red                                        │
-│  [ ] Sesión persistente con tmux                                            ↓│
+│  [ ] Permitir que el host copie al portapapeles  (OSC 52; leerlo, nunca)    ↓│
 │  TÚNELES                                                             n nuevo │
 │    aún no hay túneles: n para crear uno                                      │
 │  COMPROBACIONES                                                      n nueva │

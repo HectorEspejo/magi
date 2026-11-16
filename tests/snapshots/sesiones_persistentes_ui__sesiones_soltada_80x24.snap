@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+ MAGI · SESIONES · 2 sesiones · 2 ventanas ────────────────────────────────────
+ PERSISTENTES · 0 ──────────────────────────────────────────────── comprobando…
+
+ PESTAÑAS · 2 ──────────────────────────────────────────────────────────────────
+  ESTADO PESTAÑA            TIPO  HOST             TIEMPO     IDENTIDAD
+▸ ◆      refactor           SSH   dev-01           soltada    clave
+  ✕      db-01              SSH   db-01            caída      clave
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+  refactor · soltada: la usa portátil
+  servidor pid 4242 · protocolo 10 · desde hace NN s
+
+
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? más

@@ -1,0 +1,63 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones · 0 ventanas ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PERSISTENTES · 5 · 2 sin ficha ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+ ◆   ● portatil      docs             dev-01     hace NN m   Claude Code
+ ◆   ✕ terminada     informes         dev-01     —          ↵ reabrir
+ ◆     libre         pruebas          dev-01     hace 9 d   usuario@dev-01                                                                                                                       antigua
+ ◆   ● aquí          refactor         dev-01     hace NN s  Claude Code
+▸◆ !   libre         agente-api       web-01     hace NN m   Claude Code: permiso
+       sin ficha     portatil-3       web-01     hace NN h   a añadir
+       de tu tmux    trabajo          web-01     hace 1 d   ↵ engancharse
+ PESTAÑAS · 0 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Sin sesiones abiertas. ↵ en un host, prefijo c o «n» abre una nueva.
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                   ┌ BORRAR FICHA ──────────────────────────────────────────────────┐
+                                                                   │                                                                │
+                                                                   │  ¿Borrar la ficha de «agente-api» en web-01?                   │
+                                                                   │  La sesión seguirá viva en web-01, sin ficha: la verás como    │
+                                                                   │  «sin ficha».                                                  │
+                                                                   │  Borrar la ficha no toca el host; se borra también en tus      │
+                                                                   │  otros equipos.                                                │
+                                                                   │                                                                │
+                                                                   │  s confirmar   n / esc cancelar                                │
+                                                                   │                                                                │
+                                                                   └────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  agente-api · web-01 · libre · ! pide atención
+  servidor pid N · protocolo 10 · desde hace NN s
+
+
+ ◆ agente-api pide atención · web-01  ↵ engancharse  c compartir  v vista previa  n nueva  T terminar  r refrescar  ⇥ pestañas  e ficha  , renombrar  x borrar ficha  C limpiar  / filtrar  ? ayuda

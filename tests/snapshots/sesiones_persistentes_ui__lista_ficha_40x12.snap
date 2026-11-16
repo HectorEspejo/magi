@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ FICHA DE LA SESIÓN ────────────────┐─
+ │ agente-api · web-01                │
+ │ Carpeta  [ ~/proyectos/api┃ ]      │
+ │ Comando  [ claude ]                │
+ │ Reanudar [ claude --continue ]     │
+ │ Nota     [  ]                      │
+▸│                                    │
+ │ ↵ guardar   tab sigue              │
+ │ esc cancelar                       │─
+ └────────────────────────────────────┘
+ ◆ !  ↵ engancharse  c compartir  ? más

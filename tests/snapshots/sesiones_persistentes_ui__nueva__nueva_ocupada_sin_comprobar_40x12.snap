@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/nueva.rs
+---
+┌ MAGI · FLOTA ── 2 hosts · 0 nominal ─┐
+│┌ NUEVA SESIÓN PERSISTENTE ──────────┐│
+││ ✕ Ya hay una ficha «agente-api» en ││
+││ dev-01: puede que su sesión        ││
+││ exista.                            ││
+││                                    ││
+││ Ábrela o cambia el nombre.         ││
+││                                    ││
+││ ↵ abrirla   c cambiar              ││
+││ esc cancelar                       ││
+└└────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

@@ -1,0 +1,63 @@
+---
+source: tests/sesiones_persistentes_ui/nueva.rs
+---
+┌ MAGI · FLOTA ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 hosts · 0 nominal ─┐
+│              ▸ ○ dev-01 FRÍA                                 │   dev-01                                                                                                                              │
+│                ○ web-01 FRÍA                                 │   192.0.2.10:22                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │   sin sondeo todavía                                                                                                                  │
+│                                                              │                                                                                                                                       │
+│                                                              │   pulsa r para sondear este host                                                                                                      │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │    ┌ NUEVA SESIÓN PERSISTENTE ────────────────────────────────────┐                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │  ✕ Ya hay una ficha «agente-api» en dev-01: puede que su     │                                                                   │
+│                                                              │    │  sesión exista.                                              │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │  Ábrela: si ya existe podrás engancharte; si no, se reabre   │                                                                   │
+│                                                              │    │  con su comando.                                             │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    │  ↵ abrirla   c cambiar el nombre   esc cancelar              │                                                                   │
+│                                                              │    │                                                              │                                                                   │
+│                                                              │    └──────────────────────────────────────────────────────────────┘                                                                   │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda

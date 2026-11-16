@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ PERSISTENTES · 5 · 2 sin ficha ────────
+       NOMBRE           HOST
+▸◆   ● docs             dev-01
+ ◆   ✕ informes         dev-01
+ ◆     pruebas          dev-01
+ ◆   ● refactor         dev-01
+ ◆ !   agente-api       web-01
+       portatil-3       web-01
+ PESTAÑAS · 0 ──────────────────────────
+  Sin sesiones abiertas. ↵ en un host,
+ ◆ !  ↵ engancharse  c compartir  ? más

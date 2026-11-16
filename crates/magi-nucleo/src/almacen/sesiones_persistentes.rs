@@ -140,6 +140,15 @@ pub fn obtener(conexion: &Connection, id: i64) -> Result<Option<Ficha>> {
         .next())
 }
 
+/// Una ficha por su uuid (el que difunde el servidor en la lista y el que
+/// llevan fijado los diálogos del cliente). `None` si ya no existe (la pudo
+/// borrar otro equipo con la sincronización) o no se puede leer.
+pub fn por_uuid(conexion: &Connection, uuid: &str) -> Result<Option<Ficha>> {
+    Ok(consultar(conexion, "WHERE s.uuid = ?1", &[&uuid])?
+        .into_iter()
+        .next())
+}
+
 /// La ficha de un host con ese nombre exacto (tmux distingue mayúsculas y
 /// casa prefijos en `-t`; aquí nunca).
 pub fn por_nombre(conexion: &Connection, host_id: i64, nombre: &str) -> Result<Option<Ficha>> {

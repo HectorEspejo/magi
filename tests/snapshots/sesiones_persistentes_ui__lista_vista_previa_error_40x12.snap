@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ SESIONES · VISTA PREVIA ───────────┐─
+ │ actividad hace NN m · ! pide        │
+ │ atención                           │
+ │ no se pudo leer: web-01 no         │
+ │ respondió en NN s                  │
+ │                                    │
+▸│ sin lectura                        │
+ │ ↵ engancharse   r leer             │
+ │ esc volver                         │─
+ └─────────────────────────────── 2/5 ┘
+ ◆ !  ↵ engancharse  c compartir  ? más

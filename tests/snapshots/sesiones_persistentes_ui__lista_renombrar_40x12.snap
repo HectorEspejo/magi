@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ RENOMBRAR · web-01 ────────────────┐─
+ │                                    │
+ │ Sesión «agente-api» en web-01.     │
+ │                                    │
+ │ Nombre nuevo  [ agente-api┃ ]      │
+ │                                    │
+▸│ ↵ renombrar   esc cancelar         │
+ │                                    │
+ └────────────────────────────────────┘─
+  Sin sesiones abiertas. ↵ en un host,
+ ◆ !  ↵ engancharse  c compartir  ? más

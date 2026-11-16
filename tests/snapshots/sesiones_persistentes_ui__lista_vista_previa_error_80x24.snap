@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones · 0 ventanas ────────────────────────────────────
+ PERSISTENTES · 5 · 2 sin ficha ───────────────────────── comprobadas hace NN s
+       ESTADO        NOMBRE           HOST       ACTIVIDAD  TÍTULO
+ ◆   ● portatil      docs             dev-01     hace NN m   Claude Code
+ ◆   ✕ terminada     informes         dev-01     —          ↵ reabrir
+ ◆     libre         pruebas          dev-01     hace 9 d   usuario@dev… antigua
+ ┌ SESIONES · VISTA PREVIA ───────────────────────────────────────────────────┐
+▸│                                                                            │o
+ │  agente-api · web-01 · libre · actividad hace NN m · ! pide atención        │
+ │                                                                            │
+ │  no se pudo leer: web-01 no respondió en NN s                              │─
+ │  Comprueba la conexión con el host y pulsa r para volver a intentarlo.     │
+ │                                                                            │
+ │  sin lectura                                                               │
+ │  ↵ engancharse   r refrescar   Esc volver                                  │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+  agente-api · web-01 · libre · ! pide atención
+  servidor pid N · protocolo 10 · desde hace NN s
+
+
+ ◆ agente-api pide atención · web-01  ↵ engancharse  c compartir  ? más

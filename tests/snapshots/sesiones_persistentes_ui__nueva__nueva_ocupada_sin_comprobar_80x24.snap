@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/nueva.rs
+---
+┌ MAGI · FLOTA ────────────────────────────────────────── 2 hosts · 0 nominal ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ○ dev-01 FRÍA                                                               │
+│  ○ web-01 FRÍA                                                               │
+│                                                                              │
+│       ┌ NUEVA SESIÓN PERSISTENTE ────────────────────────────────────┐       │
+│       │                                                              │       │
+│       │  ✕ Ya hay una ficha «agente-api» en dev-01: puede que su     │       │
+│       │  sesión exista.                                              │       │
+│       │                                                              │       │
+│       │  Ábrela: si ya existe podrás engancharte; si no, se reabre   │       │
+│       │  con su comando.                                             │       │
+│       │                                                              │       │
+│       │  ↵ abrirla   c cambiar el nombre   esc cancelar              │       │
+│       │                                                              │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

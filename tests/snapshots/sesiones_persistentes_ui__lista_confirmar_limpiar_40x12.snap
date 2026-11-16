@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/lista.rs
+---
+ MAGI · SESIONES · 0 sesiones ─────────
+ ┌ BORRAR FICHAS TERMINADAS ──────────┐─
+ │ Borrar 3 fichas terminadas:        │
+▸│   vieja-1 (dev-01)                 │
+ │   vieja-2 (dev-01)                 │
+ │   vieja-3 (web-01)                 │
+ │ Las sesiones ya no existen en sus  │
+ │ hosts.                             │─
+ │                                    │
+ │ s confirmar   n / esc cancelar     │
+ └────────────────────────────────────┘
+ ↵ engancharse  c compartir  ? más

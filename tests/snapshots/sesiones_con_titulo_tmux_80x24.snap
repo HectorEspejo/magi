@@ -2,11 +2,11 @@
 source: tests/terminal_ui.rs
 ---
  MAGI · SESIONES · 1 sesiones · 1 ventanas ────────────────────────────────────
+ PERSISTENTES · 0 ──────────────────────────────────────────────── comprobando…
+
+ PESTAÑAS · 1 ──────────────────────────────────────────────────────────────────
   ESTADO PESTAÑA            TIPO  HOST             TIEMPO     IDENTIDAD
 ▸ ● !    web-01             SSH   web-01           2 h 03 m   clave
-
-
-
 
 
 
@@ -24,4 +24,4 @@ source: tests/terminal_ui.rs
   servidor pid N · protocolo 10 · desde hace NN s
 
 
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? más

@@ -62,17 +62,17 @@ Sesiones 50:
 Sesiones 60:
  ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
 Sesiones 70:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  t tmux  ? más
 Sesiones 80:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  ? más
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? más
 Sesiones 99:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ⇥ persistentes  ? más
 Sesiones 100:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ⇥ persistentes  ? más
 Sesiones 120:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ⇥ persistentes  t tmux  ? ayuda
 Sesiones 200:
- ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ? ayuda
+ ↵ entrar  n nueva  r reconectar  x cerrar  S apagar  Ctrl+] l pestañas  ⇥ persistentes  t tmux  ? ayuda
 Identidades 50:
  n generar  i importar  c copiar pública  ? más
 Identidades 60:

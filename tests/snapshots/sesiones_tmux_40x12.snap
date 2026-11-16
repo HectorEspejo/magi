@@ -1,15 +1,15 @@
 ---
 source: tests/terminal_ui.rs
 ---
- MAGI · TMUX · web-01 ─────────────────
-  SESIÓN                       ENGANCHAD
-▸ magi-portatil-1              sí
-  despliegue                   no
+ MAGI · SESIONES · 1 sesiones ─────────
+ PERSISTENTES · 0 · 2 sin ficha ────────
+       NOMBRE           HOST
+▸      despliegue       web-01
+     ● magi-portatil-1  web-01
+ PESTAÑAS · 1 ──────────────────────────
+  ESTADO PESTAÑA            TIPO
+  ● !    web-01             SSH
 
 
 
-
-
-
-  ↵ abrir · T terminar · r refrescar · …
- ↵ entrar  n nueva  r reconectar  ? más
+ sesiones de tmux en web-01

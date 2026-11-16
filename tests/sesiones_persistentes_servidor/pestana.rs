@@ -758,6 +758,8 @@ async fn si_otro_equipo_se_engancha_la_pestana_queda_soltada_con_su_pantalla() {
     )
     .await
     .unwrap();
+    // Lo que muestra el panel de la sesión en el host (`capture-pane`).
+    banco.pantalla_de("refactor", PANTALLA_DEL_HOST);
     adjuntar_hasta(
         &mut banco.escenario,
         sesion.id,
@@ -792,11 +794,332 @@ async fn si_otro_equipo_se_engancha_la_pestana_queda_soltada_con_su_pantalla() {
     // No se cierra ni se anota como cierre: la sesión sigue ahí, en la lista.
     assert_eq!(banco.escenario.anotaciones("sesion_cerrada"), 0);
     assert_eq!(nombres_de(&banco.magi), vec!["refactor".to_string()]);
-    // Conserva la última pantalla.
+    // Conserva la última pantalla: la que muestra la sesión en el host (leída
+    // con `vista`, que apunta a la sesión exacta), no lo que dejó el cliente
+    // de tmux al que se la quitaron. El servidor la deja antes de difundir
+    // quién tiene la sesión, así que ya está.
+    let volcado = adjuntar(&mut banco.escenario, sesion.id).await;
+    assert_eq!(
+        texto_visible(&volcado),
+        "$ make test\nok 12 tests",
+        "la pestaña soltada perdió su pantalla: {volcado:?}"
+    );
+    assert!(
+        banco
+            .llamadas()
+            .lines()
+            .any(|llamada| llamada.contains("capture-pane") && llamada.contains("-t =refactor:")),
+        "la vista se pide a la sesión exacta: {}",
+        banco.llamadas()
+    );
+}
+
+/// Lo que se ve en una pantalla tras procesar un volcado.
+fn texto_visible(volcado: &str) -> String {
+    let mut pantalla = magi_nucleo::terminal::emulador::PantallaEmulada::nueva(24, 80, 100, false);
+    pantalla.procesar(volcado.as_bytes());
+    pantalla.screen().contents()
+}
+
+/// Lo que devuelve `capture-pane` en las pruebas de la pestaña soltada: con
+/// espacios al final y líneas vacías detrás, como un panel sin recortar.
+const PANTALLA_DEL_HOST: &str = "$ make test   \nok 12 tests\n\n\n\n";
+
+/// Un directorio con un `tmux` que envuelve al falso y ejecuta `antes` justo
+/// antes de cada `capture-pane` (por ejemplo `sleep 2` o `exit 1`).
+fn binarios_con_captura(antes: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let directorio = tempfile::tempdir().unwrap();
+    let tmux = directorio.path().join("tmux");
+    std::fs::write(
+        &tmux,
+        format!(
+            "#!/bin/sh\n\
+             for argumento in \"$@\"; do\n\
+                 if [ \"$argumento\" = capture-pane ]; then\n\
+                     {antes}\n\
+                 fi\n\
+             done\n\
+             exec '{}' \"$@\"\n",
+            fijos().join("tmux").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    directorio
+}
+
+/// Abre «refactor», deja que tmux pinte y deja que otro equipo se la lleve.
+/// Devuelve la pestaña, ya soltada.
+async fn soltar_refactor(banco: &mut Banco) -> InfoSesion {
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco.pantalla_de("refactor", PANTALLA_DEL_HOST);
+    banco
+        .otro_equipo_se_engancha("refactor", "portatil", 1)
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana
+                .tmux
+                .as_ref()
+                .is_some_and(|tmux| tmux.soltada.is_some()))
+            .await,
+        "la pestaña no quedó soltada: {:?}",
+        banco.pestana(sesion.id)
+    );
+    sesion
+}
+
+#[tokio::test]
+async fn la_ultima_pantalla_de_la_soltada_llega_tambien_a_la_ventana_adjunta() {
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco.pantalla_de("refactor", PANTALLA_DEL_HOST);
+    // La ventana mira la pestaña cuando se la quitan.
+    let mut visto = adjuntar_hasta(
+        &mut banco.escenario,
+        sesion.id,
+        "MAGI_TMUX_ADJUNTO=refactor soltar=1",
+    )
+    .await;
+    banco
+        .otro_equipo_se_engancha("refactor", "portatil", 1)
+        .await;
+    let fin = tokio::time::Instant::now() + PLAZO;
+    while !visto.contains("ok 12 tests") {
+        assert!(
+            tokio::time::Instant::now() < fin,
+            "la ventana adjunta no recibió la última pantalla: {visto:?}"
+        );
+        for mensaje in banco.escenario.escuchar(Duration::from_millis(200)).await {
+            if let MensajeServidor::Datos { sesion_id, bytes } = mensaje {
+                if sesion_id == sesion.id {
+                    visto.push_str(&String::from_utf8_lossy(&bytes));
+                }
+            }
+        }
+    }
+    // Lo que ve la ventana, procesado como lo hace su emulador: la vista y
+    // nada más.
+    assert_eq!(texto_visible(&visto), "$ make test\nok 12 tests");
+}
+
+#[tokio::test]
+async fn si_la_vista_falla_la_pestana_queda_soltada_con_la_pantalla_de_antes() {
+    // La captura del host falla (no es un error de la pestaña): sigue soltada
+    // y conserva lo último que recibió.
+    let binarios = binarios_con_captura("exit 1");
+    let mut banco = banco_con(OpcionesBanco {
+        binarios: Some(binarios.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    adjuntar_hasta(
+        &mut banco.escenario,
+        sesion.id,
+        "MAGI_TMUX_ADJUNTO=refactor soltar=1",
+    )
+    .await;
+    banco
+        .otro_equipo_se_engancha("refactor", "portatil", 1)
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.soltada.as_ref())
+                .and_then(|soltada| soltada.por_equipo.as_deref())
+                == Some("portatil"))
+            .await,
+        "la pestaña no quedó soltada: {:?}",
+        banco.pestana(sesion.id)
+    );
+    assert_eq!(
+        banco.pestana(sesion.id).unwrap().estado,
+        EstadoSesionRemota::Caida
+    );
     let volcado = adjuntar(&mut banco.escenario, sesion.id).await;
     assert!(
         volcado.contains("MAGI_TMUX_ADJUNTO=refactor"),
-        "la pestaña soltada perdió su pantalla: {volcado:?}"
+        "sin vista, la pestaña conserva lo que tenía: {volcado:?}"
+    );
+}
+
+#[tokio::test]
+async fn la_ultima_pantalla_cae_en_la_principal_aunque_la_alternativa_estuviera_activa() {
+    // El emulador de la pestaña está en la pantalla alternativa cuando la
+    // sueltan (un tmux que no sale de ella, o un programa que la usa): la vista
+    // se pinta en la principal, y esa es la que ve una ventana que se adjunta
+    // y la que queda al volver.
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco.pantalla_de("refactor", PANTALLA_DEL_HOST);
+    adjuntar_hasta(
+        &mut banco.escenario,
+        sesion.id,
+        "MAGI_TMUX_ADJUNTO=refactor soltar=1",
+    )
+    .await;
+    // El cliente de tmux falso devuelve lo que se teclea: el eco con ESC
+    // entra en la pantalla alternativa en el emulador del servidor. (El eco
+    // del terminal escribe el ESC como `^[`; solo el del programa lleva el
+    // byte de verdad.)
+    banco
+        .escenario
+        .enviar(&MensajeCliente::Teclas {
+            sesion_id: sesion.id,
+            bytes: b"\x1b[?1049hsolo en la alternativa\n".to_vec(),
+        })
+        .await;
+    let fin = tokio::time::Instant::now() + PLAZO;
+    let mut visto = String::new();
+    while !visto.contains("\x1b[?1049h") {
+        assert!(
+            tokio::time::Instant::now() < fin,
+            "el cliente de tmux no devolvió la entrada: {visto:?}"
+        );
+        for mensaje in banco.escenario.escuchar(Duration::from_millis(200)).await {
+            if let MensajeServidor::Datos { sesion_id, bytes } = mensaje {
+                if sesion_id == sesion.id {
+                    visto.push_str(&String::from_utf8_lossy(&bytes));
+                }
+            }
+        }
+    }
+    let alternativa = adjuntar(&mut banco.escenario, sesion.id).await;
+    assert!(
+        alternativa.contains("\x1b[?1049h"),
+        "el volcado debía ir en la pantalla alternativa: {alternativa:?}"
+    );
+
+    banco
+        .otro_equipo_se_engancha("refactor", "portatil", 1)
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.soltada.as_ref())
+                .and_then(|soltada| soltada.por_equipo.as_deref())
+                == Some("portatil"))
+            .await,
+        "la pestaña no quedó soltada: {:?}",
+        banco.pestana(sesion.id)
+    );
+    let volcado = adjuntar(&mut banco.escenario, sesion.id).await;
+    assert!(
+        !volcado.contains("\x1b[?1049h"),
+        "la vista debía quedar en la pantalla principal: {volcado:?}"
+    );
+    assert_eq!(texto_visible(&volcado), "$ make test\nok 12 tests");
+
+    // Al volver, tmux repinta y la vista de antes ya no estorba; y una ventana
+    // que se adjunta después sigue viendo la pantalla viva.
+    banco
+        .escenario
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id: sesion.id,
+            compartir: false,
+        })
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana.estado
+                == EstadoSesionRemota::Abierta)
+            .await
+    );
+    let vivo = adjuntar_hasta(&mut banco.escenario, sesion.id, "soltar=1").await;
+    assert!(
+        vivo.contains("MAGI_TMUX_ADJUNTO=refactor soltar=1"),
+        "{vivo:?}"
+    );
+}
+
+#[tokio::test]
+async fn una_captura_tardia_no_pisa_la_pantalla_de_una_pestana_que_ya_volvio() {
+    // La vista tarda en llegar (el host va lento) y el usuario vuelve antes:
+    // la pantalla es ya la de tmux y la captura de antes no la sustituye.
+    let binarios = binarios_con_captura("sleep 2");
+    let mut banco = banco_con(OpcionesBanco {
+        binarios: Some(binarios.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let sesion = soltar_refactor(&mut banco).await;
+    banco
+        .escenario
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id: sesion.id,
+            compartir: false,
+        })
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana.estado
+                == EstadoSesionRemota::Abierta
+                && pestana
+                    .tmux
+                    .as_ref()
+                    .is_some_and(|tmux| tmux.soltada.is_none()))
+            .await,
+        "no volvió: {:?}",
+        banco.pestana(sesion.id)
+    );
+    // Pasa el plazo de la captura lenta: ya habría pintado si no se vigilara.
+    let mut visto = adjuntar_hasta(&mut banco.escenario, sesion.id, "soltar=1").await;
+    let fin = tokio::time::Instant::now() + Duration::from_secs(4);
+    while tokio::time::Instant::now() < fin {
+        for mensaje in banco.escenario.escuchar(Duration::from_millis(200)).await {
+            if let MensajeServidor::Datos { sesion_id, bytes } = mensaje {
+                if sesion_id == sesion.id {
+                    visto.push_str(&String::from_utf8_lossy(&bytes));
+                }
+            }
+        }
+    }
+    assert!(
+        !visto.contains("ok 12 tests"),
+        "una captura tardía pisó la pantalla de la pestaña que ya volvió: {visto:?}"
+    );
+    let volcado = adjuntar(&mut banco.escenario, sesion.id).await;
+    assert!(
+        volcado.contains("MAGI_TMUX_ADJUNTO=refactor soltar=1"),
+        "la pestaña que volvió perdió su pantalla: {volcado:?}"
     );
 }
 

@@ -45,45 +45,45 @@
 - [x] Vigilante: mientras haya alguna ventana conectada, cada `vigilar_seg` comprueba con `estado` los hosts con fichas o marcados, por el pool o con una conexión efímera sin diálogos, con 8 hosts a la vez como mucho y 10 s de plazo por host
   - AC: Dado un host que pide frase, cuando el vigilante lo comprueba, entonces no abre ningún diálogo y sus fichas quedan «sin comprobar: conéctate a mano»
 - [x] `SesionesPersistentes{lista}` a todas las ventanas en cada cambio, con el estado visto por ficha y, por host comprobado, sus sesiones sin ficha y las del tmux habitual
-- [ ] `ConsultarSesionesPersistentes` comprueba enseguida (al abrir la lista, con `r` y cada `refresco_seg` con la lista a la vista), agrupa las peticiones seguidas y no repite un host comprobado hace menos de 5 s
+- [x] `ConsultarSesionesPersistentes` comprueba enseguida (al abrir la lista, con `r` y cada `refresco_seg` con la lista a la vista), agrupa las peticiones seguidas y no repite un host comprobado hace menos de 5 s
 - [x] `CapturarHistorial` en una pestaña persistente lee el historial de tmux con `historial` y lo manda en tramos como en la F15
 - [x] `PedirVistaPrevia` devuelve las últimas `vista_previa_lineas` en texto plano solo a la ventana que la pide, sin guardarlas
-- [ ] `RenombrarTmux` renombra en el host y solo entonces el cliente cambia la ficha; las pestañas enganchadas siguen enganchadas
+- [x] `RenombrarTmux` renombra en el host y solo entonces el cliente cambia la ficha; las pestañas enganchadas siguen enganchadas
 - [x] El servidor lee y valida las filas de SESIONES_PERSISTENTES y HOSTS antes de usarlas y nunca escribe en ellas
 - [x] Ni la salida de las sesiones, ni sus títulos, ni las vistas previas, ni el historial de tmux van al log ni a REGISTRO
 
 ## Cliente: Persistentes en la vista Sesiones
-- [ ] Bloque «Persistentes» arriba en Sesiones (`prefijo l`): fichas de todos los hosts con marca, estado, nombre, host, quién la tiene, actividad, `!` de atención, título y «antigua»; `Tab` pasa a «Pestañas» y vuelve
-- [ ] Bajo cada host comprobado, sus sesiones sin ficha del tmux de MAGI («sin ficha», `a` las añade con `origen = descubierta`) y las del tmux habitual («de tu tmux»: se enganchan y se terminan, sin ficha)
-- [ ] Teclas del bloque: `↵` engancharse (en una terminada, reabrirla), `c` compartir, `v` vista previa, `n` nueva, `e` editar ficha, `,` renombrar, `T` terminar, `x` borrar ficha, `C` borrar las terminadas, `r` refrescar y `/` filtrar
-- [ ] Diálogo «Nueva sesión persistente» (host `ssh`, nombre, carpeta, comando, comando de reanudación y nota), también desde Hosts, Flota, la paleta y `prefijo N`
+- [x] Bloque «Persistentes» arriba en Sesiones (`prefijo l`): fichas de todos los hosts con marca, estado, nombre, host, quién la tiene, actividad, `!` de atención, título y «antigua»; `Tab` pasa a «Pestañas» y vuelve
+- [x] Bajo cada host comprobado, sus sesiones sin ficha del tmux de MAGI («sin ficha», `a` las añade con `origen = descubierta`) y las del tmux habitual («de tu tmux»: se enganchan y se terminan, sin ficha)
+- [x] Teclas del bloque: `↵` engancharse (en una terminada, reabrirla), `c` compartir, `v` vista previa, `n` nueva, `e` editar ficha, `,` renombrar, `T` terminar, `x` borrar ficha, `C` borrar las terminadas, `r` refrescar y `/` filtrar
+- [x] Diálogo «Nueva sesión persistente» (host `ssh`, nombre, carpeta, comando, comando de reanudación y nota), también desde Hosts, Flota, la paleta y `prefijo N`
   - AC: Dado un nombre que ya existe en ese host, cuando se acepta, entonces avisa y ofrece engancharse a la existente o cambiar el nombre
-- [ ] El cliente guarda la ficha y anota `sesion_persistente_creada` solo cuando la sesión ya existe en el host; si algo falla antes, no queda ficha
-- [ ] Reabrir una terminada la crea con su `comando_reanudar` (o su `comando`) en su carpeta y anota `sesion_persistente_reabierta`
-- [ ] Terminar (`T`) con una confirmación que nombra la sesión y el host y dice que se cerrará lo que corre dentro; anota `tmux_terminada` y la ficha queda «terminada»
-- [ ] Borrar una ficha (`x`) con confirmación; si la sesión vive, avisa de que seguirá en el host sin ficha; anota `sesion_persistente_borrada`
-- [ ] Ficha de host: «Todas las sesiones persistentes» al crear y al editar, en el bloque SESIONES, que viaja, con el aviso de tmux dentro de tmux; sale del bloque TERMINAL de la F15
-- [ ] En un host marcado, toda pestaña nueva es persistente, con nombre automático y ficha (`origen = host`); sin tmux, pestaña normal con aviso; cerrarla (`prefijo x`) pregunta como en la F15
-- [ ] Marca `◆` (en ASCII, `P`) en las pestañas y fichas persistentes y barra de la pestaña con «persistente · <nombre> · tmux <versión>»; soltada: «Ahora la usa <equipo> · ↵ volver · c compartir · x cerrar»
-- [ ] Aviso en la barra global desde cualquier vista cuando una sesión pasa a pedir atención («◆ agente-api pide atención · web-01», o «◆ N sesiones piden atención»); se quita cuando deja de pedirla
+- [x] El cliente guarda la ficha y anota `sesion_persistente_creada` solo cuando la sesión ya existe en el host; si algo falla antes, no queda ficha
+- [x] Reabrir una terminada la crea con su `comando_reanudar` (o su `comando`) en su carpeta y anota `sesion_persistente_reabierta`
+- [x] Terminar (`T`) con una confirmación que nombra la sesión y el host y dice que se cerrará lo que corre dentro; anota `tmux_terminada` y la ficha queda «terminada»
+- [x] Borrar una ficha (`x`) con confirmación; si la sesión vive, avisa de que seguirá en el host sin ficha; anota `sesion_persistente_borrada`
+- [x] Ficha de host: «Todas las sesiones persistentes» al crear y al editar, en el bloque SESIONES, que viaja, con el aviso de tmux dentro de tmux; sale del bloque TERMINAL de la F15
+- [x] En un host marcado, toda pestaña nueva es persistente, con nombre automático y ficha (`origen = host`); sin tmux, pestaña normal con aviso; cerrarla (`prefijo x`) pregunta como en la F15
+- [x] Marca `◆` (en ASCII, `P`) en las pestañas y fichas persistentes y barra de la pestaña con «persistente · <nombre> · tmux <versión>»; soltada: «Ahora la usa <equipo> · ↵ volver · c compartir · x cerrar»
+- [x] Aviso en la barra global desde cualquier vista cuando una sesión pasa a pedir atención («◆ agente-api pide atención · web-01», o «◆ N sesiones piden atención»); se quita cuando deja de pedirla
   - AC: Dado Claude Code esperando permiso con la campana en una sesión libre, cuando el vigilante la comprueba, entonces el aviso sale en la barra de todas las ventanas antes de `vigilar_seg`
-- [ ] Vista previa (`v`): las últimas líneas con la hora de lectura y «↵ engancharse · r refrescar · Esc volver»
-- [ ] `prefijo [` en una pestaña persistente abre el modo historial con el historial de tmux: búsqueda, selección, copia y guardado como en la F15
-- [ ] Errores con instrucción: sin tmux, tmux antiguo, carpeta que no existe, host sin conexión o que pide un diálogo, y nombre ocupado
-- [ ] REGISTRO: `sesion_persistente_creada`, `sesion_persistente_reabierta`, `sesion_persistente_enganchada` (solo a petición del usuario, nunca en las reconexiones) y `sesion_persistente_borrada`, con host y nombre y sin comandos, títulos ni contenido
-- [ ] Ayuda (`?`) y paleta con las teclas y órdenes nuevas («nueva sesión persistente», «engancharse a <nombre>»), y la recomendación de usar la campana como canal de avisos de Claude Code
+- [x] Vista previa (`v`): las últimas líneas con la hora de lectura y «↵ engancharse · r refrescar · Esc volver»
+- [x] `prefijo [` en una pestaña persistente abre el modo historial con el historial de tmux: búsqueda, selección, copia y guardado como en la F15
+- [x] Errores con instrucción: sin tmux, tmux antiguo, carpeta que no existe, host sin conexión o que pide un diálogo, y nombre ocupado
+- [x] REGISTRO: `sesion_persistente_creada`, `sesion_persistente_reabierta`, `sesion_persistente_enganchada` (solo a petición del usuario, nunca en las reconexiones) y `sesion_persistente_borrada`, con host y nombre y sin comandos, títulos ni contenido
+- [x] Ayuda (`?`) y paleta con las teclas y órdenes nuevas («nueva sesión persistente», «engancharse a <nombre>»), y la recomendación de usar la campana como canal de avisos de Claude Code
 
 ## CLI y configuración
-- [ ] `magi sesion <nombre> [--host <host>]` abre MAGI enganchado a esa sesión; si el nombre está en varios hosts, pide `--host` y dice cuáles
-- [ ] `magi sesiones [--json]` lista las fichas con su estado, que pregunta al servidor (lo arranca si hace falta)
+- [x] `magi sesion <nombre> [--host <host>]` abre MAGI enganchado a esa sesión; si el nombre está en varios hosts, pide `--host` y dice cuáles
+- [x] `magi sesiones [--json]` lista las fichas con su estado, que pregunta al servidor (lo arranca si hace falta)
 - [x] `[persistentes]` en `config.toml`: `vigilar_seg` (60; 30-600), `refresco_seg` (30; 10-300), `antigua_dias` (7; 1-365) y `vista_previa_lineas` (20; 5-100), acotadas con aviso al arrancar
-- [ ] `assets/` regenerado (página man y autocompletado) con las órdenes nuevas
+- [x] `assets/` regenerado (página man y autocompletado) con las órdenes nuevas
 
 ## Interfaz: instantáneas
-- [ ] Instantáneas a 40×12, 80×24 y 200×60 (T45) de Sesiones con el bloque Persistentes (atención, enganchada, terminada, sin ficha y tu tmux), el diálogo de nueva sesión, la vista previa, una pestaña soltada, el aviso de la barra y la ficha con el bloque SESIONES
+- [x] Instantáneas a 40×12, 80×24 y 200×60 (T45) de Sesiones con el bloque Persistentes (atención, enganchada, terminada, sin ficha y tu tmux), el diálogo de nueva sesión, la vista previa, una pestaña soltada, el aviso de la barra y la ficha con el bloque SESIONES
 
 ## API: protocolo cliente ⇄ servidor (v10)
-- [ ] `VERSION_PROTOCOLO = 10` y los `peticion_id` de las sesiones persistentes en el rango del terminal (2^49)
+- [x] `VERSION_PROTOCOLO = 10` y los `peticion_id` de las sesiones persistentes en el rango del terminal (2^49)
 - [x] `AbrirSesion` con `tmux{servidor, nombre, crear, compartir}`
 - [x] `ListarTmux` → `SesionesTmux` con `servidor`, `clientes`, `equipo`, `actividad`, `campana` y `titulo`, y `TerminarTmux` → `TmuxTerminada` con `servidor`
 - [x] `ConsultarSesionesPersistentes` y `SesionesPersistentes{lista}`
@@ -93,16 +93,16 @@
 
 ## Calidad, pruebas y publicación
 - [x] Pruebas del núcleo: `sesiones_persistentes` (validadores, nombres automáticos, estado y lectura acotada) y `tmux_script` (subórdenes nuevas con el tmux falso)
-- [ ] `tmux_real`: con tmux de verdad (en CI, instalado con apt; se omite si no lo hay), crear, enganchar, soltar desde otro cliente (sale con 100), historial, renombrar y terminar con `magi-a-1` y `magi-a-10`
+- [x] `tmux_real`: con tmux de verdad (en CI, instalado con apt; se omite si no lo hay), crear, enganchar, soltar desde otro cliente (sale con 100), historial, renombrar y terminar con `magi-a-1` y `magi-a-10`
 - [x] `sincronizacion_sesiones`: `formato` 4 solo cuando toca, unión de fichas con el mismo nombre, lápidas y la marca del host
-- [ ] `sesiones_persistentes_servidor` (vigilante, soltada, reconexión sin quitarla a otro equipo, captura y vista previa) y `sesiones_persistentes_ui` con `App::de_prueba`
-- [ ] `sesiones_persistentes_e2e` con el servidor SSH de prueba y tmux real: crear, cerrar la ventana, volver desde otra, soltar, atención por la campana y terminar
-- [ ] `tui_prueba` ampliado: Mayús+Intro con `modifyOtherKeys` dentro del tmux de MAGI
+- [x] `sesiones_persistentes_servidor` (vigilante, soltada, reconexión sin quitarla a otro equipo, captura y vista previa) y `sesiones_persistentes_ui` con `App::de_prueba`
+- [x] `sesiones_persistentes_e2e` con el servidor SSH de prueba y tmux real: crear, cerrar la ventana, volver desde otra, soltar, atención por la campana y terminar
+- [x] `tui_prueba` ampliado: Mayús+Intro con `modifyOtherKeys` dentro del tmux de MAGI
 - [ ] Revisión adversarial de cierre (T31, T54), servidor y cliente por separado, con su informe en `docs/fase16/magi-fase16-revision-adversarial.md`
-- [ ] Versión 1.5.0: `CHANGELOG.md` («Sin publicar»), `README.md` (sección «Sesiones persistentes»), `FECHA_DE_VERSION` y guion de validación manual con Claude Code real en el informe de implementación
+- [x] Versión 1.5.0: `CHANGELOG.md` («Sin publicar»), `README.md` (sección «Sesiones persistentes»), `FECHA_DE_VERSION` y guion de validación manual con Claude Code real en el informe de implementación
 
 ---
 
-**Progreso Fase 16:** 36 / 67 funcionalidades
+**Progreso Fase 16:** 65 / 67 funcionalidades
 
-**Total MAGI (Fases 1-16):** 1282 / 1318 funcionalidades
+**Total MAGI (Fases 1-16):** 1311 / 1318 funcionalidades

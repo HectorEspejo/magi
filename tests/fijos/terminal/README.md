@@ -8,11 +8,12 @@ Contenido:
 
 - `tmux`: un tmux falso, en `sh` POSIX, para probar `terminal_tmux.sh` y la
   sesión persistente sin tmux de verdad.
-- `tui_prueba.rs`: programa de prueba que habla como una TUI moderna (lo usa
-  `tests/terminal_e2e.rs`); este README no lo documenta.
+- `tui_prueba.rs`: programa de prueba que habla como una TUI moderna y hace lo
+  que Claude Code (lo usan `tests/terminal_e2e.rs` y
+  `tests/sesiones_persistentes_e2e.rs`; ver «`tui_prueba`» más abajo).
 
-Las pruebas con tmux de verdad (`crates/magi-nucleo/tests/tmux_real.rs`) no
-usan este falso.
+Las pruebas con tmux de verdad (`crates/magi-nucleo/tests/tmux_real.rs` y
+`tests/sesiones_persistentes_e2e.rs`) no usan el tmux falso.
 
 ## `tmux`: tmux falso
 
@@ -162,3 +163,75 @@ tmux_script`; las del escritorio, las de `tests/terminal_servidor.rs`,
 shellcheck tests/fijos/terminal/tmux
 sh -n tests/fijos/terminal/tmux
 ```
+
+## `tui_prueba`: la TUI de prueba
+
+`tui_prueba.rs` es un programa de un solo fichero (solo usa la biblioteca
+estándar) que las pruebas compilan con `rustc` y ejecutan en el host de
+pruebas como programa de la sesión. Hace lo que Claude Code al arrancar y
+vuelca por su salida estándar, una línea cada vez, lo que ha visto:
+
+| Línea | Qué dice |
+|---|---|
+| `RECIBIDO <hex>` | Los bytes con que el terminal contestó a sus consultas (DA1, DA2, teclado de kitty, DECRQM 2026 y 2004, OSC 11) |
+| `CHECK <consulta>=ok\|no` | Si llegó la respuesta esperada a cada consulta |
+| `LISTO` | Ya está configurado (2004, ratón SGR, título, campana y una pantalla de 40 líneas en salida sincronizada) y espera entrada |
+| `ENTRADA <hex>` | Cada bloque de bytes que llegó tras `LISTO`, tal cual: sirve para ver qué reenvía lo que haya entre el terminal y el programa (por ejemplo, tmux) |
+| `PEGADO <líneas> <hex>` | Llegó un pegado entre corchetes entero |
+| `MAYUS_INTRO` | Llegó Mayús+Intro, como `CSI 13;2u` (teclado de kitty, o el formato `csi-u` de tmux) o como `CSI 27;2;13~` (`modifyOtherKeys` de xterm) |
+| `TECLA27 <m> <k>` | Llegó `CSI 27;<m>;<k>~` (`modifyOtherKeys`): modificadores y código |
+| `TECLAU <m> <k>` | Llegó `CSI <k>;<m>u` (teclado de kitty o `csi-u` de tmux): código y modificadores |
+| `INTRO` | Llegó un Intro suelto (`\r`, fuera de un pegado). Es lo que ve un programa cuando algo por el camino pierde el modificador de Mayús+Intro |
+| `RATON <hex>` | Llegó un evento de ratón SGR |
+| `FIN` | Fin de la entrada estándar (o 30 s sin recibir nada) |
+
+Los modificadores de xterm son 1 + Mayús (1) + Alt (2) + Ctrl (4): Mayús es 2,
+Ctrl es 5.
+
+### Qué teclado pide
+
+- Sin opciones, empuja la bandera 1 del teclado de kitty (`CSI > 1 u`), como
+  Claude Code (Fase 15).
+- Con `--modify-other-keys` (nivel 2), `--modify-other-keys=1` o la variable
+  de entorno `MAGI_TUI_MODIFY_OTHER_KEYS` (`1` o `2`) pide `modifyOtherKeys`
+  de xterm (`CSI > 4 ; n m`) en lugar de la bandera de kitty (Fase 16). Es lo
+  que hace falta para que un tmux con `extended-keys on` le reenvíe las teclas
+  con modificadores (Mayús+Intro), y es lo que tmux le pide a su propio
+  terminal.
+
+### Terminal de verdad o tubo
+
+Al arrancar ejecuta `stty -icanon -echo -icrnl min 1 time 0` sobre su entrada:
+con un PTY (el panel de una sesión de tmux, o un terminal) la deja en modo
+crudo, con lecturas que esperan al menos un byte y el Intro como `\r`; con un
+tubo (el host de pruebas sin PTY), `stty` falla y no pasa nada. Un hilo lee la
+entrada y el principal la consume con plazo, porque una lectura bloqueante de
+un tubo no volvería.
+
+### La ampliación de la Fase 16: Mayús+Intro dentro del tmux de MAGI
+
+`tests/sesiones_persistentes_e2e.rs`
+(`mayus_intro_con_modify_other_keys_llega_dentro_del_tmux_de_magi`) lo ejecuta
+con `--modify-other-keys` como comando de una sesión del tmux propio de MAGI
+(servidor `-L magi`, con la configuración que aplica `terminal_tmux.sh`:
+`extended-keys on`, y `extended-keys-format csi-u` desde tmux 3.5), y comprueba
+la cadena entera: tmux le pide `modifyOtherKeys` a la pestaña (MAGI), MAGI
+codifica Mayús+Intro como `CSI 27;2;13~`, tmux lo reenvía al programa y este
+lo reconoce como `MAYUS_INTRO` con `TECLAU 2 13` (`csi-u`) o `TECLA27 2 13`
+(`xterm`), nunca como `INTRO`. Un Intro sin modificadores sí llega como
+`INTRO`, y Ctrl+Intro, como `TECLAU 5 13` o `TECLA27 5 13`.
+
+Depende de la versión de tmux (informe de implementación de la Fase 16, §1):
+
+| tmux | `extended-keys on` y el programa pide `modifyOtherKeys` | El programa pide solo kitty, o nada |
+|---|---|---|
+| 3.0 y 3.1 | sin `extended-keys`: la prueba se omite | — |
+| 3.2 a 3.4 | llega `CSI 13;2u` | se pierde |
+| 3.5 o posterior | llega `CSI 13;2u` (con `csi-u`, que fija el script) | llega Intro |
+
+La prueba cubre la primera columna, que es la que garantizan el script y
+`on` (también `always`) en todas las versiones desde la 3.2. La segunda, que
+es la decisión provisional D338 (si Claude Code pide solo kitty), no está
+automatizada: se comprueba a mano con Claude Code real (guion de validación,
+paso 7).
+

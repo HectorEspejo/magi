@@ -821,7 +821,12 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
         }
     };
 
-    // Cliente admitido: registro y bienvenida con el estado del servidor.
+    // Cliente admitido: registro y bienvenida con el estado del servidor, en
+    // el mismo bloqueo. Si la `Bienvenida` saliera en otro, una difusión de
+    // lista completa (otra ventana que se cierra, el vigilante...) podría
+    // colarse entre el registro y ella, y el cliente la tomaría por una
+    // respuesta inesperada al saludo. La cola hacia el socket no está acotada:
+    // enviar con el bloqueo tomado no espera nunca.
     let cliente_id = {
         let mut estado_bloqueado = estado.lock().await;
         let cliente_id = estado_bloqueado.siguiente_cliente_id;
@@ -836,10 +841,10 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 pendientes,
             ),
         );
+        enviar_bienvenida(&estado_bloqueado, cliente_id);
         cliente_id
     };
     info!(cliente = cliente_id, pid = pid_cliente, "cliente conectado");
-    bienvenida(&estado, cliente_id).await;
 
     // Bucle de mensajes: un mensaje desconocido o mal formado cierra solo a
     // este cliente, nunca el servidor.
@@ -912,9 +917,11 @@ async fn encolar_servicios(
 }
 
 /// `Bienvenida` con la versión, el pid del servidor, las sesiones vivas y la
-/// cola de transferencias (para que una ventana nueva la vea entera).
-async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id: u32) {
-    let estado_bloqueado = estado.lock().await;
+/// cola de transferencias (para que una ventana nueva la vea entera). Se manda
+/// con el mismo bloqueo del estado que registra al cliente: ninguna difusión
+/// puede adelantarla, y es síncrona a propósito para que no pueda volver a
+/// separarse del registro con un `await`.
+fn enviar_bienvenida(estado_bloqueado: &EstadoServidor, cliente_id: u32) {
     let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) else {
         return;
     };
@@ -926,10 +933,10 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
         clientes: estado_bloqueado.clientes.len() as u32,
         sesiones: sesiones::lista(&estado_bloqueado.sesiones),
         transferencias: estado_bloqueado.transferencias.info(),
-        tuneles: tuneles::lista(&estado_bloqueado),
+        tuneles: tuneles::lista(estado_bloqueado),
         ejecuciones: estado_bloqueado.ejecuciones.info(),
         acciones_servicio: estado_bloqueado.servicios.acciones(),
-        tuneles_temporales: tuneles_temporales::lista(&estado_bloqueado),
+        tuneles_temporales: tuneles_temporales::lista(estado_bloqueado),
     };
     difusion::enviar(cliente, mensaje);
     // La lista de escritorios va detrás de la Bienvenida cuando hay alguna
@@ -941,7 +948,7 @@ async fn bienvenida(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>, cliente_id
     }
     // Y la de sesiones persistentes (Fase 16), si el vigilante ya sabe algo:
     // otra difusión completa (T27), detrás de la de escritorios.
-    if let Some(lista) = sesiones_persistentes::lista_para_ventana_nueva(&estado_bloqueado) {
+    if let Some(lista) = sesiones_persistentes::lista_para_ventana_nueva(estado_bloqueado) {
         difusion::enviar(cliente, MensajeServidor::SesionesPersistentes { lista });
     }
 }

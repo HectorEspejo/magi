@@ -1,0 +1,15 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+ MAGI · SESIONES · 2 sesiones ─────────
+ PERSISTENTES · 0 ──────── comprobando…
+
+ PESTAÑAS · 2 ──────────────────────────
+  ESTADO PESTAÑA            TIPO
+▸ ◆      refactor           SSH
+  ✕      db-01              SSH
+
+
+
+
+ ↵ entrar  n nueva  r reconectar  ? más

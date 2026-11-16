@@ -91,7 +91,11 @@ pub struct SeccionFlota {
 }
 
 /// Teclas que ya usa la vista Flota: un atajo no puede quitárselas.
-pub const TECLAS_DE_FLOTA: &[char] = &['s', 'j', 'k', 'r', 'R', '/', 'e', 'a', '?', 'q', '!'];
+pub const TECLAS_DE_FLOTA: &[char] = &[
+    's', 'j', 'k', 'r', 'R', '/', 'e', 'a', '?', 'q', '!',
+    // Nueva sesión persistente (Fase 16).
+    'N',
+];
 
 /// Valida `[flota.atajos]` contra las teclas de Flota y los snippets que
 /// existen. Devuelve los atajos válidos (tecla, snippet) y un aviso por cada
@@ -752,7 +756,8 @@ editar_max_mb = 3
             ("u", "uptime"),
             ("r", "uptime"),
             ("xy", "uptime"),
-            ("N", "reiniciar nginx"),
+            ("m", "reiniciar nginx"),
+            ("N", "uptime"),
             ("z", "no existe"),
         ]
         .into_iter()
@@ -765,11 +770,12 @@ editar_max_mb = 3
         assert_eq!(
             validos,
             vec![
-                ('N', "reiniciar nginx".to_string()),
+                ('m', "reiniciar nginx".to_string()),
                 ('u', "uptime".to_string())
             ]
         );
-        assert_eq!(avisos.len(), 3, "{avisos:?}");
+        // `N` (nueva sesión persistente) es de Flota desde la Fase 16.
+        assert_eq!(avisos.len(), 4, "{avisos:?}");
         assert!(avisos.iter().any(|aviso| aviso.contains("Flota ya usa")));
         assert!(avisos.iter().any(|aviso| aviso.contains("una sola tecla")));
         assert!(avisos.iter().any(|aviso| aviso.contains("no existe")));

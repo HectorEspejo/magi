@@ -11,5 +11,5 @@ source: tests/redimensionado/vistas_g.rs
 ││ n             nuevo host           ││
 ││                                    ││
 ││ esc o ? para cerrar                ││
-└└─────────────────────────── ↑↓ 1/18 ┘┘
+└└─────────────────────────── ↑↓ 1/21 ┘┘
  ↵ conectar  e editar  / filtrar  ? más
