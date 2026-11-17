@@ -118,6 +118,22 @@ enum Comando {
     },
     /// Comprueba lo que MAGI necesita en este sistema sin modificar nada.
     Diagnostico,
+    /// El llavero de fichero con frase maestra de Termux: estado, cambio de
+    /// frase y borrado.
+    ///
+    /// Solo en Termux: en el resto de sistemas el llavero es el del sistema
+    /// (secret-tool o Keychain) y estas órdenes salen con código 1.
+    Llavero {
+        #[command(subcommand)]
+        comando: ComandoLlavero,
+    },
+    /// Utilidades de Termux: la fila de teclas y un aviso de prueba.
+    ///
+    /// Solo en Termux; en el resto de sistemas salen con código 1.
+    Termux {
+        #[command(subcommand)]
+        comando: ComandoTermux,
+    },
     /// Escribe el script de autocompletado de la shell en la salida estándar.
     Autocompletado {
         /// Shell del script: bash, zsh o fish.
@@ -126,6 +142,31 @@ enum Comando {
     },
     /// Escribe la página man de MAGI en la salida estándar.
     Man,
+}
+
+#[derive(Subcommand)]
+enum ComandoLlavero {
+    /// Dice si hay llavero y, si lo hay, su ruta, su tamaño y su fecha.
+    /// Nunca pide la frase ni enseña entradas.
+    Estado,
+    /// Cambia la frase maestra: pide la actual y la nueva dos veces.
+    Cambiar,
+    /// Borra el llavero (las contraseñas guardadas y la clave de
+    /// sincronización de este equipo): pide escribir «borrar».
+    Borrar,
+}
+
+#[derive(Subcommand)]
+enum ComandoTermux {
+    /// Enseña la fila de teclas propuesta y la actual de Termux; con
+    /// --instalar, pregunta y la escribe en termux.properties (con copia).
+    Teclas {
+        /// Instala la fila propuesta, tras confirmarlo.
+        #[arg(long)]
+        instalar: bool,
+    },
+    /// Publica un aviso de prueba de Android y lo retira a los 10 s.
+    Aviso,
 }
 
 #[derive(Subcommand)]
@@ -371,6 +412,23 @@ fn main() -> anyhow::Result<()> {
             let codigo = runtime.block_on(sesiones_cli(&rutas, json))?;
             std::process::exit(codigo);
         }
+        Some(Comando::Llavero { comando }) => {
+            let orden = match comando {
+                ComandoLlavero::Estado => magi::llavero_cli::OrdenLlavero::Estado,
+                ComandoLlavero::Cambiar => magi::llavero_cli::OrdenLlavero::Cambiar,
+                ComandoLlavero::Borrar => magi::llavero_cli::OrdenLlavero::Borrar,
+            };
+            std::process::exit(magi::llavero_cli::ejecutar(orden, &rutas)?);
+        }
+        Some(Comando::Termux { comando }) => {
+            let orden = match comando {
+                ComandoTermux::Teclas { instalar } => {
+                    magi::termux::cli::OrdenTermux::Teclas { instalar }
+                }
+                ComandoTermux::Aviso => magi::termux::cli::OrdenTermux::Aviso,
+            };
+            std::process::exit(magi::termux::cli::ejecutar(orden, &rutas)?);
+        }
         Some(Comando::Diagnostico) | Some(Comando::Autocompletado { .. }) | Some(Comando::Man) => {
             // Se atienden al principio, antes de descubrir rutas y abrir el log.
             unreachable!("los subcomandos sin entorno se despachan al principio")
@@ -611,10 +669,10 @@ fn sincronizar_cli(
             // Purga la clave anterior caducada (30 días) igual que la TUI.
             let mut config = config.clone();
             if config.sincronizacion.activa() {
-                let llavero = magi::llavero::LlaveroDelSistema;
+                let llavero = magi::llavero_cli::abrir_para_cli(rutas)?;
                 if let Ok(true) = magi::sincronizacion::equipos::olvidar_anterior_si_vencida(
                     &mut config,
-                    &llavero,
+                    &*llavero,
                 ) {
                     if let Err(error) = config.guardar(&rutas.fichero_config()) {
                         eprintln!("no se pudo guardar config.toml: {error:#}");
@@ -634,10 +692,14 @@ fn sincronizar_pasada(almacen: &Almacen, rutas: &Rutas, config: &Config) -> i32 
     // Sin carpeta no se lee el llavero: la pasada devolverá «sin configurar»
     // y no hay clave que buscar.
     let claves = if config.sincronizacion.activa() {
-        match magi::sincronizacion::equipos::claves_para_leer(
-            config,
-            &magi::llavero::LlaveroDelSistema,
-        ) {
+        let llavero = match magi::llavero_cli::abrir_para_cli(rutas) {
+            Ok(llavero) => llavero,
+            Err(error) => {
+                eprintln!("{error:#}");
+                return 1;
+            }
+        };
+        match magi::sincronizacion::equipos::claves_para_leer(config, &*llavero) {
             Ok(claves) => claves,
             Err(error) => {
                 eprintln!("no se pudo leer la clave de sincronización del llavero: {error}");
@@ -780,9 +842,9 @@ fn sondear(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let usuario = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string());
+    let usuario = magi::conexion::usuario_local();
+    let llavero: std::sync::Arc<dyn magi::llavero::LlaveroHost> =
+        magi::llavero_cli::abrir_para_cli(rutas)?;
     let peticiones: Vec<PeticionSondeo> = seleccionados
         .iter()
         .map(|host| PeticionSondeo {
@@ -794,6 +856,7 @@ fn sondear(
             usuario_local: usuario.clone(),
             servicios: magi::modelo::servicios_de(host),
             motores: config.servicios.contenedores.clone(),
+            llavero: llavero.clone(),
         })
         .collect();
     let total = peticiones.len();

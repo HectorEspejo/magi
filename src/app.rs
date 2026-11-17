@@ -2795,6 +2795,10 @@ impl PaletaCmd {
 pub struct App {
     pub rutas: Rutas,
     pub config: Config,
+    /// El llavero de este equipo: el del sistema o, en Termux, el de fichero
+    /// con frase maestra (Fase 17). Se inyecta en la construcción y es el
+    /// único sitio de la TUI que lo elige.
+    pub llavero: Arc<dyn crate::llavero::LlaveroCliente>,
     pub tema: Tema,
     pub almacen: Almacen,
     pub runtime: tokio::runtime::Runtime,
@@ -3099,9 +3103,11 @@ impl App {
         let prefijo = crate::teclas::parsear_prefijo(&config.prefijo_escape)
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
         let auto_refresco = config.flota.auto_refresco_seg >= 15;
+        let llavero = crate::llavero::del_equipo(&rutas);
         let mut app = Self {
             rutas,
             config,
+            llavero,
             tema,
             almacen,
             runtime,
@@ -4427,7 +4433,7 @@ impl App {
             cols,
             filas,
             registro: self.registro_sesiones.clone(),
-            llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
+            llavero: self.llavero.clone(),
         };
         let comandos = conexion::lanzar(&self.runtime, plan, self.eventos_tx.clone());
         self.comandos_sesion = Some(comandos);
@@ -4497,7 +4503,7 @@ impl App {
                     host,
                     intento,
                     campo: CampoTexto::default(),
-                    recordar: recordar_por_defecto && crate::llavero::disponible(),
+                    recordar: recordar_por_defecto && self.llavero.disponible(),
                     foco_casilla: false,
                     responder,
                 });
@@ -4792,7 +4798,7 @@ impl App {
                     host,
                     intento,
                     campo: CampoTexto::default(),
-                    recordar: recordar_por_defecto && crate::llavero::disponible(),
+                    recordar: recordar_por_defecto && self.llavero.disponible(),
                     foco_casilla: false,
                 });
             }
@@ -5062,9 +5068,10 @@ impl App {
     /// llavero puede tardar), con la contraseña o con `Cerrar` si no la hay.
     fn responder_con_llavero(&mut self, sesion_id: u32, host: String, usuario: String) {
         let servidor = self.servidor.clone();
+        let llavero = self.llavero.clone();
         self.runtime.spawn(async move {
             let encontrada = tokio::task::spawn_blocking(move || {
-                crate::llavero::recuperar(&host, &usuario).ok().flatten()
+                llavero.recuperar_contrasena(&host, &usuario).ok().flatten()
             })
             .await
             .ok()
@@ -5092,7 +5099,7 @@ impl App {
         // El mismo usuario con el que se guardó: el de la ficha o, sin él, el
         // local (como hace la conexión al autenticar).
         let usuario = ficha.usuario.clone().unwrap_or_else(usuario_local);
-        let Ok(Some(contrasena)) = crate::llavero::recuperar(host, &usuario) else {
+        let Ok(Some(contrasena)) = self.llavero.recuperar_contrasena(host, &usuario) else {
             return false;
         };
         self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
@@ -5307,7 +5314,10 @@ impl App {
             .find(|ficha| ficha.id == host_id)
             .and_then(|ficha| ficha.usuario.clone())
             .unwrap_or_else(usuario_local);
-        match crate::llavero::guardar(&host, &usuario, contrasena.como_str()) {
+        match self
+            .llavero
+            .guardar_contrasena(&host, &usuario, contrasena.como_str())
+        {
             Ok(()) => {
                 if let Err(error) = self
                     .almacen
@@ -8450,6 +8460,7 @@ impl App {
             hogar: self.rutas.hogar.clone(),
             usuario_local: usuario_local(),
             motores: self.config.servicios.contenedores.clone(),
+            llavero: self.llavero.clone(),
         }
     }
 
@@ -10151,8 +10162,8 @@ impl App {
             self.sincronizacion.huella = Some("7f3a·91c2".to_string());
             return;
         }
-        let llavero = crate::llavero::LlaveroDelSistema;
-        self.sincronizacion.huella = crate::sincronizacion::equipos::clave_del_llavero(&llavero)
+        let llavero = self.llavero.clone();
+        self.sincronizacion.huella = crate::sincronizacion::equipos::clave_del_llavero(&*llavero)
             .ok()
             .flatten()
             .map(|clave| clave.huella_corta());
@@ -10346,9 +10357,9 @@ impl App {
 
     /// Primera pasada al abrir MAGI (solo con efectos externos y carpeta).
     pub(crate) fn iniciar_sincronizacion(&mut self) {
-        let llavero = crate::llavero::LlaveroDelSistema;
+        let llavero = self.llavero.clone();
         if let Ok(true) =
-            crate::sincronizacion::equipos::olvidar_anterior_si_vencida(&mut self.config, &llavero)
+            crate::sincronizacion::equipos::olvidar_anterior_si_vencida(&mut self.config, &*llavero)
         {
             if let Err(error) = self.config.guardar(&self.rutas.fichero_config()) {
                 warn!("no se pudo guardar config.toml: {error}");
@@ -10428,8 +10439,8 @@ impl App {
         if !pendiente {
             return;
         }
-        let llavero = crate::llavero::LlaveroDelSistema;
-        let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &llavero)
+        let llavero = self.llavero.clone();
+        let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &*llavero)
         else {
             return;
         };
@@ -10479,6 +10490,7 @@ impl App {
             self.eventos_tx.clone(),
             self.rutas.clone(),
             self.config.clone(),
+            self.llavero.clone(),
         );
     }
 
@@ -10666,13 +10678,13 @@ impl App {
         match crate::sincronizacion::carpeta::hay_ficheros(&ruta) {
             Ok(true) => self.abrir_unir_equipo_para(&ruta),
             Ok(false) => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::crear(
                     self.almacen.conexion(),
                     &self.rutas,
                     &ruta,
                     &mut self.config,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(clave) => {
                         self.iniciar_vigilancia();
@@ -10744,14 +10756,14 @@ impl App {
     /// Intenta unir este equipo con la clave pegada. Si la clave no abre los
     /// ficheros, el diálogo sigue abierto con el motivo.
     fn unir_equipo(&mut self, carpeta: &std::path::Path, texto: &str) {
-        let llavero = crate::llavero::LlaveroDelSistema;
+        let llavero = self.llavero.clone();
         match crate::sincronizacion::equipos::unir(
             self.almacen.conexion(),
             &self.rutas,
             carpeta,
             texto,
             &mut self.config,
-            &llavero,
+            &*llavero,
         ) {
             Ok(_clave) => {
                 self.iniciar_vigilancia();
@@ -10792,8 +10804,8 @@ impl App {
 
     /// k: muestra la clave guardada en el llavero.
     fn mostrar_clave(&mut self) {
-        let llavero = crate::llavero::LlaveroDelSistema;
-        match crate::sincronizacion::equipos::clave_del_llavero(&llavero) {
+        let llavero = self.llavero.clone();
+        match crate::sincronizacion::equipos::clave_del_llavero(&*llavero) {
             Ok(Some(clave)) => self.abrir_clave(&clave, false),
             Ok(None) => self.mensaje("no hay clave de sincronización en el llavero", true),
             Err(error) => self.mensaje(error, true),
@@ -11192,13 +11204,13 @@ impl App {
         match accion {
             AccionInventario::MostrarClave => self.mostrar_clave(),
             AccionInventario::QuitarEquipo(uuid) => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::quitar(
                     self.almacen.conexion(),
                     &self.rutas,
                     &mut self.config,
                     &uuid,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(clave) => {
                         self.iniciar_vigilancia();
@@ -11209,12 +11221,12 @@ impl App {
                 }
             }
             AccionInventario::RotarClave => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::rotar(
                     self.almacen.conexion(),
                     &self.rutas,
                     &mut self.config,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(clave) => {
                         self.recargar_sincronizacion();
@@ -11224,12 +11236,12 @@ impl App {
                 }
             }
             AccionInventario::Desactivar => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::desactivar(
                     self.almacen.conexion(),
                     &self.rutas,
                     &mut self.config,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(()) => {
                         self.sincronizacion.generacion_vigilancia += 1;
@@ -11591,7 +11603,7 @@ impl App {
                 host_id: _,
                 nombre,
                 usuario,
-            } => match crate::llavero::olvidar(&nombre, &usuario) {
+            } => match self.llavero.olvidar_contrasena(&nombre, &usuario) {
                 Ok(true) => self.mensaje(
                     format!("contraseña de «{nombre}» borrada del llavero"),
                     false,
@@ -11698,9 +11710,7 @@ fn conciliar_aviso(
 }
 
 fn usuario_local() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string())
+    crate::conexion::usuario_local()
 }
 
 /// Filas útiles para el PTY remoto: el alto de la ventana menos las cuatro

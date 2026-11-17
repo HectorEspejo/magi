@@ -11,6 +11,7 @@ pub use magi_nucleo::{escritorio, ficheros, modelo, registro, rutas};
 pub mod flota;
 pub mod identidades;
 pub mod llavero;
+pub mod llavero_cli;
 pub mod portapapeles;
 pub mod protocolo;
 pub mod servidor;
@@ -20,6 +21,7 @@ pub mod snippets;
 pub mod sshconfig;
 pub mod teclas;
 pub mod tema;
+pub mod termux;
 pub mod ui;
 pub mod visor;
 

@@ -1696,7 +1696,11 @@ fn una_base_nueva_se_abre_en_la_version_11_y_las_fichas_sobreviven_a_reabrirla()
 
 #[test]
 fn el_registro_admite_los_cuatro_tipos_de_sesiones_persistentes() {
-    assert_eq!(registro::TIPOS.len(), 50, "46 de antes y los cuatro nuevos");
+    assert_eq!(
+        registro::TIPOS.len(),
+        56,
+        "46 de antes, los cuatro de la F16 y los seis de la F17"
+    );
     let nuevos = [
         (
             registro::SESION_PERSISTENTE_CREADA,
@@ -1719,7 +1723,7 @@ fn el_registro_admite_los_cuatro_tipos_de_sesiones_persistentes() {
     let mut todos: Vec<&str> = registro::TIPOS.to_vec();
     todos.sort_unstable();
     todos.dedup();
-    assert_eq!(todos.len(), 50);
+    assert_eq!(todos.len(), 56);
 
     let almacen = almacen();
     let host = crear_host(&almacen, "dev-01");

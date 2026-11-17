@@ -108,7 +108,22 @@ pub const SESION_PERSISTENTE_ENGANCHADA: &str = "sesion_persistente_enganchada";
 /// Se borró una ficha (host, nombre y «la sesión sigue en el host» si vivía).
 pub const SESION_PERSISTENTE_BORRADA: &str = "sesion_persistente_borrada";
 
-pub const TIPOS: [&str; 50] = [
+/// Se escribió por primera vez `llavero.age` (Fase 17, Termux). Ningún
+/// registro del llavero guarda frases, secretos ni su contenido.
+pub const LLAVERO_CREADO: &str = "llavero_creado";
+/// El llavero recifrado con la frase nueva ya está escrito.
+pub const LLAVERO_FRASE_CAMBIADA: &str = "llavero_frase_cambiada";
+/// El fichero del llavero ya no existe.
+pub const LLAVERO_BORRADO: &str = "llavero_borrado";
+/// Al quinto fallo seguido de una serie de desbloqueo (detalle: intentos).
+pub const LLAVERO_DESBLOQUEO_FALLIDO: &str = "llavero_desbloqueo_fallido";
+/// El llavero dañado ya está apartado (detalle: nombre de la copia).
+pub const LLAVERO_APARTADO: &str = "llavero_apartado";
+/// `termux.properties` ya está escrito con la fila de MAGI (detalle: nombre de
+/// la copia, o «no existía»).
+pub const TERMUX_TECLAS_INSTALADAS: &str = "termux_teclas_instaladas";
+
+pub const TIPOS: [&str; 56] = [
     CONEXION_ABIERTA,
     CONEXION_FALLIDA,
     HUELLA_ACEPTADA,
@@ -159,6 +174,12 @@ pub const TIPOS: [&str; 50] = [
     SESION_PERSISTENTE_REABIERTA,
     SESION_PERSISTENTE_ENGANCHADA,
     SESION_PERSISTENTE_BORRADA,
+    LLAVERO_CREADO,
+    LLAVERO_FRASE_CAMBIADA,
+    LLAVERO_BORRADO,
+    LLAVERO_DESBLOQUEO_FALLIDO,
+    LLAVERO_APARTADO,
+    TERMUX_TECLAS_INSTALADAS,
 ];
 
 /// Filtros rápidos de la vista Registro (`t` cicla por ellos).

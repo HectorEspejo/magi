@@ -16,6 +16,7 @@ pub mod ficheros;
 pub mod flota;
 pub mod instalar_clave;
 pub mod llavero;
+pub mod llavero_fichero;
 pub mod modelo;
 pub mod registro;
 pub mod rutas;

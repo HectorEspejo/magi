@@ -166,10 +166,10 @@ pub fn lanzar_espera(
     eventos: mpsc::UnboundedSender<Evento>,
     rutas: crate::config::Rutas,
     config: crate::config::Config,
+    llavero: std::sync::Arc<dyn crate::llavero::LlaveroCliente>,
 ) {
     runtime.spawn(async move {
-        let llavero = crate::llavero::LlaveroDelSistema;
-        let claves = match crate::sincronizacion::equipos::claves_para_leer(&config, &llavero) {
+        let claves = match crate::sincronizacion::equipos::claves_para_leer(&config, &*llavero) {
             Ok(claves) => claves,
             Err(error) => {
                 let _ = eventos.send(Evento::Inventario(EventoInventario::Error(error)));

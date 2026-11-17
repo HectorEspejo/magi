@@ -604,7 +604,7 @@ pub fn dibujar_dialogo(
             let foco = *foco;
             let recordar = *recordar;
             let es_vnc = peticion.tipo == TipoHost::Vnc;
-            let con_llavero = crate::llavero::disponible();
+            let con_llavero = app.llavero.disponible();
             let texto = texto_de(tema);
             let tenue = Style::default().fg(tema.paleta.inactivo);
             let acento = Style::default().fg(tema.paleta.acento);

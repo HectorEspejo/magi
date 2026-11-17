@@ -1063,8 +1063,8 @@ impl App {
         } else {
             0
         };
-        let recordar = crate::llavero::disponible()
-            && host.is_some_and(|host| host.identidad_ref.usa_llavero());
+        let recordar =
+            self.llavero.disponible() && host.is_some_and(|host| host.identidad_ref.usa_llavero());
         self.mostrar_dialogo_servidor(Dialogo::Escritorio(DialogoEscritorio::Credenciales {
             peticion_id,
             escritorio_id,
@@ -1108,7 +1108,9 @@ impl App {
                 TipoHost::Vnc | TipoHost::Voxl => String::new(),
                 _ => super::usuario_local(),
             });
-        let contrasena = crate::llavero::recuperar(&host.nombre, &usuario)
+        let contrasena = self
+            .llavero
+            .recuperar_contrasena(&host.nombre, &usuario)
             .ok()
             .flatten()?;
         Some(CredencialesEscritorio {
@@ -1150,7 +1152,8 @@ impl App {
         else {
             return Err("el host ya no existe".to_string());
         };
-        crate::llavero::guardar(&nombre, usuario, contrasena)?;
+        self.llavero
+            .guardar_contrasena(&nombre, usuario, contrasena)?;
         if let Err(error) = self
             .almacen
             .marcar_identidad_ref(host_id, &IdentidadRef::ContrasenaLlavero)
@@ -1252,7 +1255,7 @@ impl App {
         else {
             return;
         };
-        match crate::llavero::olvidar(&nombre, usuario) {
+        match self.llavero.olvidar_contrasena(&nombre, usuario) {
             Ok(_) => {
                 if let Err(error) = self
                     .almacen
@@ -1389,7 +1392,7 @@ impl App {
                 error,
             } => {
                 let es_vnc = peticion.tipo == TipoHost::Vnc;
-                let con_casilla = crate::llavero::disponible();
+                let con_casilla = self.llavero.disponible();
                 let reponer = |app: &mut App,
                                usuario: CampoTexto,
                                dominio: CampoTexto,
@@ -1520,7 +1523,8 @@ impl App {
             return false;
         }
         let usuario = usuario_llavero(host);
-        crate::llavero::recuperar(&host.nombre, &usuario)
+        self.llavero
+            .recuperar_contrasena(&host.nombre, &usuario)
             .ok()
             .flatten()
             .is_some()

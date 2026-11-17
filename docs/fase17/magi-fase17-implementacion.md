@@ -37,14 +37,14 @@ cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
 
 ## 2. Desviaciones respecto a la especificación (qué y por qué)
 
-Aprobadas con el plan (17 nov 2026), salvo la 1, que **queda pendiente de decisión**:
+Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el `readelf`:
 
-1. **`libz.so` en `readelf -d` (PENDIENTE).** El plan preveía enlazar zlib estático solo en Android con la feature `static` de `libz-sys`. **No funciona**: en `libz-sys` 1.1.31 la rama de Android hace `return` con `rustc-link-lib=z` *antes* de mirar `static` (`build.rs`, líneas 25-30). Alternativas medidas:
+1. **`libz.so` en `readelf -d` (DECIDIDA: se acepta la alternativa a).** El plan preveía enlazar zlib estático solo en Android con la feature `static` de `libz-sys`. **No funciona**: en `libz-sys` 1.1.31 la rama de Android hace `return` con `rustc-link-lib=z` *antes* de mirar `static` (`build.rs`, líneas 25-30). Alternativas medidas:
    - **a)** Aceptar `libz.so` como biblioteca permitida (`libc libm libdl liblog libz`) y decirlo en el informe, como la spec hace con `libc++_shared.so`. No exige `Depends`: Android la trae siempre. Es la que menos toca.
    - **b)** Quitar la dependencia: `winscard` activa `flate2/zlib`; habría que parchear `winscard` (`[patch]`) o sustituir `sspi`. Invasivo, y la regla de `CLAUDE.md` sobre la copia vendorizada de IronRDP dice que no se toque.
    - **c)** Enlazar `libz.a` del NDK (existe en el sysroot) con un `build.rs` propio y con el orden de enlace adecuado; frágil y con efectos sobre las compilaciones de escritorio.
    - **d)** Feature `zlib-ng-no-cmake-experimental-community-maintained` de `libz-sys`: cambia la implementación de zlib y es «experimental».
-   Recomendación: **a)**. El AC cambiaría a «solo bibliotecas del NDK estable (`libc`, `libm`, `libdl`, `liblog`, `libz`)».
+   **Decisión de Hector (17 nov 2026): a).** El AC de `readelf -d` pasa a «solo bibliotecas del NDK estable (`libc`, `libm`, `libdl`, `liblog` y `libz`)»; el `.deb` sigue sin `Depends` porque `libz.so` viene en toda versión de Android. `termux-release.yml` y `termux_paquete` comprobarán esa lista, no la de «solo bionic» del texto del checklist. El texto del checklist no se reescribe (es la clave de trazabilidad): esta desviación es la que lo corrige.
 2. **Aviso del servidor a la barra sin protocolo.** La spec pide que «la barra lo diga una vez» (Termux:API apagada en el servidor, sin wake lock, límite de procesos de Android 12+). El protocolo está congelado en v10 y `MensajeServidor::Error{peticion_id: None}` acaba en la vista Archivos. Se añade un quinto fichero de estado, `~/.local/state/magi/termux/servidor` (JSON mínimo), que el cliente mira cada ~5 s solo en Termux y que `magi diagnostico` también lee.
 3. **`termux_paquete`.** GitHub pone `CI=true` en todos los jobs (también `tests-linux`, que nunca tendrá `.deb`), así que «con `CI` puesta falla si no hay `.deb`» rompería esa CI. Se usa `MAGI_EXIGIR_DEB=1`, solo en el job `termux`; sin ella y sin `MAGI_DEB`, la prueba se omite con aviso.
 4. **Candidatas `-rc.N`.** El guion de validación las usa: `Version: 1.6.0~rc.1` en el `control` (con guion ordenaría *después* de `1.6.0`) y `termux-release.yml` con un segundo patrón de tag.
@@ -87,8 +87,7 @@ Ninguna todavía (0 / 71). Estado de la primera, que **no se marca**:
 
 ## 6. Pendientes y bloqueos
 
-- **Puerta de la PoC (bloquea el Sprint 1).** Necesito tu resultado de la prueba en el plegable (§7). Si el binario no arranca, se para y se replantea (R167). De los resultados salen tres constantes: `FOCO_FIABLE`, `TOPE_OSC52` y el plazo de arranque del servidor.
-- **Decisión sobre `libz.so`** (§2.1).
+- **PoC en el plegable: sin resultado todavía.** Hector decidió empezar el Sprint 1 sin esperar a la PoC. Hasta que la pase, las tres constantes que salen de ella llevan el valor prudente de la especificación y la marca `PROVISIONAL-POC`: `FOCO_FIABLE = false` (las pestañas avisan aunque estén delante y el aviso se retira al escribir, D379), `TOPE_OSC52 = 6000` (lo que dice §7.4) y el plazo de arranque del servidor, 2 s (sin cambios). Si la PoC contradice alguna, se cambia una sola constante. **Si el binario no arranca en Termux (R167), se para y se replantea todo lo que sigue.**
 - **`dpkg-deb` no está instalado en esta máquina** (necesario para `scripts/paquete-termux.sh` y la prueba `termux_paquete`, Sprint 3): `sudo pacman -S dpkg`. No bloquea la puerta.
 - `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` no están en la shell por defecto: hay que exportarlas para `cargo ndk` (el NDK r30 está en `$HOME/Android/Sdk/ndk/30.0.16248370`).
 - `deny.toml` solo audita los cuatro targets de escritorio; se añadirán los de Android en el Sprint 1.
