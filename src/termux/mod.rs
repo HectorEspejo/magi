@@ -9,9 +9,11 @@
 //! `EQUIPOS.plataforma`.
 //!
 //! La lógica nunca lee `std::env`: recibe un `EntornoTermux` (el del proceso en
-//! producción, uno de mentira en las pruebas). `es_termux` es la única
-//! excepción, porque decide una vez al arrancar.
+//! producción, uno de mentira en las pruebas). Las únicas excepciones son
+//! `es_termux`, que decide una vez al arrancar, y `EntornoTermux::del_proceso`,
+//! que es quien construye el entorno real.
 
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use magi_nucleo::llavero_fichero::{LlaveroFichero, NOMBRE_FICHERO};
@@ -60,6 +62,21 @@ pub fn es_termux() -> bool {
 /// directorio de datos. `None` fuera de Termux.
 pub fn llavero_fichero(rutas: &Rutas) -> Option<Arc<LlaveroFichero>> {
     es_termux().then(|| Arc::new(LlaveroFichero::nuevo(rutas.datos.join(NOMBRE_FICHERO))))
+}
+
+/// La shell con la que corre el comando local de CASPER-3 en Termux
+/// (`$PREFIX/bin/sh`, §7.1): en Termux no existe `/bin/sh` y no se debe confiar
+/// en lo que haya en el `PATH`. `None` fuera de Termux, donde sigue el `sh` del
+/// núcleo; `Some(Err(..))` es el error con instrucción si no se pudo calcular
+/// (sin `$PREFIX`). Quien la pide la fija al abrir su diálogo y no la relee.
+pub fn shell_local() -> Option<Result<PathBuf, String>> {
+    es_termux().then(|| shell_de(&EntornoTermux::del_proceso()))
+}
+
+/// La shell local de un entorno dado (la parte de [`shell_local`] que se
+/// puede probar sin depender del proceso).
+pub fn shell_de(entorno: &EntornoTermux) -> Result<PathBuf, String> {
+    rutas::calcular(entorno).map(|rutas| rutas.sh)
 }
 
 /// Nombre por defecto del equipo en Termux: `termux-<modelo>` con la regla de

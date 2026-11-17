@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::enlaces::{self, DialogoEnlace};
 use crate::app::escritura_varios::{EstadoEscritura, MotivoFin, Peticion};
@@ -61,12 +62,36 @@ impl crate::app::PestanaUI {
 
 /// Texto de un pegado para un campo de una línea: sin controles (los saltos
 /// de línea se juntan) y acotado para que un pegado enorme no infle el campo.
+///
+/// El búfer se reserva de una vez (la salida nunca pasa de los bytes de la
+/// entrada ni de 4096 caracteres de 4 bytes): sin reasignaciones que dejen
+/// copias a medias en memoria sin borrar, que importa si es una frase.
 fn texto_para_campo(texto: &str) -> String {
-    texto
-        .chars()
-        .filter(|caracter| !caracter.is_control())
-        .take(4096)
-        .collect()
+    let mut salida = String::with_capacity(texto.len().min(4096 * 4));
+    salida.extend(
+        texto
+            .chars()
+            .filter(|caracter| !caracter.is_control())
+            .take(4096),
+    );
+    salida
+}
+
+/// Pega un texto en el campo con foco de un diálogo. Si el campo es una frase
+/// del llavero, el texto del evento y el saneado se borran de la memoria
+/// (`zeroize`) en cuanto se han copiado al campo. Devuelve si el pegado lo
+/// consumió un campo.
+#[doc(hidden)]
+pub fn pegar_en_dialogo(dialogo: &mut Dialogo, texto: &mut String) -> bool {
+    let es_frase = matches!(dialogo, Dialogo::Llavero(llavero) if llavero.modo.es_secreto());
+    // Siempre se borra el saneado; solo el original si es una frase (el
+    // resto de los pegados no son secretos).
+    let saneado = Zeroizing::new(texto_para_campo(texto));
+    let consumido = dialogo.pegar_texto(&saneado);
+    if es_frase {
+        texto.zeroize();
+    }
+    consumido
 }
 
 impl App {
@@ -1976,11 +2001,11 @@ impl App {
 
     // ------------------------------------------------------------ pegado
 
-    pub(crate) fn despachar_pegado(&mut self, texto: String) {
+    pub(crate) fn despachar_pegado(&mut self, mut texto: String) {
         // Fuera de la vista Sesión en vivo, el pegado va al campo con foco
         // (diálogo, búsqueda, filtro) si lo hay; si no, se descarta (§4.3).
         if let Some(dialogo) = self.dialogo.as_mut() {
-            if dialogo.pegar_texto(&texto_para_campo(&texto)) {
+            if pegar_en_dialogo(dialogo, &mut texto) {
                 self.sucio = true;
             }
             return;

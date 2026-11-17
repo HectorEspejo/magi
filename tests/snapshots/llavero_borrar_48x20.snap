@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ────────── 7 hosts · 3 nominal ─┐
+│┌ BORRAR EL LLAVERO ─────────────────────────┐│
+││                                            ││
+││  Se borrará llavero.age de este equipo.    ││
+││                                            ││
+││  Se pierden las contraseñas guardadas de   ││
+││  tus hosts y la clave de sincronización    ││
+││  de este equipo: habrá que volver a        ││
+││  escribir las contraseñas y a unir el      ││
+││  equipo con la clave.                      ││
+││  El inventario y los demás equipos no      ││
+││  cambian.                                  ││
+││                                            ││
+││  Escribe borrar para confirmar:            ││
+││  [ borra┃ ]                                ││
+││                                            ││
+││  ↵ borrar   Esc cancelar                   ││
+││                                            ││
+└└────────────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más

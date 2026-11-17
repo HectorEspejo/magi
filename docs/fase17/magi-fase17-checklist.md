@@ -1,15 +1,15 @@
 # MAGI - Checklist Fase 17: MAGI en Termux
 
 ## Compilación y plataforma
-- [ ] El paquete `magi-ssh` compila para `aarch64-linux-android` (API 24) con `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh`, sin cambiar las dependencias del escritorio ni la app
+- [x] El paquete `magi-ssh` compila para `aarch64-linux-android` (API 24) con `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh`, sin cambiar las dependencias del escritorio ni la app
   - AC: Dado el workspace, cuando se compila para Android, entonces sale `target/aarch64-linux-android/release/magi` y `readelf -d` solo pide bibliotecas de bionic (`libc`, `libm`, `libdl` y, si alguna dependencia lo usa, `liblog`)
-- [ ] Modo Termux elegido al compilar (`cfg(target_os = "android")`) y, solo en compilaciones de depuración, con `MAGI_PLATAFORMA=termux` para las pruebas
+- [x] Modo Termux elegido al compilar (`cfg(target_os = "android")`) y, solo en compilaciones de depuración, con `MAGI_PLATAFORMA=termux` para las pruebas
   - AC: Dado un binario de release para Linux con `MAGI_PLATAFORMA=termux`, cuando arranca, entonces se porta como en Linux
 - [ ] Lo propio de Termux en `src/termux/` (`mod`, `rutas`, `ordenes`, `portapapeles`, `wake_lock`, `avisos`, `teclas`, `diagnostico` y `cli`); fuera de ahí, solo llamadas a su interfaz
-- [ ] Rutas en Termux desde `$HOME`, `XDG_*`, `$TMPDIR` y `$PREFIX`, nunca desde el uid: datos, configuración y estado como en Linux, y socket en `$TMPDIR/magi-<uid>/servidor.sock` (directorio 700) cuando no hay `XDG_RUNTIME_DIR`
+- [x] Rutas en Termux desde `$HOME`, `XDG_*`, `$TMPDIR` y `$PREFIX`, nunca desde el uid: datos, configuración y estado como en Linux, y socket en `$TMPDIR/magi-<uid>/servidor.sock` (directorio 700) cuando no hay `XDG_RUNTIME_DIR`
   - AC: Dado `XDG_RUNTIME_DIR` sin poner y el `TMPDIR` de Termux, cuando arranca el servidor, entonces el socket queda en `$TMPDIR/magi-<uid>/` con una ruta de menos de 100 bytes
-- [ ] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
-- [ ] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
+- [x] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
+- [x] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
 - [ ] El núcleo no decide nada por `EQUIPOS.plataforma`: con `android` en un equipo escritor, la deliberación, el sondeo y la sincronización se portan como en el escritorio
   - AC: Dadas las pruebas de deliberación, sondeo y sincronización con la plataforma `android` inyectada en el escritorio, cuando corren, entonces dan lo mismo que con `linux`
 
@@ -24,23 +24,23 @@
 - [ ] README: sección «MAGI en Termux» con la instalación (`apt install ./magi-ssh_<versión>_aarch64.deb` o TUR), Termux:API, `termux-setup-storage`, la fila de teclas y el límite de procesos de Android 12 o posterior
 
 ## Llavero con frase maestra
-- [ ] `LlaveroFichero` en `crates/magi-nucleo/src/llavero_fichero.rs`, detrás de `LlaveroSecreto`: `llavero.age` en el directorio de datos (600, por `ficheros.rs`), age con una entrada scrypt (2^17 al crear, hasta 2^20 al abrir), JSON con `formato` 1 y tope de 1 MiB
+- [x] `LlaveroFichero` en `crates/magi-nucleo/src/llavero_fichero.rs`, detrás de `LlaveroSecreto`: `llavero.age` en el directorio de datos (600, por `ficheros.rs`), age con una entrada scrypt (2^17 al crear, hasta 2^20 al abrir), JSON con `formato` 1 y tope de 1 MiB
   - AC: Dado un llavero creado con una frase, cuando se abre con otra, entonces da «frase incorrecta» y el fichero no cambia
-- [ ] En Termux, el llavero de MAGI es `LlaveroFichero`; secret-tool, Keychain y `LlaveroMovil` no cambian
-- [ ] La frase maestra vive solo en la memoria del cliente (`Zeroizing`, normalizada a NFC) hasta que se cierra la ventana o se bloquea el llavero; nunca va a disco, al log, a REGISTRO ni al servidor
-- [ ] Diálogo CREAR LA FRASE MAESTRA cuando hace falta guardar el primer secreto (recordar una contraseña, crear o unir la sincronización): dos campos, al menos 12 caracteres y el aviso de que no se recupera
+- [x] En Termux, el llavero de MAGI es `LlaveroFichero`; secret-tool, Keychain y `LlaveroMovil` no cambian
+- [x] La frase maestra vive solo en la memoria del cliente (`Zeroizing`, normalizada a NFC) hasta que se cierra la ventana o se bloquea el llavero; nunca va a disco, al log, a REGISTRO ni al servidor
+- [x] Diálogo CREAR LA FRASE MAESTRA cuando hace falta guardar el primer secreto (recordar una contraseña, crear o unir la sincronización): dos campos, al menos 12 caracteres y el aviso de que no se recupera
   - AC: Dado que no hay `llavero.age`, cuando se marca «recordar» al conectar y se pulsa Esc en CREAR LA FRASE MAESTRA, entonces la contraseña se usa sin guardarse y no se crea ningún fichero
-- [ ] Diálogo LLAVERO DE MAGI al abrir MAGI con `llavero.age`; Esc sigue sin él y la barra dice «llavero bloqueado» cuando algo lo necesita
-- [ ] Con el llavero bloqueado, una conexión interactiva que lo necesita pide antes la frase (y, con Esc, la contraseña sin «recordar»); una operación automática da error con instrucción, nunca un diálogo
+- [x] Diálogo LLAVERO DE MAGI al abrir MAGI con `llavero.age`; Esc sigue sin él y la barra dice «llavero bloqueado» cuando algo lo necesita
+- [x] Con el llavero bloqueado, una conexión interactiva que lo necesita pide antes la frase (y, con Esc, la contraseña sin «recordar»); una operación automática da error con instrucción, nunca un diálogo
   - AC: Dado el llavero bloqueado y la reconexión automática de un host con `contrasena:llavero`, cuando el servidor pide la contraseña, entonces la pestaña dice «llavero bloqueado: desbloquéalo (Ctrl+P)» y no se abre ningún diálogo
-- [ ] Cinco frases incorrectas seguidas imponen 30 s de espera y anotan `llavero_desbloqueo_fallido` (una línea por serie, con el número de intentos)
-- [ ] Diálogo CAMBIAR LA FRASE MAESTRA: la actual y la nueva dos veces; recifra con escritura atómica bajo el cerrojo y anota `llavero_frase_cambiada`
-- [ ] Diálogo BORRAR EL LLAVERO: explica qué se pierde (las contraseñas guardadas y la clave de sincronización de este equipo), pide escribir `borrar` y anota `llavero_borrado`
-- [ ] Diálogo LLAVERO DAÑADO (cabecera o contenido ilegibles): apartarlo como `llavero.age.danado-<fecha>` y seguir sin llavero, o salir sin tocar nada; nunca se borra solo; anota `llavero_apartado`
-- [ ] Dos ventanas de MAGI en el mismo Termux: cada una pide la frase; las escrituras van con `flock` y releen el fichero antes de escribir
+- [x] Cinco frases incorrectas seguidas imponen 30 s de espera y anotan `llavero_desbloqueo_fallido` (una línea por serie, con el número de intentos)
+- [x] Diálogo CAMBIAR LA FRASE MAESTRA: la actual y la nueva dos veces; recifra con escritura atómica bajo el cerrojo y anota `llavero_frase_cambiada`
+- [x] Diálogo BORRAR EL LLAVERO: explica qué se pierde (las contraseñas guardadas y la clave de sincronización de este equipo), pide escribir `borrar` y anota `llavero_borrado`
+- [x] Diálogo LLAVERO DAÑADO (cabecera o contenido ilegibles): apartarlo como `llavero.age.danado-<fecha>` y seguir sin llavero, o salir sin tocar nada; nunca se borra solo; anota `llavero_apartado`
+- [x] Dos ventanas de MAGI en el mismo Termux: cada una pide la frase; las escrituras van con `flock` y releen el fichero antes de escribir
   - AC: Dadas dos ventanas desbloqueadas que guardan a la vez las contraseñas de dos hosts distintos, cuando terminan, entonces `llavero.age` tiene las dos
-- [ ] La CLI que necesita el llavero (`magi sincronizar` y las demás) pide la frase en el TTY; sin TTY, error con instrucción
-- [ ] «Bloquear el llavero» desde la paleta borra de la memoria la frase y las entradas
+- [x] La CLI que necesita el llavero (`magi sincronizar` y las demás) pide la frase en el TTY; sin TTY, error con instrucción
+- [x] «Bloquear el llavero» desde la paleta borra de la memoria la frase y las entradas
 
 ## Sincronización
 - [ ] En Termux, el equipo se llama por defecto `termux-<modelo>` (`ro.product.model` con la regla de la etiqueta de la F15, 20 caracteres como mucho) y su plataforma es `android`, sin `formato` nuevo
@@ -50,7 +50,7 @@
 - [ ] La carpeta de sincronización se guarda resuelta con `realpath` (`~/storage/shared/…` → `/storage/emulated/0/…`); sin `~/storage`, la instrucción de ejecutar `termux-setup-storage`
 - [ ] La carpeta se sondea cada `[termux] sincronizacion_sondeo_seg` (30 s) con MAGI abierto, en vez de usar `notify`, y también al volver a la vista Sincronización
 - [ ] Los permisos 600 que el almacenamiento compartido no admite no son un error (una línea en el log por sesión)
-- [ ] Unir este equipo pegando la clave en el diálogo (pegado entre corchetes de Termux); la clave va al llavero de fichero, que se crea si no existe
+- [x] Unir este equipo pegando la clave en el diálogo (pegado entre corchetes de Termux); la clave va al llavero de fichero, que se crea si no existe
 
 ## Portapapeles, enlaces y escritorios
 - [ ] Copiar en Termux: `termux-clipboard-set` por la entrada estándar (hasta 512 KiB) si Termux:API responde; si no, OSC 52 hasta 6 000 bytes codificados; si no cabe, aviso con el tamaño y la alternativa
@@ -97,8 +97,8 @@
 - [ ] Tipos nuevos `llavero_creado`, `llavero_frase_cambiada`, `llavero_borrado`, `llavero_desbloqueo_fallido`, `llavero_apartado` y `termux_teclas_instaladas`, sin frases ni secretos, con su etiqueta en la vista Registro
 
 ## API: CLI y órdenes de Termux
-- [ ] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
-- [ ] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
+- [x] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
+- [x] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
 - [ ] `magi termux teclas [--instalar]`: sin `--instalar`, enseña la fila propuesta y la actual sin escribir
 - [ ] `magi termux aviso`: publica un aviso de prueba y lo retira a los 10 s
 - [ ] `termux-clipboard-set` (por la entrada estándar) y `termux-open-url` desde el cliente
@@ -108,7 +108,7 @@
 
 ## Calidad
 - [ ] Prueba de concepto en el plegable al empezar: el binario arranca y conecta, eventos de foco al cambiar de app, tope de OSC 52, el macro `^]` y la acción del aviso; el resultado, en el informe de implementación
-- [ ] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
+- [x] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
 - [ ] Dobles de `tests/fijos/termux/` (anotan argumentos y entrada, y saben colgarse o fallar) y pruebas `termux_ordenes`, `termux_ui`, `termux_servidor`, `termux_sincronizacion` y `termux_teclas` con `MAGI_PLATAFORMA=termux`
 - [ ] Prueba `termux_paquete`: rutas de `dpkg-deb --contents`, el `control` y `readelf -d` del `.deb` armado (en CI falla si no hay `.deb`; fuera, se omite con aviso)
 - [ ] El escritorio y la app no cambian: todas las pruebas anteriores en verde, las instantáneas de redimensionado sin cambios y `android/` sin tocar
@@ -117,6 +117,6 @@
 
 ---
 
-**Progreso Fase 17:** 0 / 71 funcionalidades
+**Progreso Fase 17:** 22 / 71 funcionalidades
 
-**Total MAGI (Fases 1-17):** 1311 / 1389 funcionalidades
+**Total MAGI (Fases 1-17):** 1333 / 1389 funcionalidades

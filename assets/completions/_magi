@@ -772,8 +772,8 @@ _magi__subcmd__help__subcmd__importar_commands() {
 _magi__subcmd__help__subcmd__llavero_commands() {
     local commands; commands=(
 'estado:Dice si hay llavero y, si lo hay, su ruta, su tamaño y su fecha. Nunca pide la frase ni enseña entradas' \
-'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces' \
-'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: pide escribir «borrar»' \
+'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces, sin que se vean, y recifra el llavero. Necesita un terminal' \
+'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: explica qué se pierde y pide escribir «borrar». Necesita un terminal' \
     )
     _describe -t commands 'magi help llavero commands' commands "$@"
 }
@@ -914,8 +914,8 @@ _magi__subcmd__importar_commands() {
 _magi__subcmd__llavero_commands() {
     local commands; commands=(
 'estado:Dice si hay llavero y, si lo hay, su ruta, su tamaño y su fecha. Nunca pide la frase ni enseña entradas' \
-'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces' \
-'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: pide escribir «borrar»' \
+'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces, sin que se vean, y recifra el llavero. Necesita un terminal' \
+'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: explica qué se pierde y pide escribir «borrar». Necesita un terminal' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'magi llavero commands' commands "$@"
@@ -939,8 +939,8 @@ _magi__subcmd__llavero__subcmd__estado_commands() {
 _magi__subcmd__llavero__subcmd__help_commands() {
     local commands; commands=(
 'estado:Dice si hay llavero y, si lo hay, su ruta, su tamaño y su fecha. Nunca pide la frase ni enseña entradas' \
-'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces' \
-'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: pide escribir «borrar»' \
+'cambiar:Cambia la frase maestra\: pide la actual y la nueva dos veces, sin que se vean, y recifra el llavero. Necesita un terminal' \
+'borrar:Borra el llavero (las contraseñas guardadas y la clave de sincronización de este equipo)\: explica qué se pierde y pide escribir «borrar». Necesita un terminal' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'magi llavero help commands' commands "$@"

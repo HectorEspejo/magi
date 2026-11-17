@@ -236,11 +236,20 @@ pub const ESTRECHO_PERSISTENTES: u16 = 72;
 /// el texto de ayuda y acortan las teclas del pie.
 pub const ESTRECHO_DIALOGO_PERSISTENTES: u16 = 60;
 
+/// Diálogos del llavero con frase maestra (Fase 17, Termux): LLAVERO DE MAGI,
+/// CREAR y CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO y LLAVERO DAÑADO. Con
+/// este tamaño se ven enteros (el cuerpo sigue al campo con foco); por debajo
+/// de `ESTRECHO_LLAVERO` los textos de ayuda se acortan. Los móviles en
+/// vertical (48 columnas) están por encima.
+pub const MINIMO_LLAVERO: Tamano = Tamano::new(40, 12);
+pub const ESTRECHO_LLAVERO: u16 = 44;
+
 /// Mínimo que declara el diálogo abierto, si es de los que lo declaran.
 pub fn minimo_dialogo(dialogo: &crate::app::Dialogo) -> Option<Minimo> {
     use crate::app::Dialogo;
     match dialogo {
         Dialogo::Persistentes(dialogo) => Some(crate::ui::persistentes::minimo(dialogo)),
+        Dialogo::Llavero(dialogo) => Some(crate::ui::llavero::minimo(dialogo)),
         Dialogo::Edicion(dialogo) => Some(crate::ui::edicion::minimo(dialogo)),
         Dialogo::Permisos(dialogo) => Some(crate::ui::permisos::minimo(dialogo)),
         Dialogo::Sincronizar(dialogo) => Some(crate::ui::sincronizar::minimo(dialogo)),

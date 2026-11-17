@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ BORRAR EL LLAVERO ─────────────────┐│
+││ Se pierden las contraseñas         ││
+││ guardadas y la clave de            ││
+││ sincronización de este equipo.     ││
+││                                    ││
+││ Escribe borrar para confirmar:     ││
+││ [ borra┃ ]                         ││
+││                                    ││
+││ ↵ borrar   Esc cancelar            ││
+└└────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

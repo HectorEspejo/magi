@@ -14,6 +14,7 @@ pub mod flota;
 pub mod formulario_snippet;
 pub mod hosts;
 pub mod identidades;
+pub mod llavero;
 pub mod pager;
 pub mod paleta;
 pub mod permisos;

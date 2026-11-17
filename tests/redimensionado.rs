@@ -50,6 +50,9 @@ mod vistas_n;
 // diálogos.
 #[path = "redimensionado/vistas_o.rs"]
 mod vistas_o;
+// Fase 17: los diálogos del llavero con frase maestra y las vistas a 48×20.
+#[path = "redimensionado/vistas_p.rs"]
+mod vistas_p;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

@@ -74,6 +74,10 @@ pub struct ProveedoresEscritorio {
     /// Plazo de cada comprobación, medido desde el inicio de la deliberación:
     /// el mismo instante que recibe `lanzar`.
     limite: tokio::time::Instant,
+    /// La shell del comando local en Termux (`$PREFIX/bin/sh`, §7.1) o el
+    /// error con instrucción si no se pudo calcular; `None` fuera de Termux,
+    /// donde corre el `sh` del núcleo.
+    sh_local: Option<Result<PathBuf, String>>,
 }
 
 impl ProveedoresEscritorio {
@@ -83,11 +87,14 @@ impl ProveedoresEscritorio {
         hogar: PathBuf,
         limite: tokio::time::Instant,
     ) -> Self {
+        // Como el resto de lo fijado al abrir: la shell no se relee al ejecutar.
+        let sh_local = crate::termux::shell_local();
         Self {
             cliente,
             peticiones: Mutex::new(peticiones),
             hogar,
             limite,
+            sh_local,
         }
     }
 }
@@ -135,8 +142,14 @@ impl nucleo::Proveedores for ProveedoresEscritorio {
     ) -> Futuro<Result<(bool, String), nucleo::NoDisponible>> {
         let limite = self.limite;
         let hogar = self.hogar.clone();
+        let sh_local = self.sh_local.clone();
         Box::pin(async move {
-            Ok(magi_nucleo::deliberacion::tests::ejecutar(&comando, limite, &hogar).await)
+            Ok(match sh_local {
+                // En Termux no hay `/bin/sh`: la shell es la del prefijo.
+                Some(Ok(sh)) => nucleo::tests::ejecutar_con(&sh, &comando, limite, &hogar).await,
+                Some(Err(error)) => (false, error),
+                None => nucleo::tests::ejecutar(&comando, limite, &hogar).await,
+            })
         })
     }
 }

@@ -9,6 +9,34 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **MAGI en Termux, llavero con frase maestra (Fase 17, primera entrega).**
+  MAGI se prepara para correr en Android dentro de Termux: el mismo binario
+  (TUI, servidor y CLI) compilado para `aarch64-linux-android`, con lo propio de
+  Termux aislado en `src/termux/`. Allí las contraseñas de host y la clave de
+  sincronización viven en `llavero.age` (age con una entrada scrypt, 600) y se
+  abren con una **frase maestra** que solo existe en la memoria de MAGI: nunca
+  va a disco, al log, a REGISTRO ni al servidor. Diálogos LLAVERO DE MAGI (al
+  abrir), CREAR LA FRASE MAESTRA (al guardar el primer secreto: recordar una
+  contraseña, crear o unir la sincronización; con Esc la contraseña se usa sin
+  guardarse), CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO (escribiendo `borrar`)
+  y LLAVERO DAÑADO (se aparta como `llavero.age.danado-<fecha>`; un llavero
+  dañado nunca se borra solo), cinco frases incorrectas seguidas imponen 30 s de
+  espera, la barra dice «llavero bloqueado» cuando algo lo necesita y la paleta
+  trae «Desbloquear el llavero», «Bloquear el llavero», «Cambiar la frase
+  maestra» y «Borrar el llavero». Con el llavero cerrado, una conexión
+  interactiva pide primero la frase y lo automático (reconexión, sondeo,
+  ejecuciones) da un error con instrucción y nunca abre un diálogo. Dos ventanas
+  de MAGI escriben el fichero con `flock` y lo releen antes de escribir. En el
+  escritorio no cambia nada (siguen secret-tool y Keychain). Cinco tipos nuevos
+  en el historial: `llavero_creado`, `llavero_frase_cambiada`, `llavero_borrado`,
+  `llavero_desbloqueo_fallido` y `llavero_apartado`.
+- **`magi llavero estado|cambiar|borrar`**, solo en Termux (fuera de él dicen
+  por qué no aplican y salen con código 1): `estado` enseña ruta, tamaño y fecha
+  sin pedir la frase; `cambiar` y `borrar` piden la frase y la confirmación en
+  el TTY, sin eco. `magi sincronizar` pide la frase una sola vez cuando el
+  llavero está cerrado y `magi sondear` solo si algún host que sondea usa la
+  contraseña del llavero; sin TTY dan un error con instrucción.
+
 - **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
   **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
   host (`tmux -L magi -f /dev/null`, con su configuración y sin tocar el tmux ni
@@ -218,6 +246,9 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **Un fallo al escribir un fichero de MAGI ya no deja su temporal en la
+  carpeta.** La escritura atómica (`ficheros.rs`) borra el temporal si falla
+  antes del renombrado.
 - **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
   encoding».** Copiada de la terminal, la clave suele llegar partida en dos
   líneas o con espacios, y el escritorio solo quitaba los de los extremos.

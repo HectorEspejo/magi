@@ -121,15 +121,19 @@ enum Comando {
     /// El llavero de fichero con frase maestra de Termux: estado, cambio de
     /// frase y borrado.
     ///
-    /// Solo en Termux: en el resto de sistemas el llavero es el del sistema
-    /// (secret-tool o Keychain) y estas órdenes salen con código 1.
+    /// Guarda las contraseñas de los hosts y la clave de sincronización de
+    /// este equipo. «cambiar» y «borrar» piden en el terminal la frase o la
+    /// confirmación; sin terminal no hacen nada y salen con código 1. Solo en
+    /// Termux: en el resto de sistemas el llavero es el del sistema
+    /// (secret-tool o Keychain) y estas órdenes lo dicen y salen con código 1.
     Llavero {
         #[command(subcommand)]
         comando: ComandoLlavero,
     },
     /// Utilidades de Termux: la fila de teclas y un aviso de prueba.
     ///
-    /// Solo en Termux; en el resto de sistemas salen con código 1.
+    /// Solo en Termux; en el resto de sistemas dicen «solo en Termux» y salen
+    /// con código 1.
     Termux {
         #[command(subcommand)]
         comando: ComandoTermux,
@@ -149,10 +153,12 @@ enum ComandoLlavero {
     /// Dice si hay llavero y, si lo hay, su ruta, su tamaño y su fecha.
     /// Nunca pide la frase ni enseña entradas.
     Estado,
-    /// Cambia la frase maestra: pide la actual y la nueva dos veces.
+    /// Cambia la frase maestra: pide la actual y la nueva dos veces, sin que
+    /// se vean, y recifra el llavero. Necesita un terminal.
     Cambiar,
     /// Borra el llavero (las contraseñas guardadas y la clave de
-    /// sincronización de este equipo): pide escribir «borrar».
+    /// sincronización de este equipo): explica qué se pierde y pide escribir
+    /// «borrar». Necesita un terminal.
     Borrar,
 }
 
@@ -666,20 +672,27 @@ fn sincronizar_cli(
             0
         }
         None => {
-            // Purga la clave anterior caducada (30 días) igual que la TUI.
+            // El llavero se abre UNA vez por orden (con el llavero de fichero
+            // cerrado, abrirlo pide la frase y un objeto nuevo volvería a
+            // pedirla): lo usan la purga de la clave anterior y la pasada.
             let mut config = config.clone();
-            if config.sincronizacion.activa() {
-                let llavero = magi::llavero_cli::abrir_para_cli(rutas)?;
+            let llavero = if config.sincronizacion.activa() {
+                Some(magi::llavero_cli::abrir_para_cli(rutas)?)
+            } else {
+                None
+            };
+            // Purga la clave anterior caducada (30 días) igual que la TUI.
+            if let Some(llavero) = &llavero {
                 if let Ok(true) = magi::sincronizacion::equipos::olvidar_anterior_si_vencida(
                     &mut config,
-                    &*llavero,
+                    &**llavero,
                 ) {
                     if let Err(error) = config.guardar(&rutas.fichero_config()) {
                         eprintln!("no se pudo guardar config.toml: {error:#}");
                     }
                 }
             }
-            sincronizar_pasada(&almacen, rutas, &config)
+            sincronizar_pasada(&almacen, rutas, &config, llavero.as_deref())
         }
     };
     almacen.cerrar()?;
@@ -688,26 +701,25 @@ fn sincronizar_cli(
 
 /// Hace la pasada con el cerrojo de la sincronización. La CLI espera hasta
 /// `ESPERA_CERROJO`; si otra ventana lo tiene, no hace nada y lo dice.
-fn sincronizar_pasada(almacen: &Almacen, rutas: &Rutas, config: &Config) -> i32 {
-    // Sin carpeta no se lee el llavero: la pasada devolverá «sin configurar»
-    // y no hay clave que buscar.
-    let claves = if config.sincronizacion.activa() {
-        let llavero = match magi::llavero_cli::abrir_para_cli(rutas) {
-            Ok(llavero) => llavero,
-            Err(error) => {
-                eprintln!("{error:#}");
-                return 1;
-            }
-        };
-        match magi::sincronizacion::equipos::claves_para_leer(config, &*llavero) {
+///
+/// `llavero` es el ya abierto por quien llama (`sincronizar_cli`): con la
+/// sincronización activa siempre viene; sin carpeta no se lee el llavero (la
+/// pasada devolverá «sin configurar» y no hay clave que buscar).
+fn sincronizar_pasada(
+    almacen: &Almacen,
+    rutas: &Rutas,
+    config: &Config,
+    llavero: Option<&dyn magi::llavero::LlaveroCliente>,
+) -> i32 {
+    let claves = match llavero {
+        Some(llavero) => match magi::sincronizacion::equipos::claves_para_leer(config, llavero) {
             Ok(claves) => claves,
             Err(error) => {
                 eprintln!("no se pudo leer la clave de sincronización del llavero: {error}");
                 return 1;
             }
-        }
-    } else {
-        Vec::new()
+        },
+        None => Vec::new(),
     };
     let _cerrojo = match magi::sincronizacion::carpeta::adquirir_cerrojo(
         rutas,
@@ -843,8 +855,18 @@ fn sondear(
         .enable_all()
         .build()?;
     let usuario = magi::conexion::usuario_local();
-    let llavero: std::sync::Arc<dyn magi::llavero::LlaveroHost> =
-        magi::llavero_cli::abrir_para_cli(rutas)?;
+    // El llavero solo se abre (y, si está cerrado, se pide la frase) si algún
+    // host que se va a sondear, o de su cadena de saltos, usa la contraseña del
+    // llavero (informe §4.2: «CLI que lo necesita»). Si no, se pasa tal cual:
+    // sus lecturas darían «bloqueado» por host, que el sondeo ya clasifica.
+    let llavero = magi::llavero::del_equipo(rutas);
+    if magi::llavero_cli::algun_host_usa_llavero(&seleccionados, &todos) {
+        magi::llavero_cli::desbloquear_para_cli(
+            &*llavero,
+            &mut magi::llavero_cli::ConsolaTerminal,
+        )?;
+    }
+    let llavero: std::sync::Arc<dyn magi::llavero::LlaveroHost> = llavero;
     let peticiones: Vec<PeticionSondeo> = seleccionados
         .iter()
         .map(|host| PeticionSondeo {

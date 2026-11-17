@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ LLAVERO DE MAGI ───────────────────┐│
+││                                    ││
+││ Frase maestra                      ││
+││ [ ••••••••••••••••┃ ]              ││
+││                                    ││
+││ Desbloquea tus contraseñas y la    ││
+││ clave de sincronización.           ││
+││                                    ││
+││ ↵ desbloquear   Esc sin él         ││
+└└────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

@@ -147,9 +147,13 @@ async fn un_snippet_se_ejecuta_en_dos_hosts_y_deja_salida_y_registro() {
         .await
         .expect("ejecutando el snippet");
     let lista = esperar_ejecuciones(montaje.prueba.oyente(), Duration::from_secs(20), |lista| {
-        lista
-            .iter()
-            .any(|fila| fila.id == ejecucion && fila.resultado == Some(ResultadoEjecucionMovil::Ok))
+        lista.iter().any(|fila| {
+            // El resultado sale de los estados de los hosts y `terminada_en` se
+            // fija un instante después, al cerrar la ejecución: se espera a ambos.
+            fila.id == ejecucion
+                && fila.resultado == Some(ResultadoEjecucionMovil::Ok)
+                && fila.terminada_en.is_some()
+        })
     })
     .await;
     let fila = lista

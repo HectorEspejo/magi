@@ -683,6 +683,8 @@ pub(crate) fn todos_los_dialogos(
     dialogos.extend(super::vistas_k::dialogos());
     // Los de la Fase 10.
     dialogos.extend(super::vistas_m::dialogos());
+    // Los del llavero con frase maestra (Fase 17).
+    dialogos.extend(super::vistas_p::dialogos());
     dialogos
 }
 

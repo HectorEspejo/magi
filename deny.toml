@@ -9,12 +9,17 @@
 
 # Plataformas que se publican: las comprobaciones se limitan a ellas (los
 # árboles de dependencias exclusivos de Windows no forman parte del producto).
+# Desde la Fase 17, también Android: el mismo binario se compila para Termux
+# (`aarch64-linux-android`, el que se publica) y, solo como artefacto de CI, para
+# `x86_64-linux-android`.
 [graph]
 targets = [
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
+  "aarch64-linux-android",
+  "x86_64-linux-android",
 ]
 
 [advisories]
@@ -83,6 +88,15 @@ ignore = [
   # antes si MAGI empieza a usar agent::server.
   # Caducidad de la excepción: 2027-05-15 (la comprueba el job deny de ci.yml).
   { id = "RUSTSEC-2026-0495", reason = "servidor de agente de russh; MAGI solo usa agent::client; parche en russh 0.65" },
+  # 2026-11-17 · RUSTSEC-2026-0543: chrono (todas las versiones) sin mantener;
+  # el aviso recomienda jiff o time y no hay versión a la que subir. MAGI usa
+  # chrono para fechas y horas (formato de REGISTRO, nombres de copias con
+  # fecha, relojes de la interfaz). El aviso no describe ninguna vulnerabilidad:
+  # es una cuestión de mantenimiento. Cambiarlo toca todo el workspace (núcleo,
+  # escritorio y móvil) y se pospone a una fase de dependencias. Aviso publicado
+  # después de la Fase 16: no lo introduce la Fase 17. Revisar al hacer esa fase
+  # y antes si chrono publica una vulnerabilidad.
+  { id = "RUSTSEC-2026-0543", reason = "chrono sin mantener, sin versión a la que subir; solo fechas y horas; cambiarlo a jiff o time es una fase de dependencias" },
 ]
 
 [licenses]

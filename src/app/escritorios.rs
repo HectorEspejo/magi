@@ -750,6 +750,23 @@ impl App {
             if let Some((usuario, contrasena)) =
                 self.contrasenas_escritorio_pendientes.remove(&info.id)
             {
+                // El llavero de fichero reescribe el fichero con scrypt: en un
+                // hilo, con el resultado por `Evento::Llavero` (Fase 17).
+                let nombre = self
+                    .hosts
+                    .iter()
+                    .find(|host| host.id == info.host_id)
+                    .map(|host| host.nombre.clone());
+                if let Some(nombre) = nombre {
+                    if self.guardar_contrasena_en_segundo_plano(
+                        info.host_id,
+                        nombre,
+                        usuario.clone(),
+                        &protocolo::Secreto::nuevo(contrasena.as_str()),
+                    ) {
+                        continue;
+                    }
+                }
                 match self.guardar_contrasena_escritorio(
                     info.host_id,
                     &usuario,
@@ -1047,7 +1064,35 @@ impl App {
                 self.enviar_credenciales(credenciales, peticion_id);
                 return;
             }
+            // El host guarda la contraseña en el llavero y el de fichero está
+            // cerrado: antes de preguntarla se pide la frase (Fase 17).
+            let guarda_en_el_llavero = host.is_some_and(|host| host.identidad_ref.usa_llavero());
+            if guarda_en_el_llavero && self.llavero_cerrado() {
+                self.pedir_llavero(Some(super::llavero::Continuacion::ReintentarCredenciales {
+                    peticion_id,
+                    escritorio_id,
+                    host_nombre,
+                    peticion,
+                }));
+                return;
+            }
         }
+        self.abrir_dialogo_credenciales(peticion_id, escritorio_id, host_nombre, peticion, true);
+    }
+
+    /// El diálogo de credenciales del escritorio. Sin `permitir_recordar`
+    /// (el usuario dijo que no al llavero), la casilla sale desmarcada.
+    pub(crate) fn abrir_dialogo_credenciales(
+        &mut self,
+        peticion_id: u64,
+        escritorio_id: u32,
+        host_nombre: String,
+        peticion: PeticionCredenciales,
+        permitir_recordar: bool,
+    ) {
+        let host = self
+            .host_de_escritorio(escritorio_id)
+            .or_else(|| self.hosts.iter().find(|host| host.nombre == host_nombre));
         let usuario = peticion
             .usuario
             .clone()
@@ -1063,8 +1108,9 @@ impl App {
         } else {
             0
         };
-        let recordar =
-            self.llavero.disponible() && host.is_some_and(|host| host.identidad_ref.usa_llavero());
+        let recordar = permitir_recordar
+            && self.llavero.disponible()
+            && host.is_some_and(|host| host.identidad_ref.usa_llavero());
         self.mostrar_dialogo_servidor(Dialogo::Escritorio(DialogoEscritorio::Credenciales {
             peticion_id,
             escritorio_id,
@@ -1125,7 +1171,11 @@ impl App {
     }
 
     /// Manda unas credenciales al servidor (nunca van al log).
-    fn enviar_credenciales(&mut self, credenciales: CredencialesEscritorio, peticion_id: u64) {
+    pub(crate) fn enviar_credenciales(
+        &mut self,
+        credenciales: CredencialesEscritorio,
+        peticion_id: u64,
+    ) {
         self.servidor.enviar(MensajeCliente::Credenciales {
             peticion_id,
             usuario: credenciales.usuario,
@@ -1454,6 +1504,25 @@ impl App {
                             contrasena: zeroize::Zeroizing::new(contrasena.texto.clone()),
                             recordar,
                         };
+                        // Con «recordar» y el llavero de fichero sin abrir (o sin
+                        // crear), antes se pide la frase: las credenciales
+                        // esperan en la continuación y, con Esc, se usan sin
+                        // guardarse (Fase 17).
+                        if recordar
+                            && !contrasena.texto.is_empty()
+                            && self
+                                .necesidad_llavero(super::llavero::UsoLlavero::Escribir)
+                                .is_some()
+                        {
+                            self.pedir_llavero(Some(
+                                super::llavero::Continuacion::EnviarCredenciales {
+                                    peticion_id,
+                                    escritorio_id,
+                                    credenciales,
+                                },
+                            ));
+                            return;
+                        }
                         if recordar && !contrasena.texto.is_empty() {
                             // No se guarda todavía: el llavero se escribe
                             // cuando el servidor confirme que la sesión quedó

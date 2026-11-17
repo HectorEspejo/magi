@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · HOSTS ────────────────────── 7 hosts ─┐
+│▸ ▼ produccion               (3)              │
+│    ○ hetzner-01                              │
+│    ○ hetzner-02                              │
+│    ○ vps-openclaw                            │
+│  ▼ casa                     (2)              │
+│    ○ dgx-spark                               │
+│    ○ mac-mini-m1                             │
+│  ▼ sin grupo                (2)              │
+│    ○ backup-nas                              │
+│    ○ rincon-dev                              │
+│                                              │
+│                                              │
+│                                              │
+│                                              │
+│                                              │
+│                                              │
+│                                              │
+└──────────────────────────────────────────────┘
+ ↵ conectar  e editar  / filtrar  ? más

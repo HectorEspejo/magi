@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ LLAVERO DAÑADO ────────────────────┐│
+││ No se puede leer llavero.age.      ││
+││ la cabecera de age no se puede     ││
+││ leer: no es un fichero age         ││
+││ MAGI no lo borra nunca. Apartarlo  ││
+││ lo renombra a                      ││
+││ llavero.age.danado-<fecha> y       ││
+││                                    ││
+││ a apartar   s / Esc salir          ││
+└└─────────────────────────────── 1/2 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

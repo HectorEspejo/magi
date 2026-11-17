@@ -1,7 +1,7 @@
 # MAGI - Fase 17: MAGI en Termux — Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Tramo A hecho; parado en la puerta de la prueba de concepto (PoC)**. No hay código de la fase todavía: lo único tocado es documentación y reglas. Versión objetivo 1.6.0 (el árbol sigue en 1.5.0).
-> Rama `fase17`. Entrega y reglas en el commit `51dfb5c`.
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Sprint 1 hecho (plataforma, compilación y llavero); Sprints 2 y 3 por hacer.** La PoC en el plegable sigue sin pasar: el Sprint 1 se hizo sin ella por decisión de Hector, con las constantes que dependen de ella en su valor prudente (`PROVISIONAL-POC`, §6). Versión objetivo 1.6.0 (el árbol sigue en 1.5.0; se cambia en el Sprint 3).
+> Rama `fase17`. Entrega y reglas en `51dfb5c`; contrato del Sprint 1 en `73ed247`; el Sprint 1 va en un solo commit sobre él.
 
 ---
 
@@ -33,6 +33,22 @@ cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
 
 **Sonda de scrypt (desechable, fuera del repositorio).** Para medir en el móvil lo que la spec da por supuesto (2^17 ≈ 128 MiB y «alrededor de un segundo») se compiló un programa de 60 líneas con el mismo `age` 0.11.5. Referencia en el PC de desarrollo: 2^15 → 90 ms y 36 MiB; 2^17 → 364 ms y 132 MiB; 2^18 → 733 ms y 260 MiB (2^20 serían ≈1 GiB).
 
+### Sprint 1 — Plataforma, compilación y llavero (hecho)
+
+**Método.** Contrato compilable en `73ed247` (trait `LlaveroCliente`, `App.llavero`, firmas de `LlaveroFichero`, `src/termux/*`, esqueleto de `magi llavero` y `magi termux`, 6 tipos de REGISTRO, `tests/fijos/termux/mod.rs`; ~29 sitios del escritorio barridos sin cambiar su comportamiento) → cuatro pistas en paralelo en worktrees aislados (núcleo, plataforma Termux, interfaz del llavero, CLI del llavero), cada una con una revisión adversarial de solo lectura → una ronda de correcciones (núcleo hecho aparte; CLI, interfaz y plataforma en tres pistas) → integración y verificación. Al cerrar el sprint no queda ninguna marca `CONTRATO-S1` ni `LEGADO-S1`.
+
+**Núcleo — `LlaveroFichero` (`crates/magi-nucleo/src/llavero_fichero.rs`).** `llavero.age` (age con una sola entrada scrypt y dentro `{"formato":1,"entradas":{…}}`), 600, escrito siempre con `ficheros::escribir_atomico`. Se crea a 2^17 (`set_work_factor`); la cabecera se valida a mano antes de derivar nada (un `log_n` mayor que 20 es «dañado» sin gastar scrypt) y se abre con `set_max_work_factor(20)`; tope de 1 MiB; frase NFC de 12 a 1 024 bytes en `Zeroizing`. Cinco fallos seguidos imponen 30 s (reloj inyectable), `flock` en `llavero.age.lock` con plazo de 10 s y relectura (por SHA-256) antes de escribir, `apartar_danado` → `llavero.age.danado-<fecha>[-n]`, y «Bloquear» es definitivo aunque haya una operación de scrypt en vuelo. Dos cerrojos internos (`interno`, que se toma un instante, y `operacion`, para lo lento) hacen que `estado()` y `recuperar()` nunca esperen a scrypt. Alrededor: `ficheros::escribir_atomico` borra su temporal si falla (y existe `escribir_atomico_tolerante`, para el almacenamiento compartido del Sprint 2), `reconexion::clasificar` trata «llavero bloqueado» como `Credenciales` (no se reintenta), el núcleo expone `conexion::cliente::SIN_CONTRASENA_EN_LLAVERO` y `Cargo.toml` optimiza solo `scrypt` en depuración (`[profile.dev.package.scrypt] opt-level = 3`: crear pasa de 17 s a 0,4 s y la suite `llavero_fichero`, de 46 s a 10 s).
+
+**Plataforma Termux (`src/termux/{mod,rutas,propiedades,ordenes}.rs`, `config.rs`, `conexion.rs`, `deliberacion`).** `EntornoTermux` inyectado (solo `del_proceso()` y `es_termux()` leen `std::env`; `MAGI_PLATAFORMA` solo vale en depuración), `rutas::calcular` (todo del entorno, nunca del uid; socket en `$TMPDIR/magi-<uid>/`, ~60 bytes con el `TMPDIR` de Termux; un `XDG_*` relativo se ignora), `propiedades` con `__system_property_get` vía `nix::libc` (solo `cfg(android)`), `Ordenes` sin shell (`PATH` inyectado, `process_group` + `killpg` al vencer el plazo, tope de 64 KiB por flujo, entrada en `Zeroizing`, `ApiProceso` apaga una función de Termux:API por proceso y devuelve «recién apagada» para avisar una sola vez), `termux::shell_local()` (`$PREFIX/bin/sh`), nombre del equipo `termux-<modelo>` y plataforma `android`. La deliberación local admite la shell como parámetro (`deliberacion::tests::ejecutar_con`), así que no hay copia del código del núcleo. `deny.toml` audita también `aarch64-linux-android` y `x86_64-linux-android`. Dobles de las órdenes de Termux: un único script, `tests/fijos/termux/falsos/doble`, instalado con el nombre de cada orden, con la API en `tests/fijos/termux/mod.rs`.
+
+**Interfaz del llavero (`src/app/llavero.rs`, `src/ui/llavero.rs`, barra y paleta).** Diálogos LLAVERO DE MAGI, CREAR / CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO y LLAVERO DAÑADO con campos que se borran al caer; scrypt siempre en `spawn_blocking` con evento de vuelta (una respuesta sin petición en vuelo se descarta); continuaciones que se mueven (no se clonan) y una sola pregunta de frase aunque varias operaciones esperen el desbloqueo; marca «llavero bloqueado» en la barra (calculada en el tick, sin E/S por pintado); cuatro entradas de paleta solo con llavero de fichero (se activan por `de_fichero().is_some()`/`estado()`, nunca por plataforma); conexión interactiva (pestañas, escritorios, ficha de prueba) que pide antes la frase y, con Esc, la contraseña sin «recordar»; operaciones automáticas con error con instrucción y sin diálogo; crear, unir, mostrar clave, rotar, quitar y desactivar la sincronización con el llavero cerrado o sin crear; instantáneas a 48×20 de Flota, Hosts y Sesión y de los cinco diálogos a 40×12, 80×24, 200×60 y 48×20.
+
+**CLI del llavero (`src/llavero_cli.rs`, `src/main.rs`).** `magi llavero estado|cambiar|borrar` (en Termux; fuera de él dicen por qué no aplican, código 1), frase en el TTY sin eco con modo raw restaurado por una guarda, `Consola` inyectable para probar sin terminal, y `magi sincronizar`/`magi sondear` que piden la frase con tres intentos si el llavero está cerrado (sin TTY, error con instrucción). `assets/` regenerado (man y autocompletado de bash, zsh y fish).
+
+**Revisión adversarial del sprint (una por pista, solo lectura) y su resultado.** Sin hallazgos de severidad alta. **Corregidos** (con prueba de regresión): `magi sincronizar` pedía la frase dos veces; `magi llavero borrar` borraba un llavero dañado (§3.6 lo prohíbe; ahora lo rechaza también el núcleo); `magi sondear` abría el llavero aunque ningún host lo usara; la confirmación de `borrar` consumía lo tecleado por adelantado; la lectura de la frase giraba al 99 % de CPU si el terminal desaparecía; una frase vacía abortaba la orden; cualquier fallo de `Io` apagaba Termux:API (y la barra decía «no responde» sin ser verdad); `apartar_danado` renombraba un llavero sano que otra ventana acababa de restaurar y `borrar` borraba uno recién dañado; `usuario_local` cambiaba el comportamiento del escritorio; `tomar_cerrojo` confundía cualquier errno con «otra ventana lo usa»; «Bloquear» no era definitivo con scrypt en vuelo; una petición de contraseña de una pestaña con el llavero cerrado se perdía aunque el usuario desbloqueara dentro del plazo; credenciales de escritorios que ya no existían sobrevivían en memoria; la barra hacía E/S en cada pintado; la frase pegada quedaba en dos `String` sin borrar; tres pruebas de la interfaz no probaban lo que decían y una de plataforma pasaba en vacío en release; y una carrera preexistente (F14) en la prueba `snippets_movil_e2e` (esperaba `resultado` pero no `terminada_en`). **No corregidos, decididos o anotados** (§2 y §6): la lectura de `recuperar` entre ventanas, el sondeo con el llavero cerrado, las escrituras de equipos en el hilo de UI y los límites de crossterm y de las señales.
+
+**Medidas.** `cargo ndk … build --release -p magi-ssh --locked` con el código del sprint: 3 min 25 s, 37 115 024 bytes, SHA-256 `00c49ac708924e1a8b9927c3e78ff51e0ac3bbd5e9c42bf60c49544ed5ba0b7f`, `readelf -d`: `libdl.so`, `libz.so`, `libm.so` y `libc.so` (la lista aceptada en §2.1). `git diff --stat android/` vacío.
+
 ---
 
 ## 2. Desviaciones respecto a la especificación (qué y por qué)
@@ -52,15 +68,35 @@ Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el
 6. **Sondeo de la carpeta con firma barata** (nombre, tamaño, mtime) y **un único `App::copiar_texto`**: necesarios para «MAGI nunca se queda esperando» y para el tope de 6 000 bytes.
 7. **Espera del socket de `conectar`** (2 s): se sube en Termux solo si la PoC mide un arranque en frío de más de ~1 s.
 
+**Desviaciones nuevas del Sprint 1** (las pistas las anotaron; las que piden decisión del analista van marcadas **[analista]**):
+
+8. **Dependencias y CI.** (a) `Cargo.lock`: `libz-sys` 1.1.31 → 1.1.33 por RUSTSEC-2026-0544 (desbordamiento de memoria en zlib; salió después de la Fase 16 y `cargo deny` fallaba en `main`), que además es la biblioteca que Android enlaza como `libz.so`; es un cambio de versión de parche también para el escritorio, no una dependencia nueva. (b) `deny.toml`: excepción RUSTSEC-2026-0543 para `chrono` (sin mantener, sin versión a la que subir, sin vulnerabilidad descrita; el aviso recomienda `jiff` o `time`, y cambiarlo toca núcleo, escritorio y móvil: se pospone a una fase de dependencias). Misma razón y misma forma que las de `pin-utils` y `rustls-pemfile`, sin fecha de caducidad en CI. **[analista]** confirmar esta excepción. (c) `Cargo.toml`: `[profile.dev.package.scrypt] opt-level = 3` (la spec no lo preveía; sin él, crear un llavero a 2^17 tarda 17 s en depuración y las pruebas, minutos). (d) El comando de `shellcheck` de `CLAUDE.md` y `AGENTS.md` pasa a `shellcheck packaging/termux/build.sh tests/fijos/termux/falsos/*`: el glob `tests/fijos/termux/*` de la spec incluye `mod.rs` y un directorio y no puede pasar. El informe de la spec (§11) conserva el glob antiguo.
+9. **`LlaveroFichero.estado()` con la frase en memoria** devuelve `Abierto` aunque otra ventana haya reescrito el fichero (si la cabecera sigue siendo legible), en vez de `Cerrado`: con `Cerrado`, cada guardado de una ventana haría pedir la frase a todas las demás. Si la frase ya no vale se descubre en el siguiente `guardar`/`olvidar`, que no escribe, bloquea el objeto y lo dice. **Consecuencia que la revisión señaló y se mantiene** (la spec dice «`recuperar` solo de caché»): entre dos ventanas, una lectura puede ser vieja (otra ventana rotó la clave de sincronización y esta sigue exportando con la antigua hasta su siguiente escritura). **[analista]** valorar si `recuperar` debe comprobar la firma del fichero y pedir la frase de nuevo.
+10. **`InvalidMac` con la frase buena es «dañado»**, no «frase incorrecta» (una frase equivocada falla antes, en la entrada scrypt). Una sal estropeada se ve como «frase incorrecta»: desde fuera no se distingue, el fichero no se toca ni se aparta solo, y el usuario puede apartarlo o borrarlo a mano.
+11. **Un contenido ilegible con la frase buena** (MAC, flujo, JSON, `formato`) se recuerda por la firma del fichero y `estado()` lo da como `Danado`, para que la interfaz ofrezca apartarlo (con la cabecera sola no se ve). **`borrar()` no borra un llavero dañado** (`NoSeBorraDanado`) y **`apartar_danado()` no aparta uno que ya no lo está** (`NoEstaDanado`): ambos miran bajo el cerrojo el fichero que hay ahora y no el que vio un diálogo hace rato. (La spec lo pedía por el diagrama de estados de §3.6; el contrato no lo concretaba.)
+12. **Detalles de `guardar`/`olvidar`.** Además de la firma (inodo, tamaño, fechas) se guarda un SHA-256 del fichero leído: decide si hay que releer, porque un inodo reutilizado o una fecha tosca podrían ocultar la escritura de otra ventana y perder una clave. `olvidar` sin fichero devuelve `Err(SIN_CREAR)` (contrato); la interfaz lo trata como «no había nada que olvidar» con un adaptador. Una frase corta (menos de 12) al abrir se prueba como cualquier otra (es «incorrecta», no «inválida»); vacía o de más de 1 024 bytes da «inválida» sin gastar scrypt ni contar como intento.
+13. **Interfaz del llavero.** (a) Tras Esc en LLAVERO DE MAGI, el diálogo de contraseña conserva la casilla «recordar» visible pero desmarcada (la spec dice «sin recordar»; ocultarla cambia `Dialogo::ContrasenaServidor`, que usan muchas pruebas); si se marca y se pulsa ↵, vuelve a pedir la frase. (b) La reconexión automática de una pestaña con el llavero cerrado no se contesta con `Cerrar` (cerraría la pestaña que se reconecta): se deja vencer el plazo de 10 s del servidor y el cliente reescribe el motivo a «llavero bloqueado: desbloquéalo (Ctrl+P)» en un solo método; si el usuario desbloquea dentro del plazo, la petición recordada (con tope y vencimiento) se contesta. (c) Además de lo pedido: credenciales de escritorios (RDP/VNC) y prueba de ficha siguen el mismo patrón (frase antes, y con Esc se usa sin guardar); tras desbloquear se relanza la pasada de sincronización si había fallado por el llavero cerrado; «borrar» se acepta sin distinguir mayúsculas y con espacios (los teclados del móvil capitalizan). (d) **[analista]** con scrypt en marcha **Esc se ignora** y el pie dice «espera…» (antes Esc cerraba el diálogo pero el llavero se creaba o la frase cambiaba igualmente, contra «Esc al crear → no existe»); decidir si prefiere otra redacción. (e) La paleta no ofrece Cambiar ni Borrar con el llavero dañado o sin crear (borrar un dañado es inválido) ni «crear el llavero» explícitamente (solo se crea al guardar el primer secreto). (f) El detalle de `llavero_desbloqueo_fallido` es solo el número de intentos; el de `llavero_creado`, `llavero_frase_cambiada` y `llavero_borrado`, vacío.
+14. **CLI.** `magi llavero estado` con el fichero dañado sale con 1; `borrar` sin llavero dice «no hay nada que borrar» y sale con 0 (idempotente); la confirmación es `borrar` en minúsculas con espacios alrededor; Esc no cancela la lectura (solo Ctrl+C y Ctrl+D); la fecha de `estado` va con desfase horario (Termux no siempre conoce su zona). Con tres intentos por proceso no se llega a la serie de cinco, así que la CLI no anota `llavero_desbloqueo_fallido`. `magi sondear` solo pide la frase si algún host sondeado (o de su cadena de saltos) usa `contrasena:llavero` (precisa «CLI que lo necesita», §4.2). La lectura oculta vigila el terminal con `poll(2)` sobre el fd 0 (crossterm 0.29 no devuelve error ni con EOF ni con EIO) y vacía lo tecleado por adelantado con `tcflush` y la cola de crossterm; usa `nix::libc` (con dos bloques `unsafe` acotados y comentados) porque `nix` no tiene la feature `term` en el escritorio.
+15. **Plataforma.** (a) `ordenes::correr` reintenta hasta 5 veces con 20 ms si el programa está «ocupado» (ETXTBSY: actualización del paquete). (b) `Ordenes` añade `ejecutar_avisando` y `ejecutar_async_avisando`, que devuelven si esa llamada acaba de apagar Termux:API (con solo `ejecutar` no se puede dar el aviso único). (c) Un fallo de `Io` (no se puede lanzar, no se puede crear un hilo, un argumento con carácter nulo) **no** apaga Termux:API: la spec solo apaga por «no instalada», «plazo agotado» y «código distinto de 0». (d) `config::rutas_de_termux` y `usuario_local_con` existen para poder probar la rama de Termux sin el `OnceLock` de `es_termux()`. (e) `usuario_local` cae a `getpwuid_r` solo en Termux (consulta única, en caché) y allí una `USER` o `USERNAME` vacía cuenta como no puesta; en el escritorio queda exactamente como estaba (la primera variable puesta, aunque esté vacía; si no, `root`). La primera versión de la pista lo cambiaba también en el escritorio y la revisión lo señaló. (f) Un `ENOENT` al lanzar un guion con shebang a un intérprete que no existe se sigue viendo como «no instalada» y apaga con `Ausente`.
+16. **Pruebas.** `tests/termux_plataforma.rs` (5 pruebas, `#![cfg(debug_assertions)]` porque `MAGI_PLATAFORMA` no vale en release) cubre la rama de Termux de `plataforma_actual`, `nombre_actual`, `descubrir_rutas` y el proveedor de CASPER-3; `es_termux()` es un `OnceLock` por proceso y no puede probarse junto a la rama de Linux. Las pruebas con pty usan el `script` de util-linux (sin él fallan con `CI` puesta y se omiten con aviso sin ella). `tests/termux_ui.rs` lleva un `#[global_allocator]` de todo su binario para comprobar que los búferes de la frase se ponen a cero al caer; está acotado (un búfer vigilado a la vez, con cerrojo). La prueba `snippets_movil_e2e` (F14, móvil) tenía una carrera preexistente (esperaba `resultado` y asertaba `terminada_en`, que se fija un instante después) y falló 1 de cada 3 veces; ahora espera las dos cosas.
+
 ---
 
 ## 3. Estructura de archivos creada/modificada
 
-Solo documentación y reglas; ningún fichero de código.
+**Tramo A (solo documentación y reglas):**
 
 - `CLAUDE.md` (aplicados los cambios de la entrega y restauradas tres reglas) y `AGENTS.md` (igual que `CLAUDE.md`).
 - `docs/fase17/`: `CLAUDE.md`, `magi-fase17-informe.md`, `magi-fase17-checklist.md`, `magi-fase17-prompt.md`, `magi-maestro.md` (la entrega) y este informe.
 - Fuera de git: `target/poc-termux/` con el binario y la sonda para la PoC.
+
+**Sprint 1 (39 ficheros tocados; todo bajo `android/` queda sin tocar):**
+
+- **Núcleo:** `crates/magi-nucleo/src/llavero_fichero.rs` (~1 200 líneas), `llavero.rs` (`BLOQUEADO`, `es_bloqueado`), `ficheros.rs` (temporal borrado al fallar, `escribir_atomico_tolerante`), `conexion/reconexion.rs`, `conexion/cliente.rs` (`SIN_CONTRASENA_EN_LLAVERO`), `registro.rs` (6 tipos, `TIPOS` 50 → 56), `deliberacion/tests.rs` (`ejecutar_con`); pruebas `tests/llavero_fichero.rs` (51), `tests/reconexion.rs` (+1) y `tests/sesiones_persistentes.rs` (contadores 50 → 56).
+- **Plataforma:** `src/termux/{mod,rutas,propiedades,ordenes}.rs` (el resto de `src/termux/*` sigue en esqueleto hasta los Sprints 2 y 3), `src/config.rs`, `src/conexion.rs`, `src/deliberacion/mod.rs`, `deny.toml`, `Cargo.toml` y `Cargo.lock`; pruebas `tests/termux_ordenes.rs` (39), `tests/termux_plataforma.rs` (5) y `tests/fijos/termux/{mod.rs,falsos/doble}`.
+- **Interfaz del llavero:** `src/llavero.rs` (`LlaveroCliente`, `EstadoLlavero`, `del_equipo`), `src/app.rs` (campo `llavero`), `src/app/llavero.rs` (nuevo, ~2 000 líneas), `src/app/{escritorios,sesion,sincronizacion}.rs`, `src/flota/mod.rs`, `src/ui/{llavero,barra,dialogos,disposicion,mod}.rs`; pruebas `tests/termux_ui.rs` (73) e instantáneas `tests/redimensionado/vistas_{g,p}.rs` + `tests/snapshots/llavero_*` y `sesion_48x20`, `flota_48x20`, `hosts_48x20`.
+- **CLI:** `src/llavero_cli.rs` (nuevo), `src/main.rs`, `assets/` regenerado; pruebas `tests/llavero_cli.rs` (55).
+- **Otros:** `CHANGELOG.md` («Sin publicar»), `crates/magi-movil/tests/snippets_movil_e2e.rs` (carrera preexistente), `CLAUDE.md` y `AGENTS.md` (comando de `shellcheck`).
 
 ---
 
@@ -75,13 +111,66 @@ Del diseño previo al Sprint 1 (aprobado con el plan):
 - **Wake lock** como máquina de estados pura (probada con reloj sintético) más un conductor tokio alimentado por `!estado.trabajo().vacio()` desde `revisar_inactividad`; **avisos** con una única tarea reconciliadora (Notify + tick) que compara el conjunto deseado con los ids publicados; marca nueva `Sesion.atencion_remota`, porque `Sesion.aviso` mezcla atención remota con avisos internos del servidor.
 - **Vigilante F16 sin ventanas:** predicado único `debe_vigilar`; no mantiene vivo al servidor (la spec dice que vive mientras haya trabajo).
 
+Tomadas durante el Sprint 1:
+
+- **El núcleo nunca espera a scrypt desde la interfaz:** `estado()`, `recuperar()` y `bloquear()` son baratos; `crear`, `desbloquear`, `cambiar_frase` y los `guardar`/`olvidar` que reescriben son de `spawn_blocking`. Excepciones que la spec acepta y siguen en el hilo de UI (~1 s con scrypt a 2^17 en un móvil): `equipos::{crear, unir, quitar, rotar, desactivar}`, guardar la contraseña de un escritorio desde la ficha y olvidar una contraseña; `rotar` y `quitar` hacen dos reescrituras seguidas y, si otra ventana tiene el `flock`, esperan hasta 10 s más. Se miden en el plegable (§6).
+- **Un diálogo no se fía de lo que pintó:** al confirmar apartar o borrar, el núcleo recomprueba el fichero bajo el cerrojo (`NoEstaDanado`, `NoSeBorraDanado`) y la interfaz decide qué hacer con la respuesta (volver a evaluar `estado()`, sin renombrar nunca un llavero sano). Misma regla que las peticiones de escritorio: se comprueba que la sesión sigue viva antes de continuar.
+- **El estado del llavero se activa por lo que es, no por dónde corre:** `de_fichero()`/`estado()`; ninguna rama de la interfaz pregunta por la plataforma (la paleta del llavero solo aparece con llavero de fichero, y el escritorio con `LlaveroDelSistema` es byte a byte el de antes: instantáneas existentes sin cambios).
+- **Reescrito único del motivo «sin contraseña guardada» → «llavero bloqueado»** en `normalizar_motivos_llavero`, apoyado en la constante del núcleo (si alguien cambia el texto del núcleo, la prueba de la interfaz lo ve).
+- **Procesos de Termux:API:** tres hilos auxiliares por orden (escritor, lector de stdout y de stderr, con tope de 64 KiB y el resto descartado); al vencer el plazo se mata el grupo entero con el líder aún sin recoger (su pid no se puede reutilizar) y se recoge esperando hasta 2 s; un nieto fuera de grupo (`setsid`) que retenga las tuberías no bloquea al llamante.
+- **Lectura de la frase en la CLI:** modo raw antes de escribir la pregunta, guarda `Drop`, búfer `Zeroizing` de capacidad fija (nunca se reasigna) y comprobación con `poll(2)` de que el terminal sigue vivo.
+
 ---
 
 ## 5. Funcionalidades del checklist completadas (texto exacto)
 
-Ninguna todavía (0 / 71). Estado de la primera, que **no se marca**:
+**22 / 71** tras el Sprint 1. Todas se han comprobado sin móvil (pruebas, compilación para Android o lectura del código); lo que solo se ve en el plegable queda en §6 y en el guion. Observaciones: la de compilación se da por cumplida con la lista de bibliotecas aceptada en §2.1 (`libdl`, `libz`, `libm`, `libc`); la de «Modelo, versión y SDK…» está implementada y compila para Android pero su lectura real va al guion; la de «Rutas en Termux…» se comprueba con el servidor arrancado de verdad en `tests/termux_ordenes.rs`; y la de «Modo Termux elegido al compilar» se comprobó además a mano con el binario `--release` de Linux (`MAGI_PLATAFORMA=termux magi llavero estado` dice que la orden solo existe en Termux, igual que sin la variable, y `magi diagnostico` calcula el runtime de siempre).
 
-- [ ] El paquete `magi-ssh` compila para `aarch64-linux-android` (API 24) con `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh`, sin cambiar las dependencias del escritorio ni la app — *compila; falta el AC de `readelf -d` (§2.1)*.
+**Compilación y plataforma**
+
+- [x] El paquete `magi-ssh` compila para `aarch64-linux-android` (API 24) con `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh`, sin cambiar las dependencias del escritorio ni la app
+  - AC: Dado el workspace, cuando se compila para Android, entonces sale `target/aarch64-linux-android/release/magi` y `readelf -d` solo pide bibliotecas de bionic (`libc`, `libm`, `libdl` y, si alguna dependencia lo usa, `liblog`)
+- [x] Modo Termux elegido al compilar (`cfg(target_os = "android")`) y, solo en compilaciones de depuración, con `MAGI_PLATAFORMA=termux` para las pruebas
+  - AC: Dado un binario de release para Linux con `MAGI_PLATAFORMA=termux`, cuando arranca, entonces se porta como en Linux
+- [x] Rutas en Termux desde `$HOME`, `XDG_*`, `$TMPDIR` y `$PREFIX`, nunca desde el uid: datos, configuración y estado como en Linux, y socket en `$TMPDIR/magi-<uid>/servidor.sock` (directorio 700) cuando no hay `XDG_RUNTIME_DIR`
+  - AC: Dado `XDG_RUNTIME_DIR` sin poner y el `TMPDIR` de Termux, cuando arranca el servidor, entonces el socket queda en `$TMPDIR/magi-<uid>/` con una ruta de menos de 100 bytes
+- [x] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
+- [x] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
+
+**Llavero con frase maestra**
+
+- [x] `LlaveroFichero` en `crates/magi-nucleo/src/llavero_fichero.rs`, detrás de `LlaveroSecreto`: `llavero.age` en el directorio de datos (600, por `ficheros.rs`), age con una entrada scrypt (2^17 al crear, hasta 2^20 al abrir), JSON con `formato` 1 y tope de 1 MiB
+  - AC: Dado un llavero creado con una frase, cuando se abre con otra, entonces da «frase incorrecta» y el fichero no cambia
+- [x] En Termux, el llavero de MAGI es `LlaveroFichero`; secret-tool, Keychain y `LlaveroMovil` no cambian
+- [x] La frase maestra vive solo en la memoria del cliente (`Zeroizing`, normalizada a NFC) hasta que se cierra la ventana o se bloquea el llavero; nunca va a disco, al log, a REGISTRO ni al servidor
+- [x] Diálogo CREAR LA FRASE MAESTRA cuando hace falta guardar el primer secreto (recordar una contraseña, crear o unir la sincronización): dos campos, al menos 12 caracteres y el aviso de que no se recupera
+  - AC: Dado que no hay `llavero.age`, cuando se marca «recordar» al conectar y se pulsa Esc en CREAR LA FRASE MAESTRA, entonces la contraseña se usa sin guardarse y no se crea ningún fichero
+- [x] Diálogo LLAVERO DE MAGI al abrir MAGI con `llavero.age`; Esc sigue sin él y la barra dice «llavero bloqueado» cuando algo lo necesita
+- [x] Con el llavero bloqueado, una conexión interactiva que lo necesita pide antes la frase (y, con Esc, la contraseña sin «recordar»); una operación automática da error con instrucción, nunca un diálogo
+  - AC: Dado el llavero bloqueado y la reconexión automática de un host con `contrasena:llavero`, cuando el servidor pide la contraseña, entonces la pestaña dice «llavero bloqueado: desbloquéalo (Ctrl+P)» y no se abre ningún diálogo
+- [x] Cinco frases incorrectas seguidas imponen 30 s de espera y anotan `llavero_desbloqueo_fallido` (una línea por serie, con el número de intentos)
+- [x] Diálogo CAMBIAR LA FRASE MAESTRA: la actual y la nueva dos veces; recifra con escritura atómica bajo el cerrojo y anota `llavero_frase_cambiada`
+- [x] Diálogo BORRAR EL LLAVERO: explica qué se pierde (las contraseñas guardadas y la clave de sincronización de este equipo), pide escribir `borrar` y anota `llavero_borrado`
+- [x] Diálogo LLAVERO DAÑADO (cabecera o contenido ilegibles): apartarlo como `llavero.age.danado-<fecha>` y seguir sin llavero, o salir sin tocar nada; nunca se borra solo; anota `llavero_apartado`
+- [x] Dos ventanas de MAGI en el mismo Termux: cada una pide la frase; las escrituras van con `flock` y releen el fichero antes de escribir
+  - AC: Dadas dos ventanas desbloqueadas que guardan a la vez las contraseñas de dos hosts distintos, cuando terminan, entonces `llavero.age` tiene las dos
+- [x] La CLI que necesita el llavero (`magi sincronizar` y las demás) pide la frase en el TTY; sin TTY, error con instrucción
+- [x] «Bloquear el llavero» desde la paleta borra de la memoria la frase y las entradas
+
+**Sincronización**
+
+- [x] Unir este equipo pegando la clave en el diálogo (pegado entre corchetes de Termux); la clave va al llavero de fichero, que se crea si no existe
+
+**API: CLI y órdenes de Termux**
+
+- [x] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
+- [x] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
+
+**Calidad**
+
+- [x] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
+
+Siguen sin marcar, a propósito, las de los Sprints 2 y 3 y la PoC (`src/termux/` completo, sincronización y equipo `termux-<modelo>`, portapapeles y enlaces, segundo plano, avisos, teclado, `[termux]`, diagnóstico, empaquetado y CI, README, revisión adversarial de cierre y versión 1.6.0), más las que dependen de ellos aunque el trabajo del Sprint 1 ya las toque (el núcleo no decide por `EQUIPOS.plataforma`, las instantáneas de FILA DE TECLAS, la paleta con «Instalar la fila de teclas», `magi termux` y los tipos de REGISTRO con `termux_teclas_instaladas`).
 
 ---
 
@@ -90,7 +179,17 @@ Ninguna todavía (0 / 71). Estado de la primera, que **no se marca**:
 - **PoC en el plegable: sin resultado todavía.** Hector decidió empezar el Sprint 1 sin esperar a la PoC. Hasta que la pase, las tres constantes que salen de ella llevan el valor prudente de la especificación y la marca `PROVISIONAL-POC`: `FOCO_FIABLE = false` (las pestañas avisan aunque estén delante y el aviso se retira al escribir, D379), `TOPE_OSC52 = 6000` (lo que dice §7.4) y el plazo de arranque del servidor, 2 s (sin cambios). Si la PoC contradice alguna, se cambia una sola constante. **Si el binario no arranca en Termux (R167), se para y se replantea todo lo que sigue.**
 - **`dpkg-deb` no está instalado en esta máquina** (necesario para `scripts/paquete-termux.sh` y la prueba `termux_paquete`, Sprint 3): `sudo pacman -S dpkg`. No bloquea la puerta.
 - `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` no están en la shell por defecto: hay que exportarlas para `cargo ndk` (el NDK r30 está en `$HOME/Android/Sdk/ndk/30.0.16248370`).
-- `deny.toml` solo audita los cuatro targets de escritorio; se añadirán los de Android en el Sprint 1.
+- ~~`deny.toml` solo audita los cuatro targets de escritorio~~: hecho en el Sprint 1 (también `aarch64-linux-android` y `x86_64-linux-android`); no añadieron fallos de licencias, bans ni fuentes.
+
+**Pendientes y límites que deja el Sprint 1** (todo lo marcado en el checklist se ha probado sin móvil; lo de abajo solo se ve en el plegable y va al guion):
+
+- **Nada del código `cfg(android)` se ha ejecutado:** `__system_property_get` (modelo, versión, SDK) y las llamadas `libc` de la CLI compilan para `aarch64-linux-android` (`cargo ndk build` y `check`) pero no se han corrido; `flock`, el `rename` atómico y los permisos 600 se asumen en el almacenamiento interno de Termux como en Linux; la semántica de `termux-*` real, el teclado táctil, el pegado entre corchetes de Termux, el diálogo a 48×20 real y la espera de 30 s con reloj real quedan para el guion. Los scripts doble se probaron con el `sh` de esta máquina (bash), no con `dash`.
+- **Abrir un llavero creado con el factor de producción 2^20 (~1 GiB) no se ha probado** (solo que la cabecera con 2^20 se acepta sin derivar y que >20 se rechaza). En un móvil, medirlo en el guion.
+- **Copias de la frase que no se pueden borrar:** los búferes internos de crossterm al leer un pegado (1 KiB en el lector y el `Vec` del parser), los temporales de `serde_json` con escapes y los iteradores de NFC dejan restos en memoria que el código no controla. Se reduce todo lo posible; no se garantiza.
+- **SIGTERM o SIGHUP** mientras la CLI pide la frase matan el proceso con el terminal en modo raw (sin eco) hasta un `reset` o `stty sane`; no se añaden manejadores de señales. Queda además una carrera de microsegundos (el terminal desaparece justo entre nuestro `poll` y el de crossterm) en la que vuelve a girar.
+- **Sondeo con el llavero cerrado [analista]:** un host de contraseña de llavero sale CAÍDA y anota `sondeo_fallido` (y `sondeo_recuperado` al desbloquear) aunque el host esté bien; no se relanza el sondeo al desbloquear. Propuesta: tratar el fallo por `BLOQUEADO` como «sin comprobar», sin REGISTRO, y relanzar tras desbloquear.
+- **Otros [analista]:** con SERVIDOR CAÍDO un diálogo del llavero que solo existía para una pregunta del servidor queda apilado y vacío; una pestaña Caída vuelve a enseñar «no hay ninguna guardada…» en la siguiente difusión del servidor aunque el llavero ya esté abierto; `quitar` un equipo comprueba `estado()` antes de borrar el fichero del otro equipo y, si otra ventana cambió la frase, falla después de borrarlo (la pasada lo reescribe); la ficha de escritorio con el llavero cerrado muestra «sin contraseña guardada» y, al guardar, cierra y descarta lo tecleado (rehacer `guardar_ficha` con `ficha_guardada_a_medias`); el pegado de otros diálogos con frase o contraseña (huella, servidor…) sigue sin borrar la `String` del evento (anterior a la fase).
+- **Las pruebas con pty** (`llavero_cli`) dependen de `script` de util-linux y de un margen de 1 s entre teclear y arrancar el binario: en un equipo muy cargado podrían dar un falso fallo, nunca un falso éxito. La de «no se puede lanzar» de `termux_ordenes` se omite con aviso si corre como root.
 
 **Riesgos que se mantienen como dice la spec:** apertura de `llavero.age` con scrypt de hasta 2^20 (≈1 GiB; en un móvil el *low memory killer* podría cerrar Termux entero, servidor incluido, si alguien forja el fichero); escrituras de `equipos::crear/unir` con scrypt (~1 s) en el hilo de UI mientras la PoC mida ≤ 1,5 s; una ficha de sesión persistente sin pestaña no avisa con la ventana cerrada (el servidor muere a los 10 s sin trabajo).
 
@@ -182,6 +281,18 @@ touch "$D/a"; chmod 600 "$D/a"; echo "chmod rc=$?"; ls -l "$D/a"
 Opcional (`pkg install inotify-tools`): `inotifywait -m -e create,modify "$D" &` y, desde otra app o con `adb shell touch /sdcard/magi-poc/desde-otra-app`, di si llega el evento.
 
 **Qué pega cada medida en el diseño:** P2 decide si seguimos; P3, el plazo de `conectar`; P4, `FOCO_FIABLE` (D379); P5, `TOPE_OSC52`; P6 y P7, la fila de teclas y la acción del aviso; P8, el reparto del trabajo de scrypt; P9, la tolerancia de `chmod` y el sondeo en vez de `notify`; P1, el nombre del equipo y el usuario (¿existe `$USER`?).
+
+### Pruebas del Sprint 1 (sin móvil)
+
+```
+cargo test -p magi-nucleo --test llavero_fichero --test reconexion
+TZ=UTC cargo test -p magi-ssh --test termux_ordenes --test termux_plataforma --test termux_ui \
+  --test llavero_cli --test recursos --test redimensionado
+TZ=UTC cargo test --workspace --locked --no-fail-fast        # todo, sin parar al primer fallo
+cargo clippy --workspace --all-targets --locked -- -D warnings ; cargo fmt --all --check ; cargo deny check
+```
+
+`termux_ordenes` y `termux_plataforma` también pasan con `MAGI_PLATAFORMA=termux` exportado (el checklist lo pide así). Para el binario de Termux: el bloque de compilación de §1 (con `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` exportadas) y `readelf -d`.
 
 ### Después de la puerta
 

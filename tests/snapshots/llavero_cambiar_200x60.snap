@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.0.2.140:22                                                                                                                      │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │      ┌ CAMBIAR LA FRASE MAESTRA ────────────────────────────────┐                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  Actual   [ ••••••••••••••• ]                            │                                                                     │
+│                                                              │      │  Nueva    [ ••••••••••••••••┃ ]                          │                                                                     │
+│                                                              │      │  Repetir  [  ]                                           │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  La frase nueva tiene al menos 12 caracteres; mejor,     │                                                                     │
+│                                                              │      │  varias palabras. Se recifra el llavero con ella.        │                                                                     │
+│                                                              │      │  Si la olvidas no se recupera: habría que borrar el      │                                                                     │
+│                                                              │      │  llavero y volver a unir este equipo.                    │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  ↵ cambiar   Tab siguiente   Esc cancelar                │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      └──────────────────────────────────────────────────────────┘                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda

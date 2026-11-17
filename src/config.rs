@@ -13,6 +13,11 @@ pub use magi_nucleo::rutas::Rutas;
 /// Rutas de este equipo: el núcleo no lee el entorno, así que las descubre
 /// aquí la crate directories.
 pub fn descubrir_rutas() -> Result<Rutas> {
+    // En Termux, siempre del entorno (`$HOME`, `XDG_*`, `$TMPDIR`, `$PREFIX`)
+    // y nunca del uid: bionic no sabe dónde está el home de Termux (D383).
+    if crate::termux::es_termux() {
+        return rutas_de_termux(&crate::termux::EntornoTermux::del_proceso());
+    }
     let dirs = directories::ProjectDirs::from("org", "4d3", "magi")
         .context("no se pudo determinar el directorio de datos del usuario")?;
     let hogar = directories::BaseDirs::new()
@@ -30,9 +35,29 @@ pub fn descubrir_rutas() -> Result<Rutas> {
     ))
 }
 
+/// Las rutas de Termux a partir de un entorno dado (el del proceso en
+/// producción, uno de mentira en las pruebas). Si falta algo, el error lleva
+/// la instrucción.
+#[doc(hidden)]
+pub fn rutas_de_termux(entorno: &crate::termux::EntornoTermux) -> Result<Rutas> {
+    let rutas = crate::termux::rutas::calcular(entorno)
+        .map_err(|error| anyhow::anyhow!("rutas de Termux: {error}"))?;
+    Ok(Rutas::nuevas(
+        rutas.datos,
+        rutas.config,
+        rutas.estado,
+        rutas.hogar,
+        rutas.runtime,
+    ))
+}
+
 /// Plataforma de este equipo: los valores que entiende el formato de
-/// sincronización.
+/// sincronización. En Termux es `android`, el valor que el núcleo ya conoce
+/// por la app (nada en el núcleo decide por él).
 pub fn plataforma_actual() -> &'static str {
+    if crate::termux::es_termux() {
+        return "android";
+    }
     match std::env::consts::OS {
         "linux" => "linux",
         "macos" => "macos",
@@ -42,8 +67,16 @@ pub fn plataforma_actual() -> &'static str {
 }
 
 /// Nombre por defecto de este equipo: el hostname, o «magi» si no se puede
-/// leer. Nunca es vacío: el nombre viaja en el fichero.
+/// leer. Nunca es vacío: el nombre viaja en el fichero. En Termux el nombre
+/// del sistema es `localhost` y no sirve: sale del modelo del móvil
+/// (`termux-<modelo>`).
 pub fn nombre_actual() -> String {
+    if crate::termux::es_termux() {
+        let modelo = crate::termux::Propiedades::del_sistema()
+            .modelo()
+            .unwrap_or_default();
+        return crate::termux::nombre_equipo(&modelo);
+    }
     match nix::unistd::gethostname() {
         Ok(nombre) => {
             let texto = nombre.to_string_lossy().trim().to_string();
@@ -58,8 +91,11 @@ pub fn nombre_actual() -> String {
     }
 }
 
-/// Directorio de ejecución para el proceso real, según el sistema.
+/// Directorio de ejecución para el proceso real, según el sistema (Linux y
+/// macOS).
 fn runtime_del_usuario() -> std::path::PathBuf {
+    // Termux no pasa por aquí: `descubrir_rutas` calcula su directorio de
+    // ejecución con `termux::rutas` (no hay `/tmp`).
     if cfg!(target_os = "macos") {
         let dirs = directories::ProjectDirs::from("org", "4d3", "magi");
         if let Some(dirs) = dirs {
