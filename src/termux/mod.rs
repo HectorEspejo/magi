@@ -23,6 +23,7 @@ use crate::config::Rutas;
 pub mod avisos;
 pub mod cli;
 pub mod diagnostico;
+pub mod estado;
 pub mod ordenes;
 pub mod portapapeles;
 pub mod propiedades;

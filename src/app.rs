@@ -61,6 +61,7 @@ pub mod sincronizacion;
 pub mod sincronizar;
 mod snippets;
 pub mod teclado;
+pub mod termux;
 
 pub use dialogo_magi::DeliberacionAbierta;
 pub use geometria::Geometria;
@@ -2820,6 +2821,9 @@ pub struct App {
     /// Interfaz del llavero de fichero (Fase 17): peticiones de scrypt en
     /// vuelo y la marca «llavero bloqueado» de la barra.
     pub llavero_ui: llavero::UiLlavero,
+    /// Órdenes `termux-*` del cliente y avisos del servidor en la barra (Fase
+    /// 17). Inerte fuera de Termux.
+    pub termux: termux::EstadoTermuxApp,
     pub tema: Tema,
     pub almacen: Almacen,
     pub runtime: tokio::runtime::Runtime,
@@ -3125,11 +3129,13 @@ impl App {
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
         let auto_refresco = config.flota.auto_refresco_seg >= 15;
         let llavero = crate::llavero::del_equipo(&rutas);
+        let plazo_termux = config.termux.api_plazo();
         let mut app = Self {
             rutas,
             config,
             llavero,
             llavero_ui: llavero::UiLlavero::default(),
+            termux: termux::EstadoTermuxApp::nuevo(plazo_termux),
             tema,
             almacen,
             runtime,
