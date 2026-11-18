@@ -685,6 +685,8 @@ pub(crate) fn todos_los_dialogos(
     dialogos.extend(super::vistas_m::dialogos());
     // Los del llavero con frase maestra (Fase 17).
     dialogos.extend(super::vistas_p::dialogos());
+    // El de la fila de teclas de Termux (Fase 17).
+    dialogos.extend(super::vistas_q::dialogos());
     dialogos
 }
 

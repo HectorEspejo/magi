@@ -53,6 +53,9 @@ mod vistas_o;
 // Fase 17: los diálogos del llavero con frase maestra y las vistas a 48×20.
 #[path = "redimensionado/vistas_p.rs"]
 mod vistas_p;
+// Fase 17: el diálogo FILA DE TECLAS DE TERMUX.
+#[path = "redimensionado/vistas_q.rs"]
+mod vistas_q;
 
 #[path = "redimensionado/remoto.rs"]
 mod remoto;

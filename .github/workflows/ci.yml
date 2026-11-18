@@ -1,4 +1,4 @@
-# Integración continua de MAGI — Fases 9, 11 y 12.
+# Integración continua de MAGI — Fases 9, 11, 12 y 17.
 #
 # Se ejecuta en cada pull request y en cada push a main. La release (compilar
 # los cuatro objetivos, publicar en GitHub Releases, Homebrew y AUR) la lleva
@@ -10,6 +10,12 @@
 # crates/magi-movil. cargo-deny 0.20.2 no admite --workspace: analiza el grafo
 # completo del workspace por su cuenta, así que también cubre los crates
 # nuevos sin cambiar su invocación.
+#
+# Desde la Fase 17, el job «termux» compila MAGI para Termux (aarch64 y, solo
+# como artefacto, x86_64), arma el .deb con scripts/paquete-termux.sh y pasa la
+# prueba termux_paquete. Solo corre en las PR que tocan lo que cambia el binario
+# o el contenido del .deb (lo decide el job «cambios-termux»): compilar para
+# Android es lo más lento de este workflow.
 #
 # Permisos: contents: read por defecto; ningún job de este workflow publica.
 
@@ -213,3 +219,156 @@ jobs:
             echo "namcap encontró errores en el PKGBUILD" >&2
             exit 1
           fi
+
+  cambios-termux:
+    name: ¿Toca el paquete de Termux?
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    outputs:
+      termux: ${{ steps.filtro.outputs.termux }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Basta el commit de fusión y sus dos padres.
+          fetch-depth: 2
+      - name: Mirar qué ficheros cambia la PR
+        id: filtro
+        run: |
+          set -euo pipefail
+          # En una PR, actions/checkout deja en HEAD el commit de fusión: su
+          # primer padre es la base y el segundo, la cabeza de la PR.
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "HEAD no es un commit de fusión: se asume que la PR toca Termux."
+            echo "termux=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cambia=false
+          while IFS= read -r fichero; do
+            # Todo lo que cambia el binario o el contenido del .deb: el código,
+            # lo que interviene al compilarlo (build.rs y lo vendorizado), lo
+            # que lleva embebido (visor/dist y assets), lo que se instala
+            # (README y licencias) y los ficheros que lo arman, lo prueban o lo
+            # publican (el job termux de este workflow incluido).
+            case "$fichero" in
+              src/* \
+                | crates/magi-nucleo/* \
+                | Cargo.toml \
+                | Cargo.lock \
+                | build.rs \
+                | vendor/* \
+                | visor/dist/* \
+                | assets/* \
+                | README.md \
+                | LICENSE-* \
+                | packaging/termux/* \
+                | scripts/paquete-termux.sh \
+                | tests/termux_paquete.rs \
+                | .github/workflows/ci.yml \
+                | .github/workflows/termux-release.yml)
+                cambia=true
+                echo "Toca el paquete de Termux: $fichero"
+                ;;
+              *) ;;
+            esac
+          done < <(git diff --name-only HEAD^1 HEAD)
+          echo "termux=$cambia" >> "$GITHUB_OUTPUT"
+          echo "El job termux corre: $cambia"
+
+  termux:
+    name: Paquete de Termux (.deb)
+    needs: cambios-termux
+    if: needs.cambios-termux.outputs.termux == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    env:
+      NDK_VERSION: '30.0.16248370'
+      CARGO_NDK_VERSION: '4.1.2'
+      # SHA-256 del binario precompilado de cargo-ndk (musl, estático).
+      CARGO_NDK_X86_64_LINUX_MUSL_SHA256: dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v4
+      - name: Instalar el NDK r30
+        # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);
+        # el de commandline-tools 22 y anteriores usa «;». Se prueban las dos
+        # formas para que el workflow valga con cualquiera de los dos.
+        run: |
+          set -euo pipefail
+          instalar() {
+            if ! sdkmanager --install "$1" > /dev/null 2>&1; then
+              sdkmanager --install "$2" > /dev/null
+            fi
+          }
+          instalar "ndk/${NDK_VERSION}" "ndk;${NDK_VERSION}"
+          ndk_home="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          if [ ! -d "$ndk_home" ]; then
+            echo "ERROR: el NDK ${NDK_VERSION} no quedó instalado en $ndk_home" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: termux
+      - name: Instalar cargo-ndk 4.1.2
+        # Se descarga a fichero, se comprueba su SHA-256 y solo entonces se
+        # instala.
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tgz"
+          echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/cargo-ndk
+          tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
+          install -m 755 "/tmp/cargo-ndk/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}/cargo-ndk" "$HOME/.cargo/bin/cargo-ndk"
+      - name: Compilar magi para aarch64-linux-android (API 24)
+        run: cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
+      - name: Compilar magi para x86_64-linux-android (solo como artefacto)
+        # Sirve para probar en un emulador de Android x86_64; no se empaqueta
+        # ni se publica.
+        run: cargo ndk -t x86_64 --platform 24 build --release -p magi-ssh --locked
+      - name: Comprobar las bibliotecas que pide el binario de aarch64
+        run: |
+          set -euo pipefail
+          readelf -d target/aarch64-linux-android/release/magi | grep NEEDED || true
+          scripts/paquete-termux.sh --comprobar-binario target/aarch64-linux-android/release/magi
+      - name: Instalar dpkg si la imagen no lo trae
+        run: |
+          set -euo pipefail
+          if ! command -v dpkg-deb > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y dpkg
+          fi
+          dpkg-deb --version | head -n 1
+      - name: Armar el .deb
+        id: deb
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --locked --format-version 1 | jq -r '.packages[] | select(.name == "magi-ssh") | .version')"
+          if [ -z "$version" ]; then
+            echo "ERROR: no se pudo leer la versión del paquete magi-ssh." >&2
+            exit 1
+          fi
+          export MAGI_DEB_SALIDA="$RUNNER_TEMP/termux"
+          scripts/paquete-termux.sh "$version" target/aarch64-linux-android/release/magi
+          deb="$(find "$MAGI_DEB_SALIDA" -name '*.deb' -print -quit)"
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+      - name: TZ=UTC cargo test --locked -p magi-ssh --test termux_paquete
+        # Con MAGI_EXIGIR_DEB=1 la prueba falla si no hay .deb en vez de
+        # omitirse (CI vale true en todos los jobs de GitHub, por eso no se usa).
+        env:
+          TZ: UTC
+          MAGI_DEB: ${{ steps.deb.outputs.deb }}
+          MAGI_EXIGIR_DEB: '1'
+        run: cargo test --locked -p magi-ssh --test termux_paquete
+      - name: Guardar el .deb y el binario de x86_64
+        uses: actions/upload-artifact@v7
+        with:
+          name: termux-paquete
+          path: |
+            ${{ runner.temp }}/termux/*
+            target/x86_64-linux-android/release/magi
+          if-no-files-found: error
+          retention-days: 7

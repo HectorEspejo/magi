@@ -1,7 +1,7 @@
 # MAGI - Fase 17: MAGI en Termux — Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Sprints 1 y 2 hechos** (llavero, plataforma, sincronización, portapapeles, wake lock y avisos); **Sprint 3 por hacer** (teclado, diagnóstico, paquete, CI, TUR, README, versión 1.6.0 y revisión adversarial de cierre). La PoC en el plegable sigue sin pasar: se trabaja con las constantes que dependen de ella en su valor prudente (`PROVISIONAL-POC`, §6). Versión objetivo 1.6.0 (el árbol sigue en 1.5.0).
-> Rama `fase17`. Entrega y reglas en `51dfb5c`; Sprint 1 en `73ed247` (contrato) y `b4b60a4`; Sprint 2 en `92e31bc` (contrato) y el commit del sprint.
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Sprints 1, 2 y 3 hechos** (llavero, plataforma, sincronización, portapapeles, wake lock, avisos, fila de teclas, diagnóstico y empaquetado). Falta **el cierre**: la revisión adversarial de toda la fase, la versión 1.6.0 y la verificación del `.deb` con `dpkg-deb` real (no está en esta máquina). La PoC en el plegable sigue sin pasar: se trabaja con las constantes que dependen de ella en su valor prudente (`PROVISIONAL-POC`, §6). Versión objetivo 1.6.0 (el árbol sigue en 1.5.0).
+> Rama `fase17`. Entrega y reglas en `51dfb5c`; Sprint 1 en `73ed247` (contrato) y `b4b60a4`; Sprint 2 en `92e31bc` y `df9ba3c`; Sprint 3 en `caabd66` (contrato) y el commit del sprint.
 
 ---
 
@@ -70,6 +70,20 @@ cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
 
 **Medidas.** `cargo ndk … build --release -p magi-ssh --locked` con el código de los dos sprints: 3 min 50 s, 37 745 120 bytes, SHA-256 `1ad049d38fcc5487ef2eb03fae1f411b7d4f4dad63b0c281c96ae593c4fe4004`, `readelf -d`: `libdl.so`, `libz.so`, `libm.so`, `libc.so`. `TZ=UTC cargo test --workspace --locked --no-fail-fast`: 81 binarios, 0 fallos. `git diff --stat android/` vacío; instantáneas existentes sin cambios (4 nuevas).
 
+### Sprint 3 — Teclas, diagnóstico, paquete y cierre (hecho salvo el cierre)
+
+**Método.** Contrato compilable en `caabd66` (solo `EstadoFila`, `ruta_properties` y `estado_fila` de `src/termux/teclas.rs`, que consume el diagnóstico; `[termux]` ya se había hecho en el Sprint 2) → tres pistas en paralelo en worktrees aislados (teclas, diagnóstico, empaquetado), cada una con su revisión adversarial de solo lectura → una ronda de correcciones en tres pistas → verificación. Al cerrar el sprint no queda ninguna marca `CONTRATO-S3`. El cierre de la fase (revisión adversarial de todo el código nuevo, versión 1.6.0) va en un commit aparte.
+
+**Fila de teclas (`src/termux/teclas.rs`, `cli.rs`, `src/app/termux_teclas.rs`, `src/ui/termux_teclas.rs`).** `fila(prefijo)` genera la línea `extra-keys` de §5.4 (con `Ctrl+]` → `{macro: 'CTRL ]', display: '^]'}`; con `Ctrl+a` → `'CTRL a'` y `'^A'`; un prefijo que Termux no puede expresar como macro deja la fila sin macro y el diálogo lo dice). `fusionar` sigue a `java.util.Properties` (saltos `\n`, `\r\n` y `\r`, continuaciones con barra invertida impar, comentarios `#` y `!`): sustituye la **última** línea lógica `extra-keys` efectiva o la añade al final con el comentario, y el resto queda **byte a byte**; la verificaron un lector de referencia de Java Properties (el `LineReader` de OpenJDK, portado en las pruebas) y un fuzz de 4 000 ficheros. El fichero se lee entero (hasta 256 KiB, UTF-8, solo fichero normal). Instalar: «ya está» sin copia ni escritura; si no, copia `termux.properties.magi-<AAAA-MM-DD>` (con `-2`, `-3`… si existe) con los permisos del original, escritura atómica por `ficheros.rs` conservando el modo (700/600 si se crea `~/.termux/`), `termux-reload-settings` por las `Ordenes` (si no responde, «reinicia Termux para ver la fila») y `termux_teclas_instaladas` en REGISTRO tras el efecto. Interfaz: diálogo FILA DE TECLAS DE TERMUX (desplazable con ↑↓ si no cabe; la instalación va en `spawn_blocking`), entrada de paleta solo en Termux, oferta única en el primer arranque (marca `primer-arranque` creada con `create_new`, así que dos ventanas no la ofrecen las dos) con la barra «MAGI en Termux: mira magi diagnostico», y la ayuda recuerda Volumen arriba + 1…9 y + 0. `magi termux teclas [--instalar]`: sin `--instalar` enseña la propuesta y la actual; con él pregunta «¿instalar? [s/N]» (sin TTY, error con instrucción).
+
+**Diagnóstico (`src/termux/diagnostico.rs`, `src/diagnostico.rs`).** `Estado::Info` (`·`, sin contar como aviso ni cambiar el código de salida) y el bloque TERMUX de §6.5 (Termux, Termux:API con `termux-battery-status`, almacenamiento, teclas con `estado_fila`, wake lock, avisos, segundo plano y batería), solo con `es_termux()`; las líneas generales adaptadas (runtime, llavero —sin abrirlo nunca—, portapapeles, terminal). En Linux, la salida es la de siempre (las pruebas existentes no cambian). La espera de Termux:API es cancelable: SIGINT, SIGTERM y SIGHUP matan el grupo de la orden antes de salir (antes quedaba huérfana).
+
+**Paquete, CI, TUR y documentación.** `scripts/paquete-termux.sh <versión>` (rutas exactas de §5.1, `control` sin `Depends`, `dpkg-deb -Zxz --root-owner-group`, `readelf -d` solo con `libc`, `libm`, `libdl`, `liblog` y `libz`, `.sha256`, reproducible, modo `--comprobar-binario`); `termux-release.yml` (etiqueta `vX.Y.Z` y `-rc.N`, nunca `android-v*`; compila con cargo-ndk fijado por SHA-256, atesta, espera a la release, sube con `gh release upload`; solo `GITHUB_TOKEN`; `workflow_dispatch` para repetir la subida); job `termux` de `ci.yml` con su filtro de rutas (aarch64 y x86_64, arma el `.deb` y pasa `termux_paquete` con `MAGI_EXIGIR_DEB=1`); receta de TUR en `packaging/termux/build.sh`; `docs/publicar-termux.md` y la fila de `docs/publicar.md`; sección «MAGI en Termux» del README; `tests/termux_paquete.rs`.
+
+**Revisión adversarial del sprint (una por pista, solo lectura) y su resultado.** Sin hallazgos de severidad alta. **Corregidos** (con prueba): el diálogo de la fila de teclas no era desplazable y se podía confirmar sin ver la copia prevista; una continuación abierta al final de `termux.properties` hacía que Java leyera el comentario de MAGI como parte del valor de la última clave del usuario (§7.7 tenía el mismo fallo); la columna de tipo ensanchada de Registro cambiaba el escritorio; el reintento tras una escritura fallida duplicaba copias sin avisar; dos ventanas podían ofrecer a la vez la fila del primer arranque; el diagnóstico dejaba `termux-battery-status` huérfano con Ctrl+C, enseñaba como «creado» la fecha de la última escritura (en Android no hay fecha de creación), podía entrar en pánico con una fecha de fichero absurda y afirmaba más de lo que sabía sobre wake lock y avisos; en el paquete, una prueba escribía datos personales del desarrollador en el repositorio, el filtro de CI no cubría `build.rs`, `vendor/`, `visor/dist/`, `assets/` ni los documentos del `.deb`, el nombre del `.deb` de una candidata llevaba una tilde que GitHub puede cambiar, y la prueba de permisos no miraba en qué job estaban. **No corregidos, anotados** (§2 y §6): acciones de los workflows por etiqueta y no por SHA (el patrón del repositorio) y la atestación en el mismo job que compila; construcción real del `.deb`.
+
+**Medidas.** `cargo ndk … build --release -p magi-ssh --locked` con el código de los tres sprints: 3 min 11 s, 37 810 264 bytes, SHA-256 `cc91e2136adde0b499f744924f2e58365d06f5af2d954751732945eb73e8e887`, `readelf -d`: `libdl.so`, `libz.so`, `libm.so`, `libc.so`; `scripts/paquete-termux.sh --comprobar-binario` lo da por correcto; `cargo ndk -t x86_64 … check` compila (el artefacto de CI). `TZ=UTC cargo test --workspace --locked --no-fail-fast`: 83 binarios, 0 fallos. En toda la fase (`3dea674..HEAD`) las instantáneas son 62 nuevas y ninguna modificada; `git diff --stat android/` vacío.
+
 ---
 
 ## 2. Desviaciones respecto a la especificación (qué y por qué)
@@ -112,6 +126,13 @@ Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el
 22. **Portapapeles, enlaces y barra.** (a) El resolver del navegador está en `src/app/escritorios.rs`, no en `src/visor.rs` (que es el paginador de Archivos): ahí se añadió `Plataforma::Termux`. (b) En Termux los mensajes de éxito son los literales de §4.4 («copiado (3,2 KiB)») sin la etiqueta que lleva el escritorio, y el tope de copia de 1 MiB del historial no aplica (mandan 512 KiB y 6 000 bytes). (c) Un `abrir_enlaces` que sea una ruta (lleva `/`) se lanza como en el escritorio, porque `Ordenes` solo busca nombres. (d) **Añadidos sin estar en la spec:** «copiando…» mientras corre la orden, serialización de las copias (`COPIAS_A_LA_VEZ` pasa de 4 en paralelo a 1 en vuelo y 1 pendiente), el texto «sustituida por una copia más reciente» y un aviso «…; la línea saldrá al cerrar este diálogo» cuando el respaldo se apila. (e) `ventana::abrir` y `abrir_para` se quedan como envoltorios de `abrir_ventana`/`abrir_ventana_para` (enum `AperturaVentana`). (f) `ClaveGenerada.copiada` se conserva pero ahora siempre vale `false`: la `App` copia al terminar. (g) El aviso «Termux:API no responde» se usa igual si falta el paquete que si no responde, como dice la spec. **[analista]** valorar un texto aparte para «no instalada». (h) **[analista]** Los mensajes de §4.4 y la explicación de `prefijo w` miden 72-95 caracteres y a 48 columnas la barra los recorta con «…» (se pierde la alternativa): quedaron cuatro instantáneas a 48×20 que lo documentan; decidir variantes cortas o un mensaje de dos líneas. **[analista]** Una copia descartada de tipo clave pública abre el diálogo «CLAVE PÚBLICA» aunque la última salga bien; quizá suprimirlo si el texto de la sustituta es idéntico.
 23. **Escritorio sin Termux.** Una sola vía `App::copiar` no cambia nada en el escritorio: las tres vías antiguas conservan sus respaldos (una primera versión de la pista las llevaba a OSC 52 y la revisión lo señaló).
 
+
+**Desviaciones nuevas del Sprint 3** (**[analista]** = pide decisión o corrección de la especificación):
+
+24. **Fila de teclas.** (a) **[analista]** Con `~/.termux/termux.properties` y `~/.config/termux/termux.properties` a la vez, manda `~/.termux` (el orden en que Termux los busca); §4.8 y el checklist decían «`~/.config` si es el que existe», que se lee como «si es el único». (b) **[analista]** §7.7 debe corregirse: cuando la última línea lógica del fichero acaba en continuación (barra invertida impar), MAGI inserta una línea en blanco antes del comentario `# fila de teclas de MAGI…`; el pseudocódigo lo pegaba al valor de la última clave (Java lee `bell-character = vibrate # fila de teclas…`). (c) El análisis de líneas sigue a `java.util.Properties` (separa por `\n`, `\r\n` y `\r`), no a `splitlines` de Python (que también parte por `\x0c`, `\x85` y U+2028); la línea sustituida conserva su CRLF; al añadir al final se usa `\n` aunque el fichero use CRLF. Las claves con escape (`extra\-keys`) no se reconocen: MAGI añade su fila debajo, que gana por ser la última, sin tocar ninguna línea del usuario. (d) **[analista]** El primer arranque con `llavero.age` enseña primero LLAVERO DE MAGI y deja la fila debajo, al revés que el diagrama de §4.1 (una tecla pensada para la frase no debe instalar nada). (e) La copia y la escritura: si la copia se hizo y la escritura falla, el mensaje nombra la copia y el reintento del mismo diálogo la reutiliza si sigue intacta e idéntica al fichero; `magi termux teclas --instalar` no tiene memoria entre ejecuciones, así que cada fallo tras la copia deja otra `-2`, `-3`… (f) `estado_fila` sin `$HOME` absoluto da `Ilegible(«no está puesto $HOME»)`. (g) Se tocó `src/ui/registro.rs`: la columna del tipo es de 26 caracteres **solo en Termux** (para ver `termux_teclas_instaladas` entero; en el escritorio, 22 como siempre) y `src/app/termux.rs`/`src/app.rs` ganan una variante de evento y el campo `teclas_termux`.
+25. **Diagnóstico.** (a) **[analista]** La línea del llavero dice «modificado el …» y no «creado el …» como el ejemplo de §6.5: en Android `Metadata::created()` da siempre `Unsupported` y `llavero.age` se reescribe de forma atómica en cada guardado, así que lo que se sabe sin abrir el fichero es la última escritura (lo mismo que dice `magi llavero estado`). (b) El modelo del teléfono no se enseña (§7.9 no lo lleva). (c) La línea de batería parte el texto de otro modo que el ejemplo (el paréntesis queda entero en la nota). (d) Sin SDK conocido, la línea de segundo plano sale igual, como información; antes de Android 12 no sale la de segundo plano pero sí la de batería. (e) Wake lock y avisos no afirman más de lo que saben: una marca `wake-lock` sin servidor solo es «!» si se sabe que no hay servidor (con otra versión o sin respuesta no se afirma nada), con `nunca` y una marca residual se dice, y con Termux:API no disponible la línea de avisos es informativa. (f) El portapapeles en Termux sin Termux:API sale `✓` (OSC 52 funciona, con su tope). (g) `magi diagnostico` instala manejadores de SIGINT, SIGTERM y SIGHUP **solo en Termux** y mientras espera a Termux:API (salen con 130 y 129), y escribe «comprobando Termux:API…» siempre por stderr. (h) Cambios de API pública sin efecto fuera de Termux: `Estado::Info`, `Informe.bloques`, `LlaveroObservado::Fichero { modificado }` (antes `creado`) y varios `Comprobacion::*` pasan a `pub(crate)`. (i) Los avisos de rango de `[termux]` no salen en el diagnóstico (la línea «configuración» sigue diciendo «correcto»); se avisan al arrancar la TUI.
+26. **Empaquetado y CI.** (a) El soporte de candidatas `-rc.N` (etiqueta, versión del `control` con tilde, apartado de la guía) es la desviación 4 de §2: el **nombre del fichero** de una candidata usa un guion (`magi-ssh_1.6.0-rc.1_aarch64.deb`) y no la tilde del campo `Version`, porque GitHub puede cambiar la `~` del adjunto y el `.sha256` dejaría de cuadrar; no sigue la convención de Debian, pero `dpkg` y `apt` no miran el nombre del fichero. El paso «Comprobar los ficheros de la release» **falla** si el adjunto subido tiene otro nombre. (b) **[analista]** El filtro del job `termux` de `ci.yml` enumera más rutas que el checklist (añade `build.rs`, `vendor/*`, `visor/dist/*`, `assets/*`, `README.md`, `LICENSE-*`, `tests/termux_paquete.rs` y `termux-release.yml`: cambian el binario o el contenido del `.deb`). (c) Las acciones de los workflows nuevos van por **etiqueta de versión**, no por SHA de commit: es lo que hacen `android-release.yml`, `android.yml`, `ci.yml` y `release.yml`; lo que sí se fija por SHA-256 es `cargo-ndk`. El job `compilar` tiene `id-token: write` y `attestations: write` y ejecuta acciones de terceros por etiqueta mutable: **riesgo conocido y mejora pendiente** (fijar todas por SHA y mover la atestación a un job propio que solo use `download-artifact` y `attest-build-provenance`), anotado en `docs/publicar-termux.md`. (d) `termux-release.yml` no ejecuta `cargo test --test termux_paquete` (la pasa cada PR en el job `termux`): solo las comprobaciones de estructura del propio script. (e) `gh release upload` sin `--clobber`: un `.deb` ya subido (y atestado) no se sustituye; hay que borrarlo a mano y repetir con `workflow_dispatch`. (f) La receta de TUR declara `TERMUX_PKG_DEPENDS="zlib"` aunque el `.deb` de GitHub no tiene `Depends`: **suposición no verificada** (el enlazador de Termux puede resolver `libz` contra su paquete); no activa `TERMUX_PKG_AUTO_UPDATE`; el SHA-256 de la fuente es un marcador de 64 ceros que sustituye el desarrollador (comando en la guía); la receta instala la página man sin comprimir y no se ha compilado en TUR. (g) El script gana `--comprobar-binario [ruta]` (solo `readelf -d`) para el paso temprano del workflow. (h) `tests/termux_paquete.rs` comprueba, además de rutas, `control` y `readelf`, patrones de etiqueta, permisos por job, secretos, el job de CI, la receta y los documentos, y lleva un doble de `dpkg-deb` embebido; sus pruebas del grupo de publicación solo valen en Linux (`#![cfg(target_os = "linux")]`). (i) `docs/publicar.md` actualiza su párrafo de permisos para incluir los jobs de escritura de `termux-release.yml` y `android-release.yml`.
+
 ---
 
 ## 3. Estructura de archivos creada/modificada
@@ -137,6 +158,13 @@ Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el
 - **Sincronización:** `src/app/sincronizacion.rs` (sondeo y registro de lecturas colgadas), `src/sincronizacion/{mod,almacenamiento,equipos}.rs`, `crates/magi-nucleo/src/sincronizacion/{carpeta,mod}.rs`, `crates/magi-nucleo/src/ficheros.rs`, `src/app.rs` (carpeta, vigilancia, pasada); pruebas `tests/termux_sincronizacion.rs` (45).
 - **Portapapeles y enlaces:** `src/termux/portapapeles.rs`, `src/app/{portapapeles,escritorios,sesion}.rs`, `src/portapapeles.rs`, `src/identidades.rs`, `src/cliente/ventana.rs`, `src/app.rs` (paleta y teclas); pruebas `tests/termux_portapapeles.rs` (45) e instantáneas `barra_mensaje_*_48x20` (4).
 - **Otros:** `README.md` (`abrir_enlaces` en Termux), `CLAUDE.md` y `AGENTS.md` (`--test termux_portapapeles`), `CHANGELOG.md`.
+
+**Sprint 3 (todo bajo `android/` sin tocar):**
+
+- **Fila de teclas:** `src/termux/teclas.rs` (`fila`, `fusionar`, `preparar`, `escribir_fila`, `estado_fila`), `src/termux/cli.rs` (`magi termux teclas`), `src/app/termux_teclas.rs` y `src/ui/termux_teclas.rs` (nuevos: diálogo e instalación), `src/app.rs`/`src/app/termux.rs`/`src/ui/{mod,dialogos,disposicion,ayuda,registro}.rs`; pruebas `tests/termux_teclas.rs` (62) y `tests/redimensionado/vistas_q.rs` con 29 instantáneas nuevas del diálogo, sus estados y la ayuda.
+- **Diagnóstico:** `src/termux/diagnostico.rs` (nuevo, ~2 000 líneas con sus pruebas), `src/diagnostico.rs` (`Estado::Info`, `Informe.bloques`); `tests/diagnostico.rs` (50).
+- **Paquete y documentación:** `scripts/paquete-termux.sh`, `.github/workflows/termux-release.yml`, `.github/workflows/ci.yml` (job `termux`), `packaging/termux/build.sh`, `docs/publicar-termux.md`, `docs/publicar.md`, `README.md` (sección «MAGI en Termux»); `tests/termux_paquete.rs` (28).
+- **Otros:** `CHANGELOG.md`, `CLAUDE.md` y `AGENTS.md` (`MAGI_EXIGIR_DEB` en lugar de `CI` para `termux_paquete`, y el script de empaquetado).
 
 ---
 
@@ -169,11 +197,20 @@ Tomadas durante el Sprint 2:
 - **Una firma barata de la carpeta no es la pasada:** el sondeo decide si pedirla; la pasada de F10 sigue siendo la que lee, hace SHA-256 e importa, en el bucle de UI (riesgo anotado en §6).
 - **Un fallo de lectura nunca se parece a una ausencia** (regla de CLAUDE.md) aplicado a los avisos (se conservan los de lo que no se puede comprobar), a la carpeta colgada (no se pide pasada) y a Termux:API (un fallo local de `Io` no la apaga).
 
+
+Tomadas durante el Sprint 3:
+
+- **`termux.properties` se trata como lo trata Java:** la fusión se verifica contra un lector de referencia de `java.util.Properties` (no contra el pseudocódigo) y la invariante «tras instalar, Termux lee lo mismo salvo `extra-keys`»; lo que no se entiende (no UTF-8, más de 256 KiB, no es un fichero normal) no se toca y se dice.
+- **Nada se escribe fuera de los ficheros de MAGI sin confirmar, sin copia y sin REGISTRO:** el diálogo lleva fijados ruta, prefijo y fecha, la copia va antes y, si falla, no se escribe nada; el REGISTRO se anota después del efecto.
+- **El diagnóstico observa y no decide:** `recoger` mira el sistema (con las `Ordenes` y su plazo, cancelable por señal) y `comprobar` interpreta datos puros, de modo que cada línea del bloque TERMUX se prueba con `Datos` a mano y el diagnóstico de Linux queda byte a byte igual.
+- **El paquete se prueba por capas:** `scripts/paquete-termux.sh` valida versión y binario antes de armar, comprueba la estructura después, y las pruebas lo ejercitan con un doble de `dpkg-deb` y, si está, con el real; `termux_paquete` se omite sin `.deb` salvo `MAGI_EXIGIR_DEB=1` (GitHub pone `CI` en todos los jobs).
+
 ---
 
 ## 5. Funcionalidades del checklist completadas (texto exacto)
 
-**46 / 71** tras el Sprint 2. Todas se han comprobado sin móvil (pruebas, compilación para Android o lectura del código); lo que solo se ve en el plegable queda en §6 y en el guion. Observaciones: la de compilación se da por cumplida con la lista de bibliotecas aceptada en §2.1 (`libdl`, `libz`, `libm`, `libc`); la de «Modelo, versión y SDK…» está implementada y compila para Android, pero su lectura real va al guion; la de «Rutas en Termux…» se comprueba con el servidor arrancado de verdad en `tests/termux_ordenes.rs`; la de «Modo Termux elegido al compilar» se comprobó además a mano con el binario `--release` de Linux; la de «Una pestaña delante pero sin foco…» está completa para `FOCO_FIABLE = false` y su rama `true` solo en la lógica pura (la PoC decide); «`[termux]` en `config.toml`» se hizo en el Sprint 2 en vez del 3; y la de «Órdenes de Termux con el plazo…» está completa en cliente y servidor (el diagnóstico las usa en el Sprint 3).
+**64 / 71** tras el Sprint 3. Todas se han comprobado sin móvil (pruebas, compilación para Android o lectura del código); lo que solo se ve en el plegable queda en §6 y en el guion de §7. Observaciones: la de compilación se da por cumplida con la lista de bibliotecas aceptada en §2.1; la de «Modelo, versión y SDK…» está implementada y compila para Android, pero su lectura real va al guion; «Sin fichero, se crea `~/.termux/termux.properties`…» se cumple con la desviación 24(a); la de «Receta de TUR…» está limpia con `shellcheck`, pero no se ha compilado en TUR; «README» y `docs/publicar-termux.md` se han escrito con la versión 1.6.0 por delante de `Cargo.toml` (se ajustan al subirla); y «El escritorio y la app no cambian» se vuelve a comprobar al cerrar la fase.
+
 
 **Compilación y plataforma**
 
@@ -181,12 +218,19 @@ Tomadas durante el Sprint 2:
   - AC: Dado el workspace, cuando se compila para Android, entonces sale `target/aarch64-linux-android/release/magi` y `readelf -d` solo pide bibliotecas de bionic (`libc`, `libm`, `libdl` y, si alguna dependencia lo usa, `liblog`)
 - [x] Modo Termux elegido al compilar (`cfg(target_os = "android")`) y, solo en compilaciones de depuración, con `MAGI_PLATAFORMA=termux` para las pruebas
   - AC: Dado un binario de release para Linux con `MAGI_PLATAFORMA=termux`, cuando arranca, entonces se porta como en Linux
+- [x] Lo propio de Termux en `src/termux/` (`mod`, `rutas`, `ordenes`, `portapapeles`, `wake_lock`, `avisos`, `teclas`, `diagnostico` y `cli`); fuera de ahí, solo llamadas a su interfaz
 - [x] Rutas en Termux desde `$HOME`, `XDG_*`, `$TMPDIR` y `$PREFIX`, nunca desde el uid: datos, configuración y estado como en Linux, y socket en `$TMPDIR/magi-<uid>/servidor.sock` (directorio 700) cuando no hay `XDG_RUNTIME_DIR`
   - AC: Dado `XDG_RUNTIME_DIR` sin poner y el `TMPDIR` de Termux, cuando arranca el servidor, entonces el socket queda en `$TMPDIR/magi-<uid>/` con una ruta de menos de 100 bytes
 - [x] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
 - [x] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
 - [x] El núcleo no decide nada por `EQUIPOS.plataforma`: con `android` en un equipo escritor, la deliberación, el sondeo y la sincronización se portan como en el escritorio
   - AC: Dadas las pruebas de deliberación, sondeo y sincronización con la plataforma `android` inyectada en el escritorio, cuando corren, entonces dan lo mismo que con `linux`
+
+**Instalación y publicación**
+
+- [x] Receta de TUR en `packaging/termux/build.sh` (`termux_setup_rust`, `TERMUX_PKG_EXCLUDED_ARCHES="arm, i686"`, fuente del tag con su SHA-256, man y autocompletado), limpia con `shellcheck`
+- [x] `docs/publicar-termux.md`: cómo sale el `.deb`, cómo se comprueba en el móvil y cómo se propone y se actualiza la receta en TUR (la PR la abre el desarrollador)
+- [x] README: sección «MAGI en Termux» con la instalación (`apt install ./magi-ssh_<versión>_aarch64.deb` o TUR), Termux:API, `termux-setup-storage`, la fila de teclas y el límite de procesos de Android 12 o posterior
 
 **Llavero con frase maestra**
 
@@ -243,26 +287,51 @@ Tomadas durante el Sprint 2:
 - [x] En Termux con avisos, el vigilante corre también sin ventanas conectadas mientras viva el servidor (precisa D334)
 - [x] Una pestaña delante pero sin foco (Termux en segundo plano) cuenta como sin mirar; si Termux no manda eventos de foco (prueba de concepto), el aviso sale igual y se retira al escribir en la pestaña
 
+**Teclado**
+
+- [x] Fila de teclas generada de la tabla de MAGI: `ESC TAB CTRL ALT ^] ← ↓ ↑ →` y `F1`-`F9`, con el prefijo configurado como macro (`{macro: 'CTRL ]', display: '^]'}` por defecto)
+- [x] Instalar la fila (paleta, primer arranque o `magi termux teclas --instalar`): confirmación, copia `termux.properties.magi-<fecha>`, escritura atómica de solo la línea lógica `extra-keys` y `termux-reload-settings`; anota `termux_teclas_instaladas`
+  - AC: Dado un `termux.properties` con comentarios, otras claves y un `extra-keys` partido en tres líneas con `\`, cuando se instala la fila, entonces solo cambia esa línea lógica y el resto queda byte a byte
+- [x] Sin fichero, se crea `~/.termux/termux.properties`; si el que existe es `~/.config/termux/termux.properties`, se usa ese; si la fila ya es la de MAGI, «ya está», sin copia ni escritura
+- [x] La ayuda (`?`) en Termux recuerda Volumen arriba + 1-9 (F1-F9) y + 0 (F10)
+
+**Interfaz en el móvil**
+
+- [x] Primer arranque en Termux: ofrece la fila de teclas una vez (marca en el estado) y la barra remite a `magi diagnostico`
+- [x] Instantáneas a 48×20 de Flota, Hosts, Sesión y los diálogos nuevos (LLAVERO DE MAGI, CREAR LA FRASE MAESTRA, CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO, LLAVERO DAÑADO y FILA DE TECLAS DE TERMUX), además de las de 40×12, 80×24 y 200×60 (T45)
+- [x] Paleta en Termux: «Desbloquear el llavero», «Bloquear el llavero», «Cambiar la frase maestra», «Borrar el llavero» e «Instalar la fila de teclas de Termux»; fuera de Termux no salen
+
 **CLI, configuración y diagnóstico**
 
+- [x] `magi llavero` y `magi termux` en la CLI, la página man y el autocompletado (`assets/` regenerado); fuera de Termux dicen por qué no aplican, con código 1
 - [x] `[termux]` en `config.toml` (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a 30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota con aviso; fuera de Termux se ignora
+- [x] `magi diagnostico` en Termux: bloque TERMUX (versiones de Termux y Android, Termux:API, almacenamiento, fila de teclas, wake lock y avisos), las líneas generales adaptadas (runtime, llavero sin pedir la frase, portapapeles, terminal) y lo que no se puede comprobar (procesos en segundo plano, batería) con `·`, sin contar como aviso
+  - AC: Dado el Termux de Google Play, cuando se ejecuta `magi diagnostico`, entonces la línea de Termux sale con `!` y recomienda el de F-Droid o GitHub
 - [x] Órdenes de Termux con el plazo `[termux] api_plazo_seg` y sin shell; si Termux:API no responde, la función se apaga en ese proceso con un aviso y MAGI nunca se queda esperando
   - AC: Dado un `termux-clipboard-set` que no responde, cuando se copia, entonces a los 5 s se copia por OSC 52 y la barra lo dice una sola vez
+
+**REGISTRO**
+
+- [x] Tipos nuevos `llavero_creado`, `llavero_frase_cambiada`, `llavero_borrado`, `llavero_desbloqueo_fallido`, `llavero_apartado` y `termux_teclas_instaladas`, sin frases ni secretos, con su etiqueta en la vista Registro
 
 **API: CLI y órdenes de Termux**
 
 - [x] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
 - [x] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
+- [x] `magi termux teclas [--instalar]`: sin `--instalar`, enseña la fila propuesta y la actual sin escribir
 - [x] `magi termux aviso`: publica un aviso de prueba y lo retira a los 10 s
 - [x] `termux-clipboard-set` (por la entrada estándar) y `termux-open-url` desde el cliente
 - [x] `termux-wake-lock` y `termux-wake-unlock` desde el servidor
 - [x] `termux-notification` y `termux-notification-remove` desde el servidor, con ids `magi-<id>`
+- [x] `termux-reload-settings` al instalar la fila y `termux-battery-status` en `magi diagnostico`
 
 **Calidad**
 
 - [x] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
+- [x] Dobles de `tests/fijos/termux/` (anotan argumentos y entrada, y saben colgarse o fallar) y pruebas `termux_ordenes`, `termux_ui`, `termux_servidor`, `termux_sincronizacion` y `termux_teclas` con `MAGI_PLATAFORMA=termux`
+- [x] El escritorio y la app no cambian: todas las pruebas anteriores en verde, las instantáneas de redimensionado sin cambios y `android/` sin tocar
 
-Siguen sin marcar, a propósito, las del Sprint 3 y la PoC: `src/termux/` completo (teclas, diagnóstico y CLI de teclas), la fila de teclas y `termux.properties`, la ayuda y el primer arranque, las instantáneas y la paleta con la fila de teclas, `magi termux teclas`, `magi diagnostico`, `termux-reload-settings` y `termux-battery-status`, los tipos de REGISTRO con su etiqueta (`termux_teclas_instaladas` se emite en el Sprint 3), el paquete, la CI, TUR y el README, las pruebas que faltan (`termux_teclas`, `termux_paquete`), la revisión adversarial de cierre y la versión 1.6.0.
+**Siguen sin marcar** (7), con su motivo: *`scripts/paquete-termux.sh`* (su AC exige `dpkg-deb --contents` real y aquí no hay `dpkg-deb`: solo se ha ejercitado con un doble), *`termux-release.yml`* y *el job `termux` de `ci.yml`* (pasan `actionlint` y su lógica se probó ejecutando el bash en local, pero no han corrido en GitHub), *prueba `termux_paquete`* (existe y pasa con el doble; la lectura de un `.deb` real queda pendiente de `dpkg-deb`), *prueba de concepto en el plegable*, *revisión adversarial de cierre* y *versión 1.6.0* (se hacen al cerrar la fase).
 
 ---
 
@@ -293,6 +362,15 @@ Siguen sin marcar, a propósito, las del Sprint 3 y la PoC: `src/termux/` comple
 - **`magi termux aviso` interrumpido** (Ctrl+C o SIGHUP) durante los 10 s deja el aviso `magi-test` hasta que se deslice a mano; no se añaden manejadores de señales.
 - **Los avisos de Termux:API no instalada y apagada comparten texto [analista].** Un `termux-api` instalado con el servidor en marcha no activa el vigilante sin ventanas hasta el siguiente arranque.
 - **Las pruebas de tiempos** (`termux_servidor`, `termux_sincronizacion`, `termux_portapapeles`) usan tiempos cortos inyectados y márgenes de ≥ 0,8 s: solo pueden fallar en la dirección segura (nada emitido); la de control positivo de `notify` necesita inotify en el CI.
+
+**Pendientes y límites que deja el Sprint 3:**
+
+- **El `.deb` no se ha construido con `dpkg-deb` real** (no está en esta máquina y requiere `sudo`): `sudo pacman -S dpkg`, luego `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked`, `scripts/paquete-termux.sh 1.6.0` y `MAGI_DEB=… MAGI_EXIGIR_DEB=1 TZ=UTC cargo test -p magi-ssh --test termux_paquete`. Lo que solo se ve con la herramienta real: avisos de `dpkg-deb` por falta de `Section` o `Priority`, el formato de `--contents` y `--field`, la reproducibilidad entre dos ejecuciones y un `apt install ./…deb` con el `dpkg` de Termux.
+- **`termux-release.yml` y el job `termux` nunca se han ejecutado en GitHub:** sin probar la instalación del NDK r30 en `ubuntu-22.04`, el tiempo del job (límite de 75 min, con dos compilaciones release de Android más las pruebas), la caché, `gh release upload`, la atestación, la espera a la release que crea `dist` y el filtro `cambios-termux` contra una PR real. Se aconseja probarlo con una candidata `v1.6.0-rc.1` (con `Cargo.toml` en `1.6.0-rc.1` en el commit etiquetado) antes de la estable.
+- **La receta de TUR no se ha compilado en TUR:** `TERMUX_PKG_DEPENDS="zlib"` y el mantenedor `@4d3-org` son suposiciones; hay que sustituir el SHA-256 de la fuente al proponerla y mirar `readelf -d` del `.deb` que genere TUR; falta ver si x86_64 compila allí y si el sistema de TUR comprime la página man.
+- **Nada del Sprint 3 se ha probado en un móvil:** que Termux dibuje `{macro: 'CTRL ]', display: '^]'}` y mande `0x1D`, que `termux-reload-settings` recargue la fila sin reiniciar, que lea el `termux.properties` escrito, las propiedades reales de Android (release, SDK) y la salida y el tiempo reales de `termux-battery-status`, que `Metadata::created()` dé `Unsupported` en bionic (si diera fecha, «modificado el» seguiría siendo cierto), la entrega de SIGHUP al cerrar la sesión de Termux durante el diagnóstico y el aspecto de las líneas largas del diagnóstico a ~48 columnas (no se ajustan al ancho).
+- **Carrera sin cerrar:** si otro proceso crea `termux.properties` justo entre la lectura y el renombrado cuando no existía, la ventana es de microsegundos; para un fichero existente se relee al confirmar y se copia antes.
+- **Tests frágiles bajo carga:** `termux_portapapeles::con_una_orden_en_vuelo_nada_pasa_por_delante` (usa `Modo::Lento(6)`) falló una vez con la máquina muy cargada; las pruebas de `termux_paquete` del grupo de publicación interpretan el YAML como texto y asumen la sangría actual.
 
 **Riesgos que se mantienen como dice la spec:** apertura de `llavero.age` con scrypt de hasta 2^20 (≈1 GiB; en un móvil el *low memory killer* podría cerrar Termux entero, servidor incluido, si alguien forja el fichero); escrituras de `equipos::crear/unir` con scrypt (~1 s) en el hilo de UI mientras la PoC mida ≤ 1,5 s; una ficha de sesión persistente sin pestaña no avisa con la ventana cerrada (el servidor muere a los 10 s sin trabajo).
 
@@ -398,6 +476,26 @@ cargo clippy --workspace --all-targets --locked -- -D warnings ; cargo fmt --all
 Sprint 2: `TZ=UTC cargo test -p magi-ssh --test termux_servidor --test termux_sincronizacion --test termux_portapapeles` (42, 45 y 45 pruebas; las de tiempo reales de `termux_servidor` tardan unos 12 s) y `cargo test -p magi-ssh --lib termux:: servidor::`.
 
 `termux_ordenes` y `termux_plataforma` también pasan con `MAGI_PLATAFORMA=termux` exportado (el checklist lo pide así). Para el binario de Termux: el bloque de compilación de §1 (con `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` exportadas) y `readelf -d`.
+
+Sprint 3: `TZ=UTC cargo test -p magi-ssh --test termux_teclas --test diagnostico --test termux_paquete --test redimensionado` (62, 50, 28 y 324 pruebas; `termux_paquete` omite con aviso las que leen un `.deb` real sin `MAGI_DEB`) y `shellcheck scripts/*.sh packaging/termux/build.sh tests/fijos/termux/falsos/*` y `actionlint`.
+
+### Guion de validación en el plegable (cierre)
+
+Lo hace el desarrollador con el Termux y el Termux:API de F-Droid. Es el guion de §11 de la especificación, más lo que los tres sprints dejaron para el móvil. **Antes de empezar**: `sudo pacman -S dpkg` en el PC, construir y probar el `.deb` (§6) y subirlo como candidata `v1.6.0-rc.1` (o copiarlo al móvil con `adb push`).
+
+1. Instalar el `.deb` (`apt install ./magi-ssh_1.6.0-rc.1_aarch64.deb`) y comprobar `magi --version` y `magi diagnostico` (que `readelf` del binario instalado pida solo las bibliotecas aceptadas, que el bloque TERMUX salga completo, que la línea del llavero diga «modificado el» y que Ctrl+C durante «comprobando Termux:API…» no deje procesos: `ps`).
+2. Primer arranque: aceptar la fila de teclas (comprobar la copia `termux.properties.magi-<fecha>` y que la fila aparezca sin reiniciar); F1-F9, `^]` (que mande `0x1D`: `cat -v`), Ctrl+P y las flechas funcionan; Volumen arriba + 1 da F1.
+3. Unir el móvil a la sincronización pegando la clave, con la carpeta de Syncthing en `~/storage/shared`: crear la frase maestra; comprobar la ruta guardada (`/storage/emulated/0/…`), el log (una línea de permisos 600) y que un host editado en el móvil llega al escritorio y uno editado en el escritorio llega al móvil en menos de `sincronizacion_sondeo_seg`; con la carpeta sin responder (app de sincronización parada o almacenamiento ocupado), que la TUI no se congele.
+4. Conectar a un host con contraseña y «recordar»; cerrar MAGI y volver: pide la frase y conecta sin pedir la contraseña. Con scrypt en marcha, que Esc no cierre el diálogo.
+5. Esc en LLAVERO DE MAGI: la conexión pide la contraseña y la sincronización dice que el llavero está bloqueado; la reconexión automática de una pestaña dice «llavero bloqueado» y, si se desbloquea dentro de 10 s, conecta.
+6. Copiar del modo historial y pegarlo en otra app; parar Termux:API y repetirlo con un texto corto (OSC 52: comprobar el **tope real** y ajustar `TOPE_OSC52`) y con uno largo (aviso con el tamaño); que el aviso «Termux:API no responde» salga una sola vez.
+7. Abrir un enlace de la salida remota y uno a `localhost` del host (túnel temporal) en el navegador (`termux-open-url`).
+8. Abrir un escritorio (voxl o RDP) en el navegador; escribir con el teclado en pantalla; apagar la pantalla 2 minutos y volver.
+9. Una sesión persistente con Claude Code en un host; pasar a otra app; que pida permiso: llega el aviso de Android en menos de un minuto (con la ventana de MAGI cerrada y el servidor vivo); tocarlo trae Termux delante y el aviso desaparece al mirarla. **Comprobar los eventos de foco** (`printf '\e[?1004h'` y cambiar de app) y fijar `FOCO_FIABLE`; comprobar que una campana tocada al teclear (autocompletado) no produce avisos molestos.
+10. Con Android 12 o posterior, seguir la indicación de `magi diagnostico`; dejar un túnel abierto 30 minutos con la pantalla apagada y comprobar que sigue; ver el wake lock en la notificación de Termux y que `termux-wake-lock` es idempotente tras matar Termux desde Ajustes (el servidor nuevo debe volver a tomarlo).
+11. `magi llavero cambiar`, `magi termux aviso` (Ctrl+C a mitad: el aviso se desliza a mano) y, en un equipo de prueba, `magi llavero borrar` y volver a unir.
+12. El escritorio 1.6.0 y la app Android leen el fichero de sincronización de Termux sin «formato nuevo».
+13. Medir en el móvil lo que la especificación daba por supuesto: tiempo y memoria de scrypt a 2^17 (y abrir un llavero forjado a 2^20 con cuidado: ~1 GiB), el arranque en frío del servidor frente a los 2 s de `conectar`, que exista `$USER`, y la entrega de SIGHUP al cerrar la sesión de Termux durante `magi llavero cambiar`.
 
 ### Después de la puerta
 

@@ -80,6 +80,37 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
     clave generada comparten una sola vía; en el escritorio se comportan igual que
     antes.
 
+- **MAGI en Termux, fila de teclas, diagnóstico y paquete (Fase 17, tercera
+  entrega).**
+  - **Fila de teclas de Termux.** `magi termux teclas` enseña la fila que MAGI
+    propone (`ESC TAB CTRL ALT ^] ← ↓ ↑ →` y `F1`-`F9`, con el prefijo configurado
+    como macro) y la que hay; con `--instalar` pregunta y la instala. También se
+    ofrece una vez en el primer arranque y desde la paleta («Instalar la fila de
+    teclas de Termux»), con el diálogo FILA DE TECLAS DE TERMUX. Antes de escribir
+    deja una copia `termux.properties.magi-<fecha>` (si la escritura falla, el
+    mensaje dice qué copia hay y el reintento la reutiliza), cambia solo la línea
+    lógica `extra-keys` (con sus continuaciones; el resto del fichero queda byte a
+    byte, y una continuación abierta al final no se contagia al comentario),
+    recarga con `termux-reload-settings` (si no responde: «reinicia Termux para ver
+    la fila») y anota `termux_teclas_instaladas`. La ayuda (`?`) recuerda Volumen
+    arriba + 1…9 y + 0. En Termux, la columna del tipo de Registro es de 26
+    caracteres; en el escritorio, la de siempre.
+  - **`magi diagnostico` en Termux.** Gana el bloque TERMUX (versiones de Termux y
+    Android, Termux:API con `termux-battery-status`, almacenamiento, fila de
+    teclas, wake lock y avisos) y las líneas generales adaptadas (runtime, llavero
+    sin pedir nunca la frase, portapapeles y terminal). Lo que MAGI no puede
+    comprobar desde Termux (procesos en segundo plano y batería) sale con `·`: no
+    cuenta como aviso ni cambia el código de salida. Con el Termux de Google Play,
+    avisa de que no está soportado. Ctrl+C durante la comprobación de Termux:API ya
+    no deja procesos huérfanos.
+  - **Paquete.** `scripts/paquete-termux.sh` arma `magi-ssh_<versión>_aarch64.deb`
+    (sin `Depends`; sugiere `termux-api` y `openssh`) con su `.sha256`;
+    `termux-release.yml` lo compila, comprueba con `readelf -d`, atesta y lo sube a
+    la release de cada etiqueta `vX.Y.Z` (también `-rc.N`), nunca con las de la app
+    Android; el job `termux` de CI lo arma en las PR que tocan el código; la receta
+    de TUR vive en `packaging/termux/` y la guía de publicación en
+    `docs/publicar-termux.md`. El README gana la sección «MAGI en Termux».
+
 - **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
   **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
   host (`tmux -L magi -f /dev/null`, con su configuración y sin tocar el tmux ni

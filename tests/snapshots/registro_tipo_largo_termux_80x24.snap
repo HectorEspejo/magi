@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · REGISTRO ─────────────────────────────────────────────────────────────┐
+│▸ 15/09 15:41:02  inventario_equipo_quitado  —     ok     detalle de la entra…│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│┌────────────────────────────────────────────────────────────────────────────┐│
+││ inventario_equipo_quitado  — · 15/09 15:41:02 · ok                         ││
+││ detalle de la entrada                                                      ││
+││                                                                            ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+└───────────────────────────────────────────────────────────1 entradas · todos ┘
+ ↵ detalle  / filtrar  t tipo  p purgar >90 d  x exportar  q salir  ? más

@@ -13,10 +13,11 @@ mod dobles;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use magi::termux::ordenes::{DE_LA_API, TOPE_SALIDA};
+use magi::termux::ordenes::{Ejecucion, DE_LA_API, TOPE_SALIDA};
 use magi::termux::rutas::calcular;
 use magi::termux::{ApiProceso, EntornoTermux, EstadoApi, FalloOrden, Ordenes, Propiedades};
 
@@ -260,6 +261,124 @@ fn un_doble_lento_pasa_si_cabe_en_el_plazo_y_no_si_no() {
         .ejecutar(&["termux-battery-status"], None);
     assert_eq!(resultado, Err(FalloOrden::SinRespuesta));
     assert!(inicio.elapsed() < Duration::from_secs(3), "esperó de más");
+}
+
+// ------------------------------------------------- orden cancelable
+
+/// Espera a que el doble `programa` haya anotado sus dos pids (el suyo y el de
+/// su hijo): ya está corriendo y ya se pueden mirar. Devuelve los pids.
+fn esperar_a_que_corra(dobles: &Dobles, programa: &str) -> Vec<i32> {
+    let limite = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(llamada) = dobles.llamadas(programa).first() {
+            if llamada.pids.len() == 2 {
+                return llamada.pids.clone();
+            }
+        }
+        assert!(Instant::now() < limite, "el doble no llegó a arrancar");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn una_orden_cancelable_se_mata_con_todo_su_grupo_al_cancelarse() {
+    let escenario = Escenario::nuevo();
+    escenario
+        .dobles
+        .programar("termux-battery-status", Modo::Colgar);
+    // Un plazo larguísimo: lo que la para es la cancelación, no el plazo.
+    let ordenes = escenario.ordenes(Duration::from_secs(60));
+    let cancelar = AtomicBool::new(false);
+
+    let inicio = Instant::now();
+    let (resultado, pids) = std::thread::scope(|ambito| {
+        let vigilante = ambito.spawn(|| {
+            let pids = esperar_a_que_corra(&escenario.dobles, "termux-battery-status");
+            cancelar.store(true, Ordering::SeqCst);
+            pids
+        });
+        let resultado = ordenes.ejecutar_cancelable(&["termux-battery-status"], None, &|| {
+            cancelar.load(Ordering::SeqCst)
+        });
+        (resultado, vigilante.join().expect("el vigilante"))
+    });
+    let tardado = inicio.elapsed();
+
+    assert_eq!(resultado, Ejecucion::Cancelada);
+    assert!(
+        tardado < Duration::from_secs(10),
+        "esperó al plazo en vez de cancelarse: {tardado:?}"
+    );
+    // El grupo entero (el doble y su hijo) murió y el hijo se recogió.
+    for pid in &pids {
+        assert!(
+            !sigue_vivo_tras(*pid, Duration::from_secs(3)),
+            "el proceso {pid} sigue vivo"
+        );
+    }
+    if Path::new("/proc/self").exists() {
+        assert!(
+            !Path::new(&format!("/proc/{}", pids[0])).exists(),
+            "el hijo quedó como zombi"
+        );
+    }
+    // Cancelar no es un fallo de Termux:API: no cambia su estado.
+    assert_eq!(escenario.api.estado(), EstadoApi::SinComprobar);
+}
+
+#[test]
+fn una_orden_cancelable_ya_cancelada_no_lanza_nada() {
+    let escenario = Escenario::nuevo();
+    let resultado =
+        escenario
+            .holgadas()
+            .ejecutar_cancelable(&["termux-battery-status"], None, &|| true);
+    assert_eq!(resultado, Ejecucion::Cancelada);
+    assert!(escenario
+        .dobles
+        .llamadas("termux-battery-status")
+        .is_empty());
+    assert_eq!(escenario.api.estado(), EstadoApi::SinComprobar);
+}
+
+#[test]
+fn una_orden_cancelable_que_no_se_cancela_es_como_ejecutar() {
+    let nunca = || false;
+    // Bien: responde y la API queda disponible.
+    let escenario = Escenario::nuevo();
+    match escenario
+        .holgadas()
+        .ejecutar_cancelable(&["termux-battery-status"], None, &nunca)
+    {
+        Ejecucion::Terminada(Ok(salida)) => {
+            assert!(String::from_utf8_lossy(&salida).contains("percentage"));
+        }
+        otra => panic!("debía responder: {otra:?}"),
+    }
+    assert_eq!(escenario.api.estado(), EstadoApi::Disponible);
+
+    // Sin el programa: lo mismo que `ejecutar`, y apaga la API.
+    let otra = Escenario::nuevo();
+    otra.dobles.quitar("termux-battery-status");
+    assert_eq!(
+        otra.holgadas()
+            .ejecutar_cancelable(&["termux-battery-status"], None, &nunca),
+        Ejecucion::Terminada(Err(FalloOrden::NoInstalada("termux-battery-status".into())))
+    );
+    assert_eq!(otra.api.estado(), EstadoApi::Ausente);
+
+    // Colgada con plazo corto: vence el plazo, no se cancela.
+    let colgada = Escenario::nuevo();
+    colgada
+        .dobles
+        .programar("termux-battery-status", Modo::Colgar);
+    assert_eq!(
+        colgada
+            .ordenes(Duration::from_millis(300))
+            .ejecutar_cancelable(&["termux-battery-status"], None, &nunca),
+        Ejecucion::Terminada(Err(FalloOrden::SinRespuesta))
+    );
+    assert_eq!(colgada.api.estado(), EstadoApi::NoResponde);
 }
 
 // ------------------------------------------------------- tope y código

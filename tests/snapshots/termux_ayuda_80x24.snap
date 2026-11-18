@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────┌ AYUDA · FLOTA ─────────────────────────────────────────────┐──────  │
+│▸ ◐ back│                                                            │        │
+│  ○ dgx-│  ↑ ↓ / j k       mover la selección                        │        │
+│  ● hetz│  ↵               conectar con el host                      │        │
+│  ● hetz│  r               sondear el host seleccionado              │        │
+│  ◐ mac-│  R               sondear todos los visibles                │        │
+│  ✕ rinc│  e               editar la ficha                           │        │
+│  ● vps-│  N               nueva sesión persistente en este host     │        │
+│        │  /               filtrar                                   │        │
+│        │  a               activar o pausar el auto-refresco         │        │
+│        │  !               snippets que apuntan al host              │        │
+│        │  atajos          [flota.atajos]: snippet sobre el host     │        │
+│        │  F8              Snippets                                  │        │
+│        │  ⇥               alternar lista y detalle (estrecho)       │        │
+│        │  Volumen arriba  + 1…9 (F1…F9) y + 0 (F10)                 │        │
+│        │  ↑↓ PgUp PgDn    desplazar diálogos y esta ayuda           │        │
+│        │                                                            │        │
+│        │  esc o ? para cerrar                                       │        │
+│        │                                                            │        │
+│        └────────────────────────────────────────────────────────────┘        │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

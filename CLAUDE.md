@@ -871,10 +871,13 @@ coméntalo con el desarrollador.
   `--test termux_sincronizacion` y
   `--test termux_teclas`, con los dobles de `tests/fijos/termux/` (anotan
   argumentos y entrada, y saben colgarse o fallar). `termux_paquete` lee el
-  `.deb` de `MAGI_DEB`: con `CI` puesta falla si no lo hay y sin ella se omite
-  con un aviso. Si tocas el empaquetado o los dobles:
-  `shellcheck packaging/termux/build.sh tests/fijos/termux/falsos/*`. Lo que solo se ve
-  en el móvil va al guion del informe de implementación.
+  `.deb` de `MAGI_DEB`: con `MAGI_EXIGIR_DEB=1` (solo el job `termux` de CI;
+  GitHub pone `CI` en todos los jobs) falla si no lo hay y sin ella se omite
+  con un aviso. `scripts/paquete-termux.sh` necesita `dpkg-deb` (con
+  `--comprobar-binario` solo mira `readelf -d`). Si tocas el empaquetado o los
+  dobles: `shellcheck scripts/paquete-termux.sh packaging/termux/build.sh
+  tests/fijos/termux/falsos/*`. Lo que solo se ve en el móvil va al guion del
+  informe de implementación.
 
 ## Al terminar una fase (o al pausar la sesión)
 

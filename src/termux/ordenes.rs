@@ -150,6 +150,17 @@ impl std::fmt::Display for FalloOrden {
 
 impl std::error::Error for FalloOrden {}
 
+/// Cómo termina una orden cancelable ([`Ordenes::ejecutar_cancelable`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ejecucion {
+    /// Terminó (o ni se lanzó) por sí sola: el mismo resultado que
+    /// [`Ordenes::ejecutar`].
+    Terminada(Result<Vec<u8>, FalloOrden>),
+    /// Quien llama la canceló: se mató su grupo de procesos y se recogió al
+    /// hijo antes de volver.
+    Cancelada,
+}
+
 /// Lanzador de órdenes de Termux de un proceso.
 #[derive(Debug, Clone)]
 pub struct Ordenes {
@@ -200,9 +211,49 @@ impl Ordenes {
         argumentos: &[&str],
         entrada: Option<&[u8]>,
     ) -> (Result<Vec<u8>, FalloOrden>, bool) {
+        // Sin función de cancelación nunca sale `None`; si saliera, sería una
+        // orden que no llegó a terminar y se dice como un fallo local.
+        self.ejecutar_con(argumentos, entrada, None)
+            .unwrap_or_else(|| (Err(FalloOrden::Io("orden cancelada".into())), false))
+    }
+
+    /// Como [`Self::ejecutar`], pero cancelable: mientras espera a la orden
+    /// mira `cancelada` cada pocos milisegundos y, en cuanto devuelve `true`,
+    /// mata el grupo de procesos entero, recoge al hijo y vuelve con
+    /// [`Ejecucion::Cancelada`]. Una cancelación no es un fallo de Termux:API:
+    /// no cambia su estado (ni la apaga ni la da por disponible).
+    ///
+    /// Es para quien espera a la orden con el usuario delante (`magi
+    /// diagnostico`), que puede interrumpirla con una señal: un proceso que
+    /// muere sin pasar por aquí dejaría la orden y sus hijos huérfanos, porque
+    /// cada orden corre en su propio grupo y el Ctrl+C de la terminal no lo
+    /// alcanza. Las demás llamadas no cambian.
+    pub fn ejecutar_cancelable(
+        &self,
+        argumentos: &[&str],
+        entrada: Option<&[u8]>,
+        cancelada: &dyn Fn() -> bool,
+    ) -> Ejecucion {
+        match self.ejecutar_con(argumentos, entrada, Some(cancelada)) {
+            Some((resultado, _)) => Ejecucion::Terminada(resultado),
+            None => Ejecucion::Cancelada,
+        }
+    }
+
+    /// El cuerpo común: `None` es una orden cancelada (solo con `cancelada`).
+    fn ejecutar_con(
+        &self,
+        argumentos: &[&str],
+        entrada: Option<&[u8]>,
+        cancelada: Option<&dyn Fn() -> bool>,
+    ) -> Option<(Result<Vec<u8>, FalloOrden>, bool)> {
         let Some(&programa) = argumentos.first() else {
-            return (Err(FalloOrden::Io("orden vacía".into())), false);
+            return Some((Err(FalloOrden::Io("orden vacía".into())), false));
         };
+        // Ya cancelada antes de empezar: no se lanza nada.
+        if cancelada.is_some_and(|cancelada| cancelada()) {
+            return None;
+        }
         // Un NUL no cabe en un argumento de proceso: el sistema lo rechazaría
         // al lanzar. Es un fallo de quien llama, no de Termux:API, así que se
         // dice antes de tocar nada (ni el estado de la API ni el programa) y
@@ -211,45 +262,54 @@ impl Ordenes {
             .iter()
             .position(|argumento| argumento.contains('\0'))
         {
-            return (
+            return Some((
                 Err(FalloOrden::Io(format!(
                     "el argumento {posicion} lleva un carácter nulo"
                 ))),
                 false,
-            );
+            ));
         }
         let de_api = DE_LA_API.contains(&programa);
         if de_api && self.api.apagada() {
-            return (Err(FalloOrden::ApiApagada), false);
+            return Some((Err(FalloOrden::ApiApagada), false));
         }
         // Solo una instrucción de la API apaga la función, y solo una vez.
         let apagar = |motivo: EstadoApi| de_api && self.api.apagar(motivo);
 
         let Some(ruta) = buscar_en_path(programa, self.path.as_deref()) else {
             let recien = apagar(EstadoApi::Ausente);
-            return (Err(FalloOrden::NoInstalada(programa.to_string())), recien);
+            return Some((Err(FalloOrden::NoInstalada(programa.to_string())), recien));
         };
 
-        match correr(&ruta, &argumentos[1..], entrada, self.plazo) {
-            Ok(Fin::Salida(salida)) => {
-                if de_api {
-                    self.api.marcar_disponible();
+        Some(
+            match correr(&ruta, &argumentos[1..], entrada, self.plazo, cancelada) {
+                Ok(Fin::Salida(salida)) => {
+                    if de_api {
+                        self.api.marcar_disponible();
+                    }
+                    (Ok(salida), false)
                 }
-                (Ok(salida), false)
-            }
-            Ok(Fin::Codigo { codigo, error }) => (
-                Err(FalloOrden::Codigo { codigo, error }),
-                apagar(EstadoApi::NoResponde),
-            ),
-            Ok(Fin::PlazoVencido) => (Err(FalloOrden::SinRespuesta), apagar(EstadoApi::NoResponde)),
-            // Una carrera con el borrado del programa: es como si no estuviera.
-            Err(error @ FalloOrden::NoInstalada(_)) => (Err(error), apagar(EstadoApi::Ausente)),
-            // Un fallo al lanzar, al crear un hilo o al esperar (sin recursos,
-            // permisos, argumento no válido) no lo causa Termux:API: se
-            // informa, pero la función sigue disponible. Solo apagan «no
-            // instalada», el plazo vencido y un código distinto de 0 (§7.2).
-            Err(error) => (Err(error), false),
-        }
+                Ok(Fin::Codigo { codigo, error }) => (
+                    Err(FalloOrden::Codigo { codigo, error }),
+                    apagar(EstadoApi::NoResponde),
+                ),
+                Ok(Fin::PlazoVencido) => {
+                    (Err(FalloOrden::SinRespuesta), apagar(EstadoApi::NoResponde))
+                }
+                // Cancelada por quien llama: no es culpa de Termux:API y no
+                // cambia su estado.
+                Ok(Fin::Cancelada) => return None,
+                // Una carrera con el borrado del programa: es como si no
+                // estuviera.
+                Err(error @ FalloOrden::NoInstalada(_)) => (Err(error), apagar(EstadoApi::Ausente)),
+                // Un fallo al lanzar, al crear un hilo o al esperar (sin
+                // recursos, permisos, argumento no válido) no lo causa
+                // Termux:API: se informa, pero la función sigue disponible.
+                // Solo apagan «no instalada», el plazo vencido y un código
+                // distinto de 0 (§7.2).
+                Err(error) => (Err(error), false),
+            },
+        )
     }
 
     /// Lo mismo desde código asíncrono (en `spawn_blocking`).
@@ -308,8 +368,13 @@ fn es_ejecutable(ruta: &Path) -> bool {
 /// Cómo terminó una orden que se llegó a lanzar.
 enum Fin {
     Salida(Vec<u8>),
-    Codigo { codigo: Option<i32>, error: String },
+    Codigo {
+        codigo: Option<i32>,
+        error: String,
+    },
     PlazoVencido,
+    /// La canceló quien llama (solo con función de cancelación).
+    Cancelada,
 }
 
 /// Un proceso hijo que no se queda atrás: si se suelta sin haberlo recogido
@@ -404,12 +469,14 @@ fn recoger_bufer(bufer: &Mutex<Vec<u8>>) -> Vec<u8> {
     )
 }
 
-/// Lanza `ruta` y espera su fin, sus salidas o el plazo (lo que ocurra antes).
+/// Lanza `ruta` y espera su fin, sus salidas, el plazo o, si hay función de
+/// cancelación, que devuelva `true` (lo que ocurra antes).
 fn correr(
     ruta: &Path,
     argumentos: &[&str],
     entrada: Option<&[u8]>,
     plazo: Duration,
+    cancelada: Option<&dyn Fn() -> bool>,
 ) -> Result<Fin, FalloOrden> {
     let limite = Instant::now() + plazo;
     let mut orden = Command::new(ruta);
@@ -489,6 +556,14 @@ fn correr(
             vigilado.matar();
             vigilado.recoger(ESPERA_TRAS_MATAR);
             return Ok(Fin::PlazoVencido);
+        }
+        // Cancelada mientras corre: igual que el plazo, mata el grupo entero.
+        // Con el hijo ya terminado no hay nada que matar (su pid podría
+        // reutilizarse): el bucle acaba solo en `GRACIA_TRAS_SALIDA`.
+        if estado.is_none() && cancelada.is_some_and(|cancelada| cancelada()) {
+            vigilado.matar();
+            vigilado.recoger(ESPERA_TRAS_MATAR);
+            return Ok(Fin::Cancelada);
         }
         let hasta = match terminado_en {
             Some(fin) => (fin + GRACIA_TRAS_SALIDA).min(limite),

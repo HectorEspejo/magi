@@ -1,0 +1,365 @@
+# Publicación del paquete .deb de MAGI para Termux — Fase 17.
+#
+# Se dispara con una etiqueta vX.Y.Z o vX.Y.Z-rc.N (la misma que lanza
+# release.yml, el de dist) y con workflow_dispatch, para repetir la subida de
+# una etiqueta que ya existe. NO se dispara con android-vX.Y.Z: esos patrones no
+# encajan con «android-v…» y la app Android se publica aparte, con
+# android-release.yml.
+#
+# Qué hace (informe de la Fase 17, §4.9 y §5.7):
+#   1. verificar: comprueba el formato de la etiqueta y que coincide con la
+#      versión de Cargo.toml (la del paquete magi-ssh).
+#   2. compilar: cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh
+#      con el NDK r30; readelf -d (falla si el binario pide algo que no sea del
+#      NDK estable: libc, libm, libdl, liblog y libz); scripts/paquete-termux.sh
+#      arma magi-ssh_<versión>_aarch64.deb con dpkg-deb -Zxz y comprueba su
+#      estructura; .sha256 y atestación de procedencia.
+#   3. publicar: espera a que exista la release de la etiqueta (la crea
+#      release.yml al terminar; se mira cada 30 s, hasta 60 min) y sube el .deb
+#      y su .sha256. Si no aparece, falla y dice cómo repetirlo. Al final
+#      comprueba que los adjuntos se llaman como se esperaba y, si no, falla.
+#
+# El nombre del fichero de una candidata lleva el guion de la etiqueta
+# (magi-ssh_1.6.0-rc.1_aarch64.deb), no la tilde del campo Version del control
+# (1.6.0~rc.1): GitHub puede cambiar la tilde del nombre de un adjunto por un
+# punto y entonces el .sha256, que nombra el fichero, ya no cuadraría. Una
+# versión estable no cambia.
+#
+# Este workflow NUNCA crea la release ni la marca (ni la desmarca) como
+# «Latest»: esa marca es de la release del escritorio. Con una candidata
+# (-rc.N) el .deb sube a la prerelease que crea dist.
+#
+# Permisos: contents: read por defecto; contents: write solo en el job que sube
+# a la release; id-token: write y attestations: write solo en el que compila y
+# atesta. No usa más secreto que GITHUB_TOKEN (nunca secrets: inherit).
+#
+# Una versión de Termux sin atestación o sin .sha256 no se publica: el .deb sale
+# solo de este workflow, a partir de una etiqueta, nunca de un equipo personal.
+
+name: Release Termux
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Etiqueta existente (vX.Y.Z o vX.Y.Z-rc.N) cuya release recibirá el .deb'
+        required: true
+        type: string
+
+# Una release no se cancela ni se solapa: cada etiqueta se publica una vez.
+concurrency:
+  group: termux-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: '30.0.16248370'
+  CARGO_NDK_VERSION: '4.1.2'
+  # SHA-256 del binario precompilado de cargo-ndk (musl, estático).
+  CARGO_NDK_X86_64_LINUX_MUSL_SHA256: dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
+
+jobs:
+  verificar:
+    name: Etiqueta y versión
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.etiqueta.outputs.tag }}
+      version: ${{ steps.etiqueta.outputs.version }}
+      version_deb: ${{ steps.etiqueta.outputs.version_deb }}
+      nombre_deb: ${{ steps.etiqueta.outputs.nombre_deb }}
+      prerelease: ${{ steps.etiqueta.outputs.prerelease }}
+    steps:
+      - name: Comprobar el formato de la etiqueta
+        id: etiqueta
+        env:
+          # El valor viaja por el entorno, nunca interpolado en el texto del
+          # script: una etiqueta es entrada de quien empuja o lanza el workflow.
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # La misma forma estricta que scripts/paquete-termux.sh: sin ceros a
+          # la izquierda y -rc.N con N desde 1.
+          valida='^v((0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.[1-9][0-9]{0,2})?)$'
+          if [[ ! "$TAG" =~ $valida ]]; then
+            echo "ERROR: «$TAG» no es una etiqueta del paquete de Termux; se esperaba vX.Y.Z o vX.Y.Z-rc.N (las etiquetas android-v… son de la app Android)." >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          if [ -n "${BASH_REMATCH[5]:-}" ]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          # Versión de Debian (la del campo Version del control): la tilde hace
+          # que la candidata ordene antes que la final (con guion ordenaría
+          # después).
+          tilde='~'
+          version_deb="${version/-rc./${tilde}rc.}"
+          # El nombre del fichero lleva la versión de la etiqueta, con el guion
+          # de «-rc.N»: GitHub puede cambiar la tilde del nombre de un adjunto
+          # por un punto y el .sha256 dejaría de cuadrar con el fichero.
+          nombre_deb="magi-ssh_${version}_aarch64.deb"
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "version_deb=$version_deb"
+            echo "nombre_deb=$nombre_deb"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Etiqueta $TAG válida: version=$version, version_deb=$version_deb, fichero=$nombre_deb, prerelease=$prerelease."
+
+      - name: Descargar el repositorio en la etiqueta
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.etiqueta.outputs.tag }}
+          persist-credentials: false
+
+      - name: Comprobar que la etiqueta coincide con la versión de Cargo.toml
+        env:
+          VERSION: ${{ steps.etiqueta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Primera «version = …» de la tabla [package] (la de magi-ssh).
+          esperada="$(awk '
+            /^\[package\]/ { dentro = 1; next }
+            /^\[/ { dentro = 0 }
+            dentro && /^version[[:space:]]*=/ {
+              gsub(/^version[[:space:]]*=[[:space:]]*"|"[[:space:]]*$/, "")
+              print
+              exit
+            }' Cargo.toml)"
+          if [ -z "$esperada" ]; then
+            echo "ERROR: Cargo.toml no declara la versión del paquete magi-ssh." >&2
+            exit 1
+          fi
+          if [ "$esperada" != "$VERSION" ]; then
+            echo "ERROR: la etiqueta v$VERSION no coincide con Cargo.toml (version = \"$esperada\")." >&2
+            echo "Actualiza la versión en el mismo commit que la etiqueta, o etiqueta la versión que dice Cargo.toml." >&2
+            exit 1
+          fi
+          echo "La etiqueta coincide con Cargo.toml (version = \"$esperada\")."
+
+  compilar:
+    name: .deb para Termux atestado
+    needs: verificar
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.verificar.outputs.version }}
+      VERSION_DEB: ${{ needs.verificar.outputs.version_deb }}
+      NOMBRE_DEB: ${{ needs.verificar.outputs.nombre_deb }}
+      MAGI_DEB_SALIDA: release-termux
+    steps:
+      - name: Descargar el repositorio en la etiqueta
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.verificar.outputs.tag }}
+          persist-credentials: false
+
+      - name: Preparar el SDK de Android
+        uses: android-actions/setup-android@v4
+
+      - name: Instalar el NDK r30
+        # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);
+        # el de commandline-tools 22 y anteriores usa «;». Se prueban las dos
+        # formas para que el workflow valga con cualquiera de los dos.
+        run: |
+          set -euo pipefail
+          instalar() {
+            if ! sdkmanager --install "$1" > /dev/null 2>&1; then
+              sdkmanager --install "$2" > /dev/null
+            fi
+          }
+          instalar "ndk/${NDK_VERSION}" "ndk;${NDK_VERSION}"
+          ndk_home="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          if [ ! -d "$ndk_home" ]; then
+            echo "ERROR: el NDK ${NDK_VERSION} no quedó instalado en $ndk_home" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+
+      - name: Preparar Rust con el objetivo de Termux
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache de Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: termux-release
+
+      - name: Instalar cargo-ndk 4.1.2
+        # Se descarga a fichero, se comprueba su SHA-256 y solo entonces se
+        # instala: el binario que se publica no depende de lo que sirva la red
+        # en ese momento.
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/cargo-ndk.tar.gz \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v${CARGO_NDK_VERSION}/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}.tgz"
+          echo "${CARGO_NDK_X86_64_LINUX_MUSL_SHA256}  /tmp/cargo-ndk.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/cargo-ndk
+          tar xzf /tmp/cargo-ndk.tar.gz -C /tmp/cargo-ndk
+          install -m 755 "/tmp/cargo-ndk/cargo-ndk-x86_64-unknown-linux-musl-v${CARGO_NDK_VERSION}/cargo-ndk" "$HOME/.cargo/bin/cargo-ndk"
+
+      - name: Compilar magi para aarch64-linux-android (API 24)
+        run: cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
+
+      - name: Comprobar las bibliotecas que pide el binario
+        # Falla si pide algo que no sea del NDK estable (libc, libm, libdl,
+        # liblog y libz): con libc++_shared.so el paquete tendría que depender
+        # de libc++ y su línea iría al informe de la fase.
+        run: |
+          set -euo pipefail
+          binario="target/aarch64-linux-android/release/magi"
+          readelf -d "$binario" | grep NEEDED || true
+          scripts/paquete-termux.sh --comprobar-binario "$binario"
+
+      - name: Instalar dpkg si la imagen no lo trae
+        run: |
+          set -euo pipefail
+          if ! command -v dpkg-deb > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y dpkg
+          fi
+          dpkg-deb --version | head -n 1
+
+      - name: Armar y comprobar el .deb y su .sha256
+        # El script comprueba la estructura (dpkg-deb --contents exacto y el
+        # control: aarch64, sugerencias y ningún Depends) antes de dejar el
+        # fichero y escribe el .sha256.
+        run: |
+          set -euo pipefail
+          scripts/paquete-termux.sh "$VERSION" "target/aarch64-linux-android/release/magi"
+          # El script y el workflow tienen que ponerse de acuerdo en el nombre
+          # del fichero (el de publicar sale de la misma salida de «verificar»)
+          # y en la versión del control.
+          for fichero in "$NOMBRE_DEB" "$NOMBRE_DEB.sha256"; do
+            if [ ! -f "$MAGI_DEB_SALIDA/$fichero" ]; then
+              echo "ERROR: scripts/paquete-termux.sh no dejó «$fichero» en $MAGI_DEB_SALIDA." >&2
+              ls -la "$MAGI_DEB_SALIDA" >&2
+              exit 1
+            fi
+          done
+          version_control="$(dpkg-deb --field "$MAGI_DEB_SALIDA/$NOMBRE_DEB" Version)"
+          if [ "$version_control" != "$VERSION_DEB" ]; then
+            echo "ERROR: el control del .deb dice Version: $version_control y se esperaba $VERSION_DEB." >&2
+            exit 1
+          fi
+          ( cd "$MAGI_DEB_SALIDA" && sha256sum -c "$NOMBRE_DEB.sha256" )
+          dpkg-deb --info "$MAGI_DEB_SALIDA/$NOMBRE_DEB"
+          dpkg-deb --contents "$MAGI_DEB_SALIDA/$NOMBRE_DEB"
+
+      - name: Atestar la procedencia del .deb
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: 'release-termux/*.deb'
+
+      - name: Guardar los artefactos de la release
+        uses: actions/upload-artifact@v7
+        with:
+          name: termux-release
+          path: release-termux/*
+          if-no-files-found: error
+
+  publicar:
+    name: Subir a la GitHub Release
+    needs:
+      - verificar
+      - compilar
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.verificar.outputs.tag }}
+      NOMBRE_DEB: ${{ needs.verificar.outputs.nombre_deb }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Descargar los artefactos
+        uses: actions/download-artifact@v8
+        with:
+          name: termux-release
+          path: release-termux
+
+      - name: Comprobar los artefactos descargados
+        working-directory: release-termux
+        run: |
+          set -euo pipefail
+          deb="$NOMBRE_DEB"
+          if [ ! -f "$deb" ] || [ ! -f "$deb.sha256" ]; then
+            echo "ERROR: faltan el .deb o su .sha256 entre los artefactos." >&2
+            ls -la >&2
+            exit 1
+          fi
+          sha256sum -c "$deb.sha256"
+
+      - name: Esperar a que exista la release de la etiqueta
+        # La release la crea release.yml (dist) al terminar sus compilaciones;
+        # este workflow nunca la crea. Se mira cada 30 s, hasta 60 min. Solo
+        # «release not found» es una ausencia: cualquier otro error de gh (sin
+        # permisos, sin red) no se confunde con ella y para en seguida.
+        run: |
+          set -euo pipefail
+          for intento in $(seq 1 120); do
+            if salida="$(gh release view "$TAG" 2>&1)"; then
+              echo "La release $TAG existe."
+              exit 0
+            fi
+            if ! printf '%s' "$salida" | grep -qi 'release not found'; then
+              echo "ERROR: gh no pudo consultar la release $TAG: $salida" >&2
+              exit 1
+            fi
+            echo "La release $TAG todavía no existe (intento $intento de 120); se vuelve a mirar en 30 s."
+            sleep 30
+          done
+          echo "ERROR: la release $TAG no apareció en 60 minutos. Cuando exista, repítelo con workflow_dispatch (Actions → Release Termux → Run workflow, con la etiqueta $TAG)." >&2
+          exit 1
+
+      - name: Subir el .deb y su .sha256 a la release
+        # Sin --clobber: un .deb que ya está en la release está atestado y no se
+        # sustituye a ciegas. Tampoco se toca la marca «Latest».
+        working-directory: release-termux
+        run: |
+          set -euo pipefail
+          deb="$NOMBRE_DEB"
+          if ! gh release upload "$TAG" "$deb" "$deb.sha256"; then
+            echo "ERROR: no se pudo subir a la release $TAG. Si el .deb ya estaba en ella, bórralo desde GitHub (junto a su .sha256) y repite con workflow_dispatch." >&2
+            exit 1
+          fi
+          echo "Subidos $deb y $deb.sha256 a la release $TAG."
+
+      - name: Comprobar los ficheros de la release
+        # GitHub puede cambiar algunos caracteres del nombre de un adjunto (por
+        # eso el nombre de una candidata lleva el guion de «-rc.N» y no la tilde
+        # de la versión de Debian). Si el nombre subido no es el esperado, el
+        # .sha256, que nombra el fichero, no cuadra con lo que se descarga: el
+        # paso FALLA en vez de avisar (docs/publicar-termux.md, §9).
+        run: |
+          set -euo pipefail
+          deb="$NOMBRE_DEB"
+          nombres="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          cambiado=0
+          for esperado in "$deb" "$deb.sha256"; do
+            if ! printf '%s\n' "$nombres" | grep -qxF -- "$esperado"; then
+              echo "::error title=Nombre del adjunto cambiado::La release $TAG no tiene un adjunto llamado «$esperado»: GitHub pudo cambiar algún carácter del nombre y el .sha256 no cuadraría con el fichero. Mira docs/publicar-termux.md (§9)."
+              cambiado=1
+            fi
+          done
+          if [ "$cambiado" -ne 0 ]; then
+            echo "Adjuntos de la release $TAG:" >&2
+            printf '%s\n' "$nombres" >&2
+            exit 1
+          fi
+          echo "La release $TAG lleva $deb y $deb.sha256 con esos nombres."

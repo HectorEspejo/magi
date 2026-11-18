@@ -62,6 +62,7 @@ pub mod sincronizar;
 mod snippets;
 pub mod teclado;
 pub mod termux;
+pub mod termux_teclas;
 
 pub use dialogo_magi::DeliberacionAbierta;
 pub use geometria::Geometria;
@@ -2526,6 +2527,9 @@ pub enum Dialogo {
     /// FRASE MAESTRA, CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO y LLAVERO
     /// DAÑADO.
     Llavero(Box<llavero::DialogoLlavero>),
+    /// FILA DE TECLAS DE TERMUX (Fase 17, §6.4): instalar la fila `extra-keys`
+    /// de MAGI en `termux.properties`, con copia.
+    TeclasTermux(Box<termux_teclas::DialogoTeclasTermux>),
 }
 
 impl Dialogo {
@@ -2774,6 +2778,8 @@ pub enum AccionPaleta {
     CambiarFraseLlavero,
     /// Paleta: «Borrar el llavero» (pide escribir `borrar`).
     BorrarLlavero,
+    /// Paleta, solo en Termux: «Instalar la fila de teclas de Termux».
+    InstalarFilaDeTeclas,
 }
 
 pub struct PaletaCmd {
@@ -2827,6 +2833,9 @@ pub struct App {
     /// Órdenes `termux-*` del cliente y avisos del servidor en la barra (Fase
     /// 17). Inerte fuera de Termux.
     pub termux: termux::EstadoTermuxApp,
+    /// Lo propio de la fila de teclas de Termux en esta ventana (Fase 17): qué
+    /// instalación espera la recarga.
+    pub teclas_termux: termux_teclas::EstadoTeclasTermux,
     pub tema: Tema,
     pub almacen: Almacen,
     pub runtime: tokio::runtime::Runtime,
@@ -3139,6 +3148,7 @@ impl App {
             llavero,
             llavero_ui: llavero::UiLlavero::default(),
             termux: termux::EstadoTermuxApp::nuevo(plazo_termux),
+            teclas_termux: termux_teclas::EstadoTeclasTermux::default(),
             tema,
             almacen,
             runtime,
@@ -3442,6 +3452,9 @@ impl App {
         // se ve es su diálogo; lo que abra la línea de órdenes se apila encima
         // cuando el servidor pregunte (Fase 17).
         self.abrir_llavero_del_arranque();
+        // Primer arranque en Termux (Fase 17): ofrece la fila de teclas una
+        // vez, sin pisar el diálogo del llavero.
+        self.ofrecer_fila_en_el_primer_arranque();
         match self.abrir_al_arrancar.take() {
             Some(AperturaInicial::Host(host_id)) => self.conectar(host_id),
             // `magi sesion <nombre>`: engancharse soltando a los demás.
@@ -6992,6 +7005,8 @@ impl App {
         });
         // Llavero con frase maestra (Fase 17): solo con el de fichero.
         entradas.extend(self.entradas_paleta_llavero());
+        // Fila de teclas de Termux (Fase 17): solo en Termux.
+        entradas.extend(self.entradas_paleta_teclas());
         let mut paleta = PaletaCmd {
             desplazamiento: 0,
             consulta: CampoTexto::default(),
@@ -7323,6 +7338,10 @@ impl App {
                     Some(AccionPaleta::BorrarLlavero) => {
                         self.paleta = None;
                         self.paleta_dialogo_llavero(llavero::ModoLlavero::Borrar);
+                    }
+                    Some(AccionPaleta::InstalarFilaDeTeclas) => {
+                        self.paleta = None;
+                        self.paleta_instalar_fila_de_teclas();
                     }
                     None => {}
                 }
@@ -9335,6 +9354,10 @@ impl App {
                 // Certificado y credenciales también se desplazan con ↑↓
                 // (el campo del certificado va fijo en el pie).
                 | Dialogo::Escritorio(_)
+                // La fila de teclas de Termux no tiene campos: si su texto no
+                // cabe (a 40×12, por ejemplo), `↵` no puede instalar sin que
+                // se pueda leer lo que va a hacer.
+                | Dialogo::TeclasTermux(_)
         ) || matches!(dialogo, Dialogo::Llavero(llavero) if llavero.es_informativo())
     }
 
@@ -9369,6 +9392,7 @@ impl App {
         match dialogo {
             Dialogo::Persistentes(dialogo) => self.tecla_dialogo_persistentes(dialogo, tecla),
             Dialogo::Llavero(dialogo) => self.tecla_dialogo_llavero(dialogo, tecla),
+            Dialogo::TeclasTermux(dialogo) => self.tecla_dialogo_de_teclas(dialogo, tecla),
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Edicion(dialogo) => self.tecla_dialogo_edicion(dialogo, tecla),

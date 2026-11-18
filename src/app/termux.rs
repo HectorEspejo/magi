@@ -205,6 +205,9 @@ pub enum EventoTermux {
     },
     /// Lo que el servidor dejó en `termux/servidor` (`None`: nada o ilegible).
     EstadoServidor(Option<EstadoServidorTermux>),
+    /// La fila de teclas de Termux: la propuesta, la escritura de
+    /// `termux.properties` y la recarga de Termux (`app/termux_teclas.rs`).
+    Teclas(super::termux_teclas::EventoTeclas),
 }
 
 /// Los avisos de `estado` que este cliente aún no ha dicho, en el orden del
@@ -348,6 +351,7 @@ impl App {
                     }
                 }
             }
+            EventoTermux::Teclas(evento) => self.evento_teclas(evento),
         }
     }
 

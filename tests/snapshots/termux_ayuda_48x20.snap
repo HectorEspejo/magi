@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ────────── 7 hosts · 3 nominal ─┐
+│┌ AYUDA · FLOTA ─────────────────────────────┐│
+││  /               filtrar                   ││
+││  a               activar o pausar el       ││
+││                  auto-refresco             ││
+││  !               snippets que apuntan al   ││
+││                  host                      ││
+││  atajos          [flota.atajos]: snippet   ││
+││                  sobre el host             ││
+││  F8              Snippets                  ││
+││  ⇥               alternar lista y detalle  ││
+││                  (estrecho)                ││
+││  Volumen arriba  + 1…9 (F1…F9) y + 0       ││
+││                  (F10)                     ││
+││  ↑↓ PgUp PgDn    desplazar diálogos y      ││
+││                  esta ayuda                ││
+││                                            ││
+││  esc o ? para cerrar                       ││
+└└────────────────────────────────── ↑↓ 10/10 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más

@@ -30,6 +30,7 @@ pub mod sincronizacion;
 pub mod sincronizaciones;
 pub mod sincronizar;
 pub mod snippets;
+pub mod termux_teclas;
 pub mod transferencias;
 pub mod tuneles;
 

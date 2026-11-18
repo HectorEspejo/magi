@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ FILA DE TECLAS DE TERMUX ──────────┐│
+││  F1  F2  F3   F4  F5 F6 F7 F8 F9   ││
+││ Sin el prefijo: no es un macro de  ││
+││ Termux.                            ││
+││ En ~/.termux/termux.properties:    ││
+││ solo extra-keys. Copia previa:     ││
+││ termux.properties.magi-2026-11-17  ││
+││                                    ││
+││ ↵ instalar   Esc no                ││
+└└──────────────────────────── ↑↓ 3/3 ┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

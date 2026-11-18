@@ -233,14 +233,31 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 | `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux (instala `openssh-server`, por su `sftp-server`, y `tmux`: sin ellos, las pruebas de SFTP y las de sesiones persistentes con tmux de verdad se omiten), macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
 | `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` |
 | `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
+| `termux-release.yml` | tag `vX.Y.Z` y `vX.Y.Z-rc.N` (nunca `android-v*`) y `workflow_dispatch` | Compila para `aarch64-linux-android` con el NDK r30, arma `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata) con `scripts/paquete-termux.sh`, comprueba su estructura, escribe el `.sha256`, atesta la procedencia y lo sube a la release del tag (espera hasta 60 min a que `release.yml` la cree; falla si los adjuntos no quedan con el nombre esperado; nunca toca «Latest»), solo con `GITHUB_TOKEN`. La CI de cada PR tiene su job `termux` en `ci.yml`. Guía completa y receta de TUR en [`publicar-termux.md`](publicar-termux.md) |
 
-Permisos: `contents: read` por defecto en todos los workflows; `contents:
-write` solo en los jobs de `release.yml` que crean o publican la GitHub
-Release, e `id-token: write`/`attestations: write` solo durante la
-compilación que atesta los artefactos. `release.yml` no se dispara en pull
-requests (solo con un tag), así que ningún PR necesita permisos de escritura.
-No añadas secretos a `ci.yml`: los PRs de forks no los reciben y no los
-necesitan.
+Permisos: `contents: read` por defecto en todos los workflows, y cada job que
+necesita algo más lo declara él mismo, nunca arriba. Esto es lo que hay
+(todo lo que no aparece es solo lectura):
+
+| Workflow | Job | Permisos añadidos |
+|---|---|---|
+| `ci.yml`, `android.yml` y `publicar-aur.yml` | todos | ninguno |
+| `release.yml` | `plan` | `contents: write` (crea la GitHub Release en borrador) |
+| | `build-local-artifacts` | `id-token: write` y `attestations: write` (atesta los artefactos) |
+| | `host` | `contents: write` (sube los artefactos y publica la release) |
+| | `custom-publicar-aur` | ninguno (llama a `publicar-aur.yml`, que solo recibe `AUR_SSH_PRIVATE_KEY`) |
+| `android-release.yml` | `compilar` | `id-token: write` y `attestations: write` |
+| | `publicar` | `contents: write` (crea la release de Android) |
+| `termux-release.yml` | `compilar` | `id-token: write` y `attestations: write` |
+| | `publicar` | `contents: write` (sube el `.deb` y su `.sha256` a la release que crea `release.yml`; nunca la crea ni toca «Latest») |
+
+Los demás jobs (`verificar`, `build-global-artifacts`, `publish-homebrew-formula`,
+`announce`…) no escriben con `GITHUB_TOKEN`; el de Homebrew usa su propio
+secreto, `HOMEBREW_TAP_TOKEN`. Ningún workflow que escriba se dispara en pull
+requests: `release.yml`, `android-release.yml` y `termux-release.yml` solo
+arrancan con una etiqueta (`termux-release.yml` también a mano, con
+`workflow_dispatch`), así que ningún PR necesita permisos de escritura. No
+añadas secretos a `ci.yml`: los PRs de forks no los reciben y no los necesitan.
 
 `release.yml` **sí se mantiene a mano** en algunos detalles (está marcado con
 `allow-dirty = ["ci"]` en `dist-workspace.toml`): permisos mínimos por job,

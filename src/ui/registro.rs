@@ -140,7 +140,13 @@ fn dibujar_tabla(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicio
     let largo = |texto: fn(&EntradaRegistro) -> usize| -> u16 {
         estado.entradas.iter().map(texto).max().unwrap_or(0) as u16
     };
-    let ancho_tipo = largo(|entrada| entrada.tipo.chars().count()).clamp(8, 22);
+    // En Termux el tope es 26: `termux_teclas_instaladas` (24) y
+    // `llavero_desbloqueo_fallido` (26) se ven enteros. En el escritorio sigue
+    // siendo 22, como siempre: la columna se ajusta al tipo más largo de todas
+    // las filas, así que subir el tope también ahí quitaría hasta 4 columnas
+    // al detalle por una sola fila con un tipo de 23 a 26 caracteres.
+    let tope_tipo = if app.termux.activo { 26 } else { 22 };
+    let ancho_tipo = largo(|entrada| entrada.tipo.chars().count()).clamp(8, tope_tipo);
     let ancho_host = largo(|entrada| {
         entrada
             .host_nombre

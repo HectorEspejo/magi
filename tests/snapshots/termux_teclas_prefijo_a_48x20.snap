@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ────────── 7 hosts · 3 nominal ─┐
+│┌ FILA DE TECLAS DE TERMUX ──────────────────┐│
+││                                            ││
+││  MAGI propone esta fila:                   ││
+││   ESC TAB CTRL ALT ^A ←  ↓  ↑  →           ││
+││   F1  F2  F3   F4  F5 F6 F7 F8 F9          ││
+││                                            ││
+││  Se escribe en                             ││
+││  ~/.termux/termux.properties, solo la      ││
+││  línea extra-keys. Antes, una copia:       ││
+││  termux.properties.magi-2026-11-17         ││
+││                                            ││
+││  No tienes extra-keys: se añade al final;  ││
+││  lo demás no se toca.                      ││
+││                                            ││
+││  ↵ instalar   Esc ahora no                 ││
+││                                            ││
+│└────────────────────────────────────────────┘│
+└──────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más
