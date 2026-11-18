@@ -21,8 +21,12 @@
 //! El análisis de líneas sigue a `java.util.Properties` (que es lo que usa
 //! Termux): terminadores `\n`, `\r\n` y `\r` (no los otros separadores de
 //! líneas de Unicode), comentarios con `#` o `!` solo al empezar una línea
-//! lógica, continuación con un número impar de `\` y claves que acaban en
-//! espacio, `=` o `:`.
+//! lógica, continuación con un número impar de `\` (que en la última línea
+//! del fichero se descarta) y claves que acaban en espacio, `=` o `:` sin
+//! `\` delante. La clave se decodifica como lo hace Java antes de compararla
+//! con `extra-keys`: `extra\-keys`, `\extra-keys` o `extra-keys` son esa
+//! misma clave. Y antes de escribir, el texto resultante se vuelve a analizar:
+//! si la `extra-keys` efectiva no es la de MAGI, no se escribe nada.
 
 use std::ffi::OsStr;
 use std::io::{Read as _, Write as _};
@@ -233,11 +237,53 @@ fn valor_de_la_fila(linea: &str) -> &str {
     linea.strip_prefix("extra-keys = ").unwrap_or(linea)
 }
 
-fn sin_blancos(texto: &str) -> String {
-    texto
-        .chars()
-        .filter(|caracter| !caracter.is_whitespace())
-        .collect()
+/// Los caracteres con los que se arma la estructura de la fila (`[['A'],{macro:
+/// 'B'}]`): un espacio que toca uno de ellos solo separa, no dice nada.
+const ESTRUCTURA: [char; 6] = ['[', ']', '{', '}', ',', ':'];
+
+/// El valor de una fila listo para compararlo con otro (§7.7, «sin espacios»):
+/// quita el espacio ASCII (espacio, tabulador y avance de página) que está
+/// **fuera** de las comillas simples y toca la estructura de la fila (o el
+/// principio o el final), y deja todo lo demás exacto. Lo que va entre
+/// comillas (`'CTRL ]'`) se compara tal cual: dos macros que solo difieren en
+/// un espacio son dos teclas distintas. Tampoco se quita ningún espacio de
+/// Unicode (U+00A0 y compañía): `org.json`, que lee la fila en Termux, no los
+/// admite como separador, así que una fila con ellos no es la de MAGI.
+fn normalizar_valor(texto: &str) -> String {
+    let caracteres: Vec<char> = texto.chars().collect();
+    let mut salida = String::with_capacity(texto.len());
+    let mut dentro = false;
+    let mut indice = 0;
+    while indice < caracteres.len() {
+        let caracter = caracteres[indice];
+        if caracter == '\'' {
+            dentro = !dentro;
+        }
+        if dentro || caracter == '\'' || !BLANCOS.contains(&caracter) {
+            salida.push(caracter);
+            indice += 1;
+            continue;
+        }
+        // Una tanda de blancos fuera de comillas: solo se quita si toca la
+        // estructura (un espacio dentro de una palabra, `ma cro`, no es de la
+        // fila de MAGI).
+        let mut fin = indice;
+        while fin < caracteres.len() && BLANCOS.contains(&caracteres[fin]) {
+            fin += 1;
+        }
+        let toca = salida
+            .chars()
+            .next_back()
+            .is_none_or(|anterior| ESTRUCTURA.contains(&anterior))
+            || caracteres
+                .get(fin)
+                .is_none_or(|siguiente| ESTRUCTURA.contains(siguiente));
+        if !toca {
+            salida.extend(&caracteres[indice..fin]);
+        }
+        indice = fin;
+    }
+    salida
 }
 
 // ------------------------------------------------------- líneas de Properties
@@ -322,23 +368,85 @@ struct LineaExtraKeys {
     valor: String,
 }
 
-/// El valor de una línea lógica si su clave es exactamente `extra-keys`.
-/// La clave acaba en espacio, `=` o `:`; una clave con `\` no cuenta (Java la
-/// interpretaría como escape).
+/// Separa una línea lógica en su clave (sin decodificar) y su valor, como el
+/// `load0` de `java.util.Properties`: la clave acaba en el primer espacio,
+/// tabulador, avance de página, `=` o `:` que no lleve una `\` delante (una
+/// barra escapa al carácter siguiente, y `\\` es una barra), y el valor
+/// empieza tras los blancos y, si todavía no había, un solo `=` o `:`.
+fn separar_clave_y_valor(logica: &str) -> (&str, &str) {
+    let mut fin_clave = logica.len();
+    let mut inicio_valor = logica.len();
+    let mut con_separador = false;
+    let mut barra_previa = false;
+    for (indice, caracter) in logica.char_indices() {
+        if (caracter == '=' || caracter == ':') && !barra_previa {
+            fin_clave = indice;
+            inicio_valor = indice + 1;
+            con_separador = true;
+            break;
+        } else if BLANCOS.contains(&caracter) && !barra_previa {
+            fin_clave = indice;
+            inicio_valor = indice + 1;
+            break;
+        }
+        barra_previa = caracter == '\\' && !barra_previa;
+    }
+    for (indice, caracter) in logica[inicio_valor..].char_indices() {
+        if !BLANCOS.contains(&caracter) {
+            if !con_separador && (caracter == '=' || caracter == ':') {
+                con_separador = true;
+            } else {
+                return (&logica[..fin_clave], &logica[inicio_valor + indice..]);
+            }
+        }
+    }
+    (&logica[..fin_clave], "")
+}
+
+/// La clave tal y como la lee Java (`loadConvert`): `\t`, `\n`, `\r` y `\f` son
+/// el carácter que dicen, `\uXXXX` es el carácter con ese código y `\x`, para
+/// cualquier otro `x`, es `x`. Una clave con un `\u` mal formado no se puede
+/// leer: `None` (en Java sería un error y Termux no cargaría el fichero).
+fn decodificar_clave(clave: &str) -> Option<String> {
+    let mut salida = String::with_capacity(clave.len());
+    let mut caracteres = clave.chars();
+    while let Some(caracter) = caracteres.next() {
+        if caracter != '\\' {
+            salida.push(caracter);
+            continue;
+        }
+        // Una barra al final no escapa nada (no se da: una línea que acaba en
+        // barra impar continúa o, en el fin del fichero, se le quita).
+        let Some(escapado) = caracteres.next() else {
+            break;
+        };
+        match escapado {
+            'u' => {
+                let mut codigo = 0_u32;
+                for _ in 0..4 {
+                    codigo = (codigo << 4) + caracteres.next()?.to_digit(16)?;
+                }
+                // Un sustituto suelto no es un carácter de Rust: nunca es
+                // parte de `extra-keys`.
+                salida.push(char::from_u32(codigo).unwrap_or('\u{fffd}'));
+            }
+            't' => salida.push('\t'),
+            'n' => salida.push('\n'),
+            'r' => salida.push('\r'),
+            'f' => salida.push('\u{c}'),
+            otro => salida.push(otro),
+        }
+    }
+    Some(salida)
+}
+
+/// El valor de una línea lógica si su clave, ya decodificada como la lee Java,
+/// es exactamente `extra-keys`. Con escapes también cuenta (`extra\-keys`,
+/// `\extra-keys` o `extra-keys` son `extra-keys` para Termux); una clave
+/// que acaba en un espacio escapado (`extra-keys\ `) no lo es.
 fn valor_si_extra_keys(logica: &str) -> Option<String> {
-    let fin_clave = logica
-        .find([' ', '\t', '\u{c}', '=', ':', '\\'])
-        .unwrap_or(logica.len());
-    if &logica[..fin_clave] != "extra-keys" {
-        return None;
-    }
-    let resto = &logica[fin_clave..];
-    if resto.starts_with('\\') {
-        return None;
-    }
-    let resto = resto.trim_start_matches(BLANCOS);
-    let resto = resto.strip_prefix(['=', ':']).unwrap_or(resto);
-    Some(resto.trim_start_matches(BLANCOS).to_string())
+    let (clave, valor) = separar_clave_y_valor(logica);
+    (decodificar_clave(clave)? == "extra-keys").then(|| valor.to_string())
 }
 
 /// La última línea lógica `extra-keys` del texto (la que usa Termux, que se
@@ -361,10 +469,16 @@ fn ultima_extra_keys(texto: &str) -> Option<LineaExtraKeys> {
         loop {
             let contenido = &texto[fisicas[j].inicio..fisicas[j].fin_texto];
             let parte = contenido.trim_start_matches(BLANCOS);
-            if continua(contenido) && j + 1 < fisicas.len() {
-                // Se quita la barra de continuación.
+            if continua(contenido) {
+                // Se quita la barra de continuación. En la última línea del
+                // fichero no hay nada que continuar y Java también la
+                // descarta: `extra-keys\` al final es la clave `extra-keys`.
                 unida.push_str(&parte[..parte.len() - 1]);
-                j += 1;
+                if j + 1 < fisicas.len() {
+                    j += 1;
+                } else {
+                    break;
+                }
             } else {
                 unida.push_str(parte);
                 break;
@@ -391,11 +505,14 @@ pub fn valor_efectivo(texto: &str) -> Option<String> {
 }
 
 /// ¿La línea `extra-keys` efectiva del texto es la de MAGI para este prefijo?
-/// Compara los valores sin espacios (§7.7).
+/// Compara los valores sin el espacio que solo separa (§7.7): el que va entre
+/// comillas o es de otra clase (U+00A0) cuenta (véase [`normalizar_valor`]).
 #[must_use]
 pub fn es_la_de_magi(texto: &str, prefijo_escape: &str) -> bool {
     match valor_efectivo(texto) {
-        Some(valor) => sin_blancos(&valor) == sin_blancos(valor_de_la_fila(&fila(prefijo_escape))),
+        Some(valor) => {
+            normalizar_valor(&valor) == normalizar_valor(valor_de_la_fila(&fila(prefijo_escape)))
+        }
         None => false,
     }
 }
@@ -506,6 +623,16 @@ pub fn ruta_visible(entorno: &EntornoTermux, ruta: &Path) -> String {
         )
 }
 
+/// Si `ruta` es un enlace simbólico, su destino resuelto (donde se escribe de
+/// verdad y junto a donde va la copia); `Ok(None)` si no lo es (o no existe).
+/// Falla si el enlace no se puede resolver.
+fn destino_si_es_enlace(ruta: &Path) -> std::io::Result<Option<PathBuf>> {
+    match std::fs::symlink_metadata(ruta) {
+        Ok(datos) if datos.file_type().is_symlink() => std::fs::canonicalize(ruta).map(Some),
+        _ => Ok(None),
+    }
+}
+
 /// Lo que se lee de un `termux.properties`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contenido {
@@ -607,6 +734,12 @@ pub struct Propuesta {
     pub ruta: Option<PathBuf>,
     /// La ruta como se enseña (`~/.termux/termux.properties`).
     pub ruta_visible: String,
+    /// Si `ruta` es un enlace (los dotfiles, el almacenamiento compartido), su
+    /// destino ya resuelto y como se enseña: ahí es donde se escribe y donde
+    /// queda la copia, que puede estar fuera de `~/.termux` e incluso del
+    /// home. `None` si no es un enlace (o está roto: entonces el fichero es
+    /// ilegible y no se toca).
+    pub enlace_a: Option<String>,
     pub estado: EstadoFila,
     /// La línea `extra-keys` propuesta.
     pub fila: String,
@@ -632,6 +765,7 @@ pub fn preparar(entorno: &EntornoTermux, prefijo_escape: &str, fecha: NaiveDate)
         return Propuesta {
             ruta: None,
             ruta_visible: "~/.termux/termux.properties".to_string(),
+            enlace_a: None,
             estado: EstadoFila::Ilegible("no está puesto $HOME".to_string()),
             fila: fila_propuesta,
             arriba,
@@ -642,19 +776,27 @@ pub fn preparar(entorno: &EntornoTermux, prefijo_escape: &str, fecha: NaiveDate)
         };
     };
     let visible = ruta_visible(entorno, &ruta);
+    // Un enlace se escribe en su destino y la copia queda junto a él.
+    let destino = destino_si_es_enlace(&ruta).ok().flatten();
+    let enlace_a = destino
+        .as_deref()
+        .map(|destino| ruta_visible(entorno, destino));
+    let sitio_de_la_copia = destino.as_deref().unwrap_or(&ruta);
     let (estado, actual, copia) = match leer_properties(&ruta) {
         Ok(None) => (EstadoFila::SinFichero, None, None),
         Err(motivo) => (EstadoFila::Ilegible(motivo), None, None),
         Ok(Some(contenido)) => {
             let estado = estado_de_texto(&contenido.texto, prefijo_escape);
             let actual = valor_efectivo(&contenido.texto).map(|valor| acotar(&valor));
-            let copia = (estado != EstadoFila::LaDeMagi).then(|| nombre_de_copia(&ruta, fecha));
+            let copia =
+                (estado != EstadoFila::LaDeMagi).then(|| nombre_de_copia(sitio_de_la_copia, fecha));
             (estado, actual, copia)
         }
     };
     Propuesta {
         ruta: Some(ruta),
         ruta_visible: visible,
+        enlace_a,
         estado,
         fila: fila_propuesta,
         arriba,
@@ -697,6 +839,9 @@ pub enum ErrorTeclas {
     /// No se pudo escribir el fichero y no había nada que copiar (no
     /// existía): no queda ninguna copia.
     Escritura(String),
+    /// Tras fusionar, la `extra-keys` efectiva del texto nuevo no es la de MAGI
+    /// (Termux seguiría leyendo otra fila): no se copia ni se escribe nada.
+    NoSeguro,
     /// No se pudo escribir el fichero, pero la copia ya está hecha y queda en
     /// disco: el usuario tiene que saberlo, y un reintento puede reutilizarla
     /// ([`escribir_fila_con_copia_previa`]) en vez de hacer otra.
@@ -736,6 +881,9 @@ impl std::fmt::Display for ErrorTeclas {
             Self::Escritura(motivo) => {
                 write!(f, "no se pudo escribir termux.properties ({motivo})")
             }
+            Self::NoSeguro => f.write_str(
+                "no se puede instalar con seguridad: edita termux.properties a mano (no se ha escrito nada)",
+            ),
             Self::EscrituraTrasCopia { motivo, copia } => write!(
                 f,
                 "no se pudo escribir termux.properties ({motivo}): la copia {copia} ya está hecha"
@@ -804,12 +952,16 @@ fn candidato_de_copia(base: &str, n: u32) -> String {
 }
 
 /// Crea la copia con los permisos del original y sin pisar nada (`create_new`).
-/// Devuelve su nombre.
+/// Devuelve su nombre. `ajustar` es el `chmod` que corrige el `umask`; como en
+/// la escritura, un sistema de ficheros que no lo admite (el almacenamiento
+/// compartido de Android) no impide la copia: el fichero ya se creó con el
+/// modo y el `umask` solo pudo quitarle permisos.
 fn crear_copia(
     ruta: &Path,
     contenido: &[u8],
     modo: u32,
     fecha: NaiveDate,
+    ajustar: &dyn Fn(&Path, u32) -> std::io::Result<()>,
 ) -> Result<String, String> {
     let directorio = ruta
         .parent()
@@ -831,11 +983,10 @@ fn crear_copia(
         };
         let escrito = fichero
             .write_all(contenido)
-            .and_then(|()| fichero.sync_all())
-            .and_then(|()| {
-                // El `umask` puede haber quitado permisos al crearla.
-                std::fs::set_permissions(&destino, std::fs::Permissions::from_mode(modo))
-            });
+            .and_then(|()| fichero.sync_all());
+        // El `umask` puede haber quitado permisos al crearla: se los devuelve
+        // si el sistema de ficheros deja.
+        let _ = ajustar(&destino, modo);
         drop(fichero);
         return match escrito {
             Ok(()) => Ok(candidato),
@@ -881,11 +1032,17 @@ fn copia_previa_vale(ruta: &Path, nombre: &str, contenido: &Contenido) -> bool {
 /// 2. Si su `extra-keys` ya es la de MAGI, no hace nada (`ya_estaba`).
 /// 3. Si existe, copia primero `termux.properties.magi-<fecha>` con los
 ///    permisos del original; si la copia falla, error y no se escribe nada.
-/// 4. Escribe de forma atómica (por `ficheros.rs`) solo el texto fusionado,
-///    con los permisos que tenía (600 si es nuevo) y creando `~/.termux/`
-///    (700) si hace falta. Si el fichero es un enlace, escribe en su destino
-///    y el enlace sigue siéndolo. Si falla después de la copia, el error
-///    ([`ErrorTeclas::EscrituraTrasCopia`]) lleva el nombre de la copia.
+///    Si `ruta` es un enlace, la copia queda junto a su destino (con el
+///    nombre de este), que es el fichero que se sobrescribe.
+/// 4. Escribe de forma atómica (por `ficheros.rs`, tolerando que el destino no
+///    admita `chmod`) solo el texto fusionado, con los permisos que tenía (600
+///    si es nuevo) y creando `~/.termux/` (700) si hace falta. Si el fichero es
+///    un enlace, escribe en su destino y el enlace sigue siéndolo. Si falla
+///    después de la copia, el error ([`ErrorTeclas::EscrituraTrasCopia`]) lleva
+///    el nombre de la copia.
+///
+/// Antes de la copia, el texto fusionado se vuelve a analizar: si la `extra-keys`
+/// efectiva no es la de MAGI, [`ErrorTeclas::NoSeguro`] y no se toca nada.
 ///
 /// Quien llama anota `termux_teclas_instaladas` cuando esto devuelve `Ok` sin
 /// `ya_estaba`, y llama a [`recargar`] después. Bloquea el hilo (disco):
@@ -923,16 +1080,34 @@ pub fn escribir_fila_con_copia_previa(
     let texto_actual = existente
         .as_ref()
         .map_or("", |contenido| contenido.texto.as_str());
-    let nuevo = fusionar(texto_actual, &fila(prefijo_escape));
+    // Antes de tocar nada: lo que se va a escribir tiene que dejar a Termux
+    // leyendo la fila de MAGI.
+    let nuevo = fusion_verificada(texto_actual, prefijo_escape)?;
+
+    // Un enlace (el `termux.properties` de unos dotfiles) se escribe en su
+    // destino —renombrar encima lo sustituiría por un fichero normal— y la
+    // copia queda junto a él: es el fichero que se va a sobrescribir.
+    let destino = match destino_si_es_enlace(ruta) {
+        Ok(Some(destino)) => destino,
+        Ok(None) => ruta.to_path_buf(),
+        Err(error) => return Err(ErrorTeclas::Escritura(motivo_de(&error))),
+    };
+    let ajuste = ajuste_de_permisos(&destino);
 
     let (copia, copia_reutilizada) = match &existente {
         Some(contenido) => {
-            match copia_previa.filter(|previa| copia_previa_vale(ruta, previa, contenido)) {
+            match copia_previa.filter(|previa| copia_previa_vale(&destino, previa, contenido)) {
                 Some(previa) => (Some(previa.to_string()), true),
                 None => (
                     Some(
-                        crear_copia(ruta, contenido.texto.as_bytes(), contenido.modo, fecha)
-                            .map_err(ErrorTeclas::Copia)?,
+                        crear_copia(
+                            &destino,
+                            contenido.texto.as_bytes(),
+                            contenido.modo,
+                            fecha,
+                            &ajuste,
+                        )
+                        .map_err(ErrorTeclas::Copia)?,
                     ),
                     false,
                 ),
@@ -949,14 +1124,8 @@ pub fn escribir_fila_con_copia_previa(
         None => ErrorTeclas::Escritura(motivo),
     };
 
-    // Un enlace (el `termux.properties` de unos dotfiles) se escribe en su
-    // destino: renombrar encima lo sustituiría por un fichero normal.
-    let destino = match std::fs::symlink_metadata(ruta) {
-        Ok(datos) if datos.file_type().is_symlink() => {
-            std::fs::canonicalize(ruta).map_err(|error| fallo_de_escritura(motivo_de(&error)))?
-        }
-        _ => ruta.to_path_buf(),
-    };
+    #[cfg(debug_assertions)]
+    ganchos_de_pruebas::antes_de_escribir(&destino);
     if existente.is_none() {
         if let Some(directorio) = destino.parent() {
             // `~/.termux/` se crea con 700 (como Termux).
@@ -968,22 +1137,161 @@ pub fn escribir_fila_con_copia_previa(
         }
     }
     let modo = existente.as_ref().map_or(0o600, |contenido| contenido.modo);
-    crate::ficheros::escribir_atomico(&destino, nuevo.as_bytes(), modo).map_err(|error| {
-        // Solo el motivo, en castellano y sin rutas: la cadena de `anyhow`
-        // lleva el texto del sistema operativo en inglés.
-        fallo_de_escritura(
-            error
-                .root_cause()
-                .downcast_ref::<std::io::Error>()
-                .map_or_else(|| "error de escritura".to_string(), motivo_de),
-        )
-    })?;
+    // Tolerante con el `chmod`: un destino que no lo admite (el almacenamiento
+    // compartido de Android, al que suelen apuntar esos enlaces) no impide
+    // instalar la fila.
+    crate::ficheros::escribir_atomico_con(&destino, nuevo.as_bytes(), modo, true, ajuste).map_err(
+        |error| {
+            // Solo el motivo, en castellano y sin rutas: la cadena de `anyhow`
+            // lleva el texto del sistema operativo en inglés.
+            fallo_de_escritura(
+                error
+                    .root_cause()
+                    .downcast_ref::<std::io::Error>()
+                    .map_or_else(|| "error de escritura".to_string(), motivo_de),
+            )
+        },
+    )?;
     Ok(Escritura {
         ruta: ruta.to_path_buf(),
         copia,
         ya_estaba: false,
         copia_reutilizada,
     })
+}
+
+/// Fusiona la fila de MAGI en `texto` y comprueba el resultado con el mismo
+/// analizador con el que se lee: si la `extra-keys` efectiva del texto nuevo no
+/// es la de MAGI (una forma de escribir la clave que MAGI no ha previsto,
+/// por ejemplo), Termux seguiría leyendo la fila del usuario y MAGI no puede
+/// decir «instalada»: [`ErrorTeclas::NoSeguro`], sin copiar ni escribir nada.
+fn fusion_verificada(texto: &str, prefijo_escape: &str) -> Result<String, ErrorTeclas> {
+    let nuevo = fusionar(texto, &fila(prefijo_escape));
+    verificar_fusion(&nuevo, prefijo_escape)?;
+    Ok(nuevo)
+}
+
+fn verificar_fusion(nuevo: &str, prefijo_escape: &str) -> Result<(), ErrorTeclas> {
+    if es_la_de_magi(nuevo, prefijo_escape) {
+        Ok(())
+    } else {
+        Err(ErrorTeclas::NoSeguro)
+    }
+}
+
+/// El `chmod` de las escrituras de aquí: el de siempre y, solo en las
+/// pruebas, uno que falla (un sistema de ficheros que no lo admite).
+fn ajuste_de_permisos(destino: &Path) -> impl Fn(&Path, u32) -> std::io::Result<()> {
+    #[cfg(debug_assertions)]
+    let sin_chmod = ganchos_de_pruebas::sin_chmod(destino);
+    #[cfg(not(debug_assertions))]
+    let sin_chmod = {
+        let _ = destino;
+        false
+    };
+    move |ruta, modo| {
+        if sin_chmod {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        } else {
+            crate::ficheros::ajustar_permisos(ruta, modo)
+        }
+    }
+}
+
+/// Superficie de pruebas (solo en compilaciones de depuración): hace fallar o
+/// esperar la escritura de un fichero concreto, para probar lo que pasa
+/// justo después de la copia. Se indexa por la ruta del fichero que se
+/// escribe (el destino de un enlace, ya resuelto), de modo que las pruebas que
+/// corren a la vez, cada una con su directorio, no se ven entre sí.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub mod ganchos_de_pruebas {
+    use std::collections::{HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, MutexGuard};
+
+    type Gancho = Arc<dyn Fn() + Send + Sync>;
+
+    static ANTES_DE_ESCRIBIR: Mutex<Option<HashMap<PathBuf, Gancho>>> = Mutex::new(None);
+    static SIN_CHMOD: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+    fn cerrojo<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// La ruta con su directorio resuelto: la misma para quien instala el
+    /// gancho y para quien lo busca, exista ya el fichero o no.
+    fn clave(ruta: &Path) -> PathBuf {
+        match (ruta.parent(), ruta.file_name()) {
+            (Some(padre), Some(nombre)) => std::fs::canonicalize(padre)
+                .unwrap_or_else(|_| padre.to_path_buf())
+                .join(nombre),
+            _ => ruta.to_path_buf(),
+        }
+    }
+
+    /// Quita el gancho al soltarse.
+    pub struct Guarda {
+        clave: PathBuf,
+        de_espera: bool,
+    }
+
+    impl Drop for Guarda {
+        fn drop(&mut self) {
+            if self.de_espera {
+                if let Some(mapa) = cerrojo(&ANTES_DE_ESCRIBIR).as_mut() {
+                    mapa.remove(&self.clave);
+                }
+            } else if let Some(conjunto) = cerrojo(&SIN_CHMOD).as_mut() {
+                conjunto.remove(&self.clave);
+            }
+        }
+    }
+
+    /// Cada escritura de `fichero` llama a `gancho` justo después de la copia y
+    /// antes de escribir (puede esperar, o dejar el directorio sin permiso).
+    pub fn antes_de_escribir_en(
+        fichero: &Path,
+        gancho: impl Fn() + Send + Sync + 'static,
+    ) -> Guarda {
+        let clave = clave(fichero);
+        cerrojo(&ANTES_DE_ESCRIBIR)
+            .get_or_insert_with(HashMap::new)
+            .insert(clave.clone(), Arc::new(gancho));
+        Guarda {
+            clave,
+            de_espera: true,
+        }
+    }
+
+    /// El sistema de ficheros de `fichero` no admite `chmod`.
+    pub fn sin_chmod_en(fichero: &Path) -> Guarda {
+        let clave = clave(fichero);
+        cerrojo(&SIN_CHMOD)
+            .get_or_insert_with(HashSet::new)
+            .insert(clave.clone());
+        Guarda {
+            clave,
+            de_espera: false,
+        }
+    }
+
+    pub(super) fn antes_de_escribir(destino: &Path) {
+        let gancho = cerrojo(&ANTES_DE_ESCRIBIR)
+            .as_ref()
+            .and_then(|mapa| mapa.get(&clave(destino)).cloned());
+        if let Some(gancho) = gancho {
+            gancho();
+        }
+    }
+
+    pub(super) fn sin_chmod(destino: &Path) -> bool {
+        cerrojo(&SIN_CHMOD)
+            .as_ref()
+            .is_some_and(|conjunto| conjunto.contains(&clave(destino)))
+    }
 }
 
 /// Pide a Termux que relea `termux.properties` (`termux-reload-settings`),
@@ -1296,9 +1604,111 @@ mod pruebas {
                 "{linea}"
             );
         }
-        // Una clave con escape no es `extra-keys`.
-        assert_eq!(valor_efectivo("extra\\-keys = V\n"), None);
+        // Una clave que acaba en un espacio escapado es otra clave
+        // (`extra-keys `): Java no la lee como `extra-keys`.
         assert_eq!(valor_efectivo("extra-keys\\ = V\n"), None);
+        assert_eq!(valor_efectivo("extra-keys\\:x = V\n"), None);
+    }
+
+    /// E3: Java decodifica los escapes de la clave antes de usarla: todas estas
+    /// son la clave `extra-keys` para Termux.
+    #[test]
+    fn la_clave_se_decodifica_como_lo_hace_java() {
+        for linea in [
+            "extra\\-keys = V",
+            "\\extra-keys = V",
+            "e\\xtr\\a-keys = V",
+            "extra\\u002dkeys = V",
+            "extra\\u002Dkeys=V",
+            "\\u0065xtra-keys: V",
+        ] {
+            assert_eq!(
+                valor_efectivo(&format!("{linea}\n")).as_deref(),
+                Some("V"),
+                "{linea}"
+            );
+        }
+        // Una barra escapada en la clave es otra clave.
+        assert_eq!(valor_efectivo("extra-keys\\\\ = W\n"), None);
+        // Un escape de tabulador o de salto no es el nombre de la clave.
+        assert_eq!(valor_efectivo("extra-\\tkeys = V\n"), None);
+        assert_eq!(valor_efectivo("extra\\nkeys = V\n"), None);
+        // Un `\u` mal formado no se puede leer: no es `extra-keys`.
+        assert_eq!(valor_efectivo("extra\\u00zdkeys = V\n"), None);
+        assert_eq!(valor_efectivo("extra-keys\\u00 = V\n"), None);
+    }
+
+    /// E3: una `extra-keys` escrita con escapes cuenta como la de verdad, para
+    /// leerla, para decir si es la de MAGI y para sustituirla (y, si va detrás
+    /// de la normal, es la que manda).
+    #[test]
+    fn una_clave_con_escapes_manda_como_la_normal() {
+        let nueva = "extra-keys = N";
+        for clave in ["extra\\-keys", "\\extra-keys", "extra\\u002dkeys"] {
+            let texto = format!("extra-keys = [['A']]\nx = 1\n{clave} = [['B']]\ny = 2\n");
+            assert_eq!(
+                valor_efectivo(&texto).as_deref(),
+                Some("[['B']]"),
+                "{clave}"
+            );
+            // Se sustituye la que manda; la anterior se queda como estaba.
+            assert_eq!(
+                fusionar(&texto, nueva),
+                "extra-keys = [['A']]\nx = 1\nextra-keys = N\ny = 2\n",
+                "{clave}"
+            );
+            // Y si la de MAGI está antes y la del usuario (con escapes) después,
+            // la de MAGI no es la que lee Termux.
+            let con_la_de_magi = format!("{DEFECTO}\n{clave} = [['B']]\n");
+            assert!(!es_la_de_magi(&con_la_de_magi, "Ctrl+]"), "{clave}");
+            assert_eq!(
+                estado_de_texto(&con_la_de_magi, "Ctrl+]"),
+                EstadoFila::Otra,
+                "{clave}"
+            );
+        }
+    }
+
+    /// E3: la barra de una última línea sin nada detrás se descarta, como en
+    /// Java: `extra-keys\` al final del fichero es la clave `extra-keys`.
+    #[test]
+    fn una_barra_al_final_del_fichero_se_descarta_como_en_java() {
+        assert_eq!(valor_efectivo("extra-keys\\").as_deref(), Some(""));
+        assert_eq!(valor_efectivo("extra-keys\\\n").as_deref(), Some(""));
+        assert_eq!(valor_efectivo("extra-keys = A\\").as_deref(), Some("A"));
+        assert_eq!(valor_efectivo("extra-keys = A\\\r\n").as_deref(), Some("A"));
+        // Dos barras no son una continuación: la clave es otra.
+        assert_eq!(valor_efectivo("extra-keys\\\\"), None);
+        // Con la de MAGI delante, la del final es la que lee Termux.
+        let texto = format!("{DEFECTO}\nextra-keys\\");
+        assert_eq!(valor_efectivo(&texto).as_deref(), Some(""));
+        assert!(!es_la_de_magi(&texto, "Ctrl+]"));
+        // Se sustituye la línea que manda; la de antes se queda como estaba.
+        assert_eq!(
+            fusionar(&texto, "extra-keys = N"),
+            format!("{DEFECTO}\nextra-keys = N\n")
+        );
+    }
+
+    /// E3, el cinturón: lo que se va a escribir se vuelve a analizar y, si la
+    /// fila efectiva no es la de MAGI, no se escribe.
+    #[test]
+    fn un_texto_fusionado_que_no_deja_la_fila_de_magi_no_se_escribe() {
+        // Lo normal: la fusión deja la fila de MAGI.
+        for texto in ["", "a=1\n", "extra-keys = [['A']]\n", "x = 1 \\"] {
+            let nuevo = fusion_verificada(texto, "Ctrl+]").unwrap();
+            assert!(es_la_de_magi(&nuevo, "Ctrl+]"), "{texto:?}");
+        }
+        // Un texto en el que la efectiva es otra: se niega, y dice por qué.
+        let malo = format!("{DEFECTO}\nextra-keys = [['B']]\n");
+        let error = verificar_fusion(&malo, "Ctrl+]").unwrap_err();
+        assert_eq!(error, ErrorTeclas::NoSeguro);
+        assert!(error
+            .to_string()
+            .contains("no se puede instalar con seguridad"));
+        assert!(error.to_string().contains("edita termux.properties a mano"));
+        assert_eq!(error.copia_hecha(), None);
+        assert_eq!(verificar_fusion(&format!("{DEFECTO}\n"), "Ctrl+]"), Ok(()));
     }
 
     #[test]
@@ -1364,6 +1774,47 @@ mod pruebas {
         ));
         // Y si la de MAGI está comentada, no cuenta.
         assert!(!es_la_de_magi(&format!("# {linea}\n"), "Ctrl+]"));
+    }
+
+    /// E5: solo el espacio que separa (ASCII, fuera de las comillas) es
+    /// indiferente; lo que va dentro de una comilla o es de otra clase cuenta.
+    #[test]
+    fn ya_es_la_de_magi_distingue_lo_que_va_dentro_de_las_comillas() {
+        let de_magi = |texto: &str| es_la_de_magi(&format!("extra-keys = {texto}\n"), "Ctrl+]");
+        let valor = valor_de_la_fila(DEFECTO);
+        assert!(de_magi(valor));
+        // Un macro que difiere solo en espacios dentro de la comilla es otra tecla.
+        assert!(!de_magi(&valor.replace("'CTRL ]'", "'CTRL]'")));
+        assert!(!de_magi(&valor.replace("'CTRL ]'", "'CTRL  ]'")));
+        assert!(!de_magi(&valor.replace("'CTRL ]'", "' CTRL ]'")));
+        assert!(!de_magi(&valor.replace("'^]'", "'^ ]'")));
+        // Un espacio de Unicode (U+00A0) entre elementos no es separador para
+        // `org.json`: no es la fila de MAGI. Tampoco el de ancho cero.
+        for raro in ['\u{a0}', '\u{2003}', '\u{3000}', '\u{200b}'] {
+            assert!(!de_magi(
+                &valor.replace("','TAB'", &format!("',{raro}'TAB'"))
+            ));
+            assert!(!de_magi(
+                &valor.replace("{macro:", &format!("{{macro:{raro}"))
+            ));
+            assert!(!de_magi(&format!("{valor}{raro}")));
+        }
+        // Un espacio dentro de una palabra sin comillas tampoco se descarta.
+        assert!(!de_magi(&valor.replace("macro:", "ma cro:")));
+        assert!(!de_magi(&valor.replace("display:", "dis play:")));
+        // Sí valen espacios, tabuladores y avances de página que separan, y una
+        // fila partida en líneas (la sangría de la continuación se pierde).
+        assert!(de_magi(&valor.replace(',', " ,\t").replace('[', "[ \u{c}")));
+        assert!(de_magi(&format!("  {valor}  ")));
+        assert!(de_magi(&valor.replace("macro: '", "macro:\t'")));
+        assert!(de_magi(&valor.replace("{macro", "{ macro")));
+        // Y el estado lo refleja: con el espacio de dentro cambiado, hay que
+        // ofrecer la fila (y la instalación la cambia).
+        let con_macro_distinta = format!("{}\n", DEFECTO.replace("'CTRL ]'", "'CTRL]'"));
+        assert_eq!(
+            estado_de_texto(&con_macro_distinta, "Ctrl+]"),
+            EstadoFila::Otra
+        );
     }
 
     #[test]
@@ -1640,7 +2091,155 @@ mod pruebas {
             .file_type()
             .is_symlink());
         assert!(std::fs::read_to_string(&destino).unwrap().contains(DEFECTO));
-        assert!(carpeta.join("termux.properties.magi-2026-11-17").is_file());
+        // E2: la copia queda junto al destino (con su nombre), no junto al
+        // enlace: es el fichero que se ha sobrescrito.
+        assert_eq!(
+            std::fs::read_to_string(
+                temporal
+                    .path()
+                    .join("dotfiles-termux.properties.magi-2026-11-17")
+            )
+            .unwrap(),
+            "a=1\n"
+        );
+        assert_eq!(entradas_de(&carpeta), ["termux.properties"]);
+    }
+
+    fn entradas_de(carpeta: &Path) -> Vec<String> {
+        let mut nombres: Vec<String> = std::fs::read_dir(carpeta)
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        nombres.sort();
+        nombres
+    }
+
+    /// E2: la propuesta de un enlace dice a dónde apunta y pone la copia junto
+    /// al destino; sin enlace no dice nada de eso.
+    #[test]
+    fn la_propuesta_de_un_enlace_dice_el_destino_y_la_copia_va_junto_a_el() {
+        let temporal = tempfile::tempdir().unwrap();
+        let home = temporal.path().join("home");
+        let fuera = temporal.path().join("almacenamiento");
+        std::fs::create_dir_all(home.join(".termux")).unwrap();
+        std::fs::create_dir_all(&fuera).unwrap();
+        // Los dos ya resueltos (el directorio temporal puede colgar de un
+        // enlace en algunos sistemas).
+        let home = std::fs::canonicalize(&home).unwrap();
+        let fuera = std::fs::canonicalize(&fuera).unwrap();
+        let entorno = entorno_en(&home);
+        let ruta = home.join(".termux/termux.properties");
+
+        // Un fichero normal: sin enlace.
+        std::fs::write(&ruta, "extra-keys = [['A']]\n").unwrap();
+        let normal = preparar(&entorno, "Ctrl+]", fecha());
+        assert_eq!(normal.enlace_a, None);
+        assert_eq!(
+            normal.copia.as_deref(),
+            Some("termux.properties.magi-2026-11-17")
+        );
+
+        // Un enlace a algo fuera del home: lo dice, entero, y la copia lleva el
+        // nombre del destino.
+        std::fs::remove_file(&ruta).unwrap();
+        std::fs::write(fuera.join("props.txt"), "extra-keys = [['A']]\n").unwrap();
+        std::os::unix::fs::symlink(fuera.join("props.txt"), &ruta).unwrap();
+        let enlazada = preparar(&entorno, "Ctrl+]", fecha());
+        assert_eq!(enlazada.ruta_visible, "~/.termux/termux.properties");
+        assert_eq!(
+            enlazada.enlace_a.as_deref(),
+            Some(fuera.join("props.txt").to_str().unwrap())
+        );
+        assert_eq!(enlazada.copia.as_deref(), Some("props.txt.magi-2026-11-17"));
+        assert_eq!(enlazada.estado, EstadoFila::Otra);
+        // Mirar no escribe nada.
+        assert_eq!(entradas_de(&fuera), ["props.txt"]);
+
+        // Un enlace dentro del home: se enseña con `~`.
+        let dentro = home.join("dotfiles");
+        std::fs::create_dir(&dentro).unwrap();
+        std::fs::rename(fuera.join("props.txt"), dentro.join("tp")).unwrap();
+        std::fs::remove_file(&ruta).unwrap();
+        std::os::unix::fs::symlink(dentro.join("tp"), &ruta).unwrap();
+        let en_home = preparar(&entorno, "Ctrl+]", fecha());
+        assert_eq!(en_home.enlace_a.as_deref(), Some("~/dotfiles/tp"));
+
+        // Un enlace roto es ilegible y no dice a dónde apunta.
+        std::fs::remove_file(dentro.join("tp")).unwrap();
+        let rota = preparar(&entorno, "Ctrl+]", fecha());
+        assert_eq!(rota.enlace_a, None);
+        assert!(matches!(rota.estado, EstadoFila::Ilegible(_)));
+    }
+
+    /// E2: lo que se ve en la propuesta es lo que pasa: el destino de un enlace
+    /// fuera de `~/.termux` recibe la fila y la copia, y el enlace no se toca.
+    #[test]
+    fn un_enlace_fuera_del_home_recibe_la_copia_y_la_fila_y_sigue_siendo_enlace() {
+        let temporal = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(temporal.path()).unwrap().join("home");
+        let fuera = std::fs::canonicalize(temporal.path())
+            .unwrap()
+            .join("almacenamiento");
+        std::fs::create_dir_all(home.join(".termux")).unwrap();
+        std::fs::create_dir_all(&fuera).unwrap();
+        let destino = fuera.join("props.txt");
+        std::fs::write(&destino, "a=1\nextra-keys = [['A']]\n").unwrap();
+        let ruta = home.join(".termux/termux.properties");
+        std::os::unix::fs::symlink(&destino, &ruta).unwrap();
+        let entorno = entorno_en(&home);
+        let propuesta = preparar(&entorno, "Ctrl+]", fecha());
+        let copia = propuesta.copia.clone().expect("copia prevista");
+
+        let escritura = escribir_fila(&ruta, "Ctrl+]", fecha()).unwrap();
+        // La copia es la que se prometió, en la carpeta del destino.
+        assert_eq!(escritura.copia.as_deref(), Some(copia.as_str()));
+        assert_eq!(
+            std::fs::read_to_string(fuera.join(&copia)).unwrap(),
+            "a=1\nextra-keys = [['A']]\n"
+        );
+        assert_eq!(entradas_de(&home.join(".termux")), ["termux.properties"]);
+        assert_eq!(
+            std::fs::read_to_string(&destino).unwrap(),
+            format!("a=1\n{DEFECTO}\n")
+        );
+        assert!(std::fs::symlink_metadata(&ruta)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(estado_fila(&entorno, "Ctrl+]"), EstadoFila::LaDeMagi);
+    }
+
+    /// E2: un destino que no admite `chmod` (el almacenamiento compartido de
+    /// Android) no impide instalar la fila ni hacer la copia.
+    #[test]
+    fn un_destino_que_no_admite_chmod_no_impide_instalar_la_fila() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = std::fs::canonicalize(temporal.path()).unwrap();
+        let destino = carpeta.join("termux.properties");
+        std::fs::write(&destino, "a=1\n").unwrap();
+        let _sin_chmod = ganchos_de_pruebas::sin_chmod_en(&destino);
+        let escritura = escribir_fila(&destino, "Ctrl+]", fecha()).unwrap();
+        assert_eq!(
+            escritura.copia.as_deref(),
+            Some("termux.properties.magi-2026-11-17")
+        );
+        assert_eq!(
+            std::fs::read_to_string(carpeta.join("termux.properties.magi-2026-11-17")).unwrap(),
+            "a=1\n"
+        );
+        assert!(std::fs::read_to_string(&destino).unwrap().contains(DEFECTO));
+        // No queda ningún temporal.
+        assert_eq!(
+            entradas_de(&carpeta),
+            ["termux.properties", "termux.properties.magi-2026-11-17"]
+        );
+
+        // Un fichero nuevo, igual.
+        let nuevo = carpeta.join("nueva/termux.properties");
+        let _sin_chmod = ganchos_de_pruebas::sin_chmod_en(&nuevo);
+        let escritura = escribir_fila(&nuevo, "Ctrl+]", fecha()).unwrap();
+        assert_eq!(escritura.copia, None);
+        assert!(std::fs::read_to_string(&nuevo).unwrap().contains(DEFECTO));
     }
 
     /// Un directorio sin permiso de escritura mientras vive (con root no
@@ -1663,10 +2262,11 @@ mod pruebas {
         }
     }
 
-    /// Un `termux.properties` que es un enlace a unos dotfiles: la copia cabe
-    /// junto al enlace, pero la escritura va al destino, que se puede dejar
-    /// sin permiso para que falle justo después de hacer la copia.
+    /// Un `termux.properties` que es un enlace a unos dotfiles: la copia y la
+    /// escritura van las dos al destino (a su directorio). Devuelve el enlace
+    /// y el directorio de los dotfiles, ya resuelto.
     fn con_destino_en_otro_directorio(raiz: &Path, contenido: &str) -> (PathBuf, PathBuf) {
+        let raiz = std::fs::canonicalize(raiz).unwrap();
         let dotfiles = raiz.join("dotfiles");
         std::fs::create_dir(&dotfiles).unwrap();
         std::fs::write(dotfiles.join("termux.properties"), contenido).unwrap();
@@ -1675,6 +2275,40 @@ mod pruebas {
         let ruta = carpeta.join("termux.properties");
         std::os::unix::fs::symlink(dotfiles.join("termux.properties"), &ruta).unwrap();
         (ruta, dotfiles)
+    }
+
+    /// Hace que la escritura de `fichero` falle justo después de la copia: el
+    /// gancho deja su directorio sin permiso de escritura en ese momento (la
+    /// copia y la escritura van al mismo directorio, así que no se puede
+    /// quitar antes). Al soltarse, devuelve el permiso y quita el gancho.
+    struct FalloTrasLaCopia {
+        directorio: PathBuf,
+        _gancho: ganchos_de_pruebas::Guarda,
+    }
+
+    impl FalloTrasLaCopia {
+        fn en(fichero: &Path) -> Option<Self> {
+            if nix::unistd::Uid::effective().is_root() {
+                return None;
+            }
+            let directorio = fichero.parent().unwrap().to_path_buf();
+            let a_quitar = directorio.clone();
+            let gancho = ganchos_de_pruebas::antes_de_escribir_en(fichero, move || {
+                std::fs::set_permissions(&a_quitar, std::fs::Permissions::from_mode(0o500))
+                    .unwrap();
+            });
+            Some(Self {
+                directorio,
+                _gancho: gancho,
+            })
+        }
+    }
+
+    impl Drop for FalloTrasLaCopia {
+        fn drop(&mut self) {
+            let _ =
+                std::fs::set_permissions(&self.directorio, std::fs::Permissions::from_mode(0o700));
+        }
     }
 
     fn copias_de(carpeta: &Path) -> Vec<String> {
@@ -1691,7 +2325,7 @@ mod pruebas {
     fn si_la_escritura_falla_tras_la_copia_el_error_dice_que_la_copia_ya_esta_hecha() {
         let temporal = tempfile::tempdir().unwrap();
         let (ruta, dotfiles) = con_destino_en_otro_directorio(temporal.path(), "a=1\n");
-        let Some(_guarda) = SinEscritura::de(&dotfiles) else {
+        let Some(_guarda) = FalloTrasLaCopia::en(&dotfiles.join("termux.properties")) else {
             return;
         };
         let error = escribir_fila(&ruta, "Ctrl+]", fecha()).unwrap_err();
@@ -1710,12 +2344,13 @@ mod pruebas {
             error.to_string(),
             "no se pudo escribir termux.properties (permiso denegado): la copia termux.properties.magi-2026-11-17 ya está hecha"
         );
-        // La copia existe y es el original; el fichero no se ha tocado.
-        let carpeta = ruta.parent().unwrap();
+        // E2: la copia existe, junto al destino (no junto al enlace), y es el
+        // original; el fichero no se ha tocado.
         assert_eq!(
-            std::fs::read_to_string(carpeta.join("termux.properties.magi-2026-11-17")).unwrap(),
+            std::fs::read_to_string(dotfiles.join("termux.properties.magi-2026-11-17")).unwrap(),
             "a=1\n"
         );
+        assert_eq!(copias_de(ruta.parent().unwrap()), Vec::<String>::new());
         assert_eq!(std::fs::read_to_string(&ruta).unwrap(), "a=1\n");
     }
 
@@ -1738,8 +2373,9 @@ mod pruebas {
     fn un_reintento_con_la_copia_previa_intacta_no_hace_otra_y_la_reutiliza() {
         let temporal = tempfile::tempdir().unwrap();
         let (ruta, dotfiles) = con_destino_en_otro_directorio(temporal.path(), "a=1\n");
-        let carpeta = ruta.parent().unwrap().to_path_buf();
-        let Some(guarda) = SinEscritura::de(&dotfiles) else {
+        // E2: la copia queda junto al destino, en los dotfiles.
+        let carpeta = dotfiles.clone();
+        let Some(guarda) = FalloTrasLaCopia::en(&dotfiles.join("termux.properties")) else {
             return;
         };
         let error = escribir_fila(&ruta, "Ctrl+]", fecha()).unwrap_err();
@@ -1747,12 +2383,15 @@ mod pruebas {
         assert_eq!(copias_de(&carpeta), std::slice::from_ref(&copia));
 
         // Otro intento sin saber de la copia anterior (la CLI, otra ventana):
-        // hace la suya y se apila (`-2`).
+        // hace la suya y se apila (`-2`). (El fallo anterior dejó el
+        // directorio sin permiso: quien lo arregla es el usuario.)
+        std::fs::set_permissions(&dotfiles, std::fs::Permissions::from_mode(0o700)).unwrap();
         let otro = escribir_fila(&ruta, "Ctrl+]", fecha()).unwrap_err();
         assert_eq!(
             otro.copia_hecha(),
             Some("termux.properties.magi-2026-11-17-2")
         );
+        std::fs::set_permissions(&dotfiles, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_file(carpeta.join("termux.properties.magi-2026-11-17-2")).unwrap();
 
         // Con la copia previa, el mismo fallo no duplica nada y repite el nombre.

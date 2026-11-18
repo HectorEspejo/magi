@@ -185,8 +185,39 @@ impl EstadoServidor {
     /// en curso, túneles activos y ejecuciones en curso. Las ventanas
     /// adjuntas las cuenta `tarea_conexion`, que es quien pregunta.
     pub fn trabajo(&self) -> crate::protocolo::TrabajoServidor {
+        self.trabajo_con_sesiones(self.sesiones.len() as u32)
+    }
+
+    /// Pestañas en estado `Caida` (reconexión agotada, reconexión desactivada
+    /// o sesión soltada por otro equipo): se conservan hasta que el usuario las
+    /// cierra, pero no hacen nada.
+    pub fn sesiones_caidas(&self) -> usize {
+        self.sesiones
+            .values()
+            .filter(|sesion| sesion.estado == crate::protocolo::EstadoSesionRemota::Caida)
+            .count()
+    }
+
+    /// Como [`Self::trabajo`], sin contar las pestañas caídas (Fase 17,
+    /// corrección de cierre A1). Una pestaña muerta sigue siendo custodia del
+    /// servidor, y por eso el servidor no se apaga ni un cliente anterior lo
+    /// sustituye sin preguntar, pero no es trabajo que mantenga despierto el
+    /// móvil: una reconexión en curso (`Abriendo` con `reconectando`) sí
+    /// cuenta. Solo lo usan el wake lock y el vigilante sin ventanas de
+    /// Termux; `trabajo` y `TrabajoServidor` no cambian.
+    pub fn trabajo_vivo(&self) -> crate::protocolo::TrabajoServidor {
+        self.trabajo_con_sesiones((self.sesiones.len() - self.sesiones_caidas()) as u32)
+    }
+
+    /// ¿Lo único que mantiene vivo al servidor son pestañas caídas? Hay al
+    /// menos una y no queda trabajo vivo de ninguna clase.
+    pub fn solo_mantienen_pestanas_caidas(&self) -> bool {
+        self.sesiones_caidas() > 0 && self.trabajo_vivo().vacio()
+    }
+
+    fn trabajo_con_sesiones(&self, sesiones: u32) -> crate::protocolo::TrabajoServidor {
         crate::protocolo::TrabajoServidor {
-            sesiones: self.sesiones.len() as u32,
+            sesiones,
             transferencias: self
                 .transferencias
                 .info()
@@ -411,11 +442,16 @@ pub async fn arrancar_con(
 
     // Salida: socket y lock fuera, aviso anotado y la base de datos cerrada
     // con todo lo pendiente escrito.
-    let _ = std::fs::remove_file(&ruta_socket);
-    let _ = std::fs::remove_file(ruta_lock(&rutas));
+    //
+    // Termux: el fichero de estado de la barra se quita ANTES que el socket y el
+    // lock (corrección de cierre A4). Quitar el lock deja entrar a un servidor
+    // nuevo, que escribe su propio fichero `servidor`: si el viejo lo quitara
+    // después, borraría el del nuevo y la barra perdería su `arranque`.
     if let Some(termux) = &termux {
         termux.barra.quitar();
     }
+    let _ = std::fs::remove_file(&ruta_socket);
+    let _ = std::fs::remove_file(ruta_lock(&rutas));
     let detalle = "servidor detenido";
     if let Err(error) = anotar(&estado, crate::registro::SERVIDOR_DETENIDO, detalle).await {
         warn!("no se pudo anotar la parada: {error}");
@@ -603,14 +639,16 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
         tokio::time::sleep(Duration::from_secs(1)).await;
         // Termux: el conductor del wake lock quiere saber si hay trabajo, que
         // no es lo mismo que `ocupado` (cuenta ventanas): `TrabajoServidor` no
-        // vacío. Solo informa; cuándo se apaga el servidor no cambia.
+        // vacío, sin contar las pestañas caídas (una pestaña muerta que el
+        // usuario no ha cerrado no puede tener el móvil despierto para
+        // siempre). Solo informa; cuándo se apaga el servidor no cambia.
         let mut wake_lock = None;
         let apagar = {
             let mut estado_bloqueado = estado.lock().await;
             if let Some(termux) = &estado_bloqueado.termux {
                 wake_lock = Some((
                     Arc::clone(&termux.wake_lock),
-                    !estado_bloqueado.trabajo().vacio(),
+                    !estado_bloqueado.trabajo_vivo().vacio(),
                 ));
             }
             let ocupado = !estado_bloqueado.clientes.is_empty()

@@ -62,6 +62,28 @@ pub fn mirando_con(foco_fiable: bool, enfocada: bool) -> bool {
     foco_fiable && enfocada
 }
 
+/// ¿Es el texto de un aviso del emulador el de un subcomando de ConEmu y no
+/// un aviso para el usuario? (Corrección de cierre A2.) Windows Terminal,
+/// ConEmu y muchos programas (`OSC 9;4;<estado>;<porcentaje>` es el progreso;
+/// hay otros del 1 al 9) usan la misma orden `OSC 9` que los avisos de iTerm2:
+/// el emulador del núcleo los guarda como un aviso más, con el texto
+/// `4 · 1 · 50`, y publicar con ellos un aviso de Android «pide atención» sin
+/// que nada necesite al usuario sería ruido. Se reconoce por la forma: el
+/// texto empieza por uno o dos dígitos y, o termina ahí, o sigue con « · » (la
+/// unión de los parámetros que hace el emulador). «3 tests fallan» o
+/// «te necesito» no lo son. Solo decide si la pestaña marca
+/// `atencion_remota`: el escritorio sigue enseñando el aviso como siempre.
+#[must_use]
+pub fn es_subcomando_de_conemu(texto: &str) -> bool {
+    let digitos = texto.chars().take_while(char::is_ascii_digit).count();
+    if !(1..=2).contains(&digitos) {
+        return false;
+    }
+    // Los dígitos ASCII ocupan un byte cada uno.
+    let resto = &texto[digitos..];
+    resto.is_empty() || resto.starts_with(" · ")
+}
+
 /// De dónde sale un aviso: una sesión persistente (con su ficha) o una pestaña.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origen {
@@ -348,6 +370,79 @@ mod pruebas {
             persistente: None,
             pide: true,
             enfocada: false,
+        }
+    }
+
+    #[test]
+    fn el_progreso_y_los_subcomandos_de_conemu_no_son_avisos_para_el_usuario() {
+        // `OSC 9;4;<estado>;<porcentaje>` llega al emulador como «4 · 1 · 50».
+        for texto in [
+            "4 · 1 · 50",
+            "4 · 0",
+            "4 · 3",
+            "1 · 100",
+            "9",
+            "12",
+            "3 · x",
+        ] {
+            assert!(es_subcomando_de_conemu(texto), "«{texto}» es de ConEmu");
+        }
+        for texto in [
+            "te necesito",
+            "3 tests fallan",
+            "campana",
+            "Listo · compilacion",
+            "123",
+            "123 · 4",
+            "",
+            "·",
+            " 4 · 1",
+            "4·1",
+            "x 4 · 1",
+            "٤ · 1",
+        ] {
+            assert!(!es_subcomando_de_conemu(texto), "«{texto}» es un aviso");
+        }
+    }
+
+    /// Con el emulador real del núcleo (el que usa el servidor): lo que llega
+    /// como `OSC 9` se guarda como aviso y esta función decide si pide atención.
+    #[test]
+    fn con_el_emulador_el_progreso_se_ignora_y_los_avisos_reales_no() {
+        use magi_nucleo::terminal::emulador::PantallaEmulada;
+        let aviso_de = |bytes: &[u8]| {
+            let mut pantalla = PantallaEmulada::nueva(24, 80, 0, false);
+            pantalla.procesar(bytes);
+            pantalla
+                .emulador_mut()
+                .tomar_aviso()
+                .map(|aviso| aviso.texto)
+        };
+        // Progreso de ConEmu y Windows Terminal: el emulador lo guarda como
+        // aviso con los parámetros unidos, y aquí se descarta.
+        for (bytes, texto) in [
+            (&b"\x1b]9;4;1;50\x07"[..], "4 · 1 · 50"),
+            (&b"\x1b]9;4;0\x07"[..], "4 · 0"),
+            (&b"\x1b]9;4;3\x1b\\"[..], "4 · 3"),
+        ] {
+            let aviso = aviso_de(bytes).expect("el emulador guardó un aviso");
+            assert_eq!(aviso, texto);
+            assert!(es_subcomando_de_conemu(&aviso), "«{aviso}»");
+        }
+        // Avisos para el usuario: la campana, OSC 9 con texto, OSC 777 y uno
+        // que empieza por un dígito.
+        for (bytes, texto) in [
+            (&b"\x07"[..], "campana"),
+            (&b"\x1b]9;te necesito\x07"[..], "te necesito"),
+            (&b"\x1b]9;3 tests fallan\x07"[..], "3 tests fallan"),
+            (
+                &b"\x1b]777;notify;Listo;compilacion\x07"[..],
+                "Listo · compilacion",
+            ),
+        ] {
+            let aviso = aviso_de(bytes).expect("el emulador guardó un aviso");
+            assert_eq!(aviso, texto);
+            assert!(!es_subcomando_de_conemu(&aviso), "«{aviso}»");
         }
     }
 

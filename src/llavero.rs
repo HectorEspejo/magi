@@ -451,6 +451,20 @@ pub trait LlaveroCliente: LlaveroSecreto + LlaveroHost {
     fn de_fichero(&self) -> Option<&LlaveroFichero> {
         None
     }
+
+    /// Pone lo que el llavero tiene en memoria al día con lo que hay guardado
+    /// ahora. El de fichero guarda las entradas en memoria y otra ventana de
+    /// MAGI puede haber reescrito el fichero (rotar la clave de sincronización,
+    /// desactivarla): quien va a usar una clave para algo que sale de este
+    /// equipo, como la pasada de sincronización, lo llama antes de leerla. El
+    /// del sistema y el de memoria siempre leen lo último: no hacen nada.
+    ///
+    /// Puede bloquear (el cerrojo del fichero y, si cambió, scrypt): desde una
+    /// interfaz, en `spawn_blocking`. El error es texto, como en
+    /// `LlaveroSecreto`; con la frase que ya no abre el fichero es `BLOQUEADO`.
+    fn refrescar(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl LlaveroCliente for LlaveroDelSistema {
@@ -502,6 +516,10 @@ impl LlaveroCliente for LlaveroFichero {
 
     fn de_fichero(&self) -> Option<&LlaveroFichero> {
         Some(self)
+    }
+
+    fn refrescar(&self) -> Result<(), String> {
+        LlaveroFichero::refrescar(self).map_err(|error| error.to_string())
     }
 }
 

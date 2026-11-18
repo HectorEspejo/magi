@@ -176,15 +176,24 @@ pub fn orden_teclas(
                     "aviso: no se pudo anotar en el registro de MAGI ({motivo})"
                 ));
             }
-            consola.decir(&format!(
-                "Fila de teclas instalada en {}.",
-                propuesta.ruta_visible
-            ));
-            match &escritura.copia {
-                Some(copia) => consola.decir(&format!(
+            match &propuesta.enlace_a {
+                Some(destino) => consola.decir(&format!(
+                    "Fila de teclas instalada en {} (enlace a {destino}).",
+                    propuesta.ruta_visible
+                )),
+                None => consola.decir(&format!(
+                    "Fila de teclas instalada en {}.",
+                    propuesta.ruta_visible
+                )),
+            }
+            match (&escritura.copia, &propuesta.enlace_a) {
+                (Some(copia), Some(_)) => consola.decir(&format!(
+                    "Copia anterior: {copia} (junto al destino del enlace)."
+                )),
+                (Some(copia), None) => consola.decir(&format!(
                     "Copia anterior: {copia} (en el mismo directorio)."
                 )),
-                None => consola.decir("El fichero no existía: no hay copia."),
+                (None, _) => consola.decir("El fichero no existía: no hay copia."),
             }
             match teclas::recargar(ordenes) {
                 Ok(()) => consola.decir(&format!("{}.", teclas::texto_de_recarga(&Ok(())))),
@@ -211,6 +220,9 @@ fn mostrar_propuesta(consola: &mut dyn Consola, propuesta: &Propuesta, prefijo_e
         consola.decir(&format!("  aviso: el prefijo no va en la fila ({aviso})"));
     }
     consola.decir(&format!("Fichero: {}", propuesta.ruta_visible));
+    if let Some(destino) = &propuesta.enlace_a {
+        consola.decir(&format!("  es un enlace a {destino}: se escribe ahí"));
+    }
     let actual = match &propuesta.estado {
         EstadoFila::SinFichero => "el fichero no existe".to_string(),
         EstadoFila::SinExtraKeys => {
@@ -227,12 +239,16 @@ fn mostrar_propuesta(consola: &mut dyn Consola, propuesta: &Propuesta, prefijo_e
 
 /// Lo que se va a tocar, antes de preguntar.
 fn texto_de_lo_que_se_va_a_tocar(propuesta: &Propuesta) -> String {
-    match &propuesta.copia {
-        Some(copia) => format!(
+    match (&propuesta.copia, &propuesta.enlace_a) {
+        (Some(copia), Some(destino)) => format!(
+            "Se va a escribir {} (solo la línea extra-keys), que es un enlace a {destino}: se escribe ahí. Antes, una copia junto a él: {copia}",
+            propuesta.ruta_visible
+        ),
+        (Some(copia), None) => format!(
             "Se va a escribir {} (solo la línea extra-keys). Antes, una copia en el mismo directorio: {copia}",
             propuesta.ruta_visible
         ),
-        None => format!(
+        (None, _) => format!(
             "Se va a crear {} con la línea extra-keys. No existe todavía: no hay nada que copiar.",
             propuesta.ruta_visible
         ),

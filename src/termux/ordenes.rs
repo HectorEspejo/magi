@@ -289,6 +289,17 @@ impl Ordenes {
                     }
                     (Ok(salida), false)
                 }
+                // Un código de salida distinto de 0 apaga la función (§7.2),
+                // también el de una orden que murió por una señal (`codigo`
+                // es `None`). Riesgo conocido, anotado para el analista
+                // (revisión de cierre, D3): Android 12 o posterior puede
+                // matar con SIGKILL a los procesos hijos de Termux (R166), y
+                // una orden de la API que muere así deja Termux:API apagada
+                // hasta reiniciar el proceso aunque la app esté bien. La
+                // especificación manda apagar con cualquier código distinto
+                // de 0, así que no se distingue aquí; si el analista lo
+                // cambia, esta es la rama (`codigo.is_none()` con una señal
+                // ajena: error de esa orden, sin apagar).
                 Ok(Fin::Codigo { codigo, error }) => (
                     Err(FalloOrden::Codigo { codigo, error }),
                     apagar(EstadoApi::NoResponde),

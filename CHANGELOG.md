@@ -44,7 +44,8 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
     avisa al arrancar; fuera de Termux se ignora y no se escribe mientras sea la
     de siempre (una sección escrita a mano se conserva).
   - **Wake lock.** El servidor toma el wake lock de Termux (`termux-wake-lock`)
-    mientras tiene trabajo (sesiones, túneles, transferencias, escritorios) y lo
+    mientras tiene trabajo (sesiones vivas, túneles, transferencias, escritorios;
+    una pestaña caída que espera a que la cierres no cuenta) y lo
     suelta 30 s después de quedar sin él; con `wake_lock = "nunca"` no lo toma. Si
     el servidor muere sin soltarlo (Android cierra Termux), el siguiente lo suelta
     en cuanto no tenga trabajo y vuelve a tomarlo si lo hay. Si no se puede tomar,
@@ -320,6 +321,11 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **La sincronización ya no se tumba, ni lee entero, un fichero ajeno con
+  nombre de MAGI en la carpeta compartida.** Un directorio, un FIFO o un fichero
+  de varios GiB llamado `magi-<uuid>.age` hacía fallar la pasada (o la dejaba
+  leyéndolo en la interfaz); ahora solo se admiten ficheros normales, con tope de
+  lectura, y lo demasiado grande se trata como dañado sin leerlo.
 - **Un fallo al escribir un fichero de MAGI ya no deja su temporal en la
   carpeta.** La escritura atómica (`ficheros.rs`) borra el temporal si falla
   antes del renombrado.

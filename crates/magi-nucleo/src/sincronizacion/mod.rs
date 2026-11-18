@@ -586,8 +586,12 @@ fn pasada_interna(
     }
 
     // 1. Leer los ficheros ajenos que hayan cambiado.
-    let ficheros = match carpeta::listar(&carpeta) {
-        Ok(ficheros) => ficheros,
+    let ficheros = match carpeta::listar_con_omitidos(&carpeta) {
+        Ok(listado) => {
+            // Lo que no se pudo leer consta como aviso, sin tumbar la pasada.
+            resultado.avisos.extend(listado.omitidos);
+            listado.ficheros
+        }
         Err(error) => {
             resultado.estado = EstadoPasada::Error(error.to_string());
             return Ok(resultado);

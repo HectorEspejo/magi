@@ -1640,3 +1640,284 @@ fn implementa_llavero_secreto_y_llavero_host_como_el_de_memoria() {
     let _: Arc<dyn LlaveroSecreto> = Arc::new(llavero_en(dir.path()));
     let _: Arc<dyn LlaveroHost> = Arc::new(llavero_en(dir.path()));
 }
+
+// ---------------------------------------------------------------------------
+// Dos ventanas: `refrescar` pone la memoria al día con el fichero de ahora
+// ---------------------------------------------------------------------------
+
+/// La cuenta de la clave de sincronización (la misma que usa MAGI).
+const CUENTA_CLAVE: &str = "sincronizacion";
+
+fn valor(llavero: &LlaveroFichero, cuenta: &str) -> Option<String> {
+    llavero
+        .recuperar(cuenta)
+        .unwrap()
+        .map(|valor| valor.to_string())
+}
+
+/// Dos ventanas abiertas sobre el mismo fichero, con una clave de
+/// sincronización ya guardada (la «K1» de las pruebas).
+fn dos_ventanas(dir: &Path) -> (LlaveroFichero, LlaveroFichero) {
+    let w1 = llavero_creado(dir);
+    w1.guardar(CUENTA_CLAVE, "K1").unwrap();
+    let w2 = llavero_en(dir);
+    w2.desbloquear(FRASE).unwrap();
+    assert_eq!(valor(&w2, CUENTA_CLAVE).as_deref(), Some("K1"));
+    (w1, w2)
+}
+
+#[test]
+fn la_clave_rotada_en_otra_ventana_no_se_ve_hasta_refrescar() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w1, w2) = dos_ventanas(dir.path());
+    // W1 rota la clave de sincronización.
+    w1.guardar("sincronizacion-anterior", "K1").unwrap();
+    w1.guardar(CUENTA_CLAVE, "K2").unwrap();
+    // W2 lee de su memoria: sigue viendo la K1 (la causa del defecto).
+    assert_eq!(valor(&w2, CUENTA_CLAVE).as_deref(), Some("K1"));
+    // Refrescar la pone al día: ahora ve la K2 y la anterior, y sigue abierta.
+    w2.refrescar().unwrap();
+    assert_eq!(valor(&w2, CUENTA_CLAVE).as_deref(), Some("K2"));
+    assert_eq!(valor(&w2, "sincronizacion-anterior").as_deref(), Some("K1"));
+    assert_eq!(w2.estado(), EstadoFichero::Abierto);
+    // Y su siguiente escritura parte de lo releído: no pisa la K2.
+    w2.guardar("otra", "x").unwrap();
+    assert_eq!(valor(&w1, CUENTA_CLAVE).as_deref(), Some("K2"));
+}
+
+#[test]
+fn desactivar_en_otra_ventana_no_se_resucita_tras_refrescar() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w1, w2) = dos_ventanas(dir.path());
+    // W1 desactiva la sincronización: olvida la clave.
+    assert!(w1.olvidar(CUENTA_CLAVE).unwrap());
+    // Sin refrescar, W2 todavía «tiene» la clave de una sincronización que ya
+    // no existe: la pasada exportaría de nuevo su fichero.
+    assert_eq!(valor(&w2, CUENTA_CLAVE).as_deref(), Some("K1"));
+    w2.refrescar().unwrap();
+    assert_eq!(valor(&w2, CUENTA_CLAVE), None);
+    assert_eq!(w2.estado(), EstadoFichero::Abierto);
+}
+
+#[test]
+fn refrescar_sin_cambios_no_gasta_scrypt_y_con_cambios_una_vez() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w1, w2) = dos_ventanas(dir.path());
+    // Desbloquear gastó un descifrado; refrescar el mismo fichero, ninguno.
+    let antes = w2.descifrados();
+    assert_eq!(antes, 1);
+    for _ in 0..5 {
+        w2.refrescar().unwrap();
+    }
+    assert_eq!(w2.descifrados(), antes, "el fichero no ha cambiado");
+    // La propia escritura de W2 tampoco obliga a releer.
+    w2.guardar("de-w2", "1").unwrap();
+    let tras_guardar = w2.descifrados();
+    w2.refrescar().unwrap();
+    assert_eq!(w2.descifrados(), tras_guardar);
+    // Otra ventana escribe: se relee una vez y luego vuelve a no gastar.
+    w1.guardar("de-w1", "2").unwrap();
+    w2.refrescar().unwrap();
+    assert_eq!(w2.descifrados(), tras_guardar + 1);
+    w2.refrescar().unwrap();
+    assert_eq!(w2.descifrados(), tras_guardar + 1);
+    assert_eq!(valor(&w2, "de-w1").as_deref(), Some("2"));
+    assert_eq!(valor(&w2, "de-w2").as_deref(), Some("1"));
+}
+
+#[test]
+fn si_otra_ventana_cambia_la_frase_refrescar_cierra_el_llavero() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w1, w2) = dos_ventanas(dir.path());
+    w1.cambiar_frase(FRASE, OTRA_FRASE, OTRA_FRASE).unwrap();
+    // La frase de W2 ya no abre el fichero: queda cerrada y quien lea después
+    // recibe «bloqueado», no una clave que ya no es la del fichero.
+    assert_eq!(w2.refrescar(), Err(ErrorLlavero::Bloqueado));
+    assert_eq!(w2.estado(), EstadoFichero::Cerrado);
+    assert!(es_bloqueado(&w2.recuperar(CUENTA_CLAVE).unwrap_err()));
+    // No es un intento de frase del usuario: no cuenta en la serie de fallos.
+    assert_eq!(w2.intentos_seguidos(), 0);
+    // El fichero no se ha tocado y la frase nueva lo abre.
+    w2.desbloquear(OTRA_FRASE).unwrap();
+    assert_eq!(valor(&w2, CUENTA_CLAVE).as_deref(), Some("K1"));
+}
+
+#[test]
+fn si_el_fichero_desaparece_o_se_estropea_refrescar_vacia_la_memoria() {
+    // Desaparece.
+    let dir = tempfile::tempdir().unwrap();
+    let (_w1, w2) = dos_ventanas(dir.path());
+    std::fs::remove_file(ruta_en(dir.path())).unwrap();
+    w2.refrescar().unwrap();
+    assert_eq!(w2.estado(), EstadoFichero::Inexistente);
+    assert_eq!(valor(&w2, CUENTA_CLAVE), None);
+    assert_eq!(w2.guardar("x", "y"), Err(SIN_CREAR.to_string()));
+
+    // Se estropea.
+    let dir = tempfile::tempdir().unwrap();
+    let (_w1, w2) = dos_ventanas(dir.path());
+    std::fs::write(ruta_en(dir.path()), b"roto del todo").unwrap();
+    assert!(matches!(w2.refrescar(), Err(ErrorLlavero::Danado(_))));
+    assert!(es_danado(&w2.estado()));
+    assert!(w2.recuperar(CUENTA_CLAVE).is_err(), "sin frase en memoria");
+
+    // Contenido ilegible con la frase buena.
+    let dir = tempfile::tempdir().unwrap();
+    let (_w1, w2) = dos_ventanas(dir.path());
+    let roto = cifrar_age(b"{esto no es json", FRASE, LOG_N_PRUEBAS);
+    std::fs::write(ruta_en(dir.path()), &roto).unwrap();
+    assert!(matches!(w2.refrescar(), Err(ErrorLlavero::Danado(_))));
+    assert!(es_danado(&w2.estado()));
+    assert!(w2.recuperar(CUENTA_CLAVE).is_err());
+}
+
+#[test]
+fn refrescar_cerrado_o_sin_fichero_no_hace_nada() {
+    let dir = tempfile::tempdir().unwrap();
+    let llavero = llavero_en(dir.path());
+    assert_eq!(llavero.refrescar(), Ok(()));
+    assert_eq!(llavero.estado(), EstadoFichero::Inexistente);
+    assert!(!ruta_en(dir.path()).exists(), "no crea nada");
+    assert!(!dir.path().join("llavero.age.lock").exists());
+    // Cerrado: no abre el fichero ni gasta scrypt, aunque haya cambiado.
+    let (w1, w2) = dos_ventanas(dir.path());
+    w2.bloquear();
+    w1.guardar("x", "1").unwrap();
+    let antes = w2.descifrados();
+    assert_eq!(w2.refrescar(), Ok(()));
+    assert_eq!(w2.descifrados(), antes);
+    assert_eq!(w2.estado(), EstadoFichero::Cerrado);
+}
+
+#[test]
+fn refrescar_espera_al_cerrojo_de_otra_ventana_sin_bloquear_el_estado() {
+    use nix::fcntl::{Flock, FlockArg};
+    let dir = tempfile::tempdir().unwrap();
+    let (_w1, w2) = dos_ventanas(dir.path());
+    let w2 = Arc::new(w2);
+    let cerrojo = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.path().join("llavero.age.lock"))
+        .unwrap();
+    let cerrojo = Flock::lock(cerrojo, FlockArg::LockExclusiveNonblock).unwrap();
+    let hilo = {
+        let w2 = w2.clone();
+        std::thread::spawn(move || w2.refrescar())
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!hilo.is_finished(), "espera al cerrojo de la otra ventana");
+    // Mientras espera, la interfaz no se queda esperando con ella.
+    let inicio = Instant::now();
+    assert_eq!(w2.estado(), EstadoFichero::Abierto);
+    assert!(inicio.elapsed() < Duration::from_secs(2));
+    drop(cerrojo);
+    assert_eq!(hilo.join().unwrap(), Ok(()));
+}
+
+// ---------------------------------------------------------------------------
+// Cabecera acotada a 4096 bytes
+// ---------------------------------------------------------------------------
+
+/// Un «age» forjado: primera entrada scrypt con un factor aceptado y miles de
+/// entradas más antes del cierre de la cabecera.
+fn age_con_miles_de_entradas(entradas: usize) -> Vec<u8> {
+    let mut datos = Vec::new();
+    datos.extend_from_slice(b"age-encryption.org/v1\n");
+    datos.extend_from_slice(b"-> scrypt c2FsdHNhbHRzYWx0c2FsdA 10\n");
+    datos.extend_from_slice(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+    for numero in 0..entradas {
+        datos.extend_from_slice(format!("-> grease-{numero}\n\n").as_bytes());
+    }
+    datos.extend_from_slice(b"--- AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+    datos.extend_from_slice(&[7u8; 64]);
+    datos
+}
+
+#[test]
+fn una_cabecera_con_miles_de_entradas_es_danado_enseguida_y_sin_scrypt() {
+    let dir = tempfile::tempdir().unwrap();
+    let forjado = age_con_miles_de_entradas(20_000);
+    assert!(forjado.len() < TOPE_BYTES, "cabe en el tope de 1 MiB");
+    let llavero = con_fichero(dir.path(), &forjado);
+    let inicio = Instant::now();
+    let estado = llavero.estado();
+    let error = llavero.desbloquear(FRASE).unwrap_err();
+    let mas = llavero.cambiar_frase(FRASE, OTRA_FRASE, OTRA_FRASE);
+    // Con el análisis cuadrático de age, esto tardaba minutos.
+    assert!(
+        inicio.elapsed() < Duration::from_secs(5),
+        "tardó {:?}",
+        inicio.elapsed()
+    );
+    assert!(es_danado(&estado), "{estado:?}");
+    let motivo = motivo_danado(error);
+    assert!(motivo.contains("4096"), "{motivo}");
+    assert!(matches!(mas, Err(ErrorLlavero::Danado(_))), "{mas:?}");
+    assert_eq!(llavero.intentos_seguidos(), 0);
+    assert_eq!(std::fs::read(ruta_en(dir.path())).unwrap(), forjado);
+    // Y apartarlo funciona como con cualquier dañado.
+    llavero.apartar_danado().unwrap();
+}
+
+#[test]
+fn un_llavero_valido_de_mas_de_4_kib_se_abre_con_normalidad() {
+    let dir = tempfile::tempdir().unwrap();
+    let llavero = llavero_creado(dir.path());
+    let grande = "x".repeat(50_000);
+    llavero.guardar("grande", &grande).unwrap();
+    assert!(std::fs::metadata(ruta_en(dir.path())).unwrap().len() > 4096);
+    let otro = llavero_en(dir.path());
+    assert_eq!(otro.estado(), EstadoFichero::Cerrado);
+    otro.desbloquear(FRASE).unwrap();
+    assert_eq!(valor(&otro, "grande").as_deref(), Some(grande.as_str()));
+    otro.refrescar().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Un enlace simbólico roto es un fichero dañado, no «no existe»
+// ---------------------------------------------------------------------------
+
+#[test]
+fn un_enlace_roto_es_danado_se_aparta_y_no_mete_en_un_bucle_de_crear() {
+    let dir = tempfile::tempdir().unwrap();
+    let ruta = ruta_en(dir.path());
+    std::os::unix::fs::symlink(dir.path().join("no-existe-nada"), &ruta).unwrap();
+    let llavero = llavero_en(dir.path());
+    // Antes decía «inexistente»: la interfaz ofrecía crear, `crear` daba
+    // «ya existe», pasaba a desbloquear, que daba «no existe»… y vuelta.
+    let estado = llavero.estado();
+    assert!(es_danado(&estado), "{estado:?}");
+    assert_eq!(llavero.crear(FRASE, FRASE), Err(ErrorLlavero::YaExiste));
+    let motivo = motivo_danado(llavero.desbloquear(FRASE).unwrap_err());
+    assert!(motivo.contains("enlace roto"), "{motivo}");
+    assert!(llavero.guardar("a", "b").is_err());
+    assert!(llavero.recuperar("a").unwrap_err().contains("enlace roto"));
+    assert_eq!(llavero.borrar(), Err(ErrorLlavero::NoSeBorraDanado));
+    // El mismo estado desde cualquier objeto sobre la ruta.
+    assert!(es_danado(&llavero_en(dir.path()).estado()));
+    // Se aparta (el enlace no se sigue ni se borra) y se sigue sin llavero.
+    let copia = llavero.apartar_danado().unwrap();
+    assert!(std::fs::symlink_metadata(&copia)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(llavero.estado(), EstadoFichero::Inexistente);
+    llavero.crear(FRASE, FRASE).unwrap();
+    assert_eq!(llavero.estado(), EstadoFichero::Abierto);
+}
+
+#[test]
+fn un_enlace_que_lleva_a_un_llavero_bueno_sigue_valiendo() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = tempfile::tempdir().unwrap();
+    let guardado = llavero_creado(real.path());
+    guardado.guardar("cuenta", SECRETO).unwrap();
+    std::os::unix::fs::symlink(ruta_en(real.path()), ruta_en(dir.path())).unwrap();
+    let llavero = llavero_en(dir.path());
+    assert_eq!(llavero.estado(), EstadoFichero::Cerrado);
+    llavero.desbloquear(FRASE).unwrap();
+    assert_eq!(valor(&llavero, "cuenta").as_deref(), Some(SECRETO));
+}

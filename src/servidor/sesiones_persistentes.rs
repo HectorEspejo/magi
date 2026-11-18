@@ -6,8 +6,9 @@
 //!   cliente puntual de la CLI cuenta) o, desde la Fase 17, en Termux con los
 //!   avisos de Android activos, Termux:API sin apagar y `termux-notification`
 //!   instalada: entonces sigue sin ventanas mientras viva el servidor, para
-//!   poder avisar de una atención (`debe_vigilar`). No mantiene vivo al
-//!   servidor. Cada `[persistentes]
+//!   poder avisar de una atención (`debe_vigilar`), salvo que lo único que
+//!   mantenga vivo al servidor sean pestañas caídas que nadie ha cerrado. No
+//!   mantiene vivo al servidor. Cada `[persistentes]
 //!   vigilar_seg`, y
 //!   enseguida con `ConsultarSesionesPersistentes`, comprueba con la suborden
 //!   `estado` los hosts `ssh` que tienen fichas o la marca
@@ -199,15 +200,18 @@ pub fn lista_para_ventana_nueva(estado: &EstadoServidor) -> Option<ListaPersiste
 /// ¿Debe trabajar el vigilante? Con alguna ventana conectada o, en Termux con
 /// avisos de Android, Termux:API sin apagar y `termux-notification` instalada
 /// (`TermuxServidor::vigila_sin_ventanas`), aunque no haya ninguna mientras
-/// viva el servidor (§4.7). Sin el paquete `termux-api` sigue como en el
+/// viva el servidor (§4.7), salvo que lo único que lo mantenga vivo sean
+/// pestañas caídas que el usuario no ha cerrado (corrección de cierre A1: el
+/// mismo criterio que el wake lock, `EstadoServidor::trabajo_vivo`; una
+/// pestaña muerta no puede tener al servidor sondeando hosts por SSH sin
+/// ventanas para siempre). Sin el paquete `termux-api` sigue como en el
 /// escritorio. Es el único sitio que lo decide: no cambia cuándo se apaga el
 /// servidor (`revisar_inactividad` no lo mira).
 pub fn debe_vigilar(estado: &EstadoServidor) -> bool {
     !estado.clientes.is_empty()
-        || estado
-            .termux
-            .as_ref()
-            .is_some_and(|termux| termux.vigila_sin_ventanas(&estado.config))
+        || estado.termux.as_ref().is_some_and(|termux| {
+            termux.vigila_sin_ventanas(&estado.config) && !estado.solo_mantienen_pestanas_caidas()
+        })
 }
 
 // --------------------------------------------------------------- lógica pura

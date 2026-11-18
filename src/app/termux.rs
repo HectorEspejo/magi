@@ -54,6 +54,24 @@ pub const PLAZO_LECTURA_ESTADO: Duration = Duration::from_secs(2);
 /// leerlos y no se repiten mientras viva el servidor.
 pub const VISIBILIDAD_AVISO: Duration = Duration::from_secs(6);
 
+/// Cuánto se espera, al salir, a las tareas bloqueantes que aún corren (una
+/// orden `termux-*` colgada, la lectura del estado del servidor): lo que no
+/// acabe en este plazo muere con el proceso.
+pub const PLAZO_APAGADO_RUNTIME: Duration = Duration::from_millis(500);
+
+/// Apaga el runtime de la `App` esperando como mucho `plazo` a sus tareas
+/// bloqueantes, en vez de soltarlo (que las espera sin límite: una orden de
+/// Termux colgada retendría la salida hasta agotar su plazo, y «MAGI nunca se
+/// queda esperando» no cubriría el cierre). Deja en su lugar un runtime
+/// mínimo, sin hilos ni controladores, para que el campo siga válido; si ni
+/// ese se puede construir, se suelta el original como antes. Las tareas
+/// asíncronas se cancelan igual que al soltarlo.
+pub fn apagar_runtime(runtime: &mut tokio::runtime::Runtime, plazo: Duration) {
+    if let Ok(vacio) = tokio::runtime::Builder::new_current_thread().build() {
+        std::mem::replace(runtime, vacio).shutdown_timeout(plazo);
+    }
+}
+
 /// Órdenes `termux-clipboard-set` en vuelo a la vez: una. Las copias se
 /// serializan para que el portapapeles quede con lo último que se pidió (una
 /// orden lenta y vieja no puede escribir después de una nueva): la copia

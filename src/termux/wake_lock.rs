@@ -22,6 +22,12 @@
 //! real ya no existe. Por eso, con trabajo, el servidor nuevo vuelve a tomarlo
 //! (`termux-wake-lock` es idempotente) en vez de fiarse de la marca; sin
 //! trabajo, lo suelta como si fuera suyo.
+//!
+//! Lo mismo vale para un `termux-wake-lock` que no responde a tiempo: la orden
+//! pudo llegar a Termux antes de que se matara su grupo de procesos, así que
+//! el wake lock **puede** estar tomado. El servidor se apaga (no lo reintenta)
+//! y lo dice en la barra, pero conserva la marca y lo suelta como suyo: sin
+//! trabajo, al terminar o, si muere, en el siguiente servidor.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -219,6 +225,20 @@ impl MaquinaWakeLock {
         }
     }
 
+    /// `termux-wake-lock` no respondió a tiempo (corrección de cierre A3).
+    /// Queda apagado en este servidor como con cualquier otro fallo, pero la
+    /// orden pudo llegar a Termux antes de que se matara su grupo de procesos
+    /// y el wake lock pudo tomarse: se trata como incierto, igual que una
+    /// marca de un servidor anterior. La marca se conserva y, sin trabajo, se
+    /// suelta pasada la gracia, al terminar el servidor o, si éste muere, en
+    /// el siguiente. Con trabajo no se vuelve a tomar (está apagado).
+    pub fn tomar_sin_respuesta(&mut self) {
+        self.en_vuelo = None;
+        self.apagado = true;
+        self.tomado = true;
+        self.incierto = true;
+    }
+
     /// `termux-wake-unlock` terminó. Con éxito queda suelto; si falló, se
     /// reintenta pasada la gracia y, tras varios fallos seguidos, se rinde:
     /// la marca queda y lo intentará el siguiente servidor.
@@ -407,12 +427,21 @@ impl WakeLock {
             Err(fallo) => {
                 let sigue_siendo_de_magi = {
                     let mut maquina = self.maquina();
-                    maquina.tomar_hecho(false);
+                    // Una orden que no respondió pudo haber llegado a Termux
+                    // antes de que se matara su grupo: el wake lock pudo
+                    // tomarse y la marca se conserva (A3). Los demás fallos
+                    // (código distinto de 0, sin instalar…) no lo tomaron.
+                    if matches!(fallo, FalloOrden::SinRespuesta) {
+                        maquina.tomar_sin_respuesta();
+                    } else {
+                        maquina.tomar_hecho(false);
+                    }
                     maquina.tomado()
                 };
-                // Con la marca de un servidor anterior, el wake lock de
-                // entonces puede seguir existiendo: la marca se queda para
-                // que se suelte sin trabajo (o lo haga el siguiente servidor).
+                // Con la marca de un servidor anterior, o con una orden sin
+                // respuesta, el wake lock puede existir: la marca se queda
+                // para que se suelte sin trabajo (o lo haga el siguiente
+                // servidor).
                 if !sigue_siendo_de_magi {
                     self.con_marca(|rutas| estado::quitar_marca(rutas, Marca::WakeLock))
                         .await;

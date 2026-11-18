@@ -22,7 +22,10 @@ use magi::app::llavero::{Continuacion, DialogoLlavero, EventoLlavero, ModoLlaver
 use magi::app::{AccionDialogo, AccionInventario, App, Dialogo, EntradaTextoAccion, Evento};
 use magi::config::{Config, Rutas};
 use magi::escritorio::{EstadoEscritorio, InfoEscritorio, TipoHost};
-use magi::llavero::{EstadoLlavero, LlaveroCliente, LlaveroHost, LlaveroSecreto, BLOQUEADO};
+use magi::llavero::{
+    EstadoLlavero, LlaveroCliente, LlaveroHost, LlaveroSecreto, BLOQUEADO, CUENTA_SINCRONIZACION,
+    CUENTA_SINCRONIZACION_ANTERIOR,
+};
 use magi::modelo::{DatosHost, IdentidadRef, Origen};
 use magi::protocolo::{
     EstadoSesionRemota, InfoSesion, MensajeCliente, MensajeServidor, VERSION_PROTOCOLO,
@@ -3133,4 +3136,398 @@ fn una_frase_larga_pegada_no_deja_copias_a_medias_al_crecer_el_campo() {
         Some(true),
         "al teclear más de lo reservado el búfer anterior se soltó con la frase"
     );
+}
+
+// ------------------------------------------------------------------ cierre de la Fase 17 (pista B)
+
+/// Lo que la tarea de la pasada devolvió al bucle: las claves con las que
+/// leería y exportaría, o el error que la paró.
+enum EsperaDeLaPasada {
+    Claves(Vec<String>),
+    Error(String),
+}
+
+/// Lanza la espera de la pasada con `llavero` (como `solicitar_pasada`) y
+/// recoge lo que manda al bucle, sin pasar por él: así se ven las claves.
+fn esperar_de_la_pasada(
+    prueba: &Prueba,
+    llavero: Arc<dyn LlaveroCliente>,
+    config: Config,
+) -> EsperaDeLaPasada {
+    use magi::app::sincronizacion::EventoInventario;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    magi::app::sincronizacion::lanzar_espera(
+        &prueba.app.runtime,
+        tx,
+        prueba.entorno.rutas.clone(),
+        config,
+        llavero,
+    );
+    let evento = prueba
+        .app
+        .runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(20), rx.recv()).await })
+        .expect("la espera de la pasada no contestó en 20 s")
+        .expect("el canal se cerró");
+    match evento {
+        Evento::Inventario(EventoInventario::Listo { claves, .. }) => EsperaDeLaPasada::Claves(
+            claves
+                .iter()
+                .map(|clave| clave.texto().to_string())
+                .collect(),
+        ),
+        Evento::Inventario(EventoInventario::Error(motivo)) => EsperaDeLaPasada::Error(motivo),
+        _ => panic!("evento inesperado de la espera de la pasada"),
+    }
+}
+
+/// Config con la sincronización configurada y la clave anterior vigente.
+fn config_con_sincronizacion(prueba: &Prueba) -> Config {
+    let mut config = prueba.app.config.clone();
+    config.sincronizacion.carpeta = Some(
+        prueba
+            .entorno
+            .rutas
+            .hogar
+            .join("Sync")
+            .to_string_lossy()
+            .to_string(),
+    );
+    config.sincronizacion.clave_anterior_hasta = Some(
+        (chrono::Local::now() + chrono::Duration::days(10))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
+    );
+    config
+}
+
+/// Dos ventanas con la clave K1 de sincronización guardada: la que está en la
+/// App (la W1) y otra con su propia memoria (la W2, la que hace la pasada).
+fn dos_ventanas_con_clave(
+    prueba: &mut Prueba,
+) -> (
+    magi::sincronizacion::cifrado::ClaveSincronizacion,
+    Arc<LlaveroFichero>,
+) {
+    prueba.fichero.crear(FRASE, FRASE).expect("crear");
+    let k1 = magi::sincronizacion::cifrado::ClaveSincronizacion::generar();
+    magi::sincronizacion::equipos::guardar_en_llavero(&k1, &*prueba.fichero).unwrap();
+    let w2 = Arc::new(otra_ventana(prueba));
+    w2.desbloquear(FRASE).expect("desbloquear la otra ventana");
+    (k1, w2)
+}
+
+#[test]
+fn la_pasada_con_la_clave_vieja_en_memoria_lee_la_nueva_de_otra_ventana() {
+    let mut prueba = Prueba::nueva();
+    let (k1, w2) = dos_ventanas_con_clave(&mut prueba);
+    let config = config_con_sincronizacion(&prueba);
+    // La otra ventana rota la clave: la actual pasa a ser la anterior.
+    let k2 = magi::sincronizacion::cifrado::ClaveSincronizacion::generar();
+    prueba
+        .fichero
+        .guardar(CUENTA_SINCRONIZACION_ANTERIOR, k1.texto().as_str())
+        .unwrap();
+    magi::sincronizacion::equipos::guardar_en_llavero(&k2, &*prueba.fichero).unwrap();
+    // W2 todavía tiene la K1 en la memoria…
+    assert_eq!(
+        w2.recuperar(CUENTA_SINCRONIZACION)
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
+        Some(k1.texto().as_str())
+    );
+    // …y la pasada, con su llavero, lee la nueva (y la anterior para leer).
+    match esperar_de_la_pasada(&prueba, w2.clone(), config) {
+        EsperaDeLaPasada::Claves(claves) => {
+            assert_eq!(
+                claves,
+                vec![k2.texto().to_string(), k1.texto().to_string()],
+                "primero la actual (con la que se exporta), después la anterior"
+            );
+        }
+        EsperaDeLaPasada::Error(error) => panic!("no debía fallar: {error}"),
+    }
+}
+
+#[test]
+fn si_otra_ventana_cambia_la_frase_la_pasada_se_bloquea_y_no_exporta() {
+    let mut prueba = Prueba::nueva();
+    let (_k1, w2) = dos_ventanas_con_clave(&mut prueba);
+    let config = config_con_sincronizacion(&prueba);
+    prueba
+        .fichero
+        .cambiar_frase(FRASE, OTRA_FRASE, OTRA_FRASE)
+        .unwrap();
+    match esperar_de_la_pasada(&prueba, w2.clone(), config) {
+        EsperaDeLaPasada::Error(error) => assert_eq!(error, BLOQUEADO),
+        EsperaDeLaPasada::Claves(_) => panic!("exportó con una clave que ya no es la del fichero"),
+    }
+    // La W2 quedó cerrada: pedirá la frase nueva.
+    assert_eq!(w2.estado(), EstadoFichero::Cerrado);
+}
+
+#[test]
+fn desactivar_en_otra_ventana_deja_a_la_pasada_sin_clave_y_no_resucita_el_fichero() {
+    let mut prueba = Prueba::nueva();
+    let (_k1, w2) = dos_ventanas_con_clave(&mut prueba);
+    let config = config_con_sincronizacion(&prueba);
+    // La otra ventana desactiva la sincronización: olvida la clave.
+    assert!(prueba.fichero.olvidar(CUENTA_SINCRONIZACION).unwrap());
+    match esperar_de_la_pasada(&prueba, w2.clone(), config) {
+        EsperaDeLaPasada::Claves(claves) => {
+            assert!(
+                claves.is_empty(),
+                "sin clave la pasada dice «falta la clave»"
+            );
+        }
+        EsperaDeLaPasada::Error(error) => panic!("no debía fallar: {error}"),
+    }
+}
+
+#[test]
+fn la_espera_de_la_pasada_con_otro_llavero_no_cambia() {
+    // El llavero del sistema y el de memoria no tienen nada que refrescar.
+    let prueba = Prueba::nueva();
+    let en_memoria = Arc::new(magi::llavero::LlaveroEnMemoria::nuevo());
+    let clave = magi::sincronizacion::cifrado::ClaveSincronizacion::generar();
+    magi::sincronizacion::equipos::guardar_en_llavero(&clave, &*en_memoria).unwrap();
+    let config = config_con_sincronizacion(&prueba);
+    match esperar_de_la_pasada(&prueba, en_memoria, config) {
+        EsperaDeLaPasada::Claves(claves) => {
+            assert_eq!(claves, vec![clave.texto().to_string()]);
+        }
+        EsperaDeLaPasada::Error(error) => panic!("no debía fallar: {error}"),
+    }
+}
+
+// -------------------------------------------------- la clave anterior vencida
+
+/// Una clave anterior guardada y vencida (ayer) con el llavero abierto; deja
+/// el llavero cerrado, como al abrir MAGI.
+fn clave_anterior_vencida(prueba: &mut Prueba) {
+    prueba.fichero.crear(FRASE, FRASE).expect("crear");
+    prueba
+        .fichero
+        .guardar(CUENTA_SINCRONIZACION, "clave-actual")
+        .unwrap();
+    prueba
+        .fichero
+        .guardar(CUENTA_SINCRONIZACION_ANTERIOR, "clave-vieja")
+        .unwrap();
+    prueba.app.config.sincronizacion.clave_anterior_hasta = Some(
+        (chrono::Local::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
+    );
+    prueba.fichero.bloquear();
+}
+
+#[test]
+fn la_clave_anterior_vencida_se_olvida_al_desbloquear_el_llavero() {
+    let mut prueba = Prueba::nueva();
+    clave_anterior_vencida(&mut prueba);
+    // Al arrancar el llavero está cerrado: no se puede olvidar y no se toca
+    // nada (ni la clave ni la fecha).
+    prueba.app.olvidar_clave_anterior_vencida();
+    assert!(prueba
+        .app
+        .config
+        .sincronizacion
+        .clave_anterior_hasta
+        .is_some());
+    // Se desbloquea como siempre (diálogo del arranque, frase, ↵).
+    prueba.app.abrir_lo_del_arranque();
+    assert_eq!(prueba.modo(), Some(ModoLlavero::Desbloquear));
+    prueba.escribir(FRASE);
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("desbloqueado", |p| {
+        p.fichero.estado() == EstadoFichero::Abierto
+    });
+    // Ahora sí: la clave vieja sale del llavero y la fecha de la
+    // configuración (en memoria y en config.toml); la actual sigue.
+    assert!(prueba
+        .fichero
+        .recuperar(CUENTA_SINCRONIZACION_ANTERIOR)
+        .unwrap()
+        .is_none());
+    assert!(prueba
+        .fichero
+        .recuperar(CUENTA_SINCRONIZACION)
+        .unwrap()
+        .is_some());
+    assert!(prueba
+        .app
+        .config
+        .sincronizacion
+        .clave_anterior_hasta
+        .is_none());
+    let guardado = std::fs::read_to_string(prueba.entorno.rutas.fichero_config())
+        .expect("config.toml guardado");
+    assert!(!guardado.contains("clave_anterior_hasta"), "{guardado}");
+}
+
+#[test]
+fn la_clave_anterior_vigente_no_se_olvida_al_desbloquear() {
+    let mut prueba = Prueba::nueva();
+    clave_anterior_vencida(&mut prueba);
+    let futura = (chrono::Local::now() + chrono::Duration::days(5))
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
+    prueba.app.config.sincronizacion.clave_anterior_hasta = Some(futura.clone());
+    prueba.app.abrir_lo_del_arranque();
+    prueba.escribir(FRASE);
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("desbloqueado", |p| {
+        p.fichero.estado() == EstadoFichero::Abierto
+    });
+    assert!(prueba
+        .fichero
+        .recuperar(CUENTA_SINCRONIZACION_ANTERIOR)
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        prueba
+            .app
+            .config
+            .sincronizacion
+            .clave_anterior_hasta
+            .as_deref(),
+        Some(futura.as_str())
+    );
+}
+
+#[test]
+fn la_clave_anterior_vencida_sin_fichero_de_llavero_no_deja_la_fecha() {
+    let mut prueba = Prueba::nueva();
+    prueba.app.config.sincronizacion.clave_anterior_hasta = Some(
+        (chrono::Local::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
+    );
+    assert_eq!(prueba.fichero.estado(), EstadoFichero::Inexistente);
+    prueba.app.olvidar_clave_anterior_vencida();
+    assert!(prueba
+        .app
+        .config
+        .sincronizacion
+        .clave_anterior_hasta
+        .is_none());
+    assert!(!prueba.ruta_llavero().exists(), "no crea el llavero");
+}
+
+// -------------------------------------------------- servidor caído con el llavero a la vista
+
+#[test]
+fn si_cae_el_servidor_el_llavero_a_la_vista_no_pierde_sus_continuaciones_ajenas() {
+    let mut prueba = Prueba::nueva();
+    prueba.llavero_bloqueado();
+    // El llavero espera la frase para rotar la clave y para mostrarla: nada de
+    // eso contesta al servidor.
+    prueba.app.pedir_llavero(Some(Continuacion::MostrarClave));
+    prueba.app.pedir_llavero(Some(Continuacion::RotarClave));
+    assert_eq!(prueba.dialogo_llavero().unwrap().continuaciones.len(), 2);
+    prueba.evento(Evento::ServidorCaido);
+    // SERVIDOR CAÍDO a la vista y el llavero debajo, con todo lo suyo.
+    assert!(matches!(
+        prueba.app.dialogo,
+        Some(Dialogo::ServidorCaido { .. })
+    ));
+    assert_eq!(prueba.app.dialogos_apilados(), 1);
+    prueba.tecla(KeyCode::Char('n'));
+    let continuaciones: Vec<&str> = prueba
+        .dialogo_llavero()
+        .expect("el diálogo del llavero vuelve")
+        .continuaciones
+        .iter()
+        .map(Continuacion::nombre)
+        .collect();
+    assert_eq!(continuaciones, vec!["mostrar_clave", "rotar_clave"]);
+    // Y con Esc se cancelan diciéndolo, como siempre.
+    prueba.tecla(KeyCode::Esc);
+    assert!(prueba.app.dialogo.is_none());
+    let mensaje = prueba.app.mensaje.as_ref().expect("mensaje").texto.clone();
+    assert!(mensaje.contains("la clave no se ha rotado"), "{mensaje}");
+}
+
+// -------------------------------------------------- Esc sin llavero que desbloquear
+
+#[test]
+fn esc_con_el_llavero_sin_crear_no_dice_que_esta_bloqueado() {
+    use magi::app::llavero::SIN_LLAVERO_NO_GUARDA;
+    for (continuacion, texto) in [
+        (Continuacion::RotarClave, "la clave no se ha rotado"),
+        (
+            Continuacion::QuitarEquipo("00000000-0000-4000-8000-000000000000".to_string()),
+            "no se ha quitado el equipo",
+        ),
+        (Continuacion::Desactivar, "la sincronización sigue activa"),
+        (Continuacion::MostrarClave, ""),
+    ] {
+        let mut prueba = Prueba::nueva();
+        assert_eq!(prueba.fichero.estado(), EstadoFichero::Inexistente);
+        let nombre = continuacion.nombre();
+        prueba.app.pedir_llavero(Some(continuacion));
+        assert_eq!(prueba.modo(), Some(ModoLlavero::Crear), "{nombre}");
+        prueba.tecla(KeyCode::Esc);
+        assert!(prueba.app.dialogo.is_none());
+        let mensaje = prueba.app.mensaje.as_ref().expect("mensaje").texto.clone();
+        assert!(
+            mensaje.starts_with(SIN_LLAVERO_NO_GUARDA) && mensaje.contains(texto),
+            "{nombre}: {mensaje}"
+        );
+        assert!(!mensaje.contains("bloqueado"), "{nombre}: {mensaje}");
+        assert!(!prueba.ruta_llavero().exists(), "{nombre}: no se crea nada");
+    }
+}
+
+#[test]
+fn con_el_llavero_danado_esc_o_apartarlo_tampoco_dicen_que_esta_bloqueado() {
+    use magi::app::llavero::SIN_LLAVERO_NO_GUARDA;
+    for tecla in [KeyCode::Esc, KeyCode::Char('a')] {
+        let mut prueba = Prueba::nueva();
+        dejar_danado(&prueba);
+        prueba.app.pedir_llavero(Some(Continuacion::RotarClave));
+        assert_eq!(prueba.modo(), Some(ModoLlavero::Danado));
+        prueba.tecla(tecla);
+        let mensaje = prueba.app.mensaje.as_ref().expect("mensaje").texto.clone();
+        assert!(
+            mensaje.starts_with(SIN_LLAVERO_NO_GUARDA),
+            "{tecla:?}: {mensaje}"
+        );
+        assert!(
+            mensaje.contains("la clave no se ha rotado"),
+            "{tecla:?}: {mensaje}"
+        );
+    }
+}
+
+// -------------------------------------------------- un enlace roto no es «no existe»
+
+#[test]
+fn con_un_enlace_roto_en_lugar_del_llavero_se_ofrece_apartarlo_y_no_crear_en_bucle() {
+    let mut prueba = Prueba::nueva();
+    std::os::unix::fs::symlink(
+        prueba.entorno.rutas.datos.join("no-existe-nada"),
+        prueba.ruta_llavero(),
+    )
+    .unwrap();
+    assert!(matches!(prueba.fichero.estado(), EstadoFichero::Danado(_)));
+    assert!(matches!(
+        LlaveroCliente::estado(&*prueba.fichero),
+        EstadoLlavero::Danado(_)
+    ));
+    // Algo que necesita escribir: antes salía CREAR, que daba «otra ventana
+    // ha creado el llavero», luego «ya no existe» y vuelta a CREAR.
+    prueba.app.pedir_llavero(Some(Continuacion::RotarClave));
+    prueba.paso();
+    assert_eq!(prueba.modo(), Some(ModoLlavero::Danado));
+    assert!(prueba.texto().contains("enlace roto"), "{}", prueba.texto());
+    prueba.tecla(KeyCode::Char('a'));
+    assert!(prueba.app.dialogo.is_none());
+    assert_eq!(prueba.fichero.estado(), EstadoFichero::Inexistente);
+    assert_eq!(copias_danadas(&prueba).len(), 1);
+    // Y ya se puede crear.
+    prueba.app.pedir_llavero(Some(Continuacion::MostrarClave));
+    assert_eq!(prueba.modo(), Some(ModoLlavero::Crear));
 }

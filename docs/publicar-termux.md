@@ -115,7 +115,9 @@ vez `release.yml` (los tarballs de `dist`) y `termux-release.yml` (el `.deb`):
 
 5. `termux-release.yml` hace el resto (§6); vigílalo hasta el final.
 6. **Una etiqueta publicada no se mueve ni se reutiliza.** Si hay que cambiar algo,
-   se publica un PATCH (o una candidata nueva).
+   se publica un PATCH (o una candidata nueva). Y una etiqueta tampoco se borra y se
+   vuelve a crear con una ejecución de «Release Termux» suya en curso o en cola
+   (§9): cancélala antes.
 
 **Candidatas `vX.Y.Z-rc.N`.** Sirven para probar el paquete en el móvil antes de la
 versión estable (§5). `release.yml` las publica como prerelease y este workflow
@@ -162,7 +164,24 @@ patrones (`v[0-9]+.[0-9]+.[0-9]+` y la variante `-rc.N`) no encajan con
 
 ## 5. Probar el `.deb` en el móvil antes de publicar
 
-Se hace con una candidata (`vX.Y.Z-rc.1`), que no toca las releases estables:
+Se hace con una candidata (`vX.Y.Z-rc.1`), que no toca las releases estables.
+
+**La primera publicación de Termux tiene que ser siempre una candidata
+`-rc.N`**, nunca una versión estable. Cuando se escribió esta guía, el script
+`scripts/paquete-termux.sh` solo se había ejecutado con el doble de `dpkg-deb`
+de las pruebas y el workflow nunca había corrido en GitHub: el primer armado con
+`dpkg-deb` real es el que descubre lo que el doble no ve (avisos por campos del
+`control`, el formato de `--contents`). Un fallo así en una etiqueta estable deja
+la release del escritorio sin `.deb` y solo se arregla con un PATCH (§9). Antes de
+etiquetar la candidata:
+
+- Ejecuta el script con `dpkg-deb` real y pasa `termux_paquete` con el `.deb`
+  resultante (§2).
+- Comprueba que el job `termux` de `ci.yml` de la PR de la versión terminó en
+  verde: arma el `.deb` con `dpkg-deb` real y pasa la misma prueba.
+
+Una vez que una candidata ha salido bien de punta a punta, las siguientes
+versiones pueden ir directamente como estables.
 
 1. En Termux (la de F-Droid o la de GitHub; la de Google Play no se soporta),
    descarga el `.deb` y su `.sha256` de la release, o pásalos desde el equipo con
@@ -207,14 +226,20 @@ requests no lo ejecutan ni reciben permisos de escritura.
 
 | Job | Qué hace | Permisos |
 |---|---|---|
-| `verificar` | Comprueba el formato de la etiqueta (estricto: sin ceros a la izquierda, `-rc.N` con N desde 1) y que coincide con la `version` de `Cargo.toml` | `contents: read` |
-| `compilar` | Instala el SDK, el NDK r30 y `cargo-ndk` 4.1.2 (descargado y verificado por SHA-256); compila `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked`; falla si `readelf -d` pide algo fuera de `libc`, `libm`, `libdl`, `liblog` y `libz`; arma el `.deb` con `scripts/paquete-termux.sh` y comprueba su estructura; escribe el `.sha256`; atesta la procedencia y guarda los artefactos | `contents: read`, `id-token: write`, `attestations: write` |
-| `publicar` | Espera a que exista la release de la etiqueta (la crea `release.yml` al terminar; cada 30 s, hasta 60 min), sube el `.deb` y el `.sha256` con `gh release upload` y **falla** si los adjuntos no quedan con el nombre esperado | `contents: write` |
+| `verificar` | Comprueba el formato de la etiqueta (estricto: sin ceros a la izquierda, `-rc.N` con N desde 1) y que coincide con la `version` de `Cargo.toml`; fija el commit de la etiqueta (su SHA, una sola vez) y, con un push de etiqueta, comprueba que es el que lanzó el workflow | `contents: read` |
+| `compilar` | Descarga el repositorio en ese commit (por SHA, no por el nombre de la etiqueta) y lo anota como salida; instala el SDK, el NDK r30 y `cargo-ndk` 4.1.2 (descargado y verificado por SHA-256); compila `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked`; falla si `readelf -d` pide algo fuera de `libc`, `libm`, `libdl`, `liblog` y `libz`; arma el `.deb` con `scripts/paquete-termux.sh` y comprueba su estructura; escribe el `.sha256`; atesta la procedencia y guarda los artefactos | `contents: read`, `id-token: write`, `attestations: write` |
+| `publicar` | Espera a que exista la release de la etiqueta (la crea `release.yml` al terminar; cada 30 s, hasta 60 min); justo antes de subir, comprueba que la etiqueta sigue en el commit que se compiló y **falla** si no; sube el `.deb` y el `.sha256` con `gh release upload` y **falla** si los adjuntos no quedan con el nombre esperado | `contents: write` |
 
 - **Nunca crea la release ni toca la marca «Latest»**: esa marca es de la release
   del escritorio. Con `-rc.N` el `.deb` sube a la prerelease que crea `dist`.
 - Si la release no aparece en 60 minutos (por ejemplo, porque falló
   `release.yml`), el job falla con «repítelo con `workflow_dispatch`».
+- `publicar` identifica la release por el **nombre** de la etiqueta, así que no
+  basta con que exista: si la etiqueta se borró y se volvió a crear en otro commit
+  mientras esperaba, la release que aparece es la del commit nuevo. Por eso
+  compara el SHA que compiló `compilar` con el de la etiqueta actual (`gh api
+  repos/…/commits/<etiqueta>`) justo antes de `gh release upload`, y falla
+  sin subir nada si difieren (§9).
 - Solo se distingue «la release no existe todavía» de un error real de `gh`: un
   fallo de permisos o de red no se queda esperando una hora.
 - La CI de cada PR (`ci.yml`) tiene un job `termux`: en las PR que cambian el
@@ -288,22 +313,48 @@ cada versión se revisa a mano. Las candidatas no van a TUR.
 descomenta la segunda línea de `TERMUX_PKG_EXCLUDED_ARCHES` en la receta (queda
 explicado en el propio fichero). El `.deb` de GitHub es solo `aarch64`.
 
-## 8. Repetir la subida con `workflow_dispatch`
+## 8. Repetir la subida: «Re-run failed jobs» o `workflow_dispatch`
 
-Úsalo cuando el job `publicar` falló o se agotó la espera (la release del tag
-tardó más de 60 min en existir), o cuando hay que subir el `.deb` de una etiqueta
-que ya existe. Desde la web (Actions → Release Termux → Run workflow, con la
-etiqueta) o con `gh`:
+Hay dos formas de repetir, y no son equivalentes:
+
+- **«Re-run failed jobs»** (en la web, Actions → la ejecución → Re-run failed
+  jobs, o `gh run rerun <id> --failed`) repite solo los jobs que fallaron, con el
+  **mismo workflow, la misma etiqueta y el mismo commit** de la ejecución original,
+  y conserva lo que ya salió bien (si `compilar` terminó, `publicar` sube el mismo
+  `.deb` ya atestado, mientras GitHub retenga el artefacto). Es lo que hay que
+  usar para un fallo transitorio: una caída de red, un runner, la espera de la
+  release que se agotó. No aplica ningún cambio posterior del YAML ni del código.
+- **`workflow_dispatch`** empieza una ejecución nueva: compila y atesta otra vez, y
+  usa el `termux-release.yml` de la rama que elijas. Úsalo cuando hay que subir el
+  `.deb` de una etiqueta que ya existe y no hay una ejecución que repetir, o
+  cuando el fallo es del propio YAML de `termux-release.yml` y ya está corregido en
+  esa rama. Desde la web (Actions → Release Termux → Run workflow, con la
+  etiqueta) o con `gh`:
 
 ```sh
 gh workflow run termux-release.yml --ref main -f tag=v1.6.0
 ```
 
-Compila y arma el `.deb` otra vez **a partir del árbol de la etiqueta** (con el
-workflow de la rama que elijas) y lo sube a la release del tag. La etiqueta debe
-cumplir las mismas reglas de §4 y coincidir con `Cargo.toml` de ese commit (con
-una candidata, `version = "X.Y.Z-rc.N"`); una
+Compila y arma el `.deb` otra vez **a partir del árbol de la etiqueta** y lo sube a
+la release del tag. La etiqueta debe cumplir las mismas reglas de §4 y coincidir
+con `Cargo.toml` de ese commit (con una candidata, `version = "X.Y.Z-rc.N"`); una
 etiqueta anterior a la Fase 17 no tiene `scripts/paquete-termux.sh` y falla.
+
+**El script y todo lo que se compila salen siempre del árbol de la etiqueta.**
+`--ref main` solo cambia el YAML del workflow: arregla un fallo de
+`termux-release.yml`, pero **no** uno de `scripts/paquete-termux.sh`, de la receta,
+del código ni de `Cargo.toml`, porque todo eso vive en el commit de la etiqueta y
+una etiqueta publicada no se mueve (§9, «Falla el armado del .deb»).
+
+**La atestación de un `.deb` rehecho con `workflow_dispatch` lleva el commit de
+la rama desde la que se lanzó**, no el de la etiqueta: GitHub registra como fuente
+el commit que lanzó el workflow, y con `--ref main` es la punta de `main`. Lo
+compilado sí es el árbol de la etiqueta: `verificar` fija su SHA, `compilar` lo
+descarga por SHA y lo escribe en su log («Se compila el commit …»), y `publicar`
+comprueba que la etiqueta sigue en él antes de subir. `gh attestation verify
+… --repo 4d3-org/magi` da por buenos los dos casos; si quieres comprobar además el
+origen, `--source-ref refs/tags/vX.Y.Z` solo vale para un `.deb` salido de un push
+de etiqueta.
 
 La subida no usa `--clobber`: **si el `.deb` ya está en la release, no lo
 sustituye**. Estaba atestado y su `.sha256` es el que usan los usuarios. Si de
@@ -314,7 +365,10 @@ su `.sha256`) y repite.
 
 - **Falla `verificar`:** la etiqueta no tiene la forma esperada o no coincide con
   `Cargo.toml`. Como la etiqueta no se mueve, corrige con un commit y publica una
-  etiqueta nueva (PATCH o `-rc.N`).
+  etiqueta nueva (PATCH o `-rc.N`). Si falla el paso «Fijar el commit de la
+  etiqueta» con un push, la etiqueta apunta ya a otro commit que el que lanzó esa
+  ejecución (se movió o se recreó): cancélala, la de la etiqueta actual es la que
+  vale.
 - **Falla `readelf` (bibliotecas):** el binario pide algo fuera del NDK estable.
   Si es `libc++_shared.so`, una dependencia nueva trae C++; se decide con el
   analista (el paquete pasaría a depender de `libc++`) y se anota en el informe.
@@ -328,11 +382,38 @@ su `.sha256`) y repite.
   al nombre que dice el `.sha256` antes de `sha256sum -c`, y deja el caso anotado
   (hay que cambiar el nombre en `scripts/paquete-termux.sh` y en el workflow).
   No sustituyas el adjunto a ciegas: está atestado.
+- **Falla el armado del .deb (script o estructura):** falla el paso «Comprobar las
+  bibliotecas que pide el binario» o «Armar y comprobar el .deb y su .sha256» de
+  `compilar`. `scripts/paquete-termux.sh` y todo lo que se compila salen siempre del
+  árbol de la etiqueta, y `workflow_dispatch --ref main` solo arregla fallos del
+  YAML de `termux-release.yml` (§8): no arregla el script, la receta, el código ni
+  `Cargo.toml`. Un fallo del script con `dpkg-deb` real en una etiqueta estable
+  deja la release del escritorio (que `release.yml` crea igualmente) **sin `.deb`**,
+  y solo se arregla con un PATCH nuevo: la etiqueta publicada no se mueve. Por eso
+  la primera publicación es siempre una candidata `-rc.N` y el script se ejecuta
+  antes con `dpkg-deb` real (§5 y §2). Si falla en una candidata, corrige con un
+  commit y publica `-rc.N+1`.
 - **Falla `publicar`:** la release del escritorio no existe o no es accesible.
-  Arregla `release.yml` (§7 de [`publicar.md`](publicar.md)) y repite con
-  `workflow_dispatch` (§8). El `.deb` ya compilado queda como artefacto del
-  workflow (`termux-release`) mientras GitHub lo retenga (90 días por defecto),
-  pero la repetición lo compila de nuevo desde la etiqueta.
+  Arregla `release.yml` (§7 de [`publicar.md`](publicar.md)) y repite (§8): con
+  «Re-run failed jobs» si el fallo fue transitorio, o con `workflow_dispatch`. El
+  `.deb` ya compilado queda como artefacto del workflow (`termux-release`)
+  mientras GitHub lo retenga (90 días por defecto); «Re-run failed jobs» lo
+  reutiliza, y `workflow_dispatch` lo compila de nuevo desde la etiqueta.
+- **Falla `publicar` con «el .deb se compiló desde el commit …»:** la etiqueta ya
+  no apunta al commit que compiló esta ejecución. Se borró y se volvió a crear
+  (`publicar.md`, §7) mientras `publicar` esperaba a la release, y la release que
+  apareció es la del commit nuevo. No se sube nada, a propósito: el `.deb` sería
+  de otro commit.
+  - **No se recrea una etiqueta con una ejecución de «Release Termux» suya en
+    curso o en cola: cancélala antes** (Actions → la ejecución → Cancel workflow).
+    Una ejecución vieja retiene el grupo de concurrencia de la etiqueta (hasta 60
+    min de espera más la subida) y la de la etiqueta nueva queda en cola detrás.
+  - Es mejor **«Re-run failed jobs»** del workflow que falló (el mismo commit y la
+    misma etiqueta) que borrar y recrear la etiqueta: solo hay que recrearla si lo
+    que falló está en el código o en el YAML del commit etiquetado.
+  - Si ya se recreó: cancela la ejecución vieja y comprueba que la de la etiqueta
+    nueva sube su `.deb`; si no llega a la release, repite con `workflow_dispatch`
+    (§8).
 
 ## 10. Comprobaciones posteriores a publicar
 

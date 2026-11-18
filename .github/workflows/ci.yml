@@ -243,6 +243,9 @@ jobs:
             exit 0
           fi
           cambia=false
+          # Con --no-renames, mover un fichero lista la ruta vieja y la nueva: sin
+          # ello git solo da la nueva, y mover un fichero vigilado fuera de las
+          # rutas del filtro pasaría sin que el job termux corriera.
           while IFS= read -r fichero; do
             # Todo lo que cambia el binario o el contenido del .deb: el código,
             # lo que interviene al compilarlo (build.rs y lo vendorizado), lo
@@ -270,7 +273,7 @@ jobs:
                 ;;
               *) ;;
             esac
-          done < <(git diff --name-only HEAD^1 HEAD)
+          done < <(git diff --name-only --no-renames HEAD^1 HEAD)
           echo "termux=$cambia" >> "$GITHUB_OUTPUT"
           echo "El job termux corre: $cambia"
 

@@ -122,10 +122,19 @@ fn cuerpo(dialogo: &DialogoTeclasTermux, estrecho: bool, tema: &Tema) -> Vec<Lin
     match &propuesta.copia {
         Some(copia) => {
             lineas.push(texto(
-                &if estrecho {
-                    format!("En {ruta}: solo extra-keys. Copia previa:")
-                } else {
-                    format!("Se escribe en {ruta}, solo la línea extra-keys. Antes, una copia:")
+                &match (&propuesta.enlace_a, estrecho) {
+                    // Un enlace: se dice a dónde apunta, porque ahí se escribe
+                    // y ahí queda la copia (puede estar fuera de ~/.termux).
+                    (Some(destino), true) => {
+                        format!("{ruta} es un enlace a {destino}: se escribe ahí, solo extra-keys. Copia previa junto a él:")
+                    }
+                    (Some(destino), false) => {
+                        format!("{ruta} es un enlace a {destino}: se escribe ahí, solo la línea extra-keys. Antes, una copia junto a él:")
+                    }
+                    (None, true) => format!("En {ruta}: solo extra-keys. Copia previa:"),
+                    (None, false) => {
+                        format!("Se escribe en {ruta}, solo la línea extra-keys. Antes, una copia:")
+                    }
                 },
                 tema,
             ));
@@ -172,14 +181,31 @@ fn cuerpo(dialogo: &DialogoTeclasTermux, estrecho: bool, tema: &Tema) -> Vec<Lin
 fn pie(dialogo: &DialogoTeclasTermux, estrecho: bool, tema: &Tema) -> Vec<Line<'static>> {
     let mut pie = Vec::new();
     if dialogo.trabajando.is_some() {
-        // La tarea no se puede abortar y el fichero se escribe igualmente: no
-        // se ofrece Esc.
-        pie.push(Line::from(Span::styled(
+        // La tarea no se puede abortar y el fichero se escribe igualmente: Esc
+        // cierra el diálogo (con el almacenamiento sin responder, es la única
+        // salida) y el resultado sale por la barra.
+        let mut linea = Line::from(Span::styled(
             "instalando…".to_string(),
             Style::default()
                 .fg(tema.paleta.acento)
                 .add_modifier(Modifier::BOLD),
-        )));
+        ));
+        linea.spans.push(Span::raw("   "));
+        linea.spans.extend(
+            teclas(
+                &[(
+                    "Esc",
+                    if estrecho {
+                        "cerrar"
+                    } else {
+                        "cerrar: sigue de fondo"
+                    },
+                )],
+                tema,
+            )
+            .spans,
+        );
+        pie.push(linea);
         return pie;
     }
     if let Some(error) = &dialogo.error {

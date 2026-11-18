@@ -112,11 +112,11 @@
 - [x] Dobles de `tests/fijos/termux/` (anotan argumentos y entrada, y saben colgarse o fallar) y pruebas `termux_ordenes`, `termux_ui`, `termux_servidor`, `termux_sincronizacion` y `termux_teclas` con `MAGI_PLATAFORMA=termux`
 - [ ] Prueba `termux_paquete`: rutas de `dpkg-deb --contents`, el `control` y `readelf -d` del `.deb` armado (en CI falla si no hay `.deb`; fuera, se omite con aviso)
 - [x] El escritorio y la app no cambian: todas las pruebas anteriores en verde, las instantáneas de redimensionado sin cambios y `android/` sin tocar
-- [ ] Revisión adversarial de cierre (T31, T54) del llavero, las órdenes de Termux, la escritura de `termux.properties`, los avisos y el empaquetado, con su informe en `docs/fase17/magi-fase17-revision-adversarial.md`
-- [ ] Versión 1.6.0: `CHANGELOG.md` («Sin publicar»), `FECHA_DE_VERSION`, la DA2 de `tui_prueba` y las instantáneas `servidor_anterior_*`, y el guion de validación en el plegable en el informe de implementación
+- [x] Revisión adversarial de cierre (T31, T54) del llavero, las órdenes de Termux, la escritura de `termux.properties`, los avisos y el empaquetado, con su informe en `docs/fase17/magi-fase17-revision-adversarial.md`
+- [x] Versión 1.6.0: `CHANGELOG.md` («Sin publicar»), `FECHA_DE_VERSION`, la DA2 de `tui_prueba` y las instantáneas `servidor_anterior_*`, y el guion de validación en el plegable en el informe de implementación
 
 ---
 
-**Progreso Fase 17:** 64 / 71 funcionalidades
+**Progreso Fase 17:** 66 / 71 funcionalidades
 
-**Total MAGI (Fases 1-17):** 1375 / 1389 funcionalidades
+**Total MAGI (Fases 1-17):** 1377 / 1389 funcionalidades

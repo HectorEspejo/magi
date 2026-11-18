@@ -32,7 +32,7 @@ use ratatui::Terminal;
 
 use magi::app::termux_teclas::{
     tomar_marca_del_primer_arranque, DialogoTeclasTermux, EventoTeclas, ETIQUETA_PALETA,
-    MENSAJE_PRIMER_ARRANQUE,
+    GUARDA_DE_INTRO, MENSAJE_PRIMER_ARRANQUE,
 };
 use magi::app::{App, Dialogo, Evento};
 use magi::config::{Config, Rutas};
@@ -115,6 +115,41 @@ impl SoloLectura {
 impl Drop for SoloLectura {
     fn drop(&mut self) {
         let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// Hace que la escritura de `fichero` falle justo después de la copia: el
+/// gancho de `teclas::ganchos_de_pruebas` deja su directorio sin permiso de
+/// escritura en ese momento (la copia y la escritura van las dos junto al
+/// destino, así que no se puede quitar el permiso antes). Al soltarse, devuelve
+/// el permiso y quita el gancho. Con root no demuestra nada: `None`.
+struct FalloTrasLaCopia {
+    directorio: PathBuf,
+    _gancho: teclas::ganchos_de_pruebas::Guarda,
+}
+
+impl FalloTrasLaCopia {
+    fn en(fichero: &Path) -> Option<Self> {
+        if nix::unistd::Uid::effective().is_root() {
+            eprintln!("aviso: se omite: con root no hay directorios que no se puedan escribir");
+            return None;
+        }
+        let directorio = fichero.parent().expect("padre").to_path_buf();
+        let a_quitar = directorio.clone();
+        let gancho = teclas::ganchos_de_pruebas::antes_de_escribir_en(fichero, move || {
+            std::fs::set_permissions(&a_quitar, std::fs::Permissions::from_mode(0o500))
+                .expect("permisos");
+        });
+        Some(Self {
+            directorio,
+            _gancho: gancho,
+        })
+    }
+}
+
+impl Drop for FalloTrasLaCopia {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.directorio, std::fs::Permissions::from_mode(0o700));
     }
 }
 
@@ -453,23 +488,36 @@ fn java_clave_y_valor(logica: &str) -> (String, String) {
         }
         valor += 1;
     }
+    // `loadConvert`: `\t`, `\n`, `\r`, `\f`, `\uXXXX` y `\x` para cualquier otro
+    // `x` (los `\u` mal formados lanzan en Java y las pruebas no los generan).
     let convertir = |trozo: &[char]| {
         let mut salida = String::new();
-        let mut escapa = false;
-        for &caracter in trozo {
-            if escapa {
-                salida.push(match caracter {
+        let mut indice = 0;
+        while indice < trozo.len() {
+            let caracter = trozo[indice];
+            indice += 1;
+            if caracter != '\\' {
+                salida.push(caracter);
+                continue;
+            }
+            // Una barra final (en el fin del fichero) no escapa nada.
+            let Some(&escapado) = trozo.get(indice) else {
+                break;
+            };
+            indice += 1;
+            if escapado == 'u' {
+                let digitos: String = trozo[indice..indice + 4].iter().collect();
+                indice += 4;
+                let codigo = u32::from_str_radix(&digitos, 16).expect("\\u bien formado");
+                salida.push(char::from_u32(codigo).unwrap_or('\u{fffd}'));
+            } else {
+                salida.push(match escapado {
                     't' => '\t',
                     'n' => '\n',
                     'r' => '\r',
                     'f' => '\u{c}',
                     otro => otro,
                 });
-                escapa = false;
-            } else if caracter == '\\' {
-                escapa = true;
-            } else {
-                salida.push(caracter);
             }
         }
         salida
@@ -511,6 +559,19 @@ fn el_lector_de_referencia_sigue_a_java_properties() {
     let mapa = java_propiedades("bell = vibrate \\\n# fila de MAGI\nextra-keys = X\n");
     assert_eq!(mapa["bell"], "vibrate # fila de MAGI");
     assert_eq!(mapa["extra-keys"], "X");
+    // E3: los escapes de la clave se decodifican (`\-`, `\e` y `-` son
+    // el carácter que dicen) y un espacio escapado es parte de la clave.
+    let mapa =
+        java_propiedades("extra\\-keys = A\n\\extra-keys = B\nextra\\u002dkeys = C\nz\\ k = 1\n");
+    assert_eq!(mapa["extra-keys"], "C");
+    assert_eq!(mapa["z k"], "1");
+    assert_eq!(mapa.len(), 2);
+    // E3: una barra al final del fichero, sin nada que continuar, se
+    // descarta: `extra-keys\` es la clave `extra-keys` con valor vacío.
+    let mapa = java_propiedades("extra-keys = A\nextra-keys\\");
+    assert_eq!(mapa["extra-keys"], "");
+    let mapa = java_propiedades("extra-keys = A\\");
+    assert_eq!(mapa["extra-keys"], "A");
 }
 
 /// K2: un `termux.properties` que acaba en una continuación (`bell-character =
@@ -554,6 +615,182 @@ fn si_el_fichero_acaba_en_continuacion_el_valor_del_usuario_no_cambia() {
     }
 }
 
+/// E3: Java lee como la clave `extra-keys` también `extra\-keys`, `\extra-keys`,
+/// `extra-keys` y `extra-keys\` al final del fichero (la barra se
+/// descarta). Si una va detrás de la normal, es la que lee Termux: MAGI la
+/// sustituye (y no se queda con la anterior), la ve al decir si ya es suya y
+/// lo que queda escrito es lo que Termux leerá.
+#[test]
+fn una_extra_keys_escrita_con_escapes_se_sustituye_y_se_lee_como_java() {
+    for (nombre, clave) in [
+        ("guion escapado", "extra\\-keys"),
+        ("barra delante", "\\extra-keys"),
+        ("unicode", "extra\\u002dkeys"),
+        ("unicode delante", "\\u0065xtra-keys"),
+    ] {
+        let banco = Banco::nuevo();
+        let antes = format!("extra-keys = [['A']]\nx = 1\n{clave} = [['B']]\ny = 2\n");
+        let java_antes = java_propiedades(&antes);
+        assert_eq!(java_antes["extra-keys"], "[['B']]", "{nombre}");
+        let ruta = banco.con_propiedades(&antes);
+        assert_eq!(
+            teclas::estado_fila(&banco.entorno, PREFIJO),
+            EstadoFila::Otra,
+            "{nombre}"
+        );
+        teclas::escribir_fila(&ruta, PREFIJO, fecha()).expect("instalar");
+        let despues = std::fs::read_to_string(&ruta).unwrap();
+        let java_despues = java_propiedades(&despues);
+        // Termux lee ahora la fila de MAGI y lo demás no cambia.
+        assert_eq!(java_despues["extra-keys"], valor_de_la_fila(), "{nombre}");
+        assert_eq!(java_despues["x"], "1", "{nombre}");
+        assert_eq!(java_despues["y"], "2", "{nombre}");
+        assert_eq!(
+            despues,
+            format!("extra-keys = [['A']]\nx = 1\n{FILA}\ny = 2\n"),
+            "{nombre}"
+        );
+        assert_eq!(
+            teclas::estado_fila(&banco.entorno, PREFIJO),
+            EstadoFila::LaDeMagi,
+            "{nombre}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ruta.with_file_name(COPIA)).unwrap(),
+            antes
+        );
+    }
+}
+
+/// E3: la de MAGI delante y la del usuario (con escapes o con la barra final)
+/// detrás: Termux lee la del usuario, así que MAGI no puede decir «ya está» ni
+/// quedarse con la suya.
+#[test]
+fn con_la_de_magi_delante_la_del_usuario_con_escapes_detras_no_se_da_por_instalada() {
+    for (nombre, cola) in [
+        ("guion escapado", "extra\\-keys = [['B']]\n"),
+        ("barra delante", "\\extra-keys = [['B']]\n"),
+        ("unicode", "extra\\u002dkeys = [['B']]\n"),
+        ("barra final", "extra-keys\\"),
+        ("barra final con valor", "extra-keys = [['B']]\\"),
+    ] {
+        let banco = Banco::nuevo();
+        let antes = format!("{FILA}\nz = 1\n{cola}");
+        assert_ne!(
+            java_propiedades(&antes)["extra-keys"],
+            valor_de_la_fila(),
+            "{nombre}: Termux no leería la de MAGI"
+        );
+        let ruta = banco.con_propiedades(&antes);
+        assert_eq!(
+            teclas::estado_fila(&banco.entorno, PREFIJO),
+            EstadoFila::Otra,
+            "{nombre}"
+        );
+        let propuesta = teclas::preparar(&banco.entorno, PREFIJO, fecha());
+        assert_eq!(propuesta.estado, EstadoFila::Otra, "{nombre}");
+        assert!(propuesta.copia.is_some(), "{nombre}");
+        // Se instala (no se dice «ya estaba») y Termux lee la de MAGI.
+        let escritura = teclas::escribir_fila(&ruta, PREFIJO, fecha()).expect("instalar");
+        assert!(!escritura.ya_estaba, "{nombre}");
+        let despues = std::fs::read_to_string(&ruta).unwrap();
+        assert_eq!(
+            java_propiedades(&despues)["extra-keys"],
+            valor_de_la_fila(),
+            "{nombre}: {despues:?}"
+        );
+        assert_eq!(java_propiedades(&despues)["z"], "1", "{nombre}");
+    }
+}
+
+/// E3: lo que dice el estado y lo que lee Java coinciden en todas esas formas.
+#[test]
+fn el_estado_de_la_fila_coincide_con_lo_que_lee_java() {
+    let banco = Banco::nuevo();
+    for texto in [
+        format!("{FILA}\n"),
+        format!("{FILA}\nextra\\-keys = [['B']]\n"),
+        format!("extra\\-keys = [['B']]\n{FILA}\n"),
+        format!("extra\\u002dkeys = {}\n", valor_de_la_fila()),
+        format!("\\extra-keys: {}\n", valor_de_la_fila()),
+        format!("{FILA}\nextra-keys\\"),
+        format!("{FILA}\\"),
+        format!("extra-keys\\ = {}\n", valor_de_la_fila()),
+    ] {
+        let ruta = banco.con_propiedades(&texto);
+        let java = java_propiedades(&texto).get("extra-keys").cloned();
+        let esperado = match java {
+            None => EstadoFila::SinExtraKeys,
+            Some(valor) if valor == valor_de_la_fila() => EstadoFila::LaDeMagi,
+            Some(_) => EstadoFila::Otra,
+        };
+        assert_eq!(
+            teclas::estado_de_ruta(&ruta, PREFIJO),
+            esperado,
+            "{texto:?}"
+        );
+    }
+}
+
+/// E5: «ya es la de MAGI» compara sin el espacio que solo separa (§7.7), pero
+/// no el de dentro de las comillas ni los espacios de Unicode: una fila con un
+/// macro distinto, o con U+00A0 entre elementos (que `org.json` no admite), no
+/// es la de MAGI y se ofrece (y se instala).
+#[test]
+fn una_fila_que_solo_difiere_en_lo_de_dentro_de_las_comillas_no_es_la_de_magi() {
+    let banco = Banco::nuevo();
+    let casos = [
+        ("macro sin espacio", FILA.replace("'CTRL ]'", "'CTRL]'")),
+        (
+            "macro con dos espacios",
+            FILA.replace("'CTRL ]'", "'CTRL  ]'"),
+        ),
+        ("display con espacio", FILA.replace("'^]'", "'^ ]'")),
+        (
+            "U+00A0 entre elementos",
+            FILA.replace("','TAB'", "',\u{a0}'TAB'"),
+        ),
+        ("U+00A0 al final", format!("{FILA}\u{a0}")),
+        (
+            "U+3000 tras la coma",
+            FILA.replace("'LEFT',", "'LEFT',\u{3000}"),
+        ),
+    ];
+    for (nombre, texto) in casos {
+        let ruta = banco.con_propiedades(format!("{texto}\n"));
+        assert_eq!(
+            teclas::estado_de_ruta(&ruta, PREFIJO),
+            EstadoFila::Otra,
+            "{nombre}"
+        );
+        let propuesta = teclas::preparar(&banco.entorno, PREFIJO, fecha());
+        assert_eq!(propuesta.estado, EstadoFila::Otra, "{nombre}");
+        assert!(propuesta.copia.is_some(), "{nombre}");
+        let escritura = teclas::escribir_fila(&ruta, PREFIJO, fecha()).expect("instalar");
+        assert!(!escritura.ya_estaba, "{nombre}");
+        assert_eq!(
+            java_propiedades(&std::fs::read_to_string(&ruta).unwrap())["extra-keys"],
+            valor_de_la_fila(),
+            "{nombre}"
+        );
+        // La copia de ese intento estorba al siguiente caso: fuera.
+        std::fs::remove_file(ruta.with_file_name(COPIA)).unwrap();
+    }
+    // Lo que sí es indiferente: el espacio que separa (también en varias líneas).
+    for (nombre, texto) in [
+        ("sin espacios", "extra-keys=[['ESC','TAB','CTRL','ALT',{macro:'CTRL ]',display:'^]'},'LEFT','DOWN','UP','RIGHT'],['F1','F2','F3','F4','F5','F6','F7','F8','F9']]".to_string()),
+        ("con espacios de más", FILA.replace(',', " , ").replace("[[", "[ [")),
+        ("con tabuladores", FILA.replace("macro: ", "macro:\t")),
+    ] {
+        let ruta = banco.con_propiedades(format!("{texto}\n"));
+        assert_eq!(
+            teclas::estado_de_ruta(&ruta, PREFIJO),
+            EstadoFila::LaDeMagi,
+            "{nombre}"
+        );
+    }
+}
+
 /// Un generador congruencial para repetir los mismos ficheros en cada
 /// ejecución (sin dependencias).
 struct Azar(u64);
@@ -574,7 +811,7 @@ impl Azar {
 /// de MAGI.
 #[test]
 fn instalar_la_fila_solo_cambia_extra_keys_para_el_lector_de_java() {
-    const LINEAS: [&str; 17] = [
+    const LINEAS: [&str; 25] = [
         "a = 1",
         "b: valor",
         "bell-character = vibrate \\",
@@ -592,6 +829,17 @@ fn instalar_la_fila_solo_cambia_extra_keys_para_el_lector_de_java() {
         "c = d\\",
         "\\",
         "# extra-keys = [['X']]",
+        // E3: las formas de escribir la clave `extra-keys` que Java lee igual
+        // (escapes en la clave y una barra al final del fichero).
+        "extra\\-keys = [['C']]",
+        "\\extra-keys = [['D']]",
+        "extra\\u002dkeys = [['E']]",
+        "\\u0065xtra-keys: [['F']]",
+        "extra-keys\\",
+        "extra-keys = [['G']]\\",
+        // Y las que no lo son: un espacio o una barra escapados en la clave.
+        "extra-keys\\ = [['H']]",
+        "extra-keys\\\\ = [['I']]",
     ];
     const SALTOS: [&str; 4] = ["\n", "\r\n", "\r", ""];
     let mut azar = Azar(0x4d41_4749);
@@ -608,6 +856,21 @@ fn instalar_la_fila_solo_cambia_extra_keys_para_el_lector_de_java() {
             } else {
                 SALTOS[azar.siguiente(3)]
             });
+        }
+        // Lo que MAGI lee como `extra-keys` es lo que Java lee como tal (E3):
+        // hay una en los dos o en ninguno y, si el valor no lleva escapes (MAGI
+        // lo guarda sin decodificar), es el mismo.
+        let de_magi = teclas::valor_efectivo(&texto);
+        let de_java = java_propiedades(&texto).get("extra-keys").cloned();
+        assert_eq!(
+            de_magi.is_some(),
+            de_java.is_some(),
+            "caso {caso}: MAGI y Java no leen la misma extra-keys\n{texto:?}"
+        );
+        if let (Some(de_magi), Some(de_java)) = (&de_magi, &de_java) {
+            if !de_magi.contains('\\') {
+                assert_eq!(de_magi, de_java, "caso {caso}\n{texto:?}");
+            }
         }
         let nuevo = teclas::fusionar(&texto, &teclas::fila(PREFIJO));
         let mut previsto = java_propiedades(&texto);
@@ -970,6 +1233,59 @@ fn con_instalar_pregunta_y_con_s_copia_escribe_anota_y_recarga() {
     assert!(salida.contains("ya se ve"), "{salida}");
 }
 
+/// E2: con un enlace, la CLI dice a dónde apunta tanto al enseñar como al
+/// preguntar y al terminar, la copia queda junto al destino y el enlace sigue
+/// siéndolo; sin enlace no dice nada de eso (las demás pruebas de la CLI).
+#[test]
+fn la_cli_dice_que_el_fichero_es_un_enlace_y_donde_se_escribe() {
+    let banco = Banco::nuevo();
+    let dotfiles = con_el_destino_en_otro_directorio(&banco, "a = 1\n");
+    // Sin instalar: lo enseña.
+    let mut consola = ConsolaFalsa::con(true, vec![]);
+    assert_eq!(cli(&banco, false, &mut consola), 0, "{}", consola.todo());
+    let dicho = consola.dicho.join("\n");
+    assert!(
+        dicho.contains("es un enlace a")
+            && dicho.contains("dotfiles/termux.properties: se escribe ahí"),
+        "{dicho}"
+    );
+    // Instalando: lo dice antes de preguntar y al acabar.
+    let mut consola = ConsolaFalsa::responde("s");
+    assert_eq!(cli(&banco, true, &mut consola), 0, "{}", consola.todo());
+    let avisado = consola.avisado.join("\n");
+    assert!(
+        avisado.contains("que es un enlace a")
+            && avisado.contains("dotfiles/termux.properties: se escribe ahí")
+            && avisado.contains(&format!("una copia junto a él: {COPIA}")),
+        "{avisado}"
+    );
+    let dicho = consola.dicho.join("\n");
+    assert!(
+        dicho.contains("(enlace a ") && dicho.contains("junto al destino del enlace"),
+        "{dicho}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dotfiles.join(COPIA)).unwrap(),
+        "a = 1\n"
+    );
+    assert_eq!(entradas(&banco.home.join(".termux")), ["termux.properties"]);
+    assert!(std::fs::symlink_metadata(banco.propiedades())
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(std::fs::read_to_string(dotfiles.join("termux.properties"))
+        .unwrap()
+        .contains(FILA));
+    assert_eq!(banco.instalaciones(), [COPIA]);
+
+    // Un fichero normal no habla de enlaces.
+    let normal = Banco::nuevo();
+    normal.con_propiedades("a = 1\n");
+    let mut consola = ConsolaFalsa::responde("s");
+    assert_eq!(cli(&normal, true, &mut consola), 0, "{}", consola.todo());
+    assert!(!consola.todo().contains("enlace"), "{}", consola.todo());
+}
+
 #[test]
 fn con_instalar_sin_fichero_anota_no_existia() {
     let banco = Banco::nuevo();
@@ -1065,9 +1381,9 @@ fn si_la_copia_falla_la_cli_sale_con_1_sin_escribir_ni_anotar() {
 }
 
 /// El `termux.properties` de `banco` pasa a ser un enlace a unos dotfiles: la
-/// copia cabe junto al enlace (en `~/.termux/`) y la escritura va al destino,
-/// que se puede dejar sin permiso para que falle justo después de la copia.
-/// Devuelve el directorio de los dotfiles.
+/// copia y la escritura van las dos al destino (a su directorio, E2), y la
+/// escritura se hace fallar justo después de la copia con
+/// [`FalloTrasLaCopia`]. Devuelve el directorio de los dotfiles.
 fn con_el_destino_en_otro_directorio(banco: &Banco, contenido: &str) -> PathBuf {
     let dotfiles = banco.home.join("dotfiles");
     std::fs::create_dir_all(&dotfiles).expect("dotfiles");
@@ -1088,7 +1404,7 @@ fn con_el_destino_en_otro_directorio(banco: &Banco, contenido: &str) -> PathBuf 
 fn si_la_escritura_falla_tras_la_copia_la_cli_dice_cual_es_la_copia() {
     let banco = Banco::nuevo();
     let dotfiles = con_el_destino_en_otro_directorio(&banco, "a = 1\n");
-    let Some(_guarda) = SoloLectura::de(&dotfiles) else {
+    let Some(_guarda) = FalloTrasLaCopia::en(&dotfiles.join("termux.properties")) else {
         return;
     };
     let mut consola = ConsolaFalsa::responde("s");
@@ -1099,7 +1415,9 @@ fn si_la_escritura_falla_tras_la_copia_la_cli_dice_cual_es_la_copia() {
             && avisos.contains(&format!("la copia {COPIA} ya está hecha")),
         "{avisos}"
     );
-    assert!(banco.home.join(".termux").join(COPIA).is_file());
+    // E2: la copia está junto al destino, no junto al enlace.
+    assert!(dotfiles.join(COPIA).is_file());
+    assert_eq!(entradas(&banco.home.join(".termux")), ["termux.properties"]);
     assert!(banco.instalaciones().is_empty(), "REGISTRO solo con efecto");
     assert!(banco.dobles.llamadas(ORDEN_RECARGAR).is_empty());
 }
@@ -1843,7 +2161,8 @@ fn intento_fallido_terminado(prueba: &Prueba) -> bool {
 fn si_la_escritura_falla_tras_la_copia_el_dialogo_lo_dice_y_el_reintento_no_hace_otra() {
     let mut prueba = Prueba::nueva();
     let dotfiles = con_el_destino_en_otro_directorio(&prueba.banco, "a = 1\n");
-    let carpeta = prueba.banco.home.join(".termux");
+    // E2: la copia queda junto al destino, en los dotfiles.
+    let carpeta = dotfiles.clone();
     // Termux tarda 1 s en recargar: da tiempo a ver el mensaje del éxito.
     prueba
         .banco
@@ -1860,7 +2179,7 @@ fn si_la_escritura_falla_tras_la_copia_el_dialogo_lo_dice_y_el_reintento_no_hace
             .filter(|nombre| nombre.contains(".magi-"))
             .collect()
     };
-    let Some(guarda) = SoloLectura::de(&dotfiles) else {
+    let Some(guarda) = FalloTrasLaCopia::en(&dotfiles.join("termux.properties")) else {
         return;
     };
 
@@ -1947,13 +2266,14 @@ fn si_la_escritura_falla_tras_la_copia_el_dialogo_lo_dice_y_el_reintento_no_hace
 fn si_el_fichero_cambia_entre_intentos_el_reintento_hace_una_copia_nueva() {
     let mut prueba = Prueba::nueva();
     let dotfiles = con_el_destino_en_otro_directorio(&prueba.banco, "a = 1\n");
-    let carpeta = prueba.banco.home.join(".termux");
+    // E2: la copia queda junto al destino, en los dotfiles.
+    let carpeta = dotfiles.clone();
     prueba.abrir_por_la_paleta();
     let copia = prueba
         .dialogo_de_teclas()
         .and_then(|dialogo| dialogo.propuesta.copia.clone())
         .expect("copia prevista");
-    let Some(guarda) = SoloLectura::de(&dotfiles) else {
+    let Some(guarda) = FalloTrasLaCopia::en(&dotfiles.join("termux.properties")) else {
         return;
     };
     prueba.tecla(KeyCode::Enter);
@@ -1976,17 +2296,21 @@ fn si_el_fichero_cambia_entre_intentos_el_reintento_hace_una_copia_nueva() {
 }
 
 #[test]
-fn mientras_instala_el_dialogo_no_atiende_teclas_y_un_resultado_viejo_se_descarta() {
+fn mientras_instala_el_dialogo_solo_atiende_esc_y_un_resultado_viejo_se_descarta() {
     let mut prueba = Prueba::nueva();
     prueba.abrir_por_la_paleta();
-    // Una instalación en vuelo (la de id 7): ni Esc ni ↵ hacen nada.
+    // Una instalación en vuelo (la de id 7): ↵ y el resto de teclas no hacen
+    // nada (solo Esc lo cierra, véase la prueba de abajo).
     if let Some(Dialogo::TeclasTermux(dialogo)) = prueba.app.dialogo.as_mut() {
         dialogo.trabajando = Some(7);
     }
-    prueba.tecla(KeyCode::Esc);
     prueba.tecla(KeyCode::Enter);
+    prueba.tecla(KeyCode::Char('q'));
+    prueba.tecla(KeyCode::Char(' '));
     assert!(prueba.hay_dialogo_de_teclas());
     assert!(prueba.texto().contains("instalando…"));
+    // E1: y el pie dice cómo salir.
+    assert!(prueba.texto().contains("Esc cerrar"), "{}", prueba.texto());
     // El resultado de otra instalación (id 3) no cierra este diálogo ni lo
     // desbloquea, y su error no se pierde.
     prueba.evento(Evento::Termux(magi::app::termux::EventoTermux::Teclas(
@@ -2015,6 +2339,351 @@ fn mientras_instala_el_dialogo_no_atiende_teclas_y_un_resultado_viejo_se_descart
         .as_deref()
         .is_some_and(|e| e.contains("permiso denegado")));
     assert!(prueba.instalaciones().is_empty());
+}
+
+/// Un gancho que retiene la escritura del fichero hasta que se le avise (el
+/// almacenamiento que no responde): devuelve con qué soltarla y el gancho (que
+/// lo quita al caer). Si nadie avisa, se suelta solo a los 30 s.
+fn escritura_retenida(
+    fichero: &Path,
+) -> (
+    std::sync::mpsc::Sender<()>,
+    teclas::ganchos_de_pruebas::Guarda,
+) {
+    let (soltar, retenida) = std::sync::mpsc::channel::<()>();
+    let retenida = Mutex::new(retenida);
+    let gancho = teclas::ganchos_de_pruebas::antes_de_escribir_en(fichero, move || {
+        let _ = retenida
+            .lock()
+            .expect("cerrojo")
+            .recv_timeout(Duration::from_secs(30));
+    });
+    (soltar, gancho)
+}
+
+/// E1: con el almacenamiento sin responder (aquí, la escritura retenida justo
+/// después de la copia), el diálogo no se queda atascado en «instalando…»:
+/// ninguna tecla salvo `Esc` hace nada y `Esc` lo cierra. La escritura sigue y
+/// su resultado tardío se atiende por su `id`: se anota, se dice por la barra y
+/// se recarga Termux, sin diálogo. Mientras no llega, no se abre otro.
+#[test]
+fn con_el_almacenamiento_sin_responder_esc_cierra_el_dialogo_y_el_resultado_tardio_se_atiende() {
+    let mut prueba = Prueba::nueva();
+    let ruta = prueba.banco.con_propiedades("a = 1\n");
+    prueba.abrir_por_la_paleta();
+    let copia = prueba
+        .dialogo_de_teclas()
+        .and_then(|dialogo| dialogo.propuesta.copia.clone())
+        .expect("copia prevista");
+    let (soltar, _gancho) = escritura_retenida(&ruta);
+    prueba.tecla(KeyCode::Enter);
+    // La copia se hace y la escritura se queda esperando.
+    let carpeta = prueba.banco.home.join(".termux");
+    prueba.esperar("copia hecha", |_| carpeta.join(&copia).is_file());
+    prueba.bombear(150);
+    assert!(prueba.hay_dialogo_de_teclas());
+    let texto = prueba.texto();
+    assert!(
+        texto.contains("instalando…") && texto.contains("Esc cerrar"),
+        "{texto}"
+    );
+    // Las demás teclas no hacen nada: el diálogo sigue ahí, instalando.
+    for tecla in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Tab] {
+        prueba.tecla(tecla);
+        assert!(
+            prueba
+                .dialogo_de_teclas()
+                .is_some_and(|dialogo| dialogo.trabajando.is_some()),
+            "{tecla:?}"
+        );
+    }
+    // Esc lo cierra aunque la escritura siga atascada.
+    prueba.tecla(KeyCode::Esc);
+    assert!(prueba.app.dialogo.is_none());
+    assert!(prueba
+        .mensaje()
+        .is_some_and(|(texto, error)| !error && texto.contains("se sigue instalando")));
+    assert_eq!(std::fs::read_to_string(&ruta).unwrap(), "a = 1\n");
+    assert!(prueba.instalaciones().is_empty());
+    assert!(prueba.app.teclas_termux.escribiendo.is_some());
+    // Mientras tanto, la paleta no abre otro diálogo sobre el mismo fichero.
+    prueba.tecla_con(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    prueba.escribir("fila de teclas");
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("aviso de la paleta", |p| {
+        p.mensaje()
+            .is_some_and(|(texto, _)| texto.contains("se está instalando todavía"))
+    });
+    prueba.bombear(150);
+    assert!(prueba.app.dialogo.is_none());
+
+    // El almacenamiento responde: el resultado tardío se atiende.
+    soltar.send(()).expect("soltar");
+    prueba.esperar("instalada", |p| p.instalaciones().len() == 1);
+    assert_eq!(prueba.instalaciones(), std::slice::from_ref(&copia));
+    prueba.esperar("fin de la recarga", |p| {
+        p.mensaje()
+            .is_some_and(|(texto, _)| texto == "fila de teclas instalada: ya se ve en Termux")
+    });
+    assert!(prueba.app.dialogo.is_none());
+    assert_eq!(prueba.app.teclas_termux.escribiendo, None);
+    assert_eq!(prueba.app.teclas_termux.ultima_instalacion, None);
+    assert!(std::fs::read_to_string(&ruta).unwrap().contains(FILA));
+    assert_eq!(prueba.banco.dobles.llamadas(ORDEN_RECARGAR).len(), 1);
+}
+
+/// E1: el resultado tardío de una escritura que falla, con el diálogo ya
+/// cerrado, sale por la barra (con el nombre de la copia ya hecha) y no deja
+/// nada anotado ni nada esperando.
+#[test]
+fn si_la_escritura_tardia_falla_con_el_dialogo_cerrado_el_error_sale_por_la_barra() {
+    if nix::unistd::Uid::effective().is_root() {
+        eprintln!("aviso: se omite: con root no hay directorios que no se puedan escribir");
+        return;
+    }
+    let mut prueba = Prueba::nueva();
+    let ruta = prueba.banco.con_propiedades("a = 1\n");
+    let carpeta = prueba.banco.home.join(".termux");
+    prueba.abrir_por_la_paleta();
+    let copia = prueba
+        .dialogo_de_teclas()
+        .and_then(|dialogo| dialogo.propuesta.copia.clone())
+        .expect("copia prevista");
+    // Al soltarse, la escritura se encuentra el directorio sin permiso.
+    let _restaura = SoloLectura(carpeta.clone());
+    let (soltar, retenida) = std::sync::mpsc::channel::<()>();
+    let retenida = Mutex::new(retenida);
+    let a_quitar = carpeta.clone();
+    let _gancho = teclas::ganchos_de_pruebas::antes_de_escribir_en(&ruta, move || {
+        let _ = retenida
+            .lock()
+            .expect("cerrojo")
+            .recv_timeout(Duration::from_secs(30));
+        std::fs::set_permissions(&a_quitar, std::fs::Permissions::from_mode(0o500))
+            .expect("permisos");
+    });
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("copia hecha", |_| carpeta.join(&copia).is_file());
+    prueba.tecla(KeyCode::Esc);
+    assert!(prueba.app.dialogo.is_none());
+    soltar.send(()).expect("soltar");
+    prueba.esperar("error tardío por la barra", |p| {
+        p.mensaje().is_some_and(|(texto, error)| {
+            error
+                && texto.contains("no se pudo escribir termux.properties (permiso denegado)")
+                && texto.contains(&format!("la copia {copia} ya está hecha"))
+        })
+    });
+    assert!(prueba.app.dialogo.is_none());
+    assert_eq!(prueba.app.teclas_termux.escribiendo, None);
+    assert_eq!(prueba.app.teclas_termux.ultima_instalacion, None);
+    assert_eq!(std::fs::read_to_string(&ruta).unwrap(), "a = 1\n");
+    assert!(
+        prueba.instalaciones().is_empty(),
+        "REGISTRO solo con efecto"
+    );
+    assert!(prueba.banco.dobles.llamadas(ORDEN_RECARGAR).is_empty());
+}
+
+/// E1: la escritura va en un hilo propio, no en `spawn_blocking`: cerrar la
+/// ventana (soltar la `App` y su runtime) no espera a un almacenamiento que no
+/// responde.
+#[test]
+fn cerrar_la_ventana_no_espera_a_una_escritura_que_no_responde() {
+    let mut prueba = Prueba::nueva();
+    let ruta = prueba.banco.con_propiedades("a = 1\n");
+    prueba.abrir_por_la_paleta();
+    let copia = prueba
+        .dialogo_de_teclas()
+        .and_then(|dialogo| dialogo.propuesta.copia.clone())
+        .expect("copia prevista");
+    let (soltar, _gancho) = escritura_retenida(&ruta);
+    prueba.tecla(KeyCode::Enter);
+    let carpeta = prueba.banco.home.join(".termux");
+    prueba.esperar("copia hecha", |_| carpeta.join(&copia).is_file());
+    prueba.tecla(KeyCode::Esc);
+    // Se cierra la ventana con la escritura todavía atascada.
+    let Prueba {
+        app,
+        terminal,
+        banco,
+        api,
+    } = prueba;
+    let inicio = Instant::now();
+    drop(app);
+    let tardo = inicio.elapsed();
+    // Se suelta la escritura y se espera a que acabe antes de borrar el banco.
+    soltar.send(()).expect("soltar");
+    let limite = Instant::now() + Duration::from_secs(15);
+    while banco.dobles.llamadas(ORDEN_RECARGAR).is_empty() && Instant::now() < limite {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(std::fs::read_to_string(&ruta).unwrap().contains(FILA));
+    drop((terminal, api));
+    assert!(
+        tardo < Duration::from_secs(2),
+        "cerrar la ventana esperó {tardo:?} a la escritura"
+    );
+}
+
+/// E4: el diálogo del primer arranque llega solo, sobre lo que el usuario
+/// estuviera haciendo: ignora `↵` un momento desde que se ve (un `↵` tecleado
+/// para otra cosa no confirma una escritura que nadie ha leído). `Esc` y el
+/// resto valen siempre, y el diálogo de la paleta (que se pide a propósito)
+/// no ignora nada.
+#[test]
+fn el_dialogo_del_primer_arranque_ignora_intro_un_momento_pero_no_esc() {
+    let mut prueba = Prueba::nueva();
+    let ruta = prueba.banco.con_propiedades("a = 1\n");
+    let antes = Instant::now();
+    en_el_arranque(&mut prueba);
+    prueba.esperar("diálogo del primer arranque", Prueba::hay_dialogo_de_teclas);
+    // El límite se fijó al salir el diálogo: medio segundo desde entonces.
+    let hasta = prueba
+        .dialogo_de_teclas()
+        .and_then(|dialogo| dialogo.intro_ignorada_hasta)
+        .expect("el primer arranque ignora ↵ al salir");
+    assert!(hasta >= antes + GUARDA_DE_INTRO, "{GUARDA_DE_INTRO:?}");
+    assert!(hasta <= Instant::now() + GUARDA_DE_INTRO);
+    assert_eq!(GUARDA_DE_INTRO, Duration::from_millis(500));
+
+    // Con el límite en el futuro, ↵ no instala nada (y el pie no cambia).
+    let pie = prueba.texto();
+    if let Some(Dialogo::TeclasTermux(dialogo)) = prueba.app.dialogo.as_mut() {
+        dialogo.intro_ignorada_hasta = Some(Instant::now() + Duration::from_secs(3600));
+    }
+    for _ in 0..3 {
+        prueba.tecla(KeyCode::Enter);
+    }
+    prueba.bombear(200);
+    let dialogo = prueba.dialogo_de_teclas().expect("el diálogo sigue");
+    assert_eq!(dialogo.trabajando, None);
+    assert_eq!(dialogo.error, None);
+    assert_eq!(std::fs::read_to_string(&ruta).unwrap(), "a = 1\n");
+    assert!(prueba.instalaciones().is_empty());
+    assert!(prueba.banco.dobles.llamadas(ORDEN_RECARGAR).is_empty());
+    assert!(prueba.texto().contains("↵ instalar"), "{pie}");
+
+    // Esc vale aunque falte para el límite.
+    prueba.tecla(KeyCode::Esc);
+    assert!(prueba.app.dialogo.is_none());
+
+    // Pasado el límite, ↵ instala como siempre.
+    prueba.abrir_por_la_paleta();
+    assert_eq!(
+        prueba
+            .dialogo_de_teclas()
+            .map(|dialogo| dialogo.intro_ignorada_hasta),
+        Some(None),
+        "el de la paleta no ignora nada"
+    );
+    let pasado = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    if let Some(Dialogo::TeclasTermux(dialogo)) = prueba.app.dialogo.as_mut() {
+        dialogo.intro_ignorada_hasta = Some(pasado);
+    }
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("instalada", |p| p.instalaciones().len() == 1);
+    assert!(std::fs::read_to_string(&ruta).unwrap().contains(FILA));
+}
+
+/// E4: si el diálogo del primer arranque sale de debajo de otro (la frase del
+/// llavero), el límite vuelve a contar desde que se ve, no desde que se creó:
+/// el `↵` que cierra el otro no puede confirmar este.
+#[test]
+fn el_limite_de_intro_cuenta_desde_que_el_dialogo_sale_de_debajo_de_otro() {
+    let mut prueba = Prueba::nueva();
+    prueba.banco.con_propiedades("a = 1\n");
+    let fichero = Arc::new(LlaveroFichero::con_ajustes(
+        prueba.banco.rutas.datos.join(NOMBRE_FICHERO),
+        6,
+        Arc::new(Instant::now),
+    ));
+    fichero.crear(FRASE, FRASE).expect("crear");
+    fichero.bloquear();
+    prueba.app.llavero = fichero.clone();
+    en_el_arranque(&mut prueba);
+    prueba.esperar("fila de teclas debajo", |p| p.app.dialogos_apilados() == 1);
+    // Pasa más de medio segundo con la frase a la vista: el límite original
+    // ya venció.
+    std::thread::sleep(GUARDA_DE_INTRO + Duration::from_millis(100));
+    let momento = Instant::now();
+    prueba.tecla(KeyCode::Esc);
+    let hasta = prueba
+        .dialogo_de_teclas()
+        .and_then(|dialogo| dialogo.intro_ignorada_hasta)
+        .expect("la fila de teclas sale tras el llavero");
+    assert!(
+        hasta >= momento + GUARDA_DE_INTRO,
+        "el límite no se renovó al salir de debajo del llavero"
+    );
+}
+
+/// E2: un `termux.properties` que es un enlace: el diálogo y la CLI dicen a
+/// dónde apunta («es un enlace a …: se escribe ahí»), la copia queda junto al
+/// destino y el enlace sigue siéndolo; un fichero normal no dice nada de esto.
+#[test]
+fn el_dialogo_de_un_enlace_dice_el_destino_y_la_copia_va_junto_a_el() {
+    let mut prueba = Prueba::nueva();
+    let dotfiles = con_el_destino_en_otro_directorio(&prueba.banco, "a = 1\n");
+    prueba.abrir_por_la_paleta();
+    let texto = prueba.texto();
+    // Las líneas del diálogo se parten por palabras: se compara sin espacios
+    // ni marcos.
+    let plano = texto_sin_marcos(&texto);
+    for esperado in [
+        "~/.termux/termux.properties es un enlace a",
+        "dotfiles/termux.properties",
+        "se escribe ahí",
+        "una copia junto a él:",
+        COPIA_DE_HOY,
+    ] {
+        let esperado: String = esperado.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(plano.contains(&esperado), "falta «{esperado}»:\n{texto}");
+    }
+    let propuesta = prueba
+        .dialogo_de_teclas()
+        .expect("diálogo")
+        .propuesta
+        .clone();
+    let destino = std::fs::canonicalize(dotfiles.join("termux.properties")).unwrap();
+    assert!(propuesta.enlace_a.as_deref().is_some_and(|visto| visto
+        == "~/dotfiles/termux.properties"
+        || visto == destino.to_str().unwrap()));
+    let copia = propuesta.copia.clone().expect("copia prevista");
+    prueba.tecla(KeyCode::Enter);
+    prueba.esperar("instalada", |p| p.instalaciones().len() == 1);
+    assert_eq!(prueba.instalaciones(), std::slice::from_ref(&copia));
+    // La copia junto al destino; junto al enlace, nada.
+    assert_eq!(
+        std::fs::read_to_string(dotfiles.join(&copia)).unwrap(),
+        "a = 1\n"
+    );
+    assert_eq!(
+        entradas(&prueba.banco.home.join(".termux")),
+        ["termux.properties"]
+    );
+    assert!(std::fs::symlink_metadata(prueba.banco.propiedades())
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(std::fs::read_to_string(dotfiles.join("termux.properties"))
+        .unwrap()
+        .contains(FILA));
+}
+
+/// La fecha de hoy en el nombre de la copia que arma el diálogo (la `App` usa
+/// el reloj real).
+const COPIA_DE_HOY: &str = "termux.properties.magi-";
+
+/// El texto de una pantalla sin espacios ni marcos, para buscar frases que el
+/// diálogo parte en varias líneas.
+fn texto_sin_marcos(texto: &str) -> String {
+    texto
+        .chars()
+        .filter(|c| !c.is_whitespace() && !"│┌┐└┘─|".contains(*c))
+        .collect()
 }
 
 #[test]

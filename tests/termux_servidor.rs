@@ -450,6 +450,140 @@ async fn si_vuelve_el_trabajo_antes_de_la_gracia_no_se_suelta() {
     );
 }
 
+/// Cae la conexión de una pestaña: sin reconexión automática queda «caída»
+/// hasta que el usuario la cierre o la reconecte a mano.
+async fn pestana_caida(esc: &mut Escenario) -> u32 {
+    let sesion = esc.abrir_sesion(esc.hosts[0]).await;
+    esc.observado.tirar_conexiones().await;
+    assert!(
+        esc.hasta(PLAZO, |e| e
+            .sesiones
+            .iter()
+            .any(|s| s.id == sesion && s.estado == EstadoSesionRemota::Caida))
+            .await,
+        "la pestaña no se enteró de la caída: {:?}",
+        esc.sesiones
+    );
+    sesion
+}
+
+/// A1: una pestaña caída (reconexión desactivada) que el usuario no ha cerrado
+/// sigue en el servidor, pero no es trabajo que mantenga despierto el móvil: a
+/// los 30 s (aquí 1,5 s) se suelta el wake lock y desaparece la marca. Si se
+/// reconecta, vuelve a contar.
+#[tokio::test]
+async fn una_pestana_caida_no_mantiene_el_wake_lock_y_al_reconectarla_vuelve_a_contar() {
+    let banco = Banco::nuevo();
+    let mut opciones = opciones(&banco, Some(banco.termux("35")), configuracion());
+    opciones.reconectar = Some(false);
+    let mut esc = escenario(opciones).await;
+    let rutas = esc.rutas().clone();
+    let sesion = esc.abrir_sesion(esc.hosts[0]).await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-lock") == 1)
+            .await,
+        "no se tomó el wake lock con la pestaña viva"
+    );
+    assert!(hay_marca(&rutas, Marca::WakeLock));
+
+    // La conexión cae y la pestaña queda caída, sin cerrar.
+    esc.observado.tirar_conexiones().await;
+    assert!(
+        esc.hasta(PLAZO, |e| e
+            .sesiones
+            .iter()
+            .any(|s| s.id == sesion && s.estado == EstadoSesionRemota::Caida))
+            .await,
+        "la pestaña no se enteró de la caída: {:?}",
+        esc.sesiones
+    );
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-unlock") == 1)
+            .await,
+        "una pestaña caída mantiene el wake lock tomado"
+    );
+    assert!(
+        esc.hasta(PLAZO, |_| !hay_marca(&rutas, Marca::WakeLock))
+            .await,
+        "la marca sigue puesta con una pestaña caída"
+    );
+    // La pestaña sigue ahí (el servidor la custodia hasta que se cierre) y no
+    // se vuelve a tomar ni a soltar nada.
+    esc.escuchar(Duration::from_millis(3000)).await;
+    assert!(esc
+        .sesiones
+        .iter()
+        .any(|s| s.id == sesion && s.estado == EstadoSesionRemota::Caida));
+    assert_eq!(banco.llamadas("termux-wake-lock"), 1);
+    assert_eq!(banco.llamadas("termux-wake-unlock"), 1);
+
+    // Reconectada a mano, vuelve a ser trabajo: se toma de nuevo y no se suelta.
+    esc.enviar(&MensajeCliente::Reconectar {
+        sesion_id: sesion,
+        compartir: false,
+    })
+    .await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-lock") == 2)
+            .await,
+        "una pestaña reconectada no volvió a tomar el wake lock"
+    );
+    esc.escuchar(Duration::from_millis(3000)).await;
+    assert_eq!(banco.llamadas("termux-wake-unlock"), 1, "sigue tomado");
+    assert!(hay_marca(&rutas, Marca::WakeLock));
+    esc.enviar(&MensajeCliente::Cerrar { sesion_id: sesion })
+        .await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-unlock") == 2)
+            .await
+    );
+    assert!(!hay_marca(&rutas, Marca::WakeLock));
+}
+
+/// A1: una pestaña que está reconectando (`Abriendo` con `reconectando`) sigue
+/// siendo trabajo: el wake lock sigue tomado mientras dura la reconexión, y se
+/// suelta al cerrarla.
+#[tokio::test]
+async fn una_pestana_reconectando_sigue_contando_para_el_wake_lock() {
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, Some(banco.termux("35")), configuracion())).await;
+    let rutas = esc.rutas().clone();
+    let sesion = esc.abrir_sesion(esc.hosts[0]).await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-lock") == 1)
+            .await
+    );
+    // El host se cae del todo: la reconexión automática no puede volver.
+    esc.apagar_servidor_ssh().await;
+    assert!(
+        esc.hasta(PLAZO, |e| e.sesiones.iter().any(|s| s.id == sesion
+            && s.estado == EstadoSesionRemota::Abriendo
+            && s.reconexion.is_some()))
+            .await,
+        "la pestaña no empezó a reconectar: {:?}",
+        esc.sesiones
+    );
+    // Pasa la gracia (1,5 s) con creces: sigue tomado.
+    esc.escuchar(Duration::from_millis(3500)).await;
+    assert!(esc
+        .sesiones
+        .iter()
+        .any(|s| s.id == sesion && s.estado == EstadoSesionRemota::Abriendo));
+    assert_eq!(
+        banco.llamadas("termux-wake-unlock"),
+        0,
+        "reconectar es trabajo: no se suelta"
+    );
+    assert!(hay_marca(&rutas, Marca::WakeLock));
+    esc.enviar(&MensajeCliente::Cerrar { sesion_id: sesion })
+        .await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-unlock") == 1)
+            .await,
+        "no se soltó al cerrar la pestaña que reconectaba"
+    );
+}
+
 /// `[termux] wake_lock = "nunca"`: no se toca nada.
 #[tokio::test]
 async fn con_wake_lock_nunca_no_se_ejecuta_ninguna_orden() {
@@ -546,7 +680,8 @@ async fn si_falla_el_wake_lock_se_apaga_y_lo_dice_la_barra() {
 }
 
 /// Un `termux-wake-lock` que no responde: a los 2 s del plazo, apagado y con
-/// su aviso; el proceso colgado y lo que lanzó mueren.
+/// su aviso; el proceso colgado y lo que lanzó mueren. La marca se conserva
+/// (puede estar tomado) y se suelta sin trabajo (A3).
 #[tokio::test]
 async fn un_wake_lock_que_no_responde_vence_su_plazo_y_se_mata() {
     let banco = Banco::nuevo();
@@ -554,7 +689,7 @@ async fn un_wake_lock_que_no_responde_vence_su_plazo_y_se_mata() {
     let mut esc = escenario(opciones(&banco, Some(banco.termux("35")), configuracion())).await;
     let rutas = esc.rutas().clone();
     let inicio = Instant::now();
-    esc.abrir_sesion(esc.hosts[0]).await;
+    let sesion = esc.abrir_sesion(esc.hosts[0]).await;
     assert!(
         esc.hasta(PLAZO, |_| barra(&rutas)
             .contains(&AvisoServidor::SinWakeLock))
@@ -574,6 +709,59 @@ async fn un_wake_lock_que_no_responde_vence_su_plazo_y_se_mata() {
             "el proceso {pid} de la orden colgada sigue vivo"
         );
     }
+    // A3: la orden pudo llegar a Termux antes de que se la matara, así que el
+    // wake lock puede estar tomado: la marca se conserva (como con un aviso
+    // sin respuesta, que se anota para retirarlo).
+    assert!(
+        hay_marca(&rutas, Marca::WakeLock),
+        "una orden sin respuesta pudo tomarlo: la marca se queda"
+    );
+    // Apagado: seguir con trabajo no la reintenta.
+    esc.escuchar(Duration::from_millis(2800)).await;
+    assert_eq!(banco.llamadas("termux-wake-lock"), 1, "un solo intento");
+    assert_eq!(banco.llamadas("termux-wake-unlock"), 0, "hay trabajo");
+    // Sin trabajo, pasada la gracia, se suelta (por si llegó a tomarse) y la
+    // marca se quita.
+    esc.enviar(&MensajeCliente::Cerrar { sesion_id: sesion })
+        .await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-unlock") == 1)
+            .await,
+        "no se soltó el wake lock que pudo tomarse"
+    );
+    assert!(
+        esc.hasta(PLAZO, |_| !hay_marca(&rutas, Marca::WakeLock))
+            .await,
+        "la marca sigue puesta tras soltarlo"
+    );
+    parar(&mut esc).await;
+    assert_eq!(banco.llamadas("termux-wake-unlock"), 1, "ni uno más");
+}
+
+/// A3: el servidor que termina con un `termux-wake-lock` sin respuesta suelta
+/// el wake lock que pudo tomarse (sin esperar a que lo haga el siguiente).
+#[tokio::test]
+async fn al_terminar_con_un_wake_lock_sin_respuesta_se_suelta_el_que_pudo_tomarse() {
+    let banco = Banco::nuevo();
+    banco.dobles.programar("termux-wake-lock", Modo::Colgar);
+    let mut esc = escenario(opciones(&banco, Some(banco.termux("35")), configuracion())).await;
+    let rutas = esc.rutas().clone();
+    esc.abrir_sesion(esc.hosts[0]).await;
+    assert!(
+        esc.hasta(PLAZO, |_| barra(&rutas)
+            .contains(&AvisoServidor::SinWakeLock))
+            .await,
+        "no se dio por apagado el wake lock: {:?}",
+        barra(&rutas)
+    );
+    assert!(hay_marca(&rutas, Marca::WakeLock));
+    assert_eq!(banco.llamadas("termux-wake-unlock"), 0);
+    parar(&mut esc).await;
+    assert_eq!(
+        banco.llamadas("termux-wake-unlock"),
+        1,
+        "no soltó al terminar el wake lock que pudo tomarse"
+    );
     assert!(!hay_marca(&rutas, Marca::WakeLock));
 }
 
@@ -982,6 +1170,52 @@ async fn con_avisos_false_no_se_publica_y_el_vigilante_espera_a_las_ventanas() {
     assert_eq!(banco.llamadas("termux-notification-remove"), 0);
 }
 
+/// A1: sin ventanas, una pestaña caída que nadie ha cerrado es lo único que
+/// mantiene vivo al servidor: el vigilante no sondea hosts por SSH para nadie.
+/// En cuanto hay otra ventana, vuelve a trabajar.
+#[tokio::test]
+async fn con_solo_una_pestana_caida_y_sin_ventanas_el_vigilante_no_sondea() {
+    let banco = Banco::nuevo();
+    let mut config = configuracion();
+    config.persistentes.vigilar_ms_pruebas = 150;
+    let mut opciones = opciones(&banco, Some(banco.termux("35")), config);
+    opciones.reconectar = Some(false);
+    let mut esc = escenario(opciones).await;
+    let host = esc.hosts[0];
+    crear_ficha(&esc, host, "agente-api");
+    banco.magi(1, &[linea("agente-api", false, "")]);
+    assert!(
+        esc.hasta(PLAZO, |_| banco.comprobaciones(1) >= 2).await,
+        "con ventana, el vigilante trabaja como siempre"
+    );
+    pestana_caida(&mut esc).await;
+
+    // La ventana se va: solo queda la pestaña caída.
+    irse(&mut esc).await;
+    let al_irse = banco.comprobaciones(1);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(
+        banco.comprobaciones(1) <= al_irse + 1,
+        "con solo una pestaña caída el vigilante no debe sondear ({} → {})",
+        al_irse,
+        banco.comprobaciones(1)
+    );
+    // Ni siquiera la campana de la ficha se avisa: nadie lo pide.
+    banco.magi(1, &[linea("agente-api", true, "")]);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(banco.llamadas("termux-notification"), 0);
+
+    // Una ventana nueva lo despierta.
+    let mut otra = esc.otra_ventana().await;
+    assert!(
+        esperar_que(PLAZO, || banco.comprobaciones(1) > al_irse + 1).await,
+        "con una ventana el vigilante no volvió a trabajar"
+    );
+    otra.enviar(&MensajeCliente::Parar).await;
+    let fin = tokio::time::timeout(Duration::from_secs(30), &mut esc.tarea_magi).await;
+    assert!(fin.is_ok(), "el servidor no terminó en 30 s");
+}
+
 /// El servidor del escritorio sigue sin vigilar sin ventanas.
 #[tokio::test]
 async fn el_servidor_del_escritorio_no_vigila_sin_ventanas() {
@@ -1234,6 +1468,68 @@ async fn una_pestana_con_campana_avisa_y_se_retira_al_escribir_enfocar_o_cerrar(
     assert!(estado::leer_avisos(&rutas).is_empty());
     parar(&mut esc).await;
     assert_eq!(banco.llamadas("termux-notification-remove"), 3);
+}
+
+/// Una pestaña cuyo programa suelta, según la línea que recibe, el progreso de
+/// ConEmu (`OSC 9;4;1;50`) o un aviso de verdad (`OSC 9;3 tests fallan`).
+fn programa_con_osc_9() -> Option<Vec<String>> {
+    Some(vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        r"while IFS= read -r linea; do case $linea in progreso) printf '\033]9;4;1;50\007';; tests) printf '\033]9;3 tests fallan\007';; esac; done".to_string(),
+    ])
+}
+
+/// A2: el progreso de ConEmu (`OSC 9;4;estado;porcentaje`) llega al emulador
+/// como un aviso («4 · 1 · 50») y se sigue enseñando en la pestaña, pero no
+/// pide atención ni publica un aviso de Android; un aviso real (`OSC 9;3 tests
+/// fallan`, que empieza por un dígito) sí.
+#[tokio::test]
+async fn el_progreso_de_conemu_no_publica_un_aviso_de_android_pero_un_aviso_real_si() {
+    let banco = Banco::nuevo();
+    let mut opciones = opciones(&banco, Some(banco.termux("35")), configuracion());
+    opciones.programa_shell = programa_con_osc_9();
+    let mut esc = escenario(opciones).await;
+    let rutas = esc.rutas().clone();
+    let sesion = esc.abrir_sesion(esc.hosts[0]).await;
+    adjuntar(&mut esc, sesion).await;
+
+    esc.enviar(&MensajeCliente::Teclas {
+        sesion_id: sesion,
+        bytes: b"progreso\n".to_vec(),
+    })
+    .await;
+    assert!(
+        esc.hasta(PLAZO, |e| e.sesiones.iter().any(|s| s.id == sesion
+            && s.aviso
+                .as_ref()
+                .is_some_and(|aviso| aviso.texto == "4 · 1 · 50")))
+            .await,
+        "el emulador no guardó el progreso como aviso: {:?}",
+        esc.sesiones
+    );
+    esc.escuchar(Duration::from_millis(1500)).await;
+    assert_eq!(
+        banco.llamadas("termux-notification"),
+        0,
+        "el progreso de ConEmu no pide atención a nadie"
+    );
+    assert!(estado::leer_avisos(&rutas).is_empty());
+
+    // Un aviso real, aunque empiece por un dígito, sí.
+    esc.enviar(&MensajeCliente::Teclas {
+        sesion_id: sesion,
+        bytes: b"tests\n".to_vec(),
+    })
+    .await;
+    assert!(
+        esc.hasta(PLAZO, |_| banco.llamadas("termux-notification") == 1)
+            .await,
+        "«3 tests fallan» no dio aviso de Android"
+    );
+    let id = format!("magi-p{sesion}");
+    assert_eq!(estado::leer_avisos(&rutas), [id].into());
+    parar(&mut esc).await;
 }
 
 /// Un aviso que el propio servidor guarda en la pestaña (aquí, tmux antiguo en
@@ -2032,5 +2328,68 @@ async fn si_el_socket_no_se_puede_crear_no_queda_el_estado_del_servidor() {
         estado::leer_servidor(&rutas),
         None,
         "quedó escrito el estado de un servidor que no existe"
+    );
+}
+
+/// A4: al terminar, el fichero de estado de la barra se quita antes que el
+/// socket y el lock. Quitar el lock deja entrar a un servidor nuevo, que
+/// escribe su propio fichero `servidor`: si el viejo lo quitara después, le
+/// borraría el suyo. Un solo vigilante de inotify sobre los dos directorios da
+/// el orden real de los borrados (una sola cola del kernel).
+#[tokio::test]
+async fn al_terminar_el_estado_de_la_barra_se_quita_antes_que_el_socket_y_el_lock() {
+    use notify::Watcher as _;
+    let banco = Banco::nuevo();
+    let mut servidor = Suelto::arrancar(Some(banco.termux("35")), configuracion(), |_| {}).await;
+    let rutas = servidor.rutas().clone();
+    assert!(
+        estado::leer_servidor(&rutas).is_some(),
+        "sin estado al arrancar"
+    );
+    let vistos = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut vigilante = notify::recommended_watcher({
+        let vistos = std::sync::Arc::clone(&vistos);
+        move |evento: notify::Result<notify::Event>| {
+            let Ok(evento) = evento else { return };
+            if !matches!(evento.kind, notify::EventKind::Remove(_)) {
+                return;
+            }
+            for ruta in evento.paths {
+                if let Some(nombre) = ruta.file_name().and_then(|nombre| nombre.to_str()) {
+                    vistos.lock().unwrap().push(nombre.to_string());
+                }
+            }
+        }
+    })
+    .expect("un vigilante de ficheros");
+    vigilante
+        .watch(&rutas.dir_runtime(), notify::RecursiveMode::NonRecursive)
+        .expect("vigilar el directorio del socket");
+    vigilante
+        .watch(&dir_estado(&rutas), notify::RecursiveMode::NonRecursive)
+        .expect("vigilar el directorio de estado de Termux");
+
+    servidor.parar().await;
+    let esperados = ["servidor", "servidor.sock", "servidor.lock"];
+    assert!(
+        esperar_que(PLAZO, || {
+            let vistos = vistos.lock().unwrap();
+            esperados
+                .iter()
+                .all(|nombre| vistos.iter().any(|visto| visto == nombre))
+        })
+        .await,
+        "no se vieron los tres borrados: {:?}",
+        vistos.lock().unwrap()
+    );
+    let vistos = vistos.lock().unwrap().clone();
+    let posicion = |nombre: &str| vistos.iter().position(|visto| visto == nombre).unwrap();
+    assert!(
+        posicion("servidor") < posicion("servidor.sock"),
+        "el estado de la barra se quitó después del socket: {vistos:?}"
+    );
+    assert!(
+        posicion("servidor") < posicion("servidor.lock"),
+        "el estado de la barra se quitó después del lock: {vistos:?}"
     );
 }

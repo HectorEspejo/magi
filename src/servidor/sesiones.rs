@@ -1796,8 +1796,14 @@ async fn procesar_datos(
             // tope de uno cada 5 s es de lo que se enseña, no de esto. Solo
             // la transición a «pide atención» despierta a la tarea de avisos:
             // una salida con cientos de campanas no lanza un ciclo por lote.
+            // Los subcomandos de ConEmu (`OSC 9;4;…`, el progreso) no piden
+            // atención a nadie: se siguen enseñando como aviso, pero no
+            // marcan la pestaña (corrección de cierre A2).
             if let Some(termux) = &termux {
-                if !crate::termux::avisos::mirando(sesion.enfocada()) && sesion.pedir_atencion() {
+                if !crate::termux::avisos::es_subcomando_de_conemu(&aviso.texto)
+                    && !crate::termux::avisos::mirando(sesion.enfocada())
+                    && sesion.pedir_atencion()
+                {
                     termux.despertar_avisos();
                 }
             }

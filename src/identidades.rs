@@ -169,20 +169,46 @@ pub struct ClaveGenerada {
     pub comentario: Option<String>,
     pub en_agente: bool,
     pub aviso_agente: Option<String>,
-    /// Siempre `false` al salir de [`generar`]: desde la Fase 17 la tarea no
-    /// copia nada y es la `App` quien copia la clave pública al recibir el
-    /// resultado, por la única vía de copia (`App::copiar`). Se conserva el
-    /// campo por compatibilidad.
+    /// La tarea copió la pública con la herramienta del sistema (`wl-copy`,
+    /// `pbcopy`). Solo en el escritorio, como antes de la Fase 17: la espera de
+    /// la herramienta (hasta 750 ms) no puede caer en el hilo de la interfaz.
+    /// En Termux, siempre `false`: la copia pasa por `App::copiar`.
     pub copiada: bool,
     /// El diálogo pidió copiar la pública al terminar.
     pub solicito_copia: bool,
+    /// Por qué la tarea no pudo copiarla (solo en el escritorio, con
+    /// `solicito_copia`): la `App` no repite la copia en su hilo y enseña el
+    /// respaldo de siempre (el diálogo con la línea a mano). `None` si la
+    /// tarea no lo intentó (Termux) o lo consiguió.
+    pub fallo_copia: Option<String>,
 }
 
 /// Genera el par de claves con `ssh-key` y lo escribe en `~/.ssh` sin
 /// sobrescribir nunca. La parte CPU va en `spawn_blocking`; el alta en el
-/// agente se hace después con `add_identity`. No copia nada al portapapeles:
-/// devuelve la clave pública y es la `App` quien la copia (única vía).
+/// agente se hace después con `add_identity`.
+///
+/// Si se pidió copiar la pública, en el escritorio lo hace esta tarea con la
+/// herramienta del sistema (en `spawn_blocking`, sin esperarla en la
+/// interfaz) y dice si pudo; en Termux no copia nada: devuelve la clave
+/// pública y es la `App` quien la copia por `termux-clipboard-set` o OSC 52.
 pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, String> {
+    generar_con(peticion, |texto| {
+        crate::portapapeles::copiar(texto).map(|_| ())
+    })
+    .await
+}
+
+/// [`generar`] con la copia del escritorio inyectada: las pruebas ponen una
+/// lenta o que falla. `copiador` solo se llama en el escritorio y si se pidió
+/// copiar, y siempre fuera de la interfaz (`spawn_blocking`).
+#[doc(hidden)]
+pub async fn generar_con<C>(
+    peticion: PeticionGeneracion,
+    copiador: C,
+) -> Result<ClaveGenerada, String>
+where
+    C: FnOnce(&str) -> Result<(), String> + Send + 'static,
+{
     let anadir_agente = peticion.anadir_agente;
     let copiar_publica = peticion.copiar_publica;
     let (clave, datos) = tokio::task::spawn_blocking(move || generar_en_disco(peticion))
@@ -200,6 +226,17 @@ pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, Stri
         }
     }
     drop(clave);
+    // En Termux la copia no es de esta tarea (ni su herramienta, ni su plazo).
+    let (copiada, fallo_copia) = if copiar_publica && !crate::termux::es_termux() {
+        let publica = datos.publica.clone();
+        match tokio::task::spawn_blocking(move || copiador(&publica)).await {
+            Ok(Ok(())) => (true, None),
+            Ok(Err(motivo)) => (false, Some(motivo)),
+            Err(error) => (false, Some(error.to_string())),
+        }
+    } else {
+        (false, None)
+    };
     Ok(ClaveGenerada {
         tipo: datos.tipo,
         huella: datos.huella,
@@ -208,8 +245,9 @@ pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, Stri
         comentario: datos.comentario,
         en_agente,
         aviso_agente,
-        copiada: false,
+        copiada,
         solicito_copia: copiar_publica,
+        fallo_copia,
     })
 }
 
@@ -484,6 +522,59 @@ mod pruebas {
             }
             _ => panic!("la clave recién generada debería leerse sin frase"),
         }
+    }
+
+    /// En el escritorio, la tarea de generación copia la pública (como antes
+    /// de la Fase 17) y dice cómo fue; la copia corre fuera del hilo que
+    /// espera el resultado (en la `App`, el de la interfaz no espera a la
+    /// herramienta del sistema).
+    #[test]
+    fn la_tarea_copia_la_publica_fuera_del_hilo_que_espera_y_dice_como_fue() {
+        use std::sync::{Arc, Mutex};
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let hilo_de_la_prueba = std::thread::current().id();
+
+        // Copia bien.
+        let llamadas = Arc::new(Mutex::new(Vec::new()));
+        let anotadas = Arc::clone(&llamadas);
+        let mut pedida = peticion(dir.path(), "id_copia", "");
+        pedida.copiar_publica = true;
+        let clave = runtime
+            .block_on(generar_con(pedida, move |texto| {
+                anotadas
+                    .lock()
+                    .unwrap()
+                    .push((texto.to_string(), std::thread::current().id()));
+                Ok(())
+            }))
+            .unwrap();
+        assert!(clave.solicito_copia && clave.copiada);
+        assert_eq!(clave.fallo_copia, None);
+        let llamadas = llamadas.lock().unwrap();
+        assert_eq!(llamadas.len(), 1);
+        assert_eq!(llamadas[0].0, clave.publica, "copia la línea pública");
+        assert_ne!(llamadas[0].1, hilo_de_la_prueba, "no en el hilo que espera");
+        drop(llamadas);
+
+        // No pudo: lo dice, con el motivo, y no la da por copiada.
+        let mut pedida = peticion(dir.path(), "id_sin_copia", "");
+        pedida.copiar_publica = true;
+        let clave = runtime
+            .block_on(generar_con(pedida, |_| Err("sin herramienta".to_string())))
+            .unwrap();
+        assert!(clave.solicito_copia && !clave.copiada);
+        assert_eq!(clave.fallo_copia.as_deref(), Some("sin herramienta"));
+
+        // Sin pedirla, no se llama a nadie.
+        let clave = runtime
+            .block_on(generar_con(
+                peticion(dir.path(), "id_sin_pedir", ""),
+                |_| -> Result<(), String> { panic!("no se pidió copiar") },
+            ))
+            .unwrap();
+        assert!(!clave.solicito_copia && !clave.copiada);
+        assert_eq!(clave.fallo_copia, None);
     }
 
     #[test]

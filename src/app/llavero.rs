@@ -21,8 +21,13 @@
 //!   `guardar` u `olvidar` que reescribe el fichero (~1 s de scrypt); hacen su
 //!   trabajo bajo el cerrojo de la carpeta y no se parten sin cambiar su
 //!   contrato. También el guardado de la contraseña de un escritorio desde la
-//!   ficha y `olvidar` una contraseña (paleta y ficha). `borrar` y
-//!   `apartar_danado` no gastan scrypt y van también en el hilo de la UI.
+//!   ficha y `olvidar` una contraseña (paleta y ficha), y la purga de la clave
+//!   de sincronización anterior vencida (`olvidar_clave_anterior_vencida`, al
+//!   arrancar y al abrir el llavero). `borrar` y `apartar_danado` no gastan
+//!   scrypt y van también en el hilo de la UI.
+//! - La pasada de sincronización, en cambio, pone al día el llavero con lo
+//!   que haya en disco (`refrescar`, otra ventana pudo reescribirlo) en su
+//!   tarea de fondo, antes de leer la clave.
 //!
 //! Una operación que necesita el llavero abre el diálogo que toque con su
 //! `Continuacion`: lo que hay que hacer cuando el llavero quede abierto
@@ -672,6 +677,31 @@ impl App {
             );
         if cerrado {
             self.abrir_dialogo_llavero(None, true);
+        }
+    }
+
+    /// Olvida la clave de sincronización anterior si ya pasó su plazo de 30
+    /// días: la quita del llavero y la fecha de `config.toml`. Se llama al
+    /// arrancar y cada vez que el llavero de fichero se abre o se crea: al
+    /// arrancar está cerrado y la purga da `BLOQUEADO` (no se toca la fecha),
+    /// y sin esta segunda oportunidad la clave vieja se quedaría en
+    /// `llavero.age` para siempre. Sin fichero no hay nada que olvidar.
+    ///
+    /// Se queda en el hilo de la UI como el resto de escrituras de claves de
+    /// sincronización (ver arriba): reescribir el fichero cuesta ~1 s de
+    /// scrypt en un móvil, pero solo ocurre una vez, cuando hay una clave
+    /// anterior vencida que olvidar.
+    #[doc(hidden)]
+    pub fn olvidar_clave_anterior_vencida(&mut self) {
+        let llavero = self.llavero.clone();
+        let purgado = crate::sincronizacion::equipos::olvidar_anterior_si_vencida(
+            &mut self.config,
+            &OlvidoSinFichero(&*llavero),
+        );
+        if let Ok(true) = purgado {
+            if let Err(error) = self.config.guardar(&self.rutas.fichero_config()) {
+                tracing::warn!("no se pudo guardar config.toml: {error}");
+            }
         }
     }
 
@@ -1452,6 +1482,11 @@ impl App {
                     },
                     false,
                 );
+                // Con el llavero abierto ya se puede olvidar la clave de
+                // sincronización anterior vencida, que al arrancar no se pudo.
+                if tipo != TipoFrase::Cambio {
+                    self.olvidar_clave_anterior_vencida();
+                }
                 // La sincronización que falló por estar cerrado se reintenta.
                 if tipo != TipoFrase::Cambio && self.pasada_esperaba_el_llavero() {
                     self.solicitar_pasada();
@@ -1737,16 +1772,33 @@ impl App {
                     *error = Some(format!("{SIN_LLAVERO_NO_GUARDA}: unión cancelada"));
                 }
             }
-            Continuacion::MostrarClave => self.mensaje(BLOQUEADO, true),
+            Continuacion::MostrarClave => {
+                let motivo = self.motivo_sin_llavero();
+                self.mensaje(motivo, true);
+            }
             Continuacion::QuitarEquipo(_) => {
-                self.mensaje(format!("{BLOQUEADO}: no se ha quitado el equipo"), true);
+                let motivo = self.motivo_sin_llavero();
+                self.mensaje(format!("{motivo}: no se ha quitado el equipo"), true);
             }
             Continuacion::RotarClave => {
-                self.mensaje(format!("{BLOQUEADO}: la clave no se ha rotado"), true);
+                let motivo = self.motivo_sin_llavero();
+                self.mensaje(format!("{motivo}: la clave no se ha rotado"), true);
             }
             Continuacion::Desactivar => {
-                self.mensaje(format!("{BLOQUEADO}: la sincronización sigue activa"), true);
+                let motivo = self.motivo_sin_llavero();
+                self.mensaje(format!("{motivo}: la sincronización sigue activa"), true);
             }
+        }
+    }
+
+    /// Por qué no hay llavero con el que seguir, según su estado de ahora:
+    /// «bloqueado» solo si existe y está cerrado (hay una frase que dar);
+    /// sin crear (el usuario no quiso crearlo o lo acaba de apartar) o dañado
+    /// no hay nada que desbloquear y decirlo mandaría a un callejón sin salida.
+    fn motivo_sin_llavero(&self) -> &'static str {
+        match self.llavero.estado() {
+            EstadoLlavero::SinCrear | EstadoLlavero::Danado(_) => SIN_LLAVERO_NO_GUARDA,
+            EstadoLlavero::Bloqueado | EstadoLlavero::Abierto => BLOQUEADO,
         }
     }
 
@@ -1874,6 +1926,21 @@ impl App {
     pub fn envejecer_peticiones_llavero(&mut self, por: Duration) {
         for peticion in &mut self.llavero_ui.ignoradas {
             peticion.desde = peticion.desde.checked_sub(por).unwrap_or(peticion.desde);
+        }
+    }
+
+    /// Muestra un diálogo que llega de golpe (SERVIDOR CAÍDO, SERVIDOR DE
+    /// SESIONES ANTERIOR) sin descartar un diálogo del llavero que esté a la
+    /// vista: puede llevar continuaciones que no contestan al servidor (rotar
+    /// la clave, quitar un equipo, unir, desactivar, mostrar la clave) y, si
+    /// se descartara, se perderían sin cancelarse y sin decir nada. El del
+    /// llavero pasa a la pila y vuelve al cerrarse el nuevo; cualquier otro
+    /// diálogo se sustituye como siempre.
+    pub(crate) fn mostrar_sin_perder_el_llavero(&mut self, dialogo: Dialogo) {
+        if matches!(self.dialogo, Some(Dialogo::Llavero(_))) {
+            self.mostrar_dialogo_servidor(dialogo);
+        } else {
+            self.dialogo = Some(dialogo);
         }
     }
 

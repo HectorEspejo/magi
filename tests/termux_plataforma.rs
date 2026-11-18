@@ -81,6 +81,62 @@ fn en_termux_la_plataforma_es_android_y_el_equipo_se_llama_termux() {
     assert!(!magi::config::nombre_actual().is_empty());
 }
 
+/// §3.2 y §7.8: el usuario de las deliberaciones en Termux es el nombre del
+/// equipo (`termux-<modelo>`), no el del uid de Android (`u0_a123`).
+#[test]
+fn en_termux_el_usuario_de_las_deliberaciones_es_el_nombre_del_equipo() {
+    let _termux = Termux::con(&[]);
+    let usuario = magi::deliberacion::usuario_del_sistema();
+    assert_eq!(usuario, magi::config::nombre_actual());
+    // En Linux no hay propiedades de Android: sin modelo, «termux» a secas.
+    #[cfg(not(target_os = "android"))]
+    assert_eq!(usuario, "termux");
+    // Nunca el del uid del proceso, que aquí es el del usuario que corre la
+    // prueba (en un móvil sería `u0_aNNN`).
+    let del_uid = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+        .ok()
+        .flatten()
+        .map(|usuario| usuario.name);
+    assert_ne!(Some(usuario.clone()), del_uid);
+    assert!(usuario.starts_with("termux"), "{usuario}");
+    // Con un modelo, `termux-<modelo>` con la regla de la etiqueta.
+    let propiedades = magi::termux::Propiedades::fijas(&[("ro.product.model", "ABC-X10")]);
+    assert_eq!(
+        magi::deliberacion::usuario_de_termux(&propiedades),
+        "termux-abc-x10"
+    );
+}
+
+/// En Termux la copia de la clave recién generada no es de la tarea de
+/// generación (no hay `wl-copy` ni `pbcopy`): la hace la `App` por la única vía
+/// (`termux-clipboard-set` u OSC 52). La tarea ni la intenta ni dice que falló.
+#[tokio::test]
+async fn en_termux_la_tarea_de_generacion_no_copia_la_publica() {
+    let temporal = tempfile::tempdir().unwrap();
+    // `es_termux()` se decide una vez por proceso: basta con haber puesto la
+    // variable antes de la primera pregunta, y la guarda del entorno no cruza
+    // el `await`.
+    drop(Termux::con(&[]));
+    let peticion = magi::identidades::PeticionGeneracion {
+        dir_ssh: temporal.path().to_path_buf(),
+        nombre: "id_termux".to_string(),
+        tipo: magi::identidades::TipoClave::Ed25519,
+        comentario: "usuario@ejemplo.org".to_string(),
+        frase: zeroize::Zeroizing::new(String::new()),
+        anadir_agente: false,
+        copiar_publica: true,
+    };
+    let clave = magi::identidades::generar_con(peticion, |_| -> Result<(), String> {
+        panic!("en Termux no copia la tarea")
+    })
+    .await
+    .expect("clave generada");
+    assert!(clave.solicito_copia, "el diálogo pidió copiarla");
+    assert!(!clave.copiada);
+    assert_eq!(clave.fallo_copia, None, "no lo intentó: no falló");
+    assert!(clave.publica.starts_with("ssh-ed25519 "));
+}
+
 #[test]
 fn en_termux_descubrir_rutas_sale_del_entorno_y_no_del_uid() {
     let temporal = tempfile::tempdir().unwrap();

@@ -18,7 +18,7 @@ source: tests/redimensionado/arnes.rs
 │           │  Ya tienes otra fila: se sustituye y la tuya queda   │           │
 │           │  en la copia.                                        │           │
 │           │                                                      │           │
-│           │  instalando…                                         │           │
+│           │  instalando…   Esc cerrar: sigue de fondo            │           │
 │           │                                                      │           │
 │           └──────────────────────────────────────────────────────┘           │
 │                                                                              │

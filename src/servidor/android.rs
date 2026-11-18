@@ -10,8 +10,9 @@
 //! con el cliente por el fichero de estado.
 //!
 //! - **Wake lock.** El conductor de `termux::wake_lock`; `revisar_inactividad`
-//!   le dice cada segundo si hay trabajo (`TrabajoServidor` no vacío) y el
-//!   apagado le dice que termine.
+//!   le dice cada segundo si hay trabajo (`TrabajoServidor` no vacío, sin
+//!   contar las pestañas caídas: `EstadoServidor::trabajo_vivo`) y el apagado
+//!   le dice que termine.
 //! - **Avisos.** Una sola tarea reconciliadora ([`reconciliar`]), despertada
 //!   por un `Notify` y con un tic de unos 3 s, compara los avisos que tocan
 //!   ([`avisos::deseados`]) con los publicados y publica o retira la
@@ -559,9 +560,13 @@ async fn publicar(
             debug!(publicados = publicados.len(), "aviso de Android publicado");
         }
         // La orden pudo publicar el aviso antes de que se matara su grupo de
-        // procesos por vencer el plazo: el id se queda anotado para que lo
-        // retire la siguiente purga o el cierre (retirar uno que no existe no
-        // hace daño; un aviso sin id anotado no lo retiraría nadie).
+        // procesos por vencer el plazo: el id se queda anotado (un aviso sin
+        // id anotado no lo retiraría nadie; retirar uno que no existe no hace
+        // daño). Pero esta misma falta de respuesta apaga Termux:API en este
+        // servidor (§7.2): con la API apagada ni el ciclo ni el cierre retiran
+        // nada, así que este aviso, y los que ya hubiera publicados, se quedan
+        // en la barra de Android hasta que lo retire la purga de arranque del
+        // siguiente servidor.
         Err(FalloOrden::SinRespuesta) => {}
         // Fallos que dicen que no se publicó nada: no se anota.
         Err(_) => {

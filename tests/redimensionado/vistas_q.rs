@@ -27,6 +27,7 @@ pub(crate) fn propuesta(estado: EstadoFila, copia: Option<&str>, prefijo: &str) 
     Propuesta {
         ruta: Some(PathBuf::from("/home/usuario/.termux/termux.properties")),
         ruta_visible: "~/.termux/termux.properties".to_string(),
+        enlace_a: None,
         estado,
         fila: teclas::fila(prefijo),
         arriba,
@@ -34,6 +35,19 @@ pub(crate) fn propuesta(estado: EstadoFila, copia: Option<&str>, prefijo: &str) 
         actual: None,
         copia: copia.map(str::to_string),
         aviso_prefijo: teclas::macro_del_prefijo(prefijo).err(),
+    }
+}
+
+/// Adonde apunta `termux.properties` en las instantáneas del enlace: fuera de
+/// `~/.termux` y del home, como pasa con el almacenamiento compartido.
+const DESTINO_DEL_ENLACE: &str = "/storage/emulated/0/termux/termux.properties";
+
+/// La propuesta de un `termux.properties` que es un enlace (E2): dice a dónde
+/// apunta y la copia va junto al destino.
+pub(crate) fn propuesta_de_enlace(estado: EstadoFila, prefijo: &str) -> Propuesta {
+    Propuesta {
+        enlace_a: Some(DESTINO_DEL_ENLACE.to_string()),
+        ..propuesta(estado, Some(COPIA), prefijo)
     }
 }
 
@@ -123,6 +137,20 @@ fn instantaneas_de_los_estados_del_dialogo() {
             abierto(propuesta(EstadoFila::Otra, Some(COPIA), "Ctrl+'"), "Ctrl+'"),
         );
         prueba.instantanea(&format!("termux_teclas_sin_macro_{cols}x{filas}"));
+    }
+}
+
+/// E2: un `termux.properties` que es un enlace dice a dónde apunta («se
+/// escribe ahí») y que la copia va junto a ese destino.
+#[test]
+fn instantaneas_del_dialogo_de_un_enlace() {
+    for (cols, filas) in TAMANOS {
+        let (mut prueba, _) = AppPrueba::con_semilla(cols, filas);
+        abrir(
+            &mut prueba,
+            abierto(propuesta_de_enlace(EstadoFila::Otra, "Ctrl+]"), "Ctrl+]"),
+        );
+        prueba.instantanea(&format!("termux_teclas_enlace_{cols}x{filas}"));
     }
 }
 
@@ -391,6 +419,68 @@ fn a_40x12_se_recorre_todo_lo_que_va_a_hacer_antes_de_instalar() {
             ),
         }
     }
+}
+
+/// E2: con un enlace, el texto crece (dice a dónde apunta) y a 40×12 se tiene
+/// que poder leer entero antes de confirmar, también en ASCII; y el destino
+/// llega sin cortar a 80×24.
+#[test]
+fn el_destino_de_un_enlace_se_puede_leer_entero_antes_de_instalar() {
+    use crossterm::event::KeyCode;
+    for tema_ascii in [false, true] {
+        let (mut prueba, _) = if tema_ascii {
+            AppPrueba::con_semilla_y_tema(40, 12, arnes::tema_ascii())
+        } else {
+            AppPrueba::con_semilla(40, 12)
+        };
+        abrir(
+            &mut prueba,
+            abierto(propuesta_de_enlace(EstadoFila::Otra, "Ctrl+]"), "Ctrl+]"),
+        );
+        let todo = paginas_con(&mut prueba, KeyCode::Down).join("\n");
+        // El destino puede partirse en varias líneas: se comprueba sin saltos.
+        let sin_saltos: String = todo
+            .chars()
+            .filter(|c| !c.is_whitespace() && !"│|".contains(*c))
+            .collect();
+        for frase in ["esunenlacea", "seescribeahí", DESTINO_DEL_ENLACE, COPIA] {
+            let frase: String = frase.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                sin_saltos.contains(&frase),
+                "ascii={tema_ascii}: no se llega a leer «{frase}»:\n{todo}"
+            );
+        }
+        if tema_ascii {
+            let malos: String = todo
+                .chars()
+                .filter(|c| !(c.is_ascii() || c.is_alphabetic()))
+                .collect();
+            assert!(malos.is_empty(), "glifos {malos:?} en ASCII:\n{todo}");
+        }
+    }
+    let (mut prueba, _) = AppPrueba::con_semilla(80, 24);
+    abrir(
+        &mut prueba,
+        abierto(propuesta_de_enlace(EstadoFila::Otra, "Ctrl+]"), "Ctrl+]"),
+    );
+    let texto = prueba.texto();
+    // El texto se parte por palabras: se busca sin espacios ni marcos.
+    let plano: String = texto
+        .chars()
+        .filter(|c| !c.is_whitespace() && !"│┌┐└┘─".contains(*c))
+        .collect();
+    for esperado in [
+        "es un enlace a",
+        DESTINO_DEL_ENLACE,
+        "se escribe ahí",
+        COPIA,
+        "↵ instalar",
+    ] {
+        let esperado: String = esperado.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(plano.contains(&esperado), "falta «{esperado}»:\n{texto}");
+    }
+    // El destino va entero en una sola línea, sin partirse.
+    assert!(texto.contains(DESTINO_DEL_ENLACE), "{texto}");
 }
 
 /// K1, la mitad ASCII: en ASCII también se recorre y el indicador no usa

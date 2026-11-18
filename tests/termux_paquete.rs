@@ -1778,6 +1778,16 @@ fn cuerpo_de_run(paso: &str) -> String {
 
 /// Ejecuta el script de un paso con bash y un entorno mínimo.
 fn ejecutar_paso(cuerpo: &str, camino: &str, entorno: &[(&str, &str)]) -> Resultado {
+    ejecutar_paso_en(cuerpo, camino, entorno, None)
+}
+
+/// Lo mismo, en un directorio de trabajo (el de un paso que usa git).
+fn ejecutar_paso_en(
+    cuerpo: &str,
+    camino: &str,
+    entorno: &[(&str, &str)],
+    directorio: Option<&Path>,
+) -> Resultado {
     let bash = buscar("bash").expect("bash");
     let mut orden = Command::new(bash);
     orden
@@ -1786,7 +1796,115 @@ fn ejecutar_paso(cuerpo: &str, camino: &str, entorno: &[(&str, &str)]) -> Result
         .env_clear()
         .env("PATH", camino)
         .envs(entorno.iter().copied());
+    if let Some(directorio) = directorio {
+        orden.current_dir(directorio);
+    }
     Resultado::desde(orden.output().expect("lanzar el paso"))
+}
+
+/// Un repositorio de git de prueba, aislado de la configuración del usuario
+/// (sin firma de commits, sin plantillas ni ganchos globales).
+struct RepoGit {
+    _directorio: tempfile::TempDir,
+    ruta: PathBuf,
+}
+
+impl RepoGit {
+    /// `None` (y la prueba se omite) si no hay git.
+    fn nuevo() -> Option<Self> {
+        if buscar("git").is_none() {
+            omitir("no hay git para probar los pasos que lo usan");
+            return None;
+        }
+        let directorio = tempfile::tempdir().expect("directorio temporal");
+        let ruta = directorio.path().join("repo");
+        fs::create_dir_all(&ruta).unwrap();
+        let repo = Self {
+            _directorio: directorio,
+            ruta,
+        };
+        repo.git(&["init", "-q", "-b", "main"]);
+        Some(repo)
+    }
+
+    /// El entorno con el que corre git (y los pasos que lo llaman).
+    fn entorno(&self) -> Vec<(String, String)> {
+        let casa = self.ruta.parent().unwrap().display().to_string();
+        [
+            ("HOME", casa.as_str()),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_AUTHOR_NAME", "Prueba"),
+            ("GIT_AUTHOR_EMAIL", "prueba@ejemplo.org"),
+            ("GIT_COMMITTER_NAME", "Prueba"),
+            ("GIT_COMMITTER_EMAIL", "prueba@ejemplo.org"),
+            ("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z"),
+            ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    /// Ejecuta git en el repositorio y devuelve su salida (sin el salto final).
+    fn git(&self, argumentos: &[&str]) -> String {
+        let salida = Command::new(buscar("git").expect("git"))
+            .args(argumentos)
+            .current_dir(&self.ruta)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .envs(self.entorno())
+            .output()
+            .expect("lanzar git");
+        let resultado = Resultado::desde(salida);
+        assert_eq!(
+            resultado.codigo,
+            Some(0),
+            "git {argumentos:?} debía salir bien: {}",
+            resultado.error
+        );
+        resultado.salida.trim().to_string()
+    }
+
+    fn escribir(&self, relativa: &str, contenido: &str) {
+        let ruta = self.ruta.join(relativa);
+        fs::create_dir_all(ruta.parent().unwrap()).unwrap();
+        fs::write(ruta, contenido).unwrap();
+    }
+
+    /// Confirma lo que haya y devuelve el SHA del commit.
+    fn confirmar(&self, mensaje: &str) -> String {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", mensaje]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    /// Ejecuta el script de un paso de workflow dentro del repositorio, con
+    /// estas variables además del entorno de git.
+    fn paso(&self, cuerpo: &str, variables: &[(&str, &str)]) -> Resultado {
+        let entorno = self.entorno();
+        let mut todas: Vec<(&str, &str)> = entorno
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        todas.extend_from_slice(variables);
+        ejecutar_paso_en(
+            cuerpo,
+            &std::env::var("PATH").unwrap_or_default(),
+            &todas,
+            Some(&self.ruta),
+        )
+    }
+}
+
+/// Las salidas (`clave=valor`) que un paso dejó en `GITHUB_OUTPUT`.
+fn salidas_del_paso(fichero: &Path) -> BTreeMap<String, String> {
+    fs::read_to_string(fichero)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 #[test]
@@ -1969,6 +2087,260 @@ fn termux_release_falla_si_un_adjunto_de_la_release_no_se_llama_como_se_esperaba
             resultado.salida
         );
     }
+}
+
+#[test]
+fn termux_release_fija_el_commit_de_la_etiqueta_una_vez_y_compilar_descarga_ese_commit() {
+    let texto = sin_comentarios(&leer_texto(".github/workflows/termux-release.yml"));
+
+    // El commit viaja de verificar a compilar y de compilar a publicar, y
+    // compilar lo descarga por SHA: no vuelve a resolver el nombre de la etiqueta,
+    // que pudo moverse entre los dos jobs.
+    let verificar = trozo_de_job(&texto, "verificar");
+    let compilar = trozo_de_job(&texto, "compilar");
+    let publicar = trozo_de_job(&texto, "publicar");
+    assert!(
+        verificar.contains("commit: ${{ steps.commit.outputs.commit }}"),
+        "verificar debe exportar el commit de la etiqueta"
+    );
+    assert!(
+        compilar.contains("commit: ${{ steps.commit_compilado.outputs.commit }}"),
+        "compilar debe exportar el commit que compiló"
+    );
+    assert!(
+        publicar.contains("COMMIT_COMPILADO: ${{ needs.compilar.outputs.commit }}"),
+        "publicar debe recibir el commit que compiló compilar"
+    );
+    assert!(
+        compilar.contains("ref: ${{ needs.verificar.outputs.commit }}"),
+        "compilar debe descargar el commit que fijó verificar"
+    );
+    assert!(
+        !compilar.contains("refs/tags/"),
+        "compilar no vuelve a resolver el nombre de la etiqueta"
+    );
+
+    let Some(repo) = RepoGit::nuevo() else {
+        return;
+    };
+    repo.escribir("Cargo.toml", "uno\n");
+    let a = repo.confirmar("A");
+    repo.git(&["tag", "-a", "v1.6.0", "-m", "MAGI 1.6.0"]);
+    repo.escribir("Cargo.toml", "dos\n");
+    let b = repo.confirmar("B");
+    let objeto_de_la_etiqueta = repo.git(&["rev-parse", "refs/tags/v1.6.0"]);
+    assert_ne!(
+        objeto_de_la_etiqueta, a,
+        "una etiqueta anotada tiene su propio objeto: el paso debe dar el commit"
+    );
+    let directorio = tempfile::tempdir().expect("directorio temporal");
+    let salida = directorio.path().join("salidas_del_paso");
+
+    // El paso que fija el commit, ejecutado de verdad.
+    let cuerpo = cuerpo_de_run(&paso_de(&texto, "Fijar el commit de la etiqueta"));
+    let fijar = |tag: &str, evento: &str, sha: &str| {
+        let _ = fs::remove_file(&salida);
+        let resultado = repo.paso(
+            &cuerpo,
+            &[
+                ("TAG", tag),
+                ("EVENTO", evento),
+                ("GITHUB_SHA", sha),
+                ("GITHUB_OUTPUT", salida.to_str().unwrap()),
+            ],
+        );
+        (resultado, salidas_del_paso(&salida))
+    };
+
+    // Un push de la etiqueta: lo descargado, la etiqueta y GITHUB_SHA coinciden.
+    repo.git(&["checkout", "-q", "--detach", &a]);
+    let (resultado, salidas) = fijar("v1.6.0", "push", &a);
+    resultado.exito();
+    assert_eq!(
+        salidas["commit"], a,
+        "el commit, no el objeto de la etiqueta"
+    );
+    // GITHUB_SHA es el commit; si GitHub diera el objeto de una etiqueta anotada,
+    // tampoco debe fallar una publicación legítima.
+    let (resultado, salidas) = fijar("v1.6.0", "push", &objeto_de_la_etiqueta);
+    resultado.exito();
+    assert_eq!(salidas["commit"], a);
+
+    // Con workflow_dispatch GITHUB_SHA es la punta de la rama, no la etiqueta: no
+    // se compara, pero el commit que sale sigue siendo el de la etiqueta.
+    let (resultado, salidas) = fijar("v1.6.0", "workflow_dispatch", &b);
+    resultado.exito();
+    assert_eq!(salidas["commit"], a);
+
+    // La etiqueta se borra y se recrea en otro commit y la ejecución de la
+    // etiqueta vieja arranca ahora: descarga el commit nuevo, pero GITHUB_SHA es
+    // el viejo. Tiene que fallar, sin dejar el commit como salida.
+    repo.git(&["tag", "-f", "-a", "v1.6.0", "-m", "MAGI 1.6.0", &b]);
+    repo.git(&["checkout", "-q", "--detach", &b]);
+    let (resultado, salidas) = fijar("v1.6.0", "push", &a);
+    resultado.fallo(1, "se movió o se volvió a crear");
+    assert!(
+        salidas.is_empty(),
+        "no debe fijar ningún commit: {salidas:?}"
+    );
+    // La ejecución que sí corresponde a la etiqueta nueva sigue valiendo.
+    let (resultado, salidas) = fijar("v1.6.0", "push", &b);
+    resultado.exito();
+    assert_eq!(salidas["commit"], b);
+
+    // Lo descargado no es el commit de la etiqueta.
+    repo.git(&["checkout", "-q", "--detach", &a]);
+    let (resultado, salidas) = fijar("v1.6.0", "push", &b);
+    resultado.fallo(1, "no es el commit de la etiqueta");
+    assert!(salidas.is_empty(), "{salidas:?}");
+
+    // Una etiqueta que no existe no deja pasar nada.
+    let (resultado, salidas) = fijar("v9.9.9", "push", &a);
+    assert_ne!(resultado.codigo, Some(0), "una etiqueta inexistente");
+    assert!(salidas.is_empty(), "{salidas:?}");
+
+    // El paso de compilar, que comprueba lo que descargó y lo anota para publicar.
+    let cuerpo = cuerpo_de_run(&paso_de(&texto, "Anotar el commit que se compila"));
+    let anotar = |esperado: &str| {
+        let _ = fs::remove_file(&salida);
+        let resultado = repo.paso(
+            &cuerpo,
+            &[
+                ("COMMIT_ESPERADO", esperado),
+                ("TAG", "v1.6.0"),
+                ("GITHUB_OUTPUT", salida.to_str().unwrap()),
+            ],
+        );
+        (resultado, salidas_del_paso(&salida))
+    };
+    let (resultado, salidas) = anotar(&a);
+    resultado.exito();
+    assert_eq!(salidas["commit"], a);
+    assert!(
+        resultado.salida.contains(&a),
+        "el log debe decir qué commit se compila: {}",
+        resultado.salida
+    );
+    let (resultado, salidas) = anotar(&b);
+    resultado.fallo(1, "«verificar» fijó");
+    assert!(salidas.is_empty(), "{salidas:?}");
+}
+
+/// Un `gh` falso para el paso que sube el `.deb`: anota cada llamada, contesta
+/// `gh api` con el SHA que se le da (o falla) y deja subir (o falla).
+fn gh_falso_de_publicar(directorio: &Path) -> PathBuf {
+    let bin = directorio.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        "#!/bin/sh\n\
+         echo \"$*\" >> \"$GH_FALSO_REGISTRO\"\n\
+         case \"$1\" in\n\
+           api)\n\
+             if [ -n \"$GH_FALSO_API_FALLA\" ]; then echo \"$GH_FALSO_API_FALLA\" >&2; exit 1; fi\n\
+             printf '%s\\n' \"$GH_FALSO_SHA\" ;;\n\
+           release)\n\
+             [ \"$2\" = upload ] || { echo \"gh falso: $*\" >&2; exit 2; }\n\
+             [ -z \"$GH_FALSO_SUBIDA_FALLA\" ] || exit 1 ;;\n\
+           *) echo \"gh falso: $*\" >&2; exit 2 ;;\n\
+         esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[test]
+fn termux_release_no_sube_el_deb_si_la_etiqueta_ya_no_apunta_al_commit_compilado() {
+    let texto = sin_comentarios(&leer_texto(".github/workflows/termux-release.yml"));
+    let paso = paso_de(&texto, "Subir el .deb y su .sha256 a la release");
+    // La comprobación va dentro del paso que sube y antes de subir: no hay
+    // hueco entre comprobar y subir en el que otro paso pueda colarse.
+    let cuerpo = cuerpo_de_run(&paso);
+    let comprobacion = cuerpo.find("gh api").expect("el paso consulta la etiqueta");
+    let subida = cuerpo.find("gh release upload").expect("el paso sube");
+    assert!(
+        comprobacion < subida,
+        "primero se comprueba y luego se sube"
+    );
+
+    let directorio = tempfile::tempdir().expect("directorio temporal");
+    let bin = gh_falso_de_publicar(directorio.path());
+    let camino = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let registro = directorio.path().join("registro.txt");
+    let a = "a".repeat(40);
+    let b = "b".repeat(40);
+    let deb = "magi-ssh_1.6.0_aarch64.deb";
+    let consulta = "api repos/4d3-org/magi/commits/v1.6.0 --jq .sha";
+    let subida = format!("release upload v1.6.0 {deb} {deb}.sha256");
+    let lanzar = |compilado: &str, extra: &[(&str, &str)]| -> (Resultado, String) {
+        let _ = fs::remove_file(&registro);
+        let mut entorno = vec![
+            ("TAG", "v1.6.0"),
+            ("NOMBRE_DEB", deb),
+            ("GH_REPO", "4d3-org/magi"),
+            ("COMMIT_COMPILADO", compilado),
+            ("GH_FALSO_REGISTRO", registro.to_str().unwrap()),
+            ("GH_FALSO_SHA", a.as_str()),
+        ];
+        entorno.extend_from_slice(extra);
+        let resultado = ejecutar_paso(&cuerpo, &camino, &entorno);
+        (resultado, fs::read_to_string(&registro).unwrap_or_default())
+    };
+
+    // La etiqueta sigue donde se compiló: se consulta y se sube.
+    let (resultado, llamadas) = lanzar(&a, &[]);
+    resultado.exito();
+    assert_eq!(
+        llamadas.lines().collect::<Vec<_>>(),
+        [consulta, subida.as_str()],
+        "primero la consulta de la etiqueta y luego la subida"
+    );
+
+    // La etiqueta se borró y se recreó en otro commit mientras se esperaba: el
+    // .deb es de otro commit y no se sube, con un mensaje que explica qué pasó.
+    let (resultado, llamadas) = lanzar(&b, &[]);
+    resultado.fallo(1, "la etiqueta v1.6.0 apunta ahora a");
+    assert!(
+        resultado.error.contains(&b) && resultado.error.contains(&a),
+        "el error debe nombrar los dos commits: {}",
+        resultado.error
+    );
+    assert!(
+        resultado.error.contains("se borró y se volvió a crear")
+            && resultado.error.contains("workflow_dispatch"),
+        "el error debe explicar qué pasó y cómo seguir: {}",
+        resultado.error
+    );
+    assert_eq!(llamadas.lines().collect::<Vec<_>>(), [consulta]);
+    assert!(!llamadas.contains("upload"), "no debe subir nada");
+
+    // Si no se puede leer la etiqueta, tampoco se sube: ante la duda, no.
+    let (resultado, llamadas) = lanzar(&a, &[("GH_FALSO_API_FALLA", "HTTP 502: Bad Gateway")]);
+    resultado.fallo(1, "no se pudo leer a qué commit apunta la etiqueta v1.6.0");
+    assert!(resultado.error.contains("HTTP 502"), "{}", resultado.error);
+    assert!(!llamadas.contains("upload"), "{llamadas}");
+    // Ni con una respuesta que no es un commit.
+    let (resultado, llamadas) = lanzar(&a, &[("GH_FALSO_SHA", "no es un sha")]);
+    resultado.fallo(1, "GitHub no devolvió un commit");
+    assert!(!llamadas.contains("upload"), "{llamadas}");
+
+    // Si compilar no dejó el commit, no se llega ni a consultar.
+    for vacio in ["", "no-es-un-sha", "ABCDEF"] {
+        let (resultado, llamadas) = lanzar(vacio, &[]);
+        resultado.fallo(1, "el job compilar no dejó el commit");
+        assert_eq!(llamadas, "", "sin commit compilado no se llama a gh");
+    }
+
+    // Y un fallo de la subida sigue siendo un fallo, con su explicación.
+    let (resultado, llamadas) = lanzar(&a, &[("GH_FALSO_SUBIDA_FALLA", "1")]);
+    resultado.fallo(1, "no se pudo subir a la release v1.6.0");
+    assert!(llamadas.contains("upload"), "{llamadas}");
 }
 
 #[test]
@@ -2180,6 +2552,65 @@ fn el_job_termux_de_ci_corre_solo_en_pr_que_tocan_el_paquete_y_exige_el_deb() {
             "el job termux no debe llevar «{ausente}»"
         );
     }
+}
+
+#[test]
+fn el_filtro_de_ci_ve_los_ficheros_vigilados_que_una_pr_mueve_fuera_de_sus_rutas() {
+    let texto = leer_texto(".github/workflows/ci.yml");
+    let paso = paso_de(&sin_comentarios(&texto), "Mirar qué ficheros cambia la PR");
+    let cuerpo = cuerpo_de_run(&paso);
+    assert!(
+        cuerpo.contains("git diff --name-only --no-renames HEAD^1 HEAD"),
+        "la lista de ficheros de la PR no debe pasar por la detección de renombrados"
+    );
+
+    let Some(repo) = RepoGit::nuevo() else {
+        return;
+    };
+    // Fichero grande y sin nada que lo distinga de otro: git lo empareja como
+    // renombrado (con la detección activa) y lista solo la ruta nueva.
+    let contenido = "pub fn hola() {}\n".repeat(40);
+    repo.escribir("src/vigilado.rs", &contenido);
+    repo.escribir("docs/nota.md", "nota\n");
+    let base = repo.confirmar("base");
+    let directorio = tempfile::tempdir().expect("directorio temporal");
+    let salida = directorio.path().join("salidas_del_paso");
+    let filtro = |repo: &RepoGit| -> String {
+        let _ = fs::remove_file(&salida);
+        repo.paso(&cuerpo, &[("GITHUB_OUTPUT", salida.to_str().unwrap())])
+            .exito();
+        salidas_del_paso(&salida)["termux"].clone()
+    };
+    // Como en una PR de actions/checkout: HEAD es la fusión de la base (primer
+    // padre) con la cabeza de la PR (segundo).
+    let fusionar = |rama: &str| {
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["merge", "-q", "--no-ff", "-m", "fusión", rama]);
+    };
+
+    // Una PR que solo toca documentación no activa el job...
+    repo.git(&["checkout", "-q", "-b", "documentacion"]);
+    repo.escribir("docs/nota.md", "otra nota\n");
+    repo.confirmar("documentación");
+    fusionar("documentacion");
+    assert_eq!(filtro(&repo), "false", "una PR de documentación");
+
+    // ...y una que mueve un fichero vigilado fuera de las rutas del filtro, sí:
+    // sin --no-renames, git solo lista la ruta nueva y la vieja pasa inadvertida.
+    repo.git(&["checkout", "-q", "-b", "mover"]);
+    repo.git(&["mv", "src/vigilado.rs", "docs/vigilado.rs"]);
+    repo.confirmar("mover");
+    fusionar("mover");
+    assert_eq!(
+        repo.git(&["diff", "--name-only", "HEAD^1", "HEAD"]),
+        "docs/vigilado.rs",
+        "la premisa de la prueba: con la detección de renombrados solo sale la ruta nueva"
+    );
+    assert_eq!(filtro(&repo), "true", "una PR que mueve src/vigilado.rs");
+
+    // Sin fusión (HEAD no tiene segundo padre) se asume que toca Termux.
+    repo.git(&["checkout", "-q", "--detach", &base]);
+    assert_eq!(filtro(&repo), "true", "HEAD no es una fusión");
 }
 
 #[test]
@@ -2415,6 +2846,108 @@ fn la_guia_y_publicar_md_cuentan_lo_que_hacen_de_verdad_los_workflows() {
                 }
             }
         }
+    }
+}
+
+/// El texto de un documento sin saltos de línea ni sangrías: para buscar frases
+/// que el formato parte a 80 columnas.
+fn aplanado(texto: &str) -> String {
+    texto.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// La sección `## <numero> …` de un documento, hasta la siguiente (la tabla de
+/// canales de antes del primer apartado, con `""`).
+fn seccion_de(texto: &str, numero: &str) -> String {
+    if numero.is_empty() {
+        return texto.split("\n## ").next().unwrap().to_string();
+    }
+    let cabecera = format!("\n## {numero} ");
+    let desde = texto
+        .find(&cabecera)
+        .unwrap_or_else(|| panic!("falta la sección {numero}"));
+    let resto = &texto[desde + 1..];
+    resto.split("\n## ").next().unwrap().to_string()
+}
+
+#[test]
+fn las_guias_de_publicacion_cuentan_como_se_recupera_una_publicacion_y_donde_sale_el_deb() {
+    // docs/publicar-termux.md: lo que hay que saber para rescatar una publicación.
+    let guia = leer_texto("docs/publicar-termux.md");
+    let probar = seccion_de(&guia, "5.");
+    let repetir = aplanado(&seccion_de(&guia, "8."));
+    let fallos = aplanado(&seccion_de(&guia, "9."));
+    let probar = aplanado(&probar);
+    for (donde, texto, presente) in [
+        // F3: la primera publicación es una candidata y se arma antes con dpkg-deb real.
+        (
+            "§5",
+            &probar,
+            "La primera publicación de Termux tiene que ser siempre una candidata `-rc.N`",
+        ),
+        ("§5", &probar, "Ejecuta el script con `dpkg-deb` real"),
+        // F3: Re-run failed jobs frente a un nuevo dispatch.
+        ("§8", &repetir, "«Re-run failed jobs»"),
+        ("§8", &repetir, "mismo workflow, la misma etiqueta y el mismo commit"),
+        ("§8", &repetir, "empieza una ejecución nueva: compila y atesta otra vez"),
+        // F3: de dónde sale lo que se compila.
+        (
+            "§8",
+            &repetir,
+            "El script y todo lo que se compila salen siempre del árbol de la etiqueta",
+        ),
+        ("§8", &repetir, "`--ref main` solo cambia el YAML del workflow"),
+        // F2: la atestación de un dispatch.
+        (
+            "§8",
+            &repetir,
+            "lleva el commit de la rama desde la que se lanzó",
+        ),
+        // F3: el armado con dpkg-deb real en la etiqueta estable.
+        ("§9", &fallos, "Falla el armado del .deb (script o estructura)"),
+        ("§9", &fallos, "solo arregla fallos del YAML"),
+        (
+            "§9",
+            &fallos,
+            "**sin `.deb`**, y solo se arregla con un PATCH nuevo",
+        ),
+        ("§9", &fallos, "la primera publicación es siempre una candidata `-rc.N`"),
+        // F1: la etiqueta recreada con una ejecución suya en marcha.
+        ("§9", &fallos, "el .deb se compiló desde el commit"),
+        (
+            "§9",
+            &fallos,
+            "No se recrea una etiqueta con una ejecución de «Release Termux» suya en curso o en cola: cancélala antes",
+        ),
+        ("§9", &fallos, "mejor **«Re-run failed jobs»** del workflow que falló"),
+    ] {
+        assert!(
+            texto.contains(presente),
+            "docs/publicar-termux.md, {donde}, debe decir «{presente}»"
+        );
+    }
+
+    // docs/publicar.md: el .deb en los canales, el flujo, §7 y las comprobaciones.
+    let publicar = leer_texto("docs/publicar.md");
+    let canales = aplanado(&seccion_de(&publicar, ""));
+    let flujo = aplanado(&seccion_de(&publicar, "5."));
+    let canal_caido = aplanado(&seccion_de(&publicar, "7."));
+    let comprobaciones = aplanado(&seccion_de(&publicar, "9."));
+    for (donde, texto, presente) in [
+        ("la tabla de canales", &canales, "`magi-ssh_X.Y.Z_aarch64.deb`"),
+        ("la tabla de canales", &canales, "`termux-release.yml`"),
+        ("§5", &flujo, "Vigila también Release Termux; ver [`publicar-termux.md`]"),
+        (
+            "§7",
+            &canal_caido,
+            "No recrees un tag con una ejecución de «Release Termux» suya en curso o en cola: cancélala antes",
+        ),
+        ("§7", &canal_caido, "es mejor **Re-run failed jobs** del workflow que falló"),
+        ("§9", &comprobaciones, "el `.deb` y su `.sha256` para Termux"),
+    ] {
+        assert!(
+            texto.contains(presente),
+            "docs/publicar.md, {donde}, debe decir «{presente}»"
+        );
     }
 }
 

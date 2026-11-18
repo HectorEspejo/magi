@@ -17,7 +17,13 @@
 //! la herramienta del sistema (`wl-copy`, `pbcopy`) y, si no hay, conservan su
 //! respaldo de siempre (el diálogo con la línea a mano, el enlace a la vista);
 //! el OSC 52 solo lo usan el historial, los enlaces del diálogo y lo que copia
-//! un host (`Texto` y `Remoto`), como entonces.
+//! un host (`Texto` y `Remoto`), como entonces. La clave recién generada es la
+//! excepción en el sitio, no en el resultado: su copia la hace la tarea de
+//! `identidades::generar`, como antes de la Fase 17 (la espera a la
+//! herramienta no cae en el hilo de la interfaz), y `App::publica_generada`
+//! solo dice lo que pasó. Las copias de la clave de una identidad y del enlace
+//! del visor siguen en el hilo de la interfaz, igual que desde la Fase 2 y la
+//! 12.
 //!
 //! En Termux las copias por la orden se serializan: una en vuelo y, detrás, la
 //! última que se pidió (la anterior que esperaba se da por no hecha y su
@@ -47,6 +53,9 @@ pub const COPIA_SUSTITUIDA: &str = "sustituida por una copia más reciente";
 pub enum Origen {
     /// Se copió con `wl-copy` o `pbcopy`.
     Sistema(&'static str),
+    /// Se copió con la herramienta del sistema en la tarea que generó la
+    /// clave (escritorio): el resultado llega ya hecho y no se sabe con cuál.
+    TareaDelEscritorio,
     /// Se pidió al terminal exterior con OSC 52.
     Osc52,
     /// Termux: `termux-clipboard-set` respondió; son los bytes copiados.
@@ -269,6 +278,35 @@ impl App {
             Err(motivo) => FinCopia::Fallo(motivo),
         };
         self.terminar_copia(&texto, para, fin);
+    }
+
+    /// La clave pública recién generada, con lo que su tarea dijo de la copia
+    /// (`identidades::generar`). En el escritorio la tarea ya la intentó con la
+    /// herramienta del sistema, fuera del hilo de la interfaz: si la copió se
+    /// dice, y si no, sale el respaldo de siempre sin repetir la copia aquí (que
+    /// esperaría a la herramienta hasta 750 ms con la interfaz parada). Si la
+    /// tarea no lo intentó (Termux, donde la copia es de `App::copiar`), se
+    /// copia por la única vía.
+    pub(crate) fn publica_generada(
+        &mut self,
+        publica: String,
+        copiada: bool,
+        fallo_copia: Option<String>,
+        resumen: String,
+        error: bool,
+    ) {
+        let para = ParaQue::ClaveGenerada { resumen, error };
+        if copiada {
+            self.terminar_copia(
+                &publica,
+                para,
+                FinCopia::Copiado(Origen::TareaDelEscritorio),
+            );
+        } else if let Some(motivo) = fallo_copia {
+            self.terminar_copia(&publica, para, FinCopia::Fallo(motivo));
+        } else {
+            self.copiar(publica, para);
+        }
     }
 
     /// Lo que se hace y se dice cuando la copia ha terminado, sea cual sea el
@@ -653,6 +691,31 @@ mod pruebas {
             }
         }
 
+        /// Pone un `wl-copy` y un `pbcopy` que anotan que los llamaron
+        /// (`llamado`, en la carpeta de herramientas) y se quedan sirviendo el
+        /// portapapeles 5 s, como un daemon: una copia hecha con ellos en el
+        /// hilo de la interfaz la deja parada los 750 ms de `ESPERA_COPIA`.
+        fn fabricar_herramientas_lentas(&self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            for nombre in ["wl-copy", "pbcopy"] {
+                let ruta = self.carpeta.join(nombre);
+                std::fs::write(
+                    &ruta,
+                    format!(
+                        "#!/bin/sh\necho x > '{}'\ncat > /dev/null\nsleep 5\n",
+                        self.carpeta.join("llamado").display()
+                    ),
+                )
+                .expect("herramienta");
+                std::fs::set_permissions(&ruta, std::fs::Permissions::from_mode(0o755))
+                    .expect("permisos");
+            }
+        }
+
+        fn herramienta_llamada(&self) -> bool {
+            self.carpeta.join("llamado").exists()
+        }
+
         fn copiado(&self) -> Option<String> {
             // El programa se recoge en segundo plano: se espera a que escriba.
             let limite = Instant::now() + Duration::from_secs(5);
@@ -819,6 +882,122 @@ mod pruebas {
             ))
         );
         assert!(escritorio.app.dialogo.is_none());
+    }
+
+    /// La clave recién generada tal y como la devuelve su tarea: con la copia
+    /// ya intentada (escritorio) o sin intentar (Termux).
+    fn clave_generada(
+        copiada: bool,
+        fallo_copia: Option<String>,
+    ) -> crate::identidades::ClaveGenerada {
+        crate::identidades::ClaveGenerada {
+            tipo: "ed25519".to_string(),
+            huella: "SHA256:T2qRAb3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7".to_string(),
+            ruta: std::path::PathBuf::from("/home/usuario/.ssh/id_nueva"),
+            publica: format!("{PUBLICA}\n"),
+            comentario: Some("usuario@ejemplo.org".to_string()),
+            en_agente: false,
+            aviso_agente: None,
+            copiada,
+            solicito_copia: true,
+            fallo_copia,
+        }
+    }
+
+    const RESUMEN_GENERADA: &str = "clave ed25519 generada en /home/usuario/.ssh/id_nueva";
+
+    /// Regresión (revisión de cierre de la Fase 17, D5): en el escritorio, la
+    /// copia de la clave recién generada la hace la tarea de generación (como
+    /// antes de la Fase 17) y la interfaz no vuelve a copiar: ni llama a la
+    /// herramienta del sistema ni la espera (hasta 750 ms con la interfaz
+    /// parada).
+    #[test]
+    fn la_clave_generada_copiada_por_la_tarea_no_llama_a_la_herramienta_en_la_interfaz() {
+        let mut escritorio = Escritorio::nuevo();
+        escritorio.fabricar_herramientas_lentas();
+        let inicio = Instant::now();
+        escritorio
+            .app
+            .procesar(Evento::ClaveGenerada(Ok(clave_generada(true, None))));
+        assert!(
+            inicio.elapsed() < Duration::from_millis(400),
+            "la interfaz esperó a la herramienta: {:?}",
+            inicio.elapsed()
+        );
+        assert!(
+            !escritorio.herramienta_llamada(),
+            "la interfaz llamó a la herramienta de copia"
+        );
+        assert_eq!(
+            escritorio.mensaje(),
+            Some((
+                format!("{RESUMEN_GENERADA} · pública copiada al portapapeles"),
+                false
+            ))
+        );
+        assert!(escritorio.app.dialogo.is_none());
+    }
+
+    /// Lo mismo cuando la tarea no pudo copiar: sale el respaldo de siempre
+    /// (resumen en la barra y el diálogo con la línea a mano) sin repetir la
+    /// copia en la interfaz, aunque ahora hubiera herramienta.
+    #[test]
+    fn la_clave_generada_que_la_tarea_no_pudo_copiar_abre_el_respaldo_sin_reintentar() {
+        let mut escritorio = Escritorio::nuevo();
+        escritorio.fabricar_herramientas_lentas();
+        let inicio = Instant::now();
+        escritorio
+            .app
+            .procesar(Evento::ClaveGenerada(Ok(clave_generada(
+                false,
+                Some(SIN_HERRAMIENTA.to_string()),
+            ))));
+        assert!(
+            inicio.elapsed() < Duration::from_millis(400),
+            "la interfaz esperó a la herramienta: {:?}",
+            inicio.elapsed()
+        );
+        assert!(
+            !escritorio.herramienta_llamada(),
+            "la interfaz repitió la copia que acababa de fallar"
+        );
+        assert_eq!(
+            escritorio.mensaje(),
+            Some((RESUMEN_GENERADA.to_string(), false))
+        );
+        match &escritorio.app.dialogo {
+            Some(Dialogo::Detalle { titulo, lineas, .. }) => {
+                assert_eq!(titulo, "CLAVE PÚBLICA");
+                assert_eq!(
+                    lineas[0],
+                    "No se pudo copiar al portapapeles; copia la línea a mano:"
+                );
+                assert_eq!(lineas[2], PUBLICA);
+            }
+            _ => panic!("sin el diálogo con la línea a mano"),
+        }
+    }
+
+    /// Si la tarea no intentó copiar (Termux, y las pruebas sin tarea), la copia
+    /// es de `App::copiar`, la única vía.
+    #[test]
+    fn la_clave_generada_que_la_tarea_no_intento_copiar_va_por_la_unica_via() {
+        let mut escritorio = Escritorio::nuevo();
+        escritorio.fabricar_herramientas();
+        escritorio
+            .app
+            .procesar(Evento::ClaveGenerada(Ok(clave_generada(false, None))));
+        assert_eq!(
+            escritorio.copiado().as_deref(),
+            Some(format!("{PUBLICA}\n").as_str())
+        );
+        assert_eq!(
+            escritorio.mensaje(),
+            Some((
+                format!("{RESUMEN_GENERADA} · pública copiada al portapapeles"),
+                false
+            ))
+        );
     }
 
     /// Regresión (C4): el respaldo de una copia que termina tarde no pisa el

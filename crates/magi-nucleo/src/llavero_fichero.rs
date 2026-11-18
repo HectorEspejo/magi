@@ -29,6 +29,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -75,6 +76,8 @@ const PAUSA_CERROJO: Duration = Duration::from_millis(20);
 const BYTES_CABECERA: u64 = 4096;
 /// Primera línea de todo fichero age.
 const LINEA_AGE: &[u8] = b"age-encryption.org/v1\n";
+/// Lo que hay en la ruta es un enlace simbólico que no lleva a ningún sitio.
+const ENLACE_ROTO: &str = "llavero.age es un enlace roto";
 
 /// En qué estado está el fichero y este objeto.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,10 +283,9 @@ fn error_io(accion: &str, error: &std::io::Error) -> ErrorLlavero {
 /// Lee `llavero.age` con tope. `None` si no existe. Lo que no es un fichero
 /// normal, o pasa del tope, es «dañado».
 fn leer_fichero(ruta: &Path) -> Result<Option<Lectura>, ErrorLlavero> {
-    let meta = match fs::metadata(ruta) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error_io("leer el llavero", &error)),
+    let meta = match metadatos_del_fichero(ruta)? {
+        Some(meta) => meta,
+        None => return Ok(None),
     };
     if !meta.is_file() {
         return Err(ErrorLlavero::Danado(
@@ -316,6 +318,25 @@ fn leer_fichero(ruta: &Path) -> Result<Option<Lectura>, ErrorLlavero> {
     Ok(Some(Lectura { bytes, firma }))
 }
 
+/// Los metadatos de lo que hay en la ruta, siguiendo enlaces: `None` si no hay
+/// nada. Un enlace simbólico que no lleva a ningún sitio no es «no existe»:
+/// hay algo en la ruta (crear daría `YaExiste`), así que es un fichero dañado
+/// que se aparta, y decir otra cosa metería a la interfaz en un bucle entre
+/// crear y desbloquear.
+fn metadatos_del_fichero(ruta: &Path) -> Result<Option<fs::Metadata>, ErrorLlavero> {
+    match fs::metadata(ruta) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(ruta) {
+                Ok(_) => Err(ErrorLlavero::Danado(ENLACE_ROTO.to_string())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error_io("leer el llavero", &error)),
+            }
+        }
+        Err(error) => Err(error_io("leer el llavero", &error)),
+    }
+}
+
 fn llavero_demasiado_grande() -> ErrorLlavero {
     ErrorLlavero::Danado("el fichero pasa de 1 MiB, que es más de lo que admite un llavero".into())
 }
@@ -338,7 +359,15 @@ struct Cerrojo {
 
 /// Mira la cabecera sin gastar scrypt: que sea un age con una sola entrada
 /// scrypt y con un factor de trabajo que MAGI acepta. `Err` lleva el motivo.
+///
+/// Solo mira los primeros `BYTES_CABECERA` bytes: la de un llavero válido mide
+/// unos 200 y el análisis de la cabecera de age es cuadrático en el número de
+/// entradas, así que un fichero forjado de hasta 1 MiB con miles de ellas
+/// tardaría minutos sin gastar scrypt. Una cabecera que no termina ahí es un
+/// fichero dañado.
 fn validar_cabecera(datos: &[u8]) -> Result<(), String> {
+    let completo = datos.len();
+    let datos = &datos[..completo.min(BYTES_CABECERA as usize)];
     let Some(resto) = datos.strip_prefix(LINEA_AGE) else {
         return Err("el fichero no es un llavero de MAGI (no tiene cabecera age)".to_string());
     };
@@ -361,6 +390,12 @@ fn validar_cabecera(datos: &[u8]) -> Result<(), String> {
     if log_n > u32::from(LOG_N_MAX) {
         return Err(format!(
             "el factor de trabajo del llavero (2^{log_n}) supera el máximo admitido (2^{LOG_N_MAX})"
+        ));
+    }
+    // Sin la línea de cierre (`--- <mac>`) dentro del límite, ni se le pasa a age.
+    if completo > datos.len() && !datos.windows(5).any(|ventana| ventana == b"\n--- ") {
+        return Err(format!(
+            "la cabecera age del llavero no termina en los primeros {BYTES_CABECERA} bytes"
         ));
     }
     // La estructura completa la comprueba age: una sola entrada y de tipo scrypt.
@@ -612,6 +647,9 @@ pub struct LlaveroFichero {
     interno: Mutex<Interno>,
     /// Serializa las operaciones lentas dentro de este objeto.
     operacion: Mutex<()>,
+    /// Cuántas veces ha intentado este objeto descifrar el fichero (cada una
+    /// gasta scrypt): solo lo lee `descifrados`, para las pruebas.
+    descifrados: AtomicU64,
 }
 
 impl std::fmt::Debug for LlaveroFichero {
@@ -655,6 +693,7 @@ impl LlaveroFichero {
                 espera_hasta: None,
             }),
             operacion: Mutex::new(()),
+            descifrados: AtomicU64::new(0),
         }
     }
 
@@ -670,6 +709,24 @@ impl LlaveroFichero {
         self.operacion
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `descifrar`, contando el intento (cada uno puede gastar scrypt).
+    fn descifrar_contando(
+        &self,
+        datos: &[u8],
+        frase: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, ErrorAbrir> {
+        self.descifrados.fetch_add(1, Ordering::Relaxed);
+        descifrar(datos, frase)
+    }
+
+    /// Cuántas veces ha intentado este objeto descifrar el fichero (cada una
+    /// gasta scrypt). Solo para las pruebas: comprueban que `refrescar` no lo
+    /// gasta cuando el fichero no ha cambiado.
+    #[doc(hidden)]
+    pub fn descifrados(&self) -> u64 {
+        self.descifrados.load(Ordering::Relaxed)
     }
 
     /// El fichero ya no existe: se olvida lo que había en memoria, salvo que
@@ -794,6 +851,12 @@ impl LlaveroFichero {
             Ok(meta) => meta,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 self.olvidar_memoria_sin_fichero();
+                // `metadata` sigue los enlaces: si la ruta es uno que no lleva
+                // a ningún sitio, hay algo ahí. Decir «inexistente» ofrecería
+                // crear (que da `YaExiste`) y la interfaz daría vueltas.
+                if fs::symlink_metadata(&self.ruta).is_ok() {
+                    return EstadoFichero::Danado(ENLACE_ROTO.to_string());
+                }
                 return EstadoFichero::Inexistente;
             }
             Err(error) => {
@@ -881,7 +944,7 @@ impl LlaveroFichero {
         self.comprobar_espera()?;
         let generacion = self.interno().generacion;
         let lectura = leer_fichero(&self.ruta)?.ok_or(ErrorLlavero::Inexistente)?;
-        let claro = match descifrar(&lectura.bytes, &frase) {
+        let claro = match self.descifrar_contando(&lectura.bytes, &frase) {
             Ok(claro) => claro,
             Err(ErrorAbrir::FraseIncorrecta) => {
                 return Err(ErrorLlavero::FraseIncorrecta {
@@ -911,6 +974,96 @@ impl LlaveroFichero {
         Ok(())
     }
 
+    /// Pone la memoria al día con el fichero que hay ahora. Otra ventana de
+    /// MAGI pudo reescribirlo (rotar la clave de sincronización, desactivarla,
+    /// cambiar la frase) y quien lee de la memoria, como la pasada de
+    /// sincronización, vería las entradas de antes: exportaría con una clave
+    /// vieja o resucitaría lo que otra ventana quitó.
+    ///
+    /// Con el llavero cerrado no hace nada (no hay memoria que poner al día).
+    /// Abierto, toma el cerrojo y compara el SHA-256 del fichero con el de la
+    /// memoria: si es el mismo, no gasta scrypt; si cambió, lo relee y lo
+    /// descifra con la frase que hay en memoria. Si esa frase ya no lo abre
+    /// (otra ventana la cambió) o el fichero desapareció o se estropeó, la
+    /// memoria se vacía y el llavero queda cerrado: lo que lea después recibirá
+    /// `Bloqueado` y no hará nada con una clave que ya no es la del fichero.
+    ///
+    /// Bloquea el hilo lo que tarde el cerrojo y, si cambió, scrypt (~1 s en un
+    /// móvil): quien lo llame desde una interfaz lo hace en `spawn_blocking`.
+    pub fn refrescar(&self) -> Result<(), ErrorLlavero> {
+        // Cerrado: nada que poner al día (y sin tocar el disco).
+        if self.interno().frase.is_none() {
+            return Ok(());
+        }
+        let _operacion = self.operacion();
+        let (frase, generacion) = {
+            let interno = self.interno();
+            match &interno.frase {
+                Some(frase) => (Zeroizing::new(frase.to_string()), interno.generacion),
+                None => return Ok(()),
+            }
+        };
+        let _cerrojo = self.tomar_cerrojo()?;
+        let lectura = match leer_fichero(&self.ruta) {
+            Ok(Some(lectura)) => lectura,
+            Ok(None) => {
+                // Desapareció: la memoria describe un fichero que ya no está.
+                self.interno().vaciar();
+                return Ok(());
+            }
+            Err(error @ ErrorLlavero::Danado(_)) => {
+                self.interno().vaciar();
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        let resumen = resumen_de(&lectura.bytes);
+        {
+            let mut interno = self.interno();
+            if interno.generacion != generacion {
+                return Err(ErrorLlavero::Bloqueado);
+            }
+            if interno.resumen == Some(resumen) {
+                // El mismo contenido: solo se pone al día lo que lo identifica.
+                interno.firma = Some(lectura.firma);
+                return Ok(());
+            }
+        }
+        let claro = match self.descifrar_contando(&lectura.bytes, &frase) {
+            Ok(claro) => claro,
+            Err(ErrorAbrir::FraseIncorrecta) => {
+                // Otra ventana cambió la frase: la nuestra ya no abre nada.
+                let mut interno = self.interno();
+                if interno.generacion == generacion {
+                    interno.vaciar();
+                }
+                return Err(ErrorLlavero::Bloqueado);
+            }
+            Err(ErrorAbrir::Danado(motivo)) => {
+                let error = self.recordar_danado(lectura.firma, motivo);
+                self.interno().vaciar();
+                return Err(error);
+            }
+        };
+        let entradas = match leer_entradas(&claro) {
+            Ok(entradas) => entradas,
+            Err(motivo) => {
+                let error = self.recordar_danado(lectura.firma, motivo);
+                self.interno().vaciar();
+                return Err(error);
+            }
+        };
+        let mut interno = self.interno();
+        if interno.generacion != generacion {
+            // Se bloqueó mientras scrypt trabajaba: lo cerrado no se reabre.
+            return Err(ErrorLlavero::Bloqueado);
+        }
+        interno.entradas = entradas;
+        interno.firma = Some(lectura.firma);
+        interno.resumen = Some(resumen);
+        Ok(())
+    }
+
     /// Borra de la memoria la frase y las entradas (`zeroize`). No toca el
     /// fichero.
     pub fn bloquear(&self) {
@@ -934,7 +1087,7 @@ impl LlaveroFichero {
         let _cerrojo = self.tomar_cerrojo()?;
         let generacion = self.interno().generacion;
         let lectura = leer_fichero(&self.ruta)?.ok_or(ErrorLlavero::Inexistente)?;
-        let claro = match descifrar(&lectura.bytes, &actual) {
+        let claro = match self.descifrar_contando(&lectura.bytes, &actual) {
             Ok(claro) => claro,
             Err(ErrorAbrir::FraseIncorrecta) => {
                 return Err(ErrorLlavero::FraseIncorrecta {
@@ -1007,8 +1160,8 @@ impl LlaveroFichero {
             Err(error) => return Err(error_io("leer el llavero", &error)),
         }
         // Solo se aparta lo que sigue dañado: otra ventana pudo apartarlo y
-        // crear uno bueno mientras el diálogo seguía abierto. («Inexistente»
-        // con algo en la ruta es un enlace roto: eso sí se aparta.)
+        // crear uno bueno mientras el diálogo seguía abierto. (Un enlace roto
+        // cuenta como dañado: `estado` lo dice, y eso sí se aparta.)
         if matches!(
             self.estado(),
             EstadoFichero::Abierto | EstadoFichero::Cerrado
@@ -1044,13 +1197,13 @@ impl LlaveroFichero {
     fn modificar<R>(&self, cambio: impl FnOnce(&mut Entradas) -> (R, bool)) -> Result<R, String> {
         let _operacion = self.operacion();
         // 1. Hay fichero y la frase está en memoria.
-        match fs::metadata(&self.ruta) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        match metadatos_del_fichero(&self.ruta) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
                 self.interno().vaciar();
                 return Err(SIN_CREAR.to_string());
             }
-            Err(error) => return Err(error_io("leer el llavero", &error).to_string()),
+            Err(error) => return Err(error.to_string()),
         }
         let (frase, generacion) = {
             let interno = self.interno();
@@ -1084,7 +1237,7 @@ impl LlaveroFichero {
         let mut entradas = if let Some(entradas) = de_memoria {
             entradas
         } else {
-            match descifrar(&lectura.bytes, &frase) {
+            match self.descifrar_contando(&lectura.bytes, &frase) {
                 Ok(claro) => match leer_entradas(&claro) {
                     Ok(entradas) => entradas,
                     Err(motivo) => {
@@ -1148,13 +1301,13 @@ impl LlaveroSecreto for LlaveroFichero {
     /// Sin fichero: `Ok(None)`; cerrado: `Err(BLOQUEADO)`; abierto: de la
     /// memoria.
     fn recuperar(&self, cuenta: &str) -> Result<Option<Zeroizing<String>>, String> {
-        match fs::metadata(&self.ruta) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        match metadatos_del_fichero(&self.ruta) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
                 self.olvidar_memoria_sin_fichero();
                 return Ok(None);
             }
-            Err(error) => return Err(error_io("leer el llavero", &error).to_string()),
+            Err(error) => return Err(error.to_string()),
         }
         let interno = self.interno();
         if interno.frase.is_none() {

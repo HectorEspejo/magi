@@ -30,12 +30,26 @@ type Futuro<T> = nucleo::comprobaciones::Futuro<T>;
 /// Usuario local para `DELIBERACIONES.usuario`: el del uid del proceso (una
 /// variable de entorno se puede falsear y esto es un registro de auditoría);
 /// `$USER` solo si el sistema no lo sabe.
+///
+/// En Termux (Fase 17, §3.2 y §7.8) es `termux-<modelo>`, el mismo nombre del
+/// equipo: el uid de Android (`u0_a123`) no dice nada de quién delibera.
 pub fn usuario_del_sistema() -> String {
+    if crate::termux::es_termux() {
+        return usuario_de_termux(&crate::termux::Propiedades::del_sistema());
+    }
     nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
         .flatten()
         .map(|usuario| usuario.name)
         .unwrap_or_else(crate::conexion::usuario_local)
+}
+
+/// El usuario de las deliberaciones en Termux: `termux-<modelo>`, con el
+/// modelo de las propiedades de Android. Sin modelo (propiedades ausentes o
+/// vacías) sale `termux` a secas, nunca un nombre vacío. La parte de
+/// [`usuario_del_sistema`] que se puede probar sin depender del proceso.
+pub fn usuario_de_termux(propiedades: &crate::termux::Propiedades) -> String {
+    crate::termux::nombre_equipo(&propiedades.modelo().unwrap_or_default())
 }
 
 /// Los límites de `[deliberacion]` de `config.toml`, con los suelos del
@@ -353,5 +367,21 @@ mod pruebas {
     #[test]
     fn el_usuario_del_sistema_no_esta_vacio() {
         assert!(!usuario_del_sistema().is_empty());
+    }
+
+    #[test]
+    fn el_usuario_de_termux_sale_del_modelo() {
+        let con_modelo = crate::termux::Propiedades::fijas(&[("ro.product.model", "ABC-X10")]);
+        assert_eq!(usuario_de_termux(&con_modelo), "termux-abc-x10");
+        // El mismo nombre que el del equipo (§7.8), con la misma regla.
+        assert_eq!(
+            usuario_de_termux(&con_modelo),
+            crate::termux::nombre_equipo("ABC-X10")
+        );
+        // Sin modelo, o con uno en blanco: «termux» a secas, nunca vacío.
+        let sin_modelo = crate::termux::Propiedades::fijas(&[]);
+        assert_eq!(usuario_de_termux(&sin_modelo), "termux");
+        let en_blanco = crate::termux::Propiedades::fijas(&[("ro.product.model", "   ")]);
+        assert_eq!(usuario_de_termux(&en_blanco), "termux");
     }
 }

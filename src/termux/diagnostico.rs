@@ -7,7 +7,8 @@
 //!   almacenamiento, fila de teclas, marcas del estado, fecha del llavero) y lo
 //!   deja en un [`DatosTermux`]. No lee `std::env` (todo se inyecta), no
 //!   escribe nada y no abre el llavero ni pide la frase maestra: del llavero
-//!   solo mira si `llavero.age` existe y cuándo se modificó. ([`observar_interrumpible`]
+//!   solo mira si `llavero.age` existe, si su cabecera se lee (sin scrypt) y
+//!   cuándo se modificó. ([`observar_interrumpible`]
 //!   es la de la línea de comandos: lo mismo, pero se puede interrumpir con
 //!   Ctrl+C mientras espera a Termux:API.)
 //! - [`bloque`], [`llavero`], [`portapapeles`], [`terminal`] y
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Datelike as _, Local, NaiveDate, Utc};
-use magi_nucleo::llavero_fichero::NOMBRE_FICHERO;
+use magi_nucleo::llavero_fichero::{EstadoFichero, LlaveroFichero, NOMBRE_FICHERO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
 use crate::config::{Config, Rutas};
@@ -105,7 +106,9 @@ pub enum LlaveroObservado {
     /// el de su creación: en Android `Metadata::created()` no está soportado
     /// y `llavero.age` se reescribe entero, de forma atómica, en cada guardado.
     Fichero { modificado: Option<NaiveDate> },
-    /// Existe pero no se pudo mirar (no es un fichero normal, permisos).
+    /// Existe pero no se pudo mirar o está dañado: no es un fichero normal,
+    /// permisos, o su cabecera age no se lee (el mismo «dañado» que enseña la
+    /// TUI y `magi llavero estado`).
     NoLegible(String),
 }
 
@@ -374,18 +377,37 @@ fn observar_almacenamiento(hogar: &Path) -> AlmacenamientoObservado {
     AlmacenamientoObservado::Presente { destino, accesible }
 }
 
-/// Mira `llavero.age` sin abrirlo: nunca lee su contenido, nunca gasta scrypt
-/// ni pide la frase. Un fichero con basura sale como cualquier otro.
+/// Mira `llavero.age` sin abrirlo: nunca descifra su contenido, nunca gasta
+/// scrypt ni pide la frase. Sí mira su cabecera age (lo mismo que hace
+/// `magi llavero estado` y la TUI al cargar): un fichero dañado sale como
+/// [`LlaveroObservado::NoLegible`], con su aviso, y no como un llavero bueno.
 fn observar_llavero(ruta: &Path) -> LlaveroObservado {
     match std::fs::metadata(ruta) {
         // Solo se mira cuándo se modificó: la fecha de creación no existe en
         // Android (`Metadata::created()` da `Unsupported`) y el fichero se
         // reescribe entero en cada guardado.
-        Ok(metadatos) if metadatos.is_file() => LlaveroObservado::Fichero {
-            modificado: metadatos.modified().ok().and_then(dia_local),
-        },
+        Ok(metadatos) if metadatos.is_file() => {
+            // Un `LlaveroFichero` nuevo solo conoce el disco: `estado()` lee
+            // los primeros bytes y valida la cabecera, sin scrypt ni frase.
+            match LlaveroFichero::nuevo(ruta.to_path_buf()).estado() {
+                EstadoFichero::Danado(motivo) => LlaveroObservado::NoLegible(motivo),
+                // Se borró entre una mirada y otra.
+                EstadoFichero::Inexistente => LlaveroObservado::SinCrear,
+                EstadoFichero::Cerrado | EstadoFichero::Abierto => LlaveroObservado::Fichero {
+                    modificado: metadatos.modified().ok().and_then(dia_local),
+                },
+            }
+        }
         Ok(_) => LlaveroObservado::NoLegible("no es un fichero normal".to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => LlaveroObservado::SinCrear,
+        // Un enlace simbólico roto en la ruta: `metadata` dice «no existe» pero
+        // hay algo ahí (la TUI lo trata como dañado y ofrece apartarlo).
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if std::fs::symlink_metadata(ruta).is_ok() {
+                LlaveroObservado::NoLegible("llavero.age es un enlace roto".to_string())
+            } else {
+                LlaveroObservado::SinCrear
+            }
+        }
         Err(error) => LlaveroObservado::NoLegible(error.kind().to_string()),
     }
 }
@@ -1008,7 +1030,7 @@ mod pruebas {
     fn el_llavero_con_una_fecha_absurda_no_tira_el_diagnostico() {
         let temporal = tempfile::tempdir().unwrap();
         let ruta = temporal.path().join("llavero.age");
-        std::fs::write(&ruta, b"x").unwrap();
+        llavero_de_verdad(&ruta);
         let lejos = filetime::FileTime::from_unix_time(9_000_000_000_000, 0);
         if filetime::set_file_mtime(&ruta, lejos).is_err() {
             // Un sistema de ficheros que no admite esa fecha no puede darla.
@@ -1055,18 +1077,51 @@ mod pruebas {
         assert_eq!(sanear("  \n", 10), "");
     }
 
+    /// Un `llavero.age` de verdad (factor de trabajo mínimo), cerrado: la
+    /// frase solo vive en la memoria de quien lo creó.
+    fn llavero_de_verdad(ruta: &Path) {
+        let llavero = LlaveroFichero::con_ajustes(ruta.to_path_buf(), 4, Arc::new(Instant::now));
+        llavero
+            .crear("una frase maestra larga", "una frase maestra larga")
+            .expect("creando el llavero de prueba");
+    }
+
     #[test]
     fn el_llavero_se_mira_sin_abrirlo() {
         let temporal = tempfile::tempdir().unwrap();
         let ruta = temporal.path().join("llavero.age");
         assert_eq!(observar_llavero(&ruta), LlaveroObservado::SinCrear);
-        // Con basura dentro es un fichero como otro cualquiera.
-        std::fs::write(&ruta, b"esto no es age").unwrap();
+        // Uno de verdad, con su cabecera age: es un llavero con su fecha.
+        llavero_de_verdad(&ruta);
         assert!(matches!(
             observar_llavero(&ruta),
             LlaveroObservado::Fichero {
                 modificado: Some(_)
             }
+        ));
+        // Con basura dentro está dañado: no es un llavero bueno (la TUI dice
+        // LLAVERO DAÑADO y `magi llavero estado` sale con 1), y se dice en el
+        // diagnóstico como lo que no se puede leer, con su aviso.
+        std::fs::write(&ruta, b"esto no es age").unwrap();
+        let LlaveroObservado::NoLegible(motivo) = observar_llavero(&ruta) else {
+            panic!("un llavero con basura no es un fichero bueno");
+        };
+        assert!(motivo.contains("cabecera"), "{motivo}");
+        // Una cabecera age que no es de una frase tampoco vale.
+        std::fs::write(
+            &ruta,
+            b"age-encryption.org/v1\n-> X25519 AAAA\nBBBB\n--- CCCC\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            observar_llavero(&ruta),
+            LlaveroObservado::NoLegible(_)
+        ));
+        // Vacío (un guardado cortado) tampoco.
+        std::fs::write(&ruta, b"").unwrap();
+        assert!(matches!(
+            observar_llavero(&ruta),
+            LlaveroObservado::NoLegible(_)
         ));
         // Un directorio donde debería haber un fichero no es legible.
         let directorio = temporal.path().join("otro");
@@ -1075,6 +1130,15 @@ mod pruebas {
             observar_llavero(&directorio),
             LlaveroObservado::NoLegible(_)
         ));
+        // Un enlace simbólico roto: hay algo en la ruta aunque `metadata` diga
+        // «no existe»; la TUI lo trata como dañado y el diagnóstico no dice
+        // «sin crear».
+        let enlace = temporal.path().join("enlace.age");
+        std::os::unix::fs::symlink(temporal.path().join("no-esta"), &enlace).unwrap();
+        let LlaveroObservado::NoLegible(motivo) = observar_llavero(&enlace) else {
+            panic!("un enlace roto no es «sin crear»");
+        };
+        assert!(motivo.contains("enlace roto"), "{motivo}");
     }
 
     #[test]

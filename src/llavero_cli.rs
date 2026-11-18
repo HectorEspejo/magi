@@ -526,6 +526,14 @@ pub fn orden_estado(fichero: &LlaveroFichero, consola: &mut dyn Consola) -> i32 
     let info = match info_fichero(fichero.ruta()) {
         Ok(Some(info)) => info,
         Ok(None) => {
+            // Un enlace simbólico roto en la ruta no es «no hay llavero»: hay
+            // algo ahí, que MAGI ofrece apartar (como con cualquier dañado).
+            if let EstadoFichero::Danado(motivo) = fichero.estado() {
+                consola.decir(&format!(
+                    "Hay un fichero de llavero, pero está dañado ({motivo}).\n  Ruta:       {ruta}\nAbre MAGI para apartarlo (queda como llavero.age.danado-<fecha>) y seguir sin llavero."
+                ));
+                return 1;
+            }
             consola.decir(&format!(
                 "No hay llavero en este equipo ({ruta}).\nSe crea al guardar el primer secreto desde MAGI (recordar una contraseña o unir este equipo a la sincronización)."
             ));

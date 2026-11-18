@@ -11,6 +11,7 @@ Canales de distribución:
 | Canal | Qué publica |
 |---|---|
 | GitHub Releases | Tarballs de Linux (x86_64/aarch64) y macOS (arm64/x86_64), `.sha256` y atestaciones de procedencia |
+| GitHub Releases (Termux) | `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata), su `.sha256` y su atestación, en la misma release; los sube `termux-release.yml` (guía en [`publicar-termux.md`](publicar-termux.md)) |
 | AUR | `magi-ssh-bin` (Omarchy y Arch) |
 | Homebrew | Fórmula `magi-ssh` en el tap `4d3-org/homebrew-tap` (macOS) |
 
@@ -221,6 +222,11 @@ Se hace una sola vez, en este orden, después de completar §2.
      llama a `publicar-aur.yml`, que rellena el PKGBUILD con la versión y las
      sumas, genera `.SRCINFO` en un contenedor Arch, pasa `namcap` (y falla si
      namcap informa de errores `E:`) y empuja a AUR.
+
+   El mismo tag lanza a la vez `termux-release.yml` (**Release Termux**), que
+   compila el `.deb` para Termux, lo atesta y lo sube a la release cuando
+   `release.yml` la crea. Vigila también Release Termux; ver
+   [`publicar-termux.md`](publicar-termux.md).
 6. Haz las comprobaciones de §9.
 
 Los binarios publicados salen **solo** del CI a partir del tag: no se suben
@@ -233,7 +239,7 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 | `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux (instala `openssh-server`, por su `sftp-server`, y `tmux`: sin ellos, las pruebas de SFTP y las de sesiones persistentes con tmux de verdad se omiten), macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
 | `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` |
 | `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
-| `termux-release.yml` | tag `vX.Y.Z` y `vX.Y.Z-rc.N` (nunca `android-v*`) y `workflow_dispatch` | Compila para `aarch64-linux-android` con el NDK r30, arma `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata) con `scripts/paquete-termux.sh`, comprueba su estructura, escribe el `.sha256`, atesta la procedencia y lo sube a la release del tag (espera hasta 60 min a que `release.yml` la cree; falla si los adjuntos no quedan con el nombre esperado; nunca toca «Latest»), solo con `GITHUB_TOKEN`. La CI de cada PR tiene su job `termux` en `ci.yml`. Guía completa y receta de TUR en [`publicar-termux.md`](publicar-termux.md) |
+| `termux-release.yml` | tag `vX.Y.Z` y `vX.Y.Z-rc.N` (nunca `android-v*`) y `workflow_dispatch` | Compila para `aarch64-linux-android` con el NDK r30, arma `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata) con `scripts/paquete-termux.sh`, comprueba su estructura, escribe el `.sha256`, atesta la procedencia y lo sube a la release del tag (espera hasta 60 min a que `release.yml` la cree; justo antes de subir comprueba que el tag sigue en el commit compilado y, si no, falla; falla si los adjuntos no quedan con el nombre esperado; nunca toca «Latest»), solo con `GITHUB_TOKEN`. La CI de cada PR tiene su job `termux` en `ci.yml`. Guía completa y receta de TUR en [`publicar-termux.md`](publicar-termux.md) |
 
 Permisos: `contents: read` por defecto en todos los workflows, y cada job que
 necesita algo más lo declara él mismo, nunca arriba. Esto es lo que hay
@@ -280,6 +286,16 @@ que falló.
   borrar el tag erróneo (`git push origin :refs/tags/vX.Y.Z`) y etiquetar de
   nuevo el commit corregido; si la release ya existe, el tag es inmutable y hay
   que publicar un PATCH.
+  - **No recrees un tag con una ejecución de «Release Termux» suya en curso o en
+    cola: cancélala antes** (Actions → Release Termux → la ejecución → Cancel
+    workflow). Si no, esa ejecución sigue esperando la release y, cuando aparece la
+    del commit nuevo, intentaría subirle un `.deb` compilado desde el commit
+    antiguo (el workflow lo detecta y falla sin subir nada, pero mientras tanto
+    retiene la cola de ese tag).
+  - Si el fallo fue transitorio (red, un runner), es mejor **Re-run failed jobs**
+    del workflow que falló: conserva el mismo tag y el mismo commit y no obliga a
+    borrar nada. Recrear el tag solo hace falta si lo que falló está en el código
+    o en el YAML del commit etiquetado.
 - Si falla Homebrew: revisa que el tap exista, que `HOMEBREW_TAP_TOKEN` no haya
   caducado y que tenga **Contents: Read and write** solo en
   `4d3-org/homebrew-tap`; corrige y relanza el job. Si la fórmula necesita un
@@ -359,6 +375,11 @@ Comprueba además:
 
 - la GitHub Release tiene los cuatro tarballs, sus `.sha256`, las notas de la
   sección del CHANGELOG y, si era una prerelease, está marcada como tal;
+- la misma release lleva también el `.deb` y su `.sha256` para Termux
+  (`magi-ssh_X.Y.Z_aarch64.deb`, con guion en una candidata:
+  `magi-ssh_X.Y.Z-rc.N_aarch64.deb`), que sube `termux-release.yml` cuando
+  `release.yml` ya ha creado la release; comprobaciones concretas en
+  [`publicar-termux.md`](publicar-termux.md) (§10);
 - `gh release view vX.Y.Z` y `gh attestation verify` funcionan para cada
   objetivo;
 - el tap publica la versión nueva y AUR la muestra en

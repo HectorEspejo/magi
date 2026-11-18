@@ -516,6 +516,30 @@ fn estado_con_el_fichero_danado_lo_dice_y_remite_a_abrir_magi() {
     );
 }
 
+#[test]
+fn estado_con_un_enlace_roto_en_la_ruta_no_dice_que_no_hay_llavero() {
+    let banco = Banco::nuevo();
+    let destino = banco.ruta_llavero().with_file_name("no-existe-nada");
+    std::os::unix::fs::symlink(&destino, banco.ruta_llavero()).expect("enlace");
+    let mut consola = ConsolaFalsa::con_terminal();
+    let codigo = orden_estado(&banco.fichero(), &mut consola);
+    // Hay algo en la ruta: se dice dañado y se remite a apartarlo desde MAGI.
+    assert_eq!(codigo, 1, "{}", consola.todo());
+    assert!(consola.salida().contains("dañado"), "{}", consola.todo());
+    assert!(
+        consola.salida().contains("enlace roto"),
+        "{}",
+        consola.todo()
+    );
+    assert!(consola.salida().contains("Abre MAGI"), "{}", consola.todo());
+    assert!(!consola.salida().contains("No hay llavero"));
+    assert!(consola.preguntas.is_empty());
+    assert!(
+        std::fs::symlink_metadata(banco.ruta_llavero()).is_ok(),
+        "no lo toca"
+    );
+}
+
 // ------------------------------------------------------------------ cambiar
 
 #[test]

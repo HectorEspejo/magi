@@ -75,6 +75,10 @@ pub struct EstadoSincronizacion {
     pub pausa: Option<BorradosPendientes>,
     /// Se pidió otra pasada mientras una estaba en marcha.
     pub reintentar: bool,
+    /// Pasada que se pidió con la lectura de la carpeta colgada (solo en
+    /// Termux) y quedó aplazada, con la política con que se pidió: el tick la
+    /// reintenta en cuanto la carpeta responde. `None`: no hay ninguna.
+    pub pasada_aplazada: Option<PoliticaBorrados>,
     /// Cuándo terminó la última pasada (para «hace N»).
     pub terminada_en: Option<chrono::DateTime<chrono::Local>>,
     /// Último reloj híbrido visto de este equipo: detecta cambios locales.
@@ -120,6 +124,7 @@ impl Default for EstadoSincronizacion {
             politica: PoliticaBorrados::Preguntar,
             pausa: None,
             reintentar: false,
+            pasada_aplazada: None,
             terminada_en: None,
             reloj_visto: None,
             cambio_desde: None,
@@ -198,6 +203,19 @@ pub fn lanzar_espera(
     llavero: std::sync::Arc<dyn crate::llavero::LlaveroCliente>,
 ) {
     runtime.spawn(async move {
+        // El llavero de fichero guarda la clave en memoria y otra ventana pudo
+        // reescribir `llavero.age` (rotar la clave, desactivar): se pone al día
+        // antes de leerla, fuera del hilo de la UI (cerrojo del fichero y, si
+        // cambió, scrypt). Si no se puede, la pasada no sigue: exportaría con
+        // una clave que quizá ya no es la del inventario.
+        let para_refrescar = llavero.clone();
+        let refresco = tokio::task::spawn_blocking(move || para_refrescar.refrescar())
+            .await
+            .unwrap_or_else(|_| Err("la tarea del llavero terminó con un fallo".to_string()));
+        if let Err(error) = refresco {
+            let _ = eventos.send(Evento::Inventario(EventoInventario::Error(error)));
+            return;
+        }
         let claves = match crate::sincronizacion::equipos::claves_para_leer(&config, &*llavero) {
             Ok(claves) => claves,
             Err(error) => {
@@ -407,8 +425,10 @@ pub fn lectura_de_carpeta_colgada(carpeta: &Path, plazo: Duration) -> bool {
         .any(|lectura| lectura.carpeta == carpeta && lectura.desde.elapsed() >= plazo)
 }
 
-/// Sondea la carpeta cada `periodo` y avisa solo si la firma cambia, más una
-/// pasada de seguridad cada `seguridad` aunque no haya cambiado. Todo el
+/// Sondea la carpeta cada `periodo` y avisa solo si la firma cambia y se ha
+/// asentado (la misma en dos muestras seguidas: un fichero que otra app escribe
+/// en sitio no se lee a medias), más una pasada de seguridad cada `seguridad`
+/// aunque no haya cambiado, que no espera a nada. Todo el
 /// trabajo de leer la carpeta va en un hilo aparte con plazo (la carpeta puede
 /// estar en un almacenamiento lento) y el bucle de la UI solo recibe el aviso.
 /// La primera firma es la línea base: no avisa (quien arranca la vigilancia ya
@@ -448,13 +468,28 @@ pub async fn sondear_con(
 ) {
     let periodo = periodo.max(Duration::from_millis(10));
     let mut anterior: Option<FirmaCarpeta> = None;
+    // Un cambio visto que todavía no se ha asentado: otra app escribe el
+    // fichero en sitio (sin renombrar), y una pasada que lo leyera a medias o
+    // vacío lo tomaría por un fichero que no se abre con la clave y abriría
+    // «unir este equipo». Con notify, el escritorio espera 2 s a que cese la
+    // actividad; aquí se espera a que la firma sea la misma en dos muestras
+    // seguidas.
+    let mut cambio_sin_asentar = false;
     let mut ultima_pasada = tokio::time::Instant::now();
     let mut en_curso: Option<oneshot::Receiver<FirmaCarpeta>> = None;
     loop {
         let mut pedir = false;
+        let mut asentado = false;
         if let Some(firma) = leer_firma(&carpeta, &mut en_curso, plazo, &lector).await {
-            if anterior.as_ref().is_some_and(|previa| *previa != firma) {
-                pedir = true;
+            match anterior.as_ref() {
+                // Cambió respecto de la muestra anterior: a esperar a que pare.
+                Some(previa) if *previa != firma => cambio_sin_asentar = true,
+                // Igual que la anterior y venía de un cambio: asentado.
+                Some(_) if cambio_sin_asentar => {
+                    pedir = true;
+                    asentado = true;
+                }
+                _ => {}
             }
             anterior = Some(firma);
         }
@@ -463,10 +498,15 @@ pub async fn sondear_con(
             // colgado. Ninguna pasada hasta que responda (la de seguridad
             // sigue debida y saldrá entonces).
             pedir = false;
+            asentado = false;
         } else if ultima_pasada.elapsed() >= seguridad {
+            // La pasada de seguridad no espera a que nada se asiente.
             pedir = true;
         }
         if pedir {
+            if asentado {
+                cambio_sin_asentar = false;
+            }
             ultima_pasada = tokio::time::Instant::now();
             if eventos
                 .send(Evento::Inventario(EventoInventario::CarpetaCambiada {
@@ -549,16 +589,75 @@ impl App {
         // Con la carpeta colgada (una lectura del sondeo sin responder), la
         // pasada leería de ella en este hilo, sin plazo: se espera a que
         // responda.
-        let colgada = self
-            .config
+        if !self.carpeta_de_sincronizacion_colgada() {
+            self.solicitar_pasada();
+        }
+    }
+
+    /// ¿Hay una lectura de la carpeta de sincronización de esta ventana que
+    /// lleva `plazo_lectura_carpeta` o más sin responder? Solo el sondeo de
+    /// Termux las crea: en el resto, nunca.
+    pub(crate) fn carpeta_de_sincronizacion_colgada(&self) -> bool {
+        self.config
             .sincronizacion
             .ruta_carpeta(&self.rutas.hogar)
             .is_some_and(|carpeta| {
                 lectura_de_carpeta_colgada(&carpeta, self.sincronizacion.plazo_lectura_carpeta)
+            })
+    }
+
+    /// Una pasada pedida con la carpeta colgada: no se hace (leería de ella en
+    /// el hilo de la UI, sin plazo), pero tampoco se pierde. Queda aplazada con
+    /// su política y el tick la reintenta cuando la carpeta responde.
+    ///
+    /// El estado solo se pisa si no esperaba una decisión: unos borrados en
+    /// pausa, una clave nueva o un equipo quitado siguen siéndolo (el aviso va
+    /// solo a la barra).
+    pub(crate) fn aplazar_pasada_por_carpeta_colgada(&mut self, politica: PoliticaBorrados) {
+        // Una decisión del usuario (aplicar o mantener) no se pierde porque
+        // después se pida otra pasada sin decisión.
+        self.sincronizacion.pasada_aplazada =
+            Some(match (self.sincronizacion.pasada_aplazada, politica) {
+                (Some(previa), PoliticaBorrados::Preguntar) => previa,
+                _ => politica,
             });
-        if !colgada {
-            self.solicitar_pasada();
+        let aviso = "la carpeta de sincronización no responde: se reintentará";
+        if matches!(
+            self.sincronizacion.estado,
+            EstadoPasada::DecisionPendiente(_)
+                | EstadoPasada::EsperandoClave(_)
+                | EstadoPasada::Quitado
+        ) {
+            self.mensaje(aviso, true);
+        } else {
+            self.sincronizacion.estado = EstadoPasada::Error(aviso.to_string());
         }
+        self.sucio = true;
+    }
+
+    /// Reintenta la pasada aplazada por tener la carpeta colgada, en cuanto
+    /// deja de estarlo. La llama el tick.
+    pub(crate) fn reintentar_pasada_aplazada(&mut self) {
+        let Some(politica) = self.sincronizacion.pasada_aplazada else {
+            return;
+        };
+        if self.sincronizacion.sincronizando || self.carpeta_de_sincronizacion_colgada() {
+            return;
+        }
+        self.sincronizacion.pasada_aplazada = None;
+        // Una pasada sin decisión no resuelve unos borrados en pausa.
+        if self.sincronizacion.pausa.is_some() && politica == PoliticaBorrados::Preguntar {
+            return;
+        }
+        self.solicitar_pasada_con(politica);
+    }
+
+    /// Enciende los efectos externos de una `App` de prueba (superficie de
+    /// pruebas): sin ellos no se pide ninguna pasada. No la uses fuera de
+    /// tests.
+    #[doc(hidden)]
+    pub fn activar_efectos_externos_de_prueba(&mut self) {
+        self.efectos_externos = true;
     }
 }
 

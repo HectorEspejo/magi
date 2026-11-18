@@ -1024,6 +1024,7 @@ fn clave_generada(publica: &str, solicito_copia: bool) -> ClaveGenerada {
         aviso_agente: None,
         copiada: false,
         solicito_copia,
+        fallo_copia: None,
     }
 }
 
@@ -2127,4 +2128,116 @@ fn el_estado_del_servidor_no_se_lee_antes_de_su_bienvenida() {
     prueba.tick();
     assert!(!prueba.app.termux.leyendo_servidor, "servidor caído");
     assert!(prueba.app.termux.cola_barra.is_empty());
+}
+
+// ------------------------------------------------------ el cierre de la TUI
+
+/// Al salir, una orden de Termux colgada no retiene el cierre: las órdenes
+/// van en `spawn_blocking` y soltar el runtime espera a que acaben (hasta
+/// `api_plazo_seg`, 30 s como mucho). `cerrar_al_salir` lo apaga con un plazo
+/// corto; la orden sigue su camino y muere en su propio plazo.
+#[test]
+fn una_orden_colgada_en_vuelo_no_retiene_la_salida() {
+    let mut prueba = Prueba::nueva();
+    // El plazo de la orden es mucho mayor que lo que puede tardar el cierre:
+    // soltar el runtime esperaría casi todo él.
+    prueba.con_plazo(Duration::from_secs(4));
+    prueba.dobles.programar("termux-open-url", Modo::Colgar);
+    prueba.abrir_url("https://ejemplo.org/");
+    // La orden ya está en marcha (el doble anotó su pid) y sigue colgada.
+    let limite = Instant::now() + Duration::from_secs(5);
+    let pids = loop {
+        let llamadas = prueba.llamadas("termux-open-url");
+        if let Some(llamada) = llamadas.first().filter(|llamada| !llamada.pids.is_empty()) {
+            break llamada.pids.clone();
+        }
+        assert!(
+            Instant::now() < limite,
+            "la orden no llegó a lanzarse en 5 s"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    let Prueba {
+        app,
+        dobles,
+        _temporal,
+        ..
+    } = prueba;
+    let inicio = Instant::now();
+    app.cerrar_al_salir().expect("cierre");
+    let tardo = inicio.elapsed();
+    assert!(
+        tardo < Duration::from_millis(1500),
+        "la salida esperó a la orden colgada: {tardo:?}"
+    );
+
+    // Dejada atrás, la orden no queda huérfana para siempre: su plazo mata el
+    // grupo (el hilo bloqueante sigue vivo hasta entonces dentro de este
+    // proceso).
+    for pid in pids {
+        assert!(!sigue_vivo_tras(pid, Duration::from_secs(8)), "{pid}");
+    }
+    drop(dobles);
+}
+
+/// Lo mismo con la lectura del estado del servidor, que va en su propio hilo
+/// bloqueante y no se puede cancelar.
+#[test]
+fn una_lectura_del_estado_en_vuelo_no_retiene_la_salida() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut prueba = Prueba::nueva();
+    let soltar = Arc::new(AtomicBool::new(false));
+    let _guarda = SoltarAlSalir(Arc::clone(&soltar));
+    {
+        let soltar = Arc::clone(&soltar);
+        prueba.app.termux.lector_estado = Arc::new(move |_: &Rutas| {
+            // Con tope propio: sin el arreglo, la salida esperaría hasta aquí
+            // y la prueba fallaría por el tiempo, no se quedaría colgada.
+            let tope = Instant::now() + Duration::from_secs(6);
+            while !soltar.load(Ordering::SeqCst) && Instant::now() < tope {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            None
+        });
+    }
+    prueba.tick();
+    assert!(prueba.app.termux.leyendo_servidor, "no se lanzó la lectura");
+    assert!(
+        prueba.app.termux.lectura_viva.load(Ordering::SeqCst),
+        "el hilo está leyendo"
+    );
+    let Prueba { app, _temporal, .. } = prueba;
+    let inicio = Instant::now();
+    app.cerrar_al_salir().expect("cierre");
+    assert!(
+        inicio.elapsed() < Duration::from_millis(1500),
+        "la salida esperó a la lectura: {:?}",
+        inicio.elapsed()
+    );
+}
+
+/// Sin nada en vuelo, el cierre sigue siendo lo de siempre: el adiós al
+/// servidor se envía antes de apagar el runtime y el almacén se cierra.
+#[test]
+fn el_cierre_sin_nada_en_vuelo_dice_adios_y_cierra_el_almacen() {
+    let mut prueba = Prueba::nueva();
+    prueba.drenar();
+    let Prueba {
+        app,
+        mut enviados,
+        _temporal,
+        ..
+    } = prueba;
+    app.cerrar_al_salir().expect("cierre");
+    let mut mensajes = Vec::new();
+    while let Ok(mensaje) = enviados.try_recv() {
+        mensajes.push(mensaje);
+    }
+    assert!(
+        mensajes
+            .iter()
+            .any(|mensaje| matches!(mensaje, MensajeCliente::Adios)),
+        "no se envió el adiós: {mensajes:?}"
+    );
 }

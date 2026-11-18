@@ -284,7 +284,7 @@ coméntalo con el desarrollador.
   `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
   `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`. Al
   cambiar `version`, actualiza también la DA2 que espera
-  `tests/fijos/terminal/tui_prueba.rs` (`10500` en la 1.5.0) y las instantáneas
+  `tests/fijos/terminal/tui_prueba.rs` (`10600` en la 1.6.0) y las instantáneas
   `servidor_anterior_*`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
   mensaje, siempre validado (1 < pid ≤ i32::MAX y distinto del propio). Nunca

@@ -8,9 +8,14 @@
 //!
 //! - **Nada bloquea el bucle de la interfaz.** Leer el fichero para armar la
 //!   propuesta y, después, instalar (leer, copiar, escribir y pedir a Termux
-//!   que recargue) van en tareas (`spawn_blocking`) y su resultado vuelve por
-//!   `Evento::Termux`. El diálogo, mientras instala, no atiende teclas (la
-//!   tarea no se puede abortar y el fichero se escribe igualmente).
+//!   que recargue) van en hilos propios (no en `spawn_blocking`: con el
+//!   almacenamiento sin responder, el cierre del runtime esperaría a la tarea
+//!   para siempre) y su resultado vuelve por `Evento::Termux`. El diálogo,
+//!   mientras instala, solo atiende `Esc`: lo cierra, la tarea no se puede
+//!   abortar y el fichero se escribe igualmente, y su resultado se atiende
+//!   por `id` (se anota y se dice por la barra, o el error sale por ella).
+//!   Mientras haya una escritura en vuelo no se abre otro diálogo (dos
+//!   escrituras a la vez sobre el mismo fichero no son de fiar).
 //! - **El diálogo lleva fijados los datos sobre los que actúa** (la ruta, el
 //!   texto del prefijo y la fecha de la copia) y no los relee al confirmar. Un
 //!   resultado cuyo `id` ya no está en vuelo se descarta.
@@ -25,7 +30,12 @@
 //!   se pone al ofrecerlo, también si se responde Esc) y la barra remite a
 //!   `magi diagnostico`. No se ofrece si la fila ya es la de MAGI. La marca se
 //!   crea de forma exclusiva ([`tomar_marca_del_primer_arranque`]): dos
-//!   ventanas lanzadas a la vez no ofrecen el diálogo las dos.
+//!   ventanas lanzadas a la vez no ofrecen el diálogo las dos. Como la
+//!   propuesta llega sola, sobre lo que el usuario esté haciendo, el diálogo
+//!   del primer arranque ignora `↵` durante [`GUARDA_DE_INTRO`] desde que se
+//!   ve (también si sale de debajo de otro): un `↵` tecleado para otra cosa no
+//!   puede confirmar una escritura que nadie ha leído. `Esc` y lo demás
+//!   siempre valen.
 //! - **Una sola recarga vale:** `termux-reload-settings` responde de forma
 //!   asíncrona; el resultado de una instalación que ya no es la última de esta
 //!   ventana se descarta (como el de una escritura).
@@ -36,6 +46,7 @@
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -65,6 +76,10 @@ static SIGUIENTE_ID: AtomicU64 = AtomicU64::new(1);
 /// el mismo que usa `estado::Marca::PrimerArranque` (una prueba lo vigila).
 const MARCA_PRIMER_ARRANQUE: &str = "primer-arranque";
 
+/// Cuánto ignora `↵` el diálogo del primer arranque desde que se ve: lo que un
+/// `↵` tecleado para otra cosa tarda en dejar de ser «justo antes».
+pub const GUARDA_DE_INTRO: Duration = Duration::from_millis(500);
+
 /// Lo propio de la fila de teclas en una `App`.
 #[derive(Debug, Default)]
 pub struct EstadoTeclasTermux {
@@ -73,6 +88,10 @@ pub struct EstadoTeclasTermux {
     /// llega tarde y no dice nada de lo que hay ahora). Vuelve a `None` cuando
     /// no queda recarga que esperar.
     pub ultima_instalacion: Option<u64>,
+    /// La instalación cuya escritura sigue en vuelo (aunque su diálogo ya se
+    /// haya cerrado con `Esc`): hasta que llega su resultado no se abre otro
+    /// diálogo, para no tener dos escrituras sobre el mismo fichero.
+    pub escribiendo: Option<u64>,
 }
 
 /// Pone la marca del primer arranque si no estaba y dice si esta llamada fue
@@ -124,6 +143,11 @@ pub struct DialogoTeclasTermux {
     /// hecha en disco: un reintento la reutiliza (si sigue intacta e idéntica)
     /// en vez de hacer otra.
     pub copia_hecha: Option<String>,
+    /// Hasta cuándo se ignora `↵` (solo el diálogo del primer arranque, que
+    /// llega sin que el usuario lo espere; `None` no ignora nada). Se pone al
+    /// verse el diálogo y se vuelve a poner si sale de debajo de otro. Es un
+    /// `Instant` a la vista para que las pruebas lo pongan donde quieran.
+    pub intro_ignorada_hasta: Option<Instant>,
 }
 
 impl DialogoTeclasTermux {
@@ -136,7 +160,22 @@ impl DialogoTeclasTermux {
             trabajando: None,
             error: None,
             copia_hecha: None,
+            intro_ignorada_hasta: None,
         }
+    }
+
+    /// El diálogo se acaba de ver (o de volver a ver, si estaba debajo de otro):
+    /// si ignora `↵` al salir, empieza a contar desde `ahora`.
+    pub(crate) fn visto_en(&mut self, ahora: Instant) {
+        if self.intro_ignorada_hasta.is_some() {
+            self.intro_ignorada_hasta = Some(ahora + GUARDA_DE_INTRO);
+        }
+    }
+
+    /// ¿Se ignora `↵` en `ahora`?
+    #[must_use]
+    pub fn ignora_intro(&self, ahora: Instant) -> bool {
+        self.intro_ignorada_hasta.is_some_and(|hasta| ahora < hasta)
     }
 }
 
@@ -192,6 +231,15 @@ impl App {
             self.mensaje("el diálogo de la fila de teclas ya está abierto", false);
             return;
         }
+        if self.teclas_termux.escribiendo.is_some() {
+            // Se cerró con Esc mientras instalaba: la escritura sigue y su
+            // resultado todavía no ha llegado.
+            self.mensaje(
+                "la fila de teclas se está instalando todavía: espera a que acabe",
+                false,
+            );
+            return;
+        }
         self.pedir_propuesta_de_teclas(OrigenOferta::Paleta);
     }
 
@@ -215,7 +263,10 @@ impl App {
         let rutas = self.rutas.clone();
         let prefijo = self.config.prefijo_escape.clone();
         let entorno = self.entorno_de_teclas();
-        self.runtime.spawn_blocking(move || {
+        // En un hilo propio y no en `spawn_blocking`: si el almacenamiento al
+        // que apunta `termux.properties` no responde, el cierre del runtime
+        // esperaría a la tarea y la TUI no podría salir.
+        std::thread::spawn(move || {
             if origen == OrigenOferta::PrimerArranque {
                 // Se pone al ofrecerlo, también si luego se responde Esc, y se
                 // pone de forma exclusiva: solo la ventana que la crea ofrece.
@@ -288,7 +339,11 @@ impl App {
                 if self.dialogo_de_teclas_abierto() {
                     return;
                 }
-                let dialogo = DialogoTeclasTermux::nuevo(propuesta, prefijo, fecha);
+                let mut dialogo = DialogoTeclasTermux::nuevo(propuesta, prefijo, fecha);
+                if primer_arranque {
+                    // Sale solo, sobre lo que el usuario estuviera haciendo.
+                    dialogo.intro_ignorada_hasta = Some(Instant::now() + GUARDA_DE_INTRO);
+                }
                 self.mostrar_dialogo_de_teclas(dialogo);
                 return;
             }
@@ -346,18 +401,34 @@ impl App {
     }
 
     /// Tecla sobre el diálogo (ya sacado de `App.dialogo`): `↵` instala y
-    /// `Esc` lo deja para otra vez. Mientras instala no atiende ninguna.
+    /// `Esc` lo deja para otra vez. Mientras instala solo atiende `Esc`, que
+    /// cierra el diálogo: la tarea sigue (no se puede abortar y el fichero se
+    /// escribe igualmente) y su resultado se atiende por `id` cuando llegue.
+    /// Sin esa salida, un almacenamiento que no responde dejaría la TUI
+    /// atascada en «instalando…».
     pub(crate) fn tecla_dialogo_de_teclas(
         &mut self,
         dialogo: Box<DialogoTeclasTermux>,
         tecla: KeyEvent,
     ) {
         if dialogo.trabajando.is_some() {
-            self.dialogo = Some(Dialogo::TeclasTermux(dialogo));
+            if tecla.code == KeyCode::Esc {
+                self.mensaje(
+                    "la fila de teclas se sigue instalando: el resultado saldrá aquí",
+                    false,
+                );
+            } else {
+                self.dialogo = Some(Dialogo::TeclasTermux(dialogo));
+            }
             return;
         }
         match tecla.code {
             KeyCode::Esc => {}
+            KeyCode::Enter if dialogo.ignora_intro(Instant::now()) => {
+                // Un `↵` tecleado para otra cosa justo antes de que saliera
+                // el diálogo: no confirma nada.
+                self.dialogo = Some(Dialogo::TeclasTermux(dialogo));
+            }
             KeyCode::Enter => self.instalar_fila_de_teclas(dialogo),
             _ => self.dialogo = Some(Dialogo::TeclasTermux(dialogo)),
         }
@@ -376,13 +447,17 @@ impl App {
         dialogo.error = None;
         // Desde ahora solo se atiende la recarga de esta instalación.
         self.teclas_termux.ultima_instalacion = Some(id);
+        self.teclas_termux.escribiendo = Some(id);
         let prefijo = dialogo.prefijo.clone();
         let fecha = dialogo.fecha;
         let copia_previa = dialogo.copia_hecha.clone();
         self.dialogo = Some(Dialogo::TeclasTermux(dialogo));
         let eventos = self.eventos_tx.clone();
         let ordenes = Arc::clone(&self.termux.ordenes);
-        self.runtime.spawn_blocking(move || {
+        // En un hilo propio (véase `pedir_propuesta_de_teclas`): el disco o el
+        // almacenamiento compartido pueden no responder y esa espera no debe
+        // retener el cierre del runtime.
+        std::thread::spawn(move || {
             let resultado = teclas::escribir_fila_con_copia_previa(
                 &ruta,
                 &prefijo,
@@ -407,6 +482,9 @@ impl App {
     /// diálogo y se dice por la barra. Si falló, el diálogo se queda con el
     /// motivo para reintentar o salir.
     fn fila_escrita(&mut self, id: u64, resultado: Result<Escritura, ErrorTeclas>) {
+        if self.teclas_termux.escribiendo == Some(id) {
+            self.teclas_termux.escribiendo = None;
+        }
         match resultado {
             Ok(escritura) => {
                 self.cerrar_dialogo_de_teclas(id);

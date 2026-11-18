@@ -1968,7 +1968,9 @@ fn las_teclas_las_da_el_modulo_de_teclas() {
 }
 
 /// El diagnóstico nunca abre el llavero ni pide la frase: con basura, con uno
-/// de verdad (cerrado) o sin nada, ni cambia el fichero ni toca otra cosa.
+/// de verdad (cerrado) o sin nada, ni cambia el fichero ni toca otra cosa. Sí
+/// mira su cabecera (sin scrypt): un fichero con basura es un llavero dañado,
+/// como lo ven la TUI y `magi llavero estado`, no un llavero bueno.
 #[test]
 fn el_llavero_se_mira_sin_abrirlo_ni_pedir_nada() {
     let escenario = Escenario::nuevo();
@@ -1982,15 +1984,28 @@ fn el_llavero_se_mira_sin_abrirlo_ni_pedir_nada() {
     let arbol = escenario.arbol();
     let datos = escenario.observar(Duration::from_secs(20));
     assert!(
-        matches!(
-            datos.llavero,
-            LlaveroObservado::Fichero {
-                modificado: Some(_)
-            }
-        ),
+        matches!(datos.llavero, LlaveroObservado::NoLegible(_)),
         "{:?}",
         datos.llavero
     );
+    // Su línea es un aviso (no un ✓) y remite a `magi llavero estado`.
+    let mut a_mano = datos_termux();
+    a_mano.termux = Some(DatosTermux {
+        llavero: datos.llavero.clone(),
+        ..termux_sano()
+    });
+    let (_, texto) = texto_de(&a_mano, false);
+    assert!(
+        texto.contains("! llavero         llavero.age no se puede leer: "),
+        "{texto}"
+    );
+    assert!(texto.contains("magi llavero estado"), "{texto}");
+    assert!(
+        !texto.contains("✓ llavero"),
+        "un llavero dañado no sale como bueno:\n{texto}"
+    );
+    let informe = comprobar(&a_mano);
+    assert_eq!((informe.avisos, informe.errores), (1, 0));
     assert_eq!(std::fs::read(&ruta).unwrap(), antes);
     assert_eq!(
         std::fs::metadata(&ruta).unwrap().modified().unwrap(),
@@ -2104,10 +2119,17 @@ fn el_binario_en_termux_enseña_el_bloque_con_los_dobles() {
     std::fs::create_dir_all(&emulado).unwrap();
     std::fs::create_dir_all(escenario.rutas.hogar.join("storage")).unwrap();
     std::os::unix::fs::symlink(&emulado, escenario.rutas.hogar.join("storage/shared")).unwrap();
-    // Un llavero con basura: el diagnóstico ni lo abre ni lo toca.
+    // Un llavero de verdad, cerrado: el diagnóstico ni lo abre ni lo toca.
     let llavero = escenario.rutas.datos.join("llavero.age");
     std::fs::create_dir_all(&escenario.rutas.datos).unwrap();
-    std::fs::write(&llavero, b"basura").unwrap();
+    magi_nucleo::llavero_fichero::LlaveroFichero::con_ajustes(
+        llavero.clone(),
+        4,
+        Arc::new(Instant::now),
+    )
+    .crear("una frase maestra larga", "una frase maestra larga")
+    .expect("creando el llavero de prueba");
+    let llavero_antes = std::fs::read(&llavero).unwrap();
 
     let salida = ejecutar_binario(&escenario, true, &[]);
     let texto = String::from_utf8(salida.stdout).expect("UTF-8");
@@ -2162,7 +2184,7 @@ fn el_binario_en_termux_enseña_el_bloque_con_los_dobles() {
         "{texto}"
     );
     // No toca el llavero, no crea nada de MAGI y solo llama a la batería.
-    assert_eq!(std::fs::read(&llavero).unwrap(), b"basura");
+    assert_eq!(std::fs::read(&llavero).unwrap(), llavero_antes);
     assert!(!escenario.rutas.config.exists(), "creó la configuración");
     assert!(!escenario.rutas.estado.exists(), "creó el estado");
     assert!(!escenario.rutas.runtime.exists(), "creó el runtime");
@@ -2242,6 +2264,32 @@ fn el_binario_en_termux_sin_termux_api_ni_almacenamiento_avisa_con_su_arreglo() 
     assert!(
         texto.contains("✓ llavero         fichero con frase maestra (sin crear aún)"),
         "{texto}"
+    );
+}
+
+/// Un `llavero.age` dañado sale como aviso con su arreglo (la TUI dice
+/// LLAVERO DAÑADO y `magi llavero estado` sale con 1) y el diagnóstico no lo
+/// toca: ni lo abre, ni lo aparta, ni pide la frase.
+#[cfg(debug_assertions)]
+#[test]
+fn el_binario_en_termux_con_un_llavero_danado_avisa_y_no_lo_toca() {
+    let escenario = Escenario::nuevo();
+    let llavero = escenario.rutas.datos.join("llavero.age");
+    std::fs::create_dir_all(&escenario.rutas.datos).unwrap();
+    std::fs::write(&llavero, b"basura").unwrap();
+    let salida = ejecutar_binario(&escenario, true, &[]);
+    let texto = String::from_utf8(salida.stdout).expect("UTF-8");
+    assert!(salida.status.success(), "{texto}");
+    assert!(
+        texto.contains("! llavero         llavero.age no se puede leer: "),
+        "{texto}"
+    );
+    assert!(texto.contains("magi llavero estado"), "{texto}");
+    assert!(!texto.contains("✓ llavero"), "{texto}");
+    assert_eq!(std::fs::read(&llavero).unwrap(), b"basura");
+    assert!(
+        !escenario.rutas.datos.join("llavero.age.lock").exists(),
+        "ni un cerrojo"
     );
 }
 

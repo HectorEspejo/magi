@@ -106,7 +106,9 @@ pub fn olvidar_anterior_si_vencida(
         return Ok(false);
     }
     if let Err(error) = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR) {
-        // No se toca la fecha: se reintentará en la siguiente pasada.
+        // No se toca la fecha: la TUI lo reintenta al abrirse el llavero (con
+        // el de fichero, cerrado al arrancar, es lo normal: ver
+        // `App::olvidar_clave_anterior_vencida`) y en el siguiente arranque.
         anyhow::bail!("no se pudo olvidar la clave anterior del llavero: {error}");
     }
     config.sincronizacion.clave_anterior_hasta = None;

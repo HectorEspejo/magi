@@ -185,10 +185,7 @@ impl CarpetaSincronizacion for CarpetaDisco {
             ));
         }
         let ruta = self.ruta.join(nombre);
-        let fichero = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_NOFOLLOW)
-            .open(&ruta)
+        let fichero = abrir_fichero_normal(&ruta)
             .map_err(|error| format!("abriendo {}: {error}", ruta.display()))?;
         let mut bytes = Vec::new();
         // Se pide un byte de más: si llega, el fichero supera el tope y se
@@ -207,66 +204,182 @@ impl CarpetaSincronizacion for CarpetaDisco {
     }
 }
 
+/// Lo que la pasada ve de la carpeta compartida: los ficheros de equipo y lo
+/// que se dejó sin leer (con el motivo, para el aviso).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListadoCarpeta {
+    pub ficheros: Vec<FicheroCarpeta>,
+    /// Entradas con nombre de fichero de equipo que no se pudieron leer
+    /// (permisos, error de entrada/salida): se omiten con su motivo en vez de
+    /// tumbar el listado de todas las demás.
+    pub omitidos: Vec<String>,
+}
+
 /// Lista los ficheros de equipo de la carpeta, con su hash. Una carpeta que no
 /// existe no es un error: devuelve vacío.
 pub fn listar(carpeta: &Path) -> Result<Vec<FicheroCarpeta>> {
+    Ok(listar_con_omitidos(carpeta)?.ficheros)
+}
+
+/// Como [`listar`], pero dice también qué entradas con nombre de fichero de
+/// equipo se omitieron por no poder leerse.
+///
+/// La carpeta es entrada no fiable (en Termux es almacenamiento compartido
+/// donde escribe cualquier app con permiso): una entrada con nombre de MAGI
+/// que no es un fichero normal (carpeta, FIFO, dispositivo, enlace) no cuenta;
+/// una que supera [`TAMANO_MAXIMO`] se lista sin leerla, con un hash que no es
+/// el de su contenido para que la pasada la dé por dañada; y una que no se
+/// puede leer se omite con su motivo. Ninguna tumba el listado de las demás.
+pub fn listar_con_omitidos(carpeta: &Path) -> Result<ListadoCarpeta> {
     let entradas = match fs::read_dir(carpeta) {
         Ok(entradas) => entradas,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ListadoCarpeta::default())
+        }
         Err(error) => return Err(error).with_context(|| format!("leyendo {}", carpeta.display())),
     };
-    let mut ficheros = Vec::new();
+    let mut listado = ListadoCarpeta::default();
     for entrada in entradas {
-        let entrada = entrada.with_context(|| format!("leyendo {}", carpeta.display()))?;
+        let entrada = match entrada {
+            Ok(entrada) => entrada,
+            Err(error) => {
+                // Tras un error, `read_dir` termina: lo ya listado vale.
+                listado
+                    .omitidos
+                    .push(format!("leyendo {}: {error}", carpeta.display()));
+                continue;
+            }
+        };
         let ruta = entrada.path();
-        // Un enlace simbólico en la carpeta no se sigue: podría apuntar fuera y
-        // leer/escribir un fichero que no es del usuario (la carpeta la
-        // comparte la herramienta de sincronización, no hace falta la clave
-        // para crear enlaces).
-        let es_enlace = entrada
-            .file_type()
-            .map(|tipo| tipo.is_symlink())
-            .unwrap_or(true);
-        if es_enlace {
-            continue;
-        }
         let Some(nombre) = ruta.file_name().and_then(|nombre| nombre.to_str()) else {
             continue;
         };
         let Some(uuid) = uuid_de_nombre(nombre) else {
             continue;
         };
-        let bytes =
-            leer_sin_enlaces(&ruta).with_context(|| format!("leyendo {}", ruta.display()))?;
-        ficheros.push(FicheroCarpeta {
-            uuid,
-            ruta,
-            hash: cifrado::sha256_hex(&bytes),
-        });
+        // Metadatos sin seguir el enlace: un enlace simbólico en la carpeta no
+        // se sigue (podría apuntar fuera y leer/escribir un fichero que no es
+        // del usuario; la carpeta la comparte la herramienta de
+        // sincronización, no hace falta la clave para crear enlaces) y solo un
+        // fichero normal es un fichero de equipo.
+        let metadatos = match entrada.metadata() {
+            Ok(metadatos) => metadatos,
+            // Desapareció entre el listado y la consulta.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                listado
+                    .omitidos
+                    .push(motivo_omitido(&ruta, &anyhow::Error::from(error)));
+                continue;
+            }
+        };
+        if !metadatos.is_file() {
+            continue;
+        }
+        if metadatos.len() > TAMANO_MAXIMO {
+            listado.ficheros.push(FicheroCarpeta {
+                uuid,
+                ruta,
+                hash: hash_de_fichero_grande(metadatos.len()),
+            });
+            continue;
+        }
+        match leer_sin_enlaces(&ruta) {
+            Ok(bytes) => listado.ficheros.push(FicheroCarpeta {
+                uuid,
+                ruta,
+                hash: cifrado::sha256_hex(&bytes),
+            }),
+            // Creció por encima del tope mientras se leía: mismo trato.
+            Err(error) if error.downcast_ref::<FicheroDemasiadoGrande>().is_some() => {
+                listado.ficheros.push(FicheroCarpeta {
+                    uuid,
+                    ruta,
+                    hash: hash_de_fichero_grande(TAMANO_MAXIMO + 1),
+                });
+            }
+            Err(error) => listado.omitidos.push(motivo_omitido(&ruta, &error)),
+        }
     }
-    ficheros.sort_by(|a, b| a.uuid.cmp(&b.uuid));
-    Ok(ficheros)
+    listado.ficheros.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+    Ok(listado)
 }
 
-/// Lee un fichero entero, sin seguir enlaces simbólicos.
+/// Texto del aviso de una entrada omitida.
+fn motivo_omitido(ruta: &Path, error: &anyhow::Error) -> String {
+    format!(
+        "el fichero {} no se pudo leer y se omite: {error:#}",
+        ruta.display()
+    )
+}
+
+/// El «hash» de un fichero por encima del tope: no es el de su contenido (no
+/// se lee), solo una marca estable que no coincide con ningún hash guardado.
+/// La pasada lo ve demasiado grande al abrirlo y lo da por dañado.
+fn hash_de_fichero_grande(tamano: u64) -> String {
+    cifrado::sha256_hex(format!("magi:fichero-demasiado-grande:{tamano}").as_bytes())
+}
+
+/// Un fichero de equipo por encima de [`TAMANO_MAXIMO`].
+#[derive(Debug)]
+struct FicheroDemasiadoGrande;
+
+impl std::fmt::Display for FicheroDemasiadoGrande {
+    fn fmt(&self, formato: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formato,
+            "ocupa más del máximo de {TAMANO_MAXIMO} bytes (T81)"
+        )
+    }
+}
+
+impl std::error::Error for FicheroDemasiadoGrande {}
+
+/// Lee un fichero entero, sin seguir enlaces simbólicos. Falla sin leerlo si
+/// no es un fichero normal o supera [`TAMANO_MAXIMO`].
 pub fn leer(ruta: &Path) -> Result<Vec<u8>> {
     leer_sin_enlaces(ruta).with_context(|| format!("leyendo {}", ruta.display()))
 }
 
+/// Abre un fichero de la carpeta solo si es un fichero normal: sin seguir
+/// enlaces (`O_NOFOLLOW`: si el nombre es un enlace, `open` falla en vez de
+/// seguirlo) y sin quedarse esperando en un FIFO que haya sustituido al
+/// fichero entre el listado y la apertura (`O_NONBLOCK`, que en un fichero
+/// normal no hace nada).
+fn abrir_fichero_normal(ruta: &Path) -> std::io::Result<fs::File> {
+    let fichero = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(ruta)?;
+    if !fichero.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "no es un fichero normal",
+        ));
+    }
+    Ok(fichero)
+}
+
 fn leer_sin_enlaces(ruta: &Path) -> Result<Vec<u8>> {
-    use std::io::Read as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut opciones = fs::OpenOptions::new();
-    opciones.read(true);
-    // O_NOFOLLOW: si el nombre es un enlace, open falla en vez de seguirlo.
-    opciones.custom_flags(nix::libc::O_NOFOLLOW);
-    let mut fichero = opciones
-        .open(ruta)
-        .with_context(|| format!("abriendo {}", ruta.display()))?;
+    let fichero =
+        abrir_fichero_normal(ruta).with_context(|| format!("abriendo {}", ruta.display()))?;
+    let tamano = fichero
+        .metadata()
+        .with_context(|| format!("consultando {}", ruta.display()))?
+        .len();
+    if tamano > TAMANO_MAXIMO {
+        return Err(FicheroDemasiadoGrande.into());
+    }
     let mut bytes = Vec::new();
+    // Se pide un byte de más: si llega, el fichero creció por encima del tope
+    // y se descarta sin terminar de cargarlo en memoria.
     fichero
+        .take(TAMANO_MAXIMO + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("leyendo {}", ruta.display()))?;
+    if bytes.len() as u64 > TAMANO_MAXIMO {
+        return Err(FicheroDemasiadoGrande.into());
+    }
     Ok(bytes)
 }
 
@@ -597,6 +710,162 @@ mod pruebas {
             "un fichero por encima del tope no se lista"
         );
         assert!(servicio.leer(&nombre, TAMANO_MAXIMO).is_err());
+    }
+
+    /// Ejecuta `cuerpo` en un hilo y falla si no termina en 20 s: un FIFO
+    /// mal tratado dejaría el `open` esperando para siempre.
+    fn sin_colgarse<T: Send + 'static>(cuerpo: impl FnOnce() -> T + Send + 'static) -> T {
+        let (enviar, recibir) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = enviar.send(cuerpo());
+        });
+        recibir
+            .recv_timeout(Duration::from_secs(20))
+            .expect("la operación sobre la carpeta se quedó colgada")
+    }
+
+    fn hacer_fifo(ruta: &Path) {
+        nix::unistd::mkfifo(ruta, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+    }
+
+    const UUID_A: &str = "2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b";
+    const UUID_B: &str = "11111111-1111-4111-8111-111111111111";
+    const UUID_C: &str = "33333333-3333-4333-8333-333333333333";
+    const UUID_D: &str = "44444444-4444-4444-8444-444444444444";
+
+    #[test]
+    fn el_listado_ignora_lo_que_con_nombre_de_magi_no_es_un_fichero_normal() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        std::fs::write(carpeta.join(nombre_fichero(UUID_A)), b"aaaaaa").unwrap();
+        // Una carpeta, un FIFO y un enlace con nombre de fichero de equipo: en
+        // el almacenamiento compartido de Termux escribe cualquier app.
+        std::fs::create_dir_all(carpeta.join(nombre_fichero(UUID_B))).unwrap();
+        hacer_fifo(&carpeta.join(nombre_fichero(UUID_C)));
+        std::os::unix::fs::symlink(
+            temporal.path().join("no-existe"),
+            carpeta.join(nombre_fichero(UUID_D)),
+        )
+        .unwrap();
+
+        let ruta = carpeta.clone();
+        let listado = sin_colgarse(move || listar_con_omitidos(&ruta).unwrap());
+        assert_eq!(
+            listado
+                .ficheros
+                .iter()
+                .map(|fichero| fichero.uuid.as_str())
+                .collect::<Vec<_>>(),
+            vec![UUID_A],
+            "solo el fichero normal cuenta"
+        );
+        assert!(listado.omitidos.is_empty(), "{:?}", listado.omitidos);
+        assert_eq!(listar(&carpeta).unwrap(), listado.ficheros);
+        // Decidir entre crear y unir tampoco se tumba por ellos.
+        assert!(hay_ficheros(&carpeta).unwrap());
+        std::fs::remove_file(carpeta.join(nombre_fichero(UUID_A))).unwrap();
+        assert!(
+            !hay_ficheros(&carpeta).unwrap(),
+            "una carpeta, un FIFO y un enlace no son ficheros de equipo"
+        );
+    }
+
+    #[test]
+    fn leer_un_fifo_o_una_carpeta_con_nombre_de_magi_falla_sin_colgarse() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let fifo = carpeta.join(nombre_fichero(UUID_C));
+        hacer_fifo(&fifo);
+        let directorio = carpeta.join(nombre_fichero(UUID_B));
+        std::fs::create_dir_all(&directorio).unwrap();
+        // Un FIFO que sustituya al fichero entre el listado y la lectura no
+        // deja el `open` esperando a un escritor que no va a llegar.
+        let ruta = fifo.clone();
+        assert!(sin_colgarse(move || leer(&ruta)).is_err());
+        let ruta = directorio.clone();
+        assert!(sin_colgarse(move || leer(&ruta)).is_err());
+        let servicio = CarpetaDisco::nueva(&carpeta);
+        assert!(
+            sin_colgarse(move || servicio.leer(&nombre_fichero(UUID_C), TAMANO_MAXIMO)).is_err()
+        );
+    }
+
+    #[test]
+    fn un_fichero_disperso_por_encima_del_tope_se_lista_sin_leerlo() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        std::fs::write(carpeta.join(nombre_fichero(UUID_A)), b"aaaaaa").unwrap();
+        // 300 MiB de ceros que no ocupan disco: si se leyera entero, el hash
+        // sería el de su contenido y la memoria, la de 300 MiB.
+        let grande = carpeta.join(nombre_fichero(UUID_B));
+        let tamano = 300 * 1024 * 1024;
+        std::fs::File::create(&grande)
+            .unwrap()
+            .set_len(tamano)
+            .unwrap();
+
+        let ruta = carpeta.clone();
+        let listado = sin_colgarse(move || listar_con_omitidos(&ruta).unwrap());
+        assert!(listado.omitidos.is_empty(), "{:?}", listado.omitidos);
+        let uuids: Vec<&str> = listado
+            .ficheros
+            .iter()
+            .map(|fichero| fichero.uuid.as_str())
+            .collect();
+        assert_eq!(uuids, vec![UUID_B, UUID_A], "se listan los dos");
+        assert_eq!(
+            listado.ficheros[0].hash,
+            hash_de_fichero_grande(tamano),
+            "el grande lleva la marca, no el hash de su contenido"
+        );
+        assert_eq!(
+            listado.ficheros[1].hash,
+            cifrado::sha256_hex(b"aaaaaa"),
+            "el normal sigue llevando el hash de su contenido"
+        );
+        // Y nadie lo lee: ni `leer` ni el servicio de carpeta.
+        let error = format!("{:#}", leer(&grande).unwrap_err());
+        assert!(error.contains("máximo"), "{error}");
+        assert!(CarpetaDisco::nueva(&carpeta)
+            .leer(&nombre_fichero(UUID_B), TAMANO_MAXIMO)
+            .is_err());
+    }
+
+    #[test]
+    fn un_fichero_ilegible_se_omite_con_su_motivo_y_no_tumba_el_listado() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if nix::unistd::Uid::current().is_root() {
+            return; // root lee lo que quiera: la prueba no puede dar el permiso denegado
+        }
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        std::fs::write(carpeta.join(nombre_fichero(UUID_A)), b"aaaaaa").unwrap();
+        let ilegible = carpeta.join(nombre_fichero(UUID_B));
+        std::fs::write(&ilegible, b"bbbb").unwrap();
+        std::fs::set_permissions(&ilegible, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let listado =
+            listar_con_omitidos(&carpeta).expect("un fichero ilegible no tumba el listado");
+        assert_eq!(
+            listado
+                .ficheros
+                .iter()
+                .map(|fichero| fichero.uuid.as_str())
+                .collect::<Vec<_>>(),
+            vec![UUID_A],
+            "el legible se lista"
+        );
+        assert_eq!(listado.omitidos.len(), 1, "{:?}", listado.omitidos);
+        assert!(
+            listado.omitidos[0].contains(&nombre_fichero(UUID_B)),
+            "el aviso dice qué fichero: {}",
+            listado.omitidos[0]
+        );
+        assert_eq!(listar(&carpeta).unwrap().len(), 1);
     }
 
     fn sin_chmod(_ruta: &Path, _modo: u32) -> std::io::Result<()> {

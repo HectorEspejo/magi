@@ -3335,7 +3335,7 @@ impl App {
                 self.sustituir_servidor_anterior(rechazo);
             }
             servidor_anterior::Decision::Preguntar => {
-                self.dialogo = Some(Dialogo::ServidorAnterior(
+                self.mostrar_sin_perder_el_llavero(Dialogo::ServidorAnterior(
                     servidor_anterior::DialogoServidorAnterior::Aviso(rechazo),
                 ));
             }
@@ -3370,7 +3370,7 @@ impl App {
                     // que hay un servidor anterior sin sustituir.
                     self.servidor_incompatible = None;
                 }
-                self.dialogo = Some(Dialogo::ServidorAnterior(
+                self.mostrar_sin_perder_el_llavero(Dialogo::ServidorAnterior(
                     servidor_anterior::DialogoServidorAnterior::Error {
                         rechazo,
                         motivo: fallo.texto(),
@@ -3514,13 +3514,29 @@ impl App {
         crate::ui::desactivar_extras();
         crate::ui::restaurar_terminal();
         self.teclado.salir();
+        self.cerrar_al_salir()
+    }
+
+    /// Lo último de `ejecutar`, con la terminal ya devuelta: el adiós al
+    /// servidor, el aviso de salida, el almacén y el runtime. Aparte para
+    /// probarlo sin tocar la terminal real.
+    ///
+    /// El runtime no se suelta sin más: soltarlo espera a las tareas
+    /// bloqueantes (las órdenes `termux-*` y la lectura del estado del
+    /// servidor van en `spawn_blocking`), y el proceso no terminaría hasta que
+    /// la última agotase su plazo (hasta `[termux] api_plazo_seg`, 30 s como
+    /// mucho). Se apaga con un plazo corto (Fase 17, revisión de cierre).
+    #[doc(hidden)]
+    pub fn cerrar_al_salir(mut self) -> Result<()> {
         // Las sesiones sobreviven a la ventana; el servidor se entera del
         // adiós antes de que termine el proceso.
         self.servidor.enviar(protocolo::MensajeCliente::Adios);
         if let Some(aviso) = self.aviso_al_salir.take() {
             println!("{aviso}");
         }
-        self.almacen.cerrar()
+        let cierre = self.almacen.cerrar();
+        termux::apagar_runtime(&mut self.runtime, termux::PLAZO_APAGADO_RUNTIME);
+        cierre
     }
 
     /// Toma el tamaño real del terminal como aplicado y hace el primer pintado.
@@ -5335,6 +5351,11 @@ impl App {
     fn restaurar_dialogo_apilado(&mut self) {
         if self.dialogo.is_none() {
             self.dialogo = self.pila_dialogos.pop();
+            // La fila de teclas del primer arranque empieza a ignorar `↵`
+            // desde que sale de debajo de otro diálogo (Fase 17).
+            if let Some(Dialogo::TeclasTermux(dialogo)) = self.dialogo.as_mut() {
+                dialogo.visto_en(Instant::now());
+            }
         }
     }
 
@@ -5575,7 +5596,9 @@ impl App {
             "el servidor de sesiones ha caído",
             crate::modelo::ResultadoRegistro::Error,
         );
-        self.dialogo = Some(Dialogo::ServidorCaido {
+        // Un diálogo del llavero a la vista no se descarta: pasa a la pila con
+        // lo que le queda por continuar (rotar, quitar, unir…).
+        self.mostrar_sin_perder_el_llavero(Dialogo::ServidorCaido {
             perdidas: self.sesiones_perdidas,
         });
         self.sucio = true;
@@ -8350,15 +8373,17 @@ impl App {
         let aviso = clave.aviso_agente.is_some();
         self.mensaje(texto.clone(), aviso);
         if clave.solicito_copia {
-            // Por la única vía de copia: ella añade «pública copiada al
-            // portapapeles» al resumen o, si no se pudo, abre el diálogo con la
-            // línea para copiarla a mano.
-            self.copiar(
+            // Añade «pública copiada al portapapeles» al resumen o, si no se
+            // pudo, abre el diálogo con la línea para copiarla a mano. En el
+            // escritorio la copia ya la intentó la tarea de generación (la
+            // interfaz no espera a la herramienta del sistema); en Termux va
+            // por la única vía de copia.
+            self.publica_generada(
                 clave.publica,
-                portapapeles::ParaQue::ClaveGenerada {
-                    resumen: texto,
-                    error: aviso,
-                },
+                clave.copiada,
+                clave.fallo_copia,
+                texto,
+                aviso,
             );
         }
     }
@@ -10461,14 +10486,9 @@ impl App {
 
     /// Primera pasada al abrir MAGI (solo con efectos externos y carpeta).
     pub(crate) fn iniciar_sincronizacion(&mut self) {
-        let llavero = self.llavero.clone();
-        if let Ok(true) =
-            crate::sincronizacion::equipos::olvidar_anterior_si_vencida(&mut self.config, &*llavero)
-        {
-            if let Err(error) = self.config.guardar(&self.rutas.fichero_config()) {
-                warn!("no se pudo guardar config.toml: {error}");
-            }
-        }
+        // Con el llavero de fichero (Termux) cerrado al arrancar esto no puede
+        // y se repite al abrirlo (`resultado_de_frase`).
+        self.olvidar_clave_anterior_vencida();
         self.sincronizacion.reloj_visto = self.reloj_de_este();
         if !self.efectos_externos || !self.config.sincronizacion.activa() {
             return;
@@ -10523,6 +10543,7 @@ impl App {
     fn tick_sincronizacion(&mut self) {
         if !self.config.sincronizacion.activa() {
             self.sincronizacion.cambio_desde = None;
+            self.sincronizacion.pasada_aplazada = None;
             return;
         }
         let reloj = self.reloj_de_este();
@@ -10541,6 +10562,9 @@ impl App {
             self.sincronizacion.cambio_desde = None;
             self.solicitar_pasada();
         }
+        // Una pasada aplazada por tener la carpeta colgada (solo Termux) se
+        // reintenta en cuanto responde.
+        self.reintentar_pasada_aplazada();
     }
 
     /// Al salir: si queda un cambio local sin exportar (o la última pasada no
@@ -10556,6 +10580,12 @@ impl App {
             return;
         }
         let llavero = self.llavero.clone();
+        // Otra ventana pudo rotar la clave: se relee antes de exportar. Al
+        // salir se puede esperar (como mucho, el cerrojo y un scrypt si el
+        // fichero cambió); si ya no abre con la frase, la exportación se omite.
+        if llavero.refrescar().is_err() {
+            return;
+        }
         let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &*llavero)
         else {
             return;
@@ -10601,24 +10631,19 @@ impl App {
         }
         // En Termux, con el almacenamiento compartido sin responder, la pasada
         // leería la carpeta en este hilo sin plazo y congelaría la TUI: se
-        // aplaza hasta que responda (el sondeo vuelve a pedirla).
-        if crate::termux::es_termux() {
-            let carpeta = self.config.sincronizacion.ruta_carpeta(&self.rutas.hogar);
-            if carpeta.as_deref().is_some_and(|carpeta| {
-                crate::app::sincronizacion::lectura_de_carpeta_colgada(
-                    carpeta,
-                    self.sincronizacion.plazo_lectura_carpeta,
-                )
-            }) {
-                self.sincronizacion.estado = crate::sincronizacion::EstadoPasada::Error(
-                    "la carpeta de sincronización no responde: se reintentará".to_string(),
-                );
-                self.sucio = true;
-                return;
-            }
+        // aplaza hasta que responda (el tick la reintenta; no se pierde).
+        if crate::termux::es_termux() && self.carpeta_de_sincronizacion_colgada() {
+            self.aplazar_pasada_por_carpeta_colgada(politica);
+            return;
         }
         self.sincronizacion.sincronizando = true;
-        self.sincronizacion.politica = politica;
+        // Esta pasada cubre la que quedó aplazada; si lo aplazado era una
+        // decisión del usuario sobre unos borrados, no se pierde.
+        self.sincronizacion.politica = match (politica, self.sincronizacion.pasada_aplazada.take())
+        {
+            (crate::sincronizacion::PoliticaBorrados::Preguntar, Some(aplazada)) => aplazada,
+            (politica, _) => politica,
+        };
         self.sucio = true;
         crate::app::sincronizacion::lanzar_espera(
             &self.runtime,

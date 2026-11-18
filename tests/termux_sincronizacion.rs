@@ -48,8 +48,9 @@ use magi::sincronizacion::cifrado::ClaveSincronizacion;
 use magi::sincronizacion::lector::{self, EstadoLectura};
 use magi::sincronizacion::{
     carpeta, equipos, formato, pasada_con_aviso, pasada_con_aviso_y_ajuste,
-    permisos_de_esta_plataforma, AvisoUnico, EstadoPasada, OpcionesPasada, PermisosCarpeta,
-    PoliticaBorrados, ResultadoPasada, ResumenImportacion, AVISO_PERMISOS_IGNORADOS,
+    permisos_de_esta_plataforma, AvisoUnico, BorradosPendientes, EstadoPasada, OpcionesPasada,
+    PermisosCarpeta, PoliticaBorrados, ResultadoPasada, ResumenImportacion,
+    AVISO_PERMISOS_IGNORADOS,
 };
 use magi::tema::Tema;
 use magi::termux::{es_termux, Propiedades};
@@ -1087,6 +1088,346 @@ async fn con_la_carpeta_colgada_un_cambio_tampoco_pide_pasada_hasta_que_responde
     tarea.abort();
 }
 
+/// Un lector con las firmas que se le dan, una por lectura (la última se
+/// repite), que espera una orden del test antes de devolver cada una: así el
+/// test decide cuándo se toma cada muestra del sondeo.
+struct LectorGuionizado {
+    firmas: Mutex<std::collections::VecDeque<FirmaCarpeta>>,
+    pasos: Mutex<std::sync::mpsc::Receiver<()>>,
+    /// Lecturas empezadas.
+    lecturas: AtomicUsize,
+}
+
+impl LectorGuionizado {
+    fn nuevo(firmas: Vec<FirmaCarpeta>) -> (Arc<Self>, std::sync::mpsc::Sender<()>) {
+        let (paso, pasos) = std::sync::mpsc::channel();
+        let lector = Arc::new(Self {
+            firmas: Mutex::new(firmas.into()),
+            pasos: Mutex::new(pasos),
+            lecturas: AtomicUsize::new(0),
+        });
+        (lector, paso)
+    }
+}
+
+impl LectorFirma for LectorGuionizado {
+    fn leer(&self, _carpeta: &Path) -> FirmaCarpeta {
+        self.lecturas.fetch_add(1, Ordering::SeqCst);
+        let _ = self.pasos.lock().unwrap().recv();
+        let mut firmas = self.firmas.lock().unwrap();
+        if firmas.len() > 1 {
+            firmas.pop_front().expect("hay firmas")
+        } else {
+            firmas.front().cloned().expect("hay una firma")
+        }
+    }
+}
+
+/// La firma de una carpeta con el fichero de un equipo de ese tamaño.
+fn firma_de_un_fichero(tamano: u64) -> FirmaCarpeta {
+    Some(vec![carpeta::EntradaCarpeta {
+        nombre: carpeta::nombre_fichero(UUID_A),
+        tamano,
+        modificado_ms: 0,
+    }])
+}
+
+/// Un lector cuya firma cambia en cada lectura: un fichero que otra app no
+/// deja de escribir.
+struct LectorQueNoParaDeCambiar {
+    lecturas: AtomicUsize,
+}
+
+impl LectorFirma for LectorQueNoParaDeCambiar {
+    fn leer(&self, _carpeta: &Path) -> FirmaCarpeta {
+        let numero = self.lecturas.fetch_add(1, Ordering::SeqCst);
+        firma_de_un_fichero(numero as u64 + 1)
+    }
+}
+
+#[tokio::test]
+async fn el_sondeo_espera_a_que_la_firma_se_asiente_antes_de_pedir_la_pasada() {
+    // Cierre de la Fase 17 (C3): otra app escribe el fichero de un equipo en
+    // sitio; una pasada que lo leyera a medias lo tomaría por un fichero que
+    // no se abre con la clave y abriría «unir este equipo». Con notify el
+    // escritorio espera a que cese la actividad; el sondeo, a que la firma sea
+    // la misma en dos muestras seguidas.
+    let (_temporal, carpeta) = carpeta_compartida();
+    let (lector, paso) = LectorGuionizado::nuevo(vec![
+        Some(Vec::new()),        // 0: línea base
+        firma_de_un_fichero(10), // 1: aparece (a medias)
+        firma_de_un_fichero(20), // 2: sigue creciendo
+        firma_de_un_fichero(20), // 3: igual que la anterior: asentada
+        firma_de_un_fichero(20), // 4: sin cambios
+    ]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let tarea = tokio::spawn(sondear_con(
+        carpeta.clone(),
+        7,
+        tx,
+        Duration::from_millis(20),
+        NUNCA,
+        Duration::from_secs(60),
+        lector.clone(),
+    ));
+    async fn esperar_lectura(lector: &LectorGuionizado, numero: usize) {
+        assert!(
+            hasta(ESPERA_CAMBIO, || lector.lecturas.load(Ordering::SeqCst)
+                >= numero)
+            .await,
+            "el sondeo no llegó a la lectura {numero}"
+        );
+    }
+    // Cada paso deja tomar una muestra; la lectura siguiente empieza cuando la
+    // decisión sobre la anterior ya está tomada (y enviada, si se pidió).
+    esperar_lectura(&lector, 1).await;
+    for (muestra, esperada) in [(0, None), (1, None), (2, None), (3, Some(7)), (4, None)] {
+        paso.send(()).expect("el sondeo sigue vivo");
+        esperar_lectura(&lector, muestra + 2).await;
+        let recibido = match rx.try_recv() {
+            Ok(Evento::Inventario(EventoInventario::CarpetaCambiada { generacion })) => {
+                Some(generacion)
+            }
+            Ok(_) => panic!("la vigilancia solo manda CarpetaCambiada"),
+            Err(_) => None,
+        };
+        assert_eq!(
+            recibido, esperada,
+            "muestra {muestra}: sin asentarse no se pide la pasada; asentada, una sola vez"
+        );
+    }
+    assert!(rx.try_recv().is_err(), "ni una más");
+    tarea.abort();
+}
+
+#[tokio::test]
+async fn un_fichero_que_no_deja_de_cambiar_no_pide_pasada_pero_la_de_seguridad_si() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let lector = Arc::new(LectorQueNoParaDeCambiar {
+        lecturas: AtomicUsize::new(0),
+    });
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    // Seguridad de 2 s: durante el primer segundo, con la firma cambiando en
+    // cada muestra, no se avisa de nada.
+    let tarea = tokio::spawn(sondear_con(
+        carpeta.clone(),
+        7,
+        tx,
+        Duration::from_millis(20),
+        Duration::from_secs(2),
+        Duration::from_secs(60),
+        lector.clone(),
+    ));
+    assert_eq!(
+        siguiente(&mut rx, Duration::from_secs(1)).await,
+        None,
+        "un fichero que sigue cambiando no se lee a medias"
+    );
+    assert!(
+        lector.lecturas.load(Ordering::SeqCst) >= 5,
+        "el sondeo siguió tomando muestras"
+    );
+    // La pasada de seguridad no espera a que nada se asiente.
+    assert_eq!(
+        siguiente(&mut rx, Duration::from_secs(5)).await,
+        Some(7),
+        "la seguridad sale aunque la firma no pare de cambiar"
+    );
+    tarea.abort();
+}
+
+/// Una `App` de Termux con la sincronización apuntando a una carpeta cuyo
+/// sondeo tiene la lectura colgada, y con los efectos externos encendidos (sin
+/// ellos no se pide ninguna pasada).
+struct AppConCarpetaColgada {
+    app: App,
+    terminal: Terminal<TestBackend>,
+    carpeta: PathBuf,
+    /// Al soltarlo (o al caer), la lectura colgada responde.
+    soltar: Option<std::sync::mpsc::Sender<()>>,
+    /// El runtime del sondeo: tiene que seguir vivo mientras dure la prueba.
+    runtime: tokio::runtime::Runtime,
+    _temporales: (tempfile::TempDir, tempfile::TempDir),
+}
+
+impl AppConCarpetaColgada {
+    fn nueva() -> Self {
+        termux();
+        let (temporal_carpeta, carpeta) = carpeta_compartida();
+        let (temporal_rutas, rutas) = entorno_app(carpeta.parent().unwrap());
+        let mut config = Config::default();
+        config.sincronizacion.carpeta = Some(carpeta.to_string_lossy().to_string());
+        let (mut app, terminal) = con_app(&rutas, config);
+        app.sincronizacion.plazo_lectura_carpeta = PLAZO_CORTO;
+        app.activar_efectos_externos_de_prueba();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (lector, soltar) = LectorColgado::nuevo(0);
+        let (tx, rx) = mpsc::unbounded_channel();
+        // El sondeo no avisa mientras su lectura no responda; el canal se
+        // queda abierto para que no termine.
+        std::mem::forget(rx);
+        runtime.spawn(sondear_con(
+            carpeta.clone(),
+            7,
+            tx,
+            Duration::from_millis(20),
+            NUNCA,
+            PLAZO_CORTO,
+            lector,
+        ));
+        let colgada = runtime.block_on(hasta(ESPERA_CAMBIO, || {
+            lectura_de_carpeta_colgada(&carpeta, PLAZO_CORTO)
+        }));
+        assert!(colgada, "la lectura debía colgarse");
+        Self {
+            app,
+            terminal,
+            carpeta,
+            soltar: Some(soltar),
+            runtime,
+            _temporales: (temporal_carpeta, temporal_rutas),
+        }
+    }
+
+    /// El aviso de que la carpeta cambió, como lo manda la vigilancia.
+    fn carpeta_cambiada(&mut self) {
+        let generacion = self.app.sincronizacion.generacion_vigilancia;
+        self.app
+            .procesar(Evento::Inventario(EventoInventario::CarpetaCambiada {
+                generacion,
+            }));
+    }
+
+    /// La carpeta responde: la lectura colgada termina.
+    fn responder(&mut self) {
+        drop(self.soltar.take());
+        let carpeta = self.carpeta.clone();
+        let responde = self.runtime.block_on(hasta(ESPERA_CAMBIO, || {
+            !lectura_de_carpeta_colgada(&carpeta, PLAZO_CORTO)
+        }));
+        assert!(responde, "la carpeta debía responder");
+    }
+}
+
+#[test]
+fn una_pasada_aplazada_por_la_carpeta_colgada_se_reintenta_al_responder() {
+    // Cierre de la Fase 17 (C2): la pasada que se aplaza porque leer la carpeta
+    // congelaría la TUI no puede perder su disparador (el sondeo solo vuelve a
+    // avisar con otro cambio de firma o a los 10 min).
+    let mut prueba = AppConCarpetaColgada::nueva();
+    assert_eq!(prueba.app.sincronizacion.pasadas_pedidas, 0);
+
+    prueba.carpeta_cambiada();
+    assert_eq!(prueba.app.sincronizacion.pasadas_pedidas, 1);
+    assert!(
+        !prueba.app.sincronizacion.sincronizando,
+        "con la carpeta colgada no se lanza la pasada"
+    );
+    assert_eq!(
+        prueba.app.sincronizacion.pasada_aplazada,
+        Some(PoliticaBorrados::Preguntar),
+        "pero queda aplazada, no perdida"
+    );
+    assert!(
+        matches!(prueba.app.sincronizacion.estado, EstadoPasada::Error(_)),
+        "el estado dice que no responde: {:?}",
+        prueba.app.sincronizacion.estado
+    );
+
+    // Mientras no responda, los ticks no piden nada (ni cuentan pasadas).
+    for _ in 0..3 {
+        prueba.app.procesar(Evento::Tick);
+    }
+    assert_eq!(prueba.app.sincronizacion.pasadas_pedidas, 1);
+    assert!(prueba.app.sincronizacion.pasada_aplazada.is_some());
+
+    // Responde: el siguiente tick reintenta, una sola vez.
+    prueba.responder();
+    prueba.app.procesar(Evento::Tick);
+    assert_eq!(
+        prueba.app.sincronizacion.pasadas_pedidas, 2,
+        "al responder se reintenta"
+    );
+    assert!(prueba.app.sincronizacion.sincronizando, "la pasada arranca");
+    assert_eq!(prueba.app.sincronizacion.pasada_aplazada, None);
+    prueba.app.procesar(Evento::Tick);
+    assert_eq!(prueba.app.sincronizacion.pasadas_pedidas, 2, "una sola vez");
+}
+
+#[test]
+fn una_pasada_aplazada_no_pisa_lo_que_espera_una_decision() {
+    for estado in [
+        EstadoPasada::EsperandoClave("otro".to_string()),
+        EstadoPasada::Quitado,
+    ] {
+        let mut prueba = AppConCarpetaColgada::nueva();
+        prueba.app.sincronizacion.estado = estado.clone();
+        prueba.carpeta_cambiada();
+        assert_eq!(
+            prueba.app.sincronizacion.estado, estado,
+            "el estado que espera una decisión se queda como está"
+        );
+        let mensaje = prueba.app.mensaje.as_ref().expect("el aviso va a la barra");
+        assert!(mensaje.error);
+        assert!(mensaje.texto.contains("no responde"), "{}", mensaje.texto);
+        assert!(prueba.app.sincronizacion.pasada_aplazada.is_some());
+        prueba.responder();
+        prueba.app.procesar(Evento::Tick);
+        assert!(
+            prueba.app.sincronizacion.sincronizando,
+            "con {estado:?} también se reintenta al responder"
+        );
+    }
+}
+
+#[test]
+fn la_decision_de_borrados_aplazada_por_la_carpeta_colgada_no_se_pierde() {
+    let mut prueba = AppConCarpetaColgada::nueva();
+    let pendientes = BorradosPendientes {
+        copia: PathBuf::from("copia.db"),
+        hosts: vec!["web".to_string()],
+        total_hosts: 3,
+    };
+    // Borrados en pausa y el diálogo abierto: el usuario decide aplicarlos
+    // con la carpeta colgada.
+    prueba.app.sincronizacion.estado = EstadoPasada::DecisionPendiente(pendientes.clone());
+    prueba.app.sincronizacion.pausa = Some(pendientes.clone());
+    prueba.app.dialogo = Some(Dialogo::ImportacionBorrados { pendientes });
+    tecla(&mut prueba.app, &mut prueba.terminal, KeyCode::Char('a'));
+    assert!(
+        matches!(
+            prueba.app.sincronizacion.estado,
+            EstadoPasada::DecisionPendiente(_)
+        ),
+        "la decisión sigue pendiente: {:?}",
+        prueba.app.sincronizacion.estado
+    );
+    assert!(prueba.app.sincronizacion.pausa.is_some());
+    assert_eq!(
+        prueba.app.sincronizacion.pasada_aplazada,
+        Some(PoliticaBorrados::Aplicar)
+    );
+    // Otra petición sin decisión (la vigilancia) no borra la del usuario.
+    prueba.carpeta_cambiada();
+    assert_eq!(
+        prueba.app.sincronizacion.pasada_aplazada,
+        Some(PoliticaBorrados::Aplicar)
+    );
+    // Responde: la pasada reintentada lleva la decisión del usuario.
+    prueba.responder();
+    prueba.app.procesar(Evento::Tick);
+    assert!(prueba.app.sincronizacion.sincronizando);
+    assert_eq!(
+        prueba.app.sincronizacion.politica,
+        PoliticaBorrados::Aplicar
+    );
+    assert_eq!(prueba.app.sincronizacion.pasada_aplazada, None);
+}
+
 #[test]
 fn al_volver_a_la_vista_con_la_carpeta_colgada_no_se_pide_la_pasada() {
     termux();
@@ -1480,6 +1821,82 @@ fn en_termux_la_pasada_de_la_interfaz_y_de_la_cli_es_tolerante() {
     assert_eq!(permisos_de_esta_plataforma(), PermisosCarpeta::Tolerantes);
     // Y el valor por omisión del núcleo, que es el de los demás, es estricto.
     assert_eq!(PermisosCarpeta::default(), PermisosCarpeta::Estrictos);
+}
+
+/// Cierre de la Fase 17 (C1): la carpeta del móvil es almacenamiento compartido
+/// donde escribe cualquier app. Con nombre de fichero de equipo caben una
+/// carpeta, un FIFO, un fichero enorme (disperso) y uno ilegible: ninguno
+/// tumba la pasada, que sigue importando los ficheros buenos.
+#[test]
+fn una_carpeta_con_basura_con_nombre_de_magi_no_tumba_la_pasada() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = texto_clave();
+    let termux = Entorno::nuevo(&carpeta, "termux-abc-x10", "android", &clave);
+    termux.crear_host("web", "192.0.2.5");
+    assert!(termux.pasada_con(PermisosCarpeta::Tolerantes).exportado);
+
+    // Lo que dejan otras apps, con nombre de fichero de equipo.
+    let uuid_directorio = "11111111-1111-4111-8111-111111111111";
+    let uuid_fifo = "33333333-3333-4333-8333-333333333333";
+    let uuid_grande = "44444444-4444-4444-8444-444444444444";
+    let uuid_ilegible = "55555555-5555-4555-8555-555555555555";
+    std::fs::create_dir(carpeta.join(carpeta::nombre_fichero(uuid_directorio))).unwrap();
+    nix::unistd::mkfifo(
+        &carpeta.join(carpeta::nombre_fichero(uuid_fifo)),
+        nix::sys::stat::Mode::from_bits_truncate(0o600),
+    )
+    .unwrap();
+    std::fs::File::create(carpeta.join(carpeta::nombre_fichero(uuid_grande)))
+        .unwrap()
+        .set_len(300 * 1024 * 1024)
+        .unwrap();
+    let ilegible = carpeta.join(carpeta::nombre_fichero(uuid_ilegible));
+    std::fs::write(&ilegible, b"no lo puedo leer").unwrap();
+    std::fs::set_permissions(&ilegible, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let escritorio = Entorno::nuevo(&carpeta, "escritorio", "linux", &clave);
+    let resultado = escritorio.pasada_con(PermisosCarpeta::Estrictos);
+    assert_eq!(
+        resultado.estado,
+        EstadoPasada::AlDia,
+        "la basura no tumba la pasada: {:?}",
+        resultado.avisos
+    );
+    assert_eq!(
+        escritorio.hosts(),
+        vec![("web".to_string(), "192.0.2.5".to_string())],
+        "los ficheros buenos se importan"
+    );
+    assert!(
+        resultado
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains(uuid_grande) && aviso.contains("dañado")),
+        "el fichero enorme consta como dañado, sin haberlo leído: {:?}",
+        resultado.avisos
+    );
+    if !es_root() {
+        assert!(
+            resultado
+                .avisos
+                .iter()
+                .any(|aviso| aviso.contains(&carpeta::nombre_fichero(uuid_ilegible))),
+            "el ilegible consta como aviso: {:?}",
+            resultado.avisos
+        );
+    }
+    // La carpeta y el FIFO no son ficheros de equipo: ni un aviso.
+    assert!(
+        !resultado
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains(uuid_directorio) || aviso.contains(uuid_fifo)),
+        "{:?}",
+        resultado.avisos
+    );
+    // Para que el directorio temporal se pueda borrar.
+    std::fs::set_permissions(&ilegible, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 // ====================================================================

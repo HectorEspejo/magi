@@ -8,15 +8,20 @@
 #
 # Qué hace (informe de la Fase 17, §4.9 y §5.7):
 #   1. verificar: comprueba el formato de la etiqueta y que coincide con la
-#      versión de Cargo.toml (la del paquete magi-ssh).
+#      versión de Cargo.toml (la del paquete magi-ssh), y fija el commit de la
+#      etiqueta (su SHA, una sola vez): lo que se compila y se sube sale siempre
+#      de ese commit, aunque la etiqueta se mueva después.
 #   2. compilar: cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh
 #      con el NDK r30; readelf -d (falla si el binario pide algo que no sea del
 #      NDK estable: libc, libm, libdl, liblog y libz); scripts/paquete-termux.sh
 #      arma magi-ssh_<versión>_aarch64.deb con dpkg-deb -Zxz y comprueba su
 #      estructura; .sha256 y atestación de procedencia.
 #   3. publicar: espera a que exista la release de la etiqueta (la crea
-#      release.yml al terminar; se mira cada 30 s, hasta 60 min) y sube el .deb
-#      y su .sha256. Si no aparece, falla y dice cómo repetirlo. Al final
+#      release.yml al terminar; se mira cada 30 s, hasta 60 min) y, justo antes
+#      de subir, comprueba que la etiqueta sigue apuntando al commit que se
+#      compiló (si se borró y se volvió a crear mientras esperaba, FALLA y no
+#      sube nada: el .deb sería de otro commit). Después sube el .deb y su
+#      .sha256. Si la release no aparece, falla y dice cómo repetirlo. Al final
 #      comprueba que los adjuntos se llaman como se esperaba y, si no, falla.
 #
 # El nombre del fichero de una candidata lleva el guion de la etiqueta
@@ -35,6 +40,12 @@
 #
 # Una versión de Termux sin atestación o sin .sha256 no se publica: el .deb sale
 # solo de este workflow, a partir de una etiqueta, nunca de un equipo personal.
+#
+# El árbol que se compila es siempre el de la etiqueta (su commit, resuelto en
+# «verificar»), también con workflow_dispatch. La atestación, en cambio, registra
+# como fuente el commit desde el que se lanzó el workflow (GITHUB_SHA): con un
+# push de etiqueta es el mismo; con un workflow_dispatch --ref main es la punta
+# de main (docs/publicar-termux.md, §8).
 
 name: Release Termux
 
@@ -75,6 +86,7 @@ jobs:
       version_deb: ${{ steps.etiqueta.outputs.version_deb }}
       nombre_deb: ${{ steps.etiqueta.outputs.nombre_deb }}
       prerelease: ${{ steps.etiqueta.outputs.prerelease }}
+      commit: ${{ steps.commit.outputs.commit }}
     steps:
       - name: Comprobar el formato de la etiqueta
         id: etiqueta
@@ -121,6 +133,37 @@ jobs:
           ref: refs/tags/${{ steps.etiqueta.outputs.tag }}
           persist-credentials: false
 
+      - name: Fijar el commit de la etiqueta
+        id: commit
+        # El commit al que apunta la etiqueta se resuelve aquí, una sola vez:
+        # «compilar» descarga ese SHA (no vuelve a resolver el nombre de la
+        # etiqueta) y «publicar» lo compara con la etiqueta antes de subir.
+        env:
+          TAG: ${{ steps.etiqueta.outputs.tag }}
+          EVENTO: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
+          descargado="$(git rev-parse --verify HEAD)"
+          if [ "$descargado" != "$commit" ]; then
+            echo "ERROR: lo descargado ($descargado) no es el commit de la etiqueta $TAG ($commit)." >&2
+            exit 1
+          fi
+          # Con un push de etiqueta, lo que disparó el workflow tiene que ser la
+          # etiqueta de ahora: si no, se movió o se volvió a crear después de
+          # lanzarse esta ejecución y compilaría otro árbol. GITHUB_SHA es el
+          # commit de la etiqueta; por si GitHub diera el objeto de una etiqueta
+          # anotada en su lugar, se acepta también ese (ambos cambian si la
+          # etiqueta se mueve).
+          objeto="$(git rev-parse --verify "refs/tags/${TAG}")"
+          if [ "$EVENTO" = push ] && [ "$GITHUB_SHA" != "$commit" ] && [ "$GITHUB_SHA" != "$objeto" ]; then
+            echo "ERROR: la etiqueta $TAG apunta ahora a $commit, pero esta ejecución se lanzó para $GITHUB_SHA." >&2
+            echo "La etiqueta se movió o se volvió a crear después de empujarla. No se compila nada: cancela esta ejecución; la de la etiqueta actual es la que vale." >&2
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "La etiqueta $TAG apunta al commit $commit."
+
       - name: Comprobar que la etiqueta coincide con la versión de Cargo.toml
         env:
           VERSION: ${{ steps.etiqueta.outputs.version }}
@@ -151,6 +194,8 @@ jobs:
     needs: verificar
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    outputs:
+      commit: ${{ steps.commit_compilado.outputs.commit }}
     permissions:
       contents: read
       id-token: write
@@ -161,11 +206,29 @@ jobs:
       NOMBRE_DEB: ${{ needs.verificar.outputs.nombre_deb }}
       MAGI_DEB_SALIDA: release-termux
     steps:
-      - name: Descargar el repositorio en la etiqueta
+      - name: Descargar el repositorio en el commit de la etiqueta
+        # Por SHA, el que fijó «verificar»: no se vuelve a resolver el nombre de
+        # la etiqueta, que pudo moverse entre los dos jobs.
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/${{ needs.verificar.outputs.tag }}
+          ref: ${{ needs.verificar.outputs.commit }}
           persist-credentials: false
+
+      - name: Anotar el commit que se compila
+        id: commit_compilado
+        env:
+          COMMIT_ESPERADO: ${{ needs.verificar.outputs.commit }}
+          TAG: ${{ needs.verificar.outputs.tag }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify HEAD)"
+          if [ "$commit" != "$COMMIT_ESPERADO" ]; then
+            echo "ERROR: se descargó $commit y «verificar» fijó $COMMIT_ESPERADO para la etiqueta $TAG." >&2
+            exit 1
+          fi
+          # «publicar» compara este SHA con el de la etiqueta antes de subir.
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Se compila el commit $commit (etiqueta $TAG)."
 
       - name: Preparar el SDK de Android
         uses: android-actions/setup-android@v4
@@ -261,6 +324,10 @@ jobs:
           dpkg-deb --contents "$MAGI_DEB_SALIDA/$NOMBRE_DEB"
 
       - name: Atestar la procedencia del .deb
+        # La atestación registra como fuente el commit del que se lanzó el
+        # workflow (GITHUB_SHA). El árbol compilado es el de la etiqueta; ambos
+        # coinciden con un push de etiqueta, no con un workflow_dispatch desde una
+        # rama (docs/publicar-termux.md, §8).
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'release-termux/*.deb'
@@ -284,6 +351,8 @@ jobs:
     env:
       TAG: ${{ needs.verificar.outputs.tag }}
       NOMBRE_DEB: ${{ needs.verificar.outputs.nombre_deb }}
+      # El commit del que se compiló el .deb (el que anotó «compilar»).
+      COMMIT_COMPILADO: ${{ needs.compilar.outputs.commit }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -328,12 +397,36 @@ jobs:
           exit 1
 
       - name: Subir el .deb y su .sha256 a la release
+        # Justo antes de subir se comprueba que la etiqueta sigue en el commit del
+        # que se compiló el .deb: el workflow identifica la release por el NOMBRE
+        # de la etiqueta y, si esta se borró y se volvió a crear mientras se
+        # esperaba, la release que apareció es la de otro commit.
         # Sin --clobber: un .deb que ya está en la release está atestado y no se
         # sustituye a ciegas. Tampoco se toca la marca «Latest».
         working-directory: release-termux
         run: |
           set -euo pipefail
           deb="$NOMBRE_DEB"
+          sha40='^[0-9a-f]{40}$'
+          if [[ ! "$COMMIT_COMPILADO" =~ $sha40 ]]; then
+            echo "ERROR: el job compilar no dejó el commit que compiló («$COMMIT_COMPILADO»); no se sube nada." >&2
+            exit 1
+          fi
+          if ! actual="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha 2>&1)"; then
+            echo "ERROR: no se pudo leer a qué commit apunta la etiqueta $TAG: $actual" >&2
+            exit 1
+          fi
+          if [[ ! "$actual" =~ $sha40 ]]; then
+            echo "ERROR: GitHub no devolvió un commit para la etiqueta $TAG: «$actual»; no se sube nada." >&2
+            exit 1
+          fi
+          if [ "$actual" != "$COMMIT_COMPILADO" ]; then
+            echo "ERROR: el .deb se compiló desde el commit $COMMIT_COMPILADO, pero la etiqueta $TAG apunta ahora a $actual." >&2
+            echo "La etiqueta se borró y se volvió a crear mientras esta ejecución esperaba a la release, y la release que existe es la del commit nuevo: subir este .deb la dejaría con un paquete de otro commit. No se sube nada." >&2
+            echo "Cancela esta ejecución y deja que termine la de la etiqueta actual; si el .deb no llega a la release, repite con workflow_dispatch (Actions → Release Termux → Run workflow, con la etiqueta $TAG). docs/publicar-termux.md, §9." >&2
+            exit 1
+          fi
+          echo "La etiqueta $TAG sigue en el commit compilado ($actual)."
           if ! gh release upload "$TAG" "$deb" "$deb.sha256"; then
             echo "ERROR: no se pudo subir a la release $TAG. Si el .deb ya estaba en ella, bórralo desde GitHub (junto a su .sha256) y repite con workflow_dispatch." >&2
             exit 1
