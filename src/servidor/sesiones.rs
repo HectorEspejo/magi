@@ -247,6 +247,12 @@ pub struct Sesion {
     /// La pestaña está concedida en una escritura en varios activa (la marca
     /// «»» de §7.14, que ven todas las ventanas).
     pub escritura_varios: bool,
+    /// El remoto avisó (campana, OSC 9 u OSC 777) y nadie la ha atendido desde
+    /// entonces (Fase 17, §4.7). Es lo que decide el aviso de Android de una
+    /// pestaña, y solo lo pone el emulador del remoto, no los avisos que el
+    /// propio servidor guarda en `aviso`. Solo se usa en Termux. Se quita al
+    /// enfocarla alguna ventana y al escribir en ella.
+    pub atencion_remota: bool,
 }
 
 impl Sesion {
@@ -286,6 +292,19 @@ impl Sesion {
         !self.enfocadas.is_empty()
     }
 
+    /// Alguien atiende la pestaña (la enfoca una ventana o escribe en ella):
+    /// quita la marca de atención del remoto. Devuelve si estaba puesta.
+    pub fn atendida(&mut self) -> bool {
+        std::mem::take(&mut self.atencion_remota)
+    }
+
+    /// El remoto pide atención y nadie la mira: pone la marca. Devuelve si
+    /// cambió (estaba quitada); con la marca ya puesta no hay nada nuevo que
+    /// decir a los avisos de Android.
+    pub fn pedir_atencion(&mut self) -> bool {
+        !std::mem::replace(&mut self.atencion_remota, true)
+    }
+
     /// Anota un aviso local (del servidor) o del remoto, con el tope de uno
     /// cada 5 s por pestaña. Devuelve si se admitió (para difundir la lista).
     pub fn anotar_aviso(&mut self, texto: &str, hora: i64) -> bool {
@@ -313,6 +332,11 @@ pub fn lista(sesiones: &HashMap<u32, Sesion>) -> Vec<InfoSesion> {
 /// verdad sale ya y descarta la difusión cosmética pendiente (título/aviso).
 pub fn difundir_lista(estado: &mut EstadoServidor) {
     estado.difusion_sesiones.limpiar();
+    // Una pestaña que aparece, se cae o se cierra cambia los avisos de Android
+    // que tocan (y se retira el de la que ya no está).
+    if let Some(termux) = &estado.termux {
+        termux.despertar_avisos();
+    }
     let mensajes = lista(&estado.sesiones);
     difusion::difundir(
         &estado.clientes,
@@ -1750,6 +1774,8 @@ async fn procesar_datos(
     }
     let (ids, cosmetico) = {
         let mut estado_bloqueado = estado.lock().await;
+        // Solo en Termux: la marca de atención del aviso de Android.
+        let termux = estado_bloqueado.termux.clone();
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             return true;
         };
@@ -1764,6 +1790,16 @@ async fn procesar_datos(
         if let Some(aviso) = aviso {
             if sesion.anotar_aviso(&aviso.texto, aviso.hora) {
                 cosmetico = true;
+            }
+            // Un aviso del emulador del remoto (no los internos del servidor,
+            // que también pasan por `aviso`) que nadie mira pide atención. El
+            // tope de uno cada 5 s es de lo que se enseña, no de esto. Solo
+            // la transición a «pide atención» despierta a la tarea de avisos:
+            // una salida con cientos de campanas no lanza un ciclo por lote.
+            if let Some(termux) = &termux {
+                if !crate::termux::avisos::mirando(sesion.enfocada()) && sesion.pedir_atencion() {
+                    termux.despertar_avisos();
+                }
             }
         }
         let ids = if sesion.adjuntos.is_empty() {
@@ -2520,6 +2556,7 @@ pub async fn foco(
 ) {
     let avisar = {
         let mut estado_bloqueado = estado.lock().await;
+        let termux = estado_bloqueado.termux.clone();
         let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
             return;
         };
@@ -2527,6 +2564,13 @@ pub async fn foco(
         if enfocada {
             sesion.enfocadas.insert(cliente_id);
             sesion.ventana_enfocada = Some(cliente_id);
+            // Una ventana que la enfoca la está atendiendo: se retira su aviso
+            // de Android.
+            if sesion.atendida() {
+                if let Some(termux) = &termux {
+                    termux.despertar_avisos();
+                }
+            }
         } else {
             sesion.enfocadas.remove(&cliente_id);
         }

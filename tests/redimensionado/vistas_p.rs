@@ -298,6 +298,60 @@ fn el_pie_con_las_teclas_se_ve_a_48x20_y_a_40x12() {
     }
 }
 
+// ---------------------------------------------------------------- mensajes largos de la barra
+
+/// Lo que dice la barra de un Termux vertical de 48 columnas cuando el mensaje
+/// es de los largos de §4.4 (el portapapeles) o la explicación de `prefijo w`
+/// (§5.4): miden entre 70 y 95 caracteres y la barra, de una sola línea, los
+/// recorta con «…». El texto es el de la especificación y no se acorta; esta
+/// instantánea documenta lo que se ve. Variantes cortas, si el analista las
+/// quiere, son una petición abierta del informe de implementación.
+#[test]
+fn la_barra_recorta_a_48x20_los_mensajes_largos_de_termux() {
+    let casos: [(&str, String, bool); 4] = [
+        (
+            "no_cabe",
+            magi::termux::portapapeles::mensaje_no_cabe(20 * 1024),
+            true,
+        ),
+        (
+            "demasiado",
+            magi::termux::portapapeles::mensaje_demasiado(900 * 1024),
+            true,
+        ),
+        (
+            "api_apagada",
+            magi::termux::portapapeles::AVISO_API_APAGADA.to_string(),
+            true,
+        ),
+        (
+            "explicacion_w",
+            magi::cliente::ventana::EXPLICACION_TERMUX.to_string(),
+            false,
+        ),
+    ];
+    for (nombre, texto, error) in casos {
+        let largo = texto.chars().count();
+        assert!(
+            (60..=100).contains(&largo),
+            "«{nombre}» mide {largo}: ya no es de los largos"
+        );
+        // Se pone el mensaje un poco más ancho y se pasa a 48×20: poner un
+        // mensaje no marca la pantalla sucia y el cambio de tamaño repinta.
+        let (mut prueba, _) = AppPrueba::con_semilla(49, 20);
+        prueba.app.mensaje(texto, error);
+        prueba.redimensionar(48, 20);
+        let texto_pintado = prueba.texto();
+        let barra = texto_pintado.lines().last().expect("barra").to_string();
+        assert_eq!(barra.chars().count(), 48, "{barra}");
+        assert!(
+            barra.trim_end().ends_with('…'),
+            "el mensaje largo se recorta con marca: {barra}"
+        );
+        prueba.instantanea(&format!("barra_mensaje_{nombre}_48x20"));
+    }
+}
+
 /// El tema por defecto no se toca: los diálogos son los de siempre en los
 /// demás tamaños y no cambian el aviso de tamaño.
 #[test]

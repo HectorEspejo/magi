@@ -109,8 +109,21 @@ impl CarpetaDisco {
     }
 }
 
-impl CarpetaSincronizacion for CarpetaDisco {
-    fn listar(&self) -> Result<Vec<EntradaCarpeta>, String> {
+impl CarpetaDisco {
+    /// Cuerpo de [`CarpetaSincronizacion::listar`] con la lectura de metadatos
+    /// inyectable (superficie de pruebas: es la única forma de comprobar que
+    /// lo ajeno no se toca).
+    ///
+    /// El filtro de nombre va antes de los metadatos: la carpeta compartida
+    /// puede tener miles de ficheros que no son de MAGI y, en un
+    /// almacenamiento lento (FUSE), cada `stat` de más se paga en cada
+    /// sondeo. Solo los nombres `magi-<uuid>.age` canónicos llegan a
+    /// `leer_metadatos`.
+    #[doc(hidden)]
+    pub fn listar_con(
+        &self,
+        leer_metadatos: &dyn Fn(&Path) -> std::io::Result<fs::Metadata>,
+    ) -> Result<Vec<EntradaCarpeta>, String> {
         let entradas = match fs::read_dir(&self.ruta) {
             Ok(entradas) => entradas,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -120,19 +133,19 @@ impl CarpetaSincronizacion for CarpetaDisco {
         for entrada in entradas {
             let entrada =
                 entrada.map_err(|error| format!("leyendo {}: {error}", self.ruta.display()))?;
-            // Metadatos sin seguir el enlace: un enlace simbólico no es un
-            // fichero de equipo y no se lee.
-            let Ok(metadatos) = fs::symlink_metadata(entrada.path()) else {
-                continue;
-            };
-            if !metadatos.is_file() {
-                continue;
-            }
             let nombre_os = entrada.file_name();
             let Some(nombre) = nombre_os.to_str() else {
                 continue;
             };
             if uuid_de_nombre(nombre).is_none() {
+                continue;
+            }
+            // Metadatos sin seguir el enlace: un enlace simbólico no es un
+            // fichero de equipo y no se lee.
+            let Ok(metadatos) = leer_metadatos(&entrada.path()) else {
+                continue;
+            };
+            if !metadatos.is_file() {
                 continue;
             }
             // Un fichero por encima del tope no se lista: no es un fichero de
@@ -155,6 +168,12 @@ impl CarpetaSincronizacion for CarpetaDisco {
         }
         ficheros.sort_by(|a, b| a.nombre.cmp(&b.nombre));
         Ok(ficheros)
+    }
+}
+
+impl CarpetaSincronizacion for CarpetaDisco {
+    fn listar(&self) -> Result<Vec<EntradaCarpeta>, String> {
+        self.listar_con(&|ruta| fs::symlink_metadata(ruta))
     }
 
     fn leer(&self, nombre: &str, maximo: u64) -> Result<Vec<u8>, String> {
@@ -268,6 +287,39 @@ pub fn escribir(carpeta: &Path, uuid: &str, contenido: &[u8]) -> Result<PathBuf>
     let ruta = carpeta.join(nombre_fichero(uuid));
     crate::ficheros::escribir_atomico(&ruta, contenido, 0o600)?;
     Ok(ruta)
+}
+
+/// Como [`escribir`], pero en una carpeta que puede no admitir `chmod` (el
+/// almacenamiento compartido de Android): un 600 que no se puede aplicar no es
+/// un error. Devuelve la ruta y si el `chmod` falló y se ignoró. El resto de
+/// fallos (crear, escribir, renombrar) siguen siéndolo, y la escritura sigue
+/// siendo atómica y sin temporales sueltos.
+pub fn escribir_tolerante(carpeta: &Path, uuid: &str, contenido: &[u8]) -> Result<(PathBuf, bool)> {
+    escribir_con_ajuste(
+        carpeta,
+        uuid,
+        contenido,
+        true,
+        &crate::ficheros::ajustar_permisos,
+    )
+}
+
+/// Cuerpo común de [`escribir`] y [`escribir_tolerante`], con el `chmod`
+/// inyectable (superficie de pruebas: en Linux un `chmod` sobre un fichero
+/// propio no falla).
+#[doc(hidden)]
+pub fn escribir_con_ajuste(
+    carpeta: &Path,
+    uuid: &str,
+    contenido: &[u8],
+    tolerante: bool,
+    ajustar: &dyn Fn(&Path, u32) -> std::io::Result<()>,
+) -> Result<(PathBuf, bool)> {
+    uuid_canonico(uuid)?;
+    let ruta = carpeta.join(nombre_fichero(uuid));
+    let ignorado =
+        crate::ficheros::escribir_atomico_con(&ruta, contenido, 0o600, tolerante, ajustar)?;
+    Ok((ruta, ignorado))
 }
 
 /// Borra el fichero de un equipo. Solo se usa al quitar ese equipo.
@@ -449,6 +501,71 @@ mod pruebas {
     }
 
     #[test]
+    fn el_listado_solo_pide_metadatos_de_los_nombres_que_pueden_ser_de_magi() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path().join("sync");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let uuid_a = "2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b";
+        let uuid_b = "11111111-1111-4111-8111-111111111111";
+        let uuid_c = "33333333-3333-4333-8333-333333333333";
+        let uuid_d = "44444444-4444-4444-8444-444444444444";
+        // Candidatos (su nombre es el de un fichero de equipo): un fichero
+        // bueno, otro vacío, una carpeta y un enlace con nombre canónico.
+        std::fs::write(carpeta.join(nombre_fichero(uuid_a)), b"aaaaaa").unwrap();
+        std::fs::write(carpeta.join(nombre_fichero(uuid_b)), b"").unwrap();
+        std::fs::create_dir_all(carpeta.join(nombre_fichero(uuid_c))).unwrap();
+        symlink(
+            temporal.path().join("no-existe.age"),
+            carpeta.join(nombre_fichero(uuid_d)),
+        )
+        .unwrap();
+        // Todo lo demás es ajeno: miles de ficheros de otra cosa en una
+        // carpeta compartida, copias en conflicto y temporales.
+        for numero in 0..200 {
+            std::fs::write(carpeta.join(format!("foto-{numero}.jpg")), b"x").unwrap();
+        }
+        std::fs::write(
+            carpeta.join(format!("magi-{uuid_a}.sync-conflict-20260101-000000.age")),
+            b"x",
+        )
+        .unwrap();
+        std::fs::write(carpeta.join(format!(".magi-{uuid_a}.age.tmp")), b"x").unwrap();
+        std::fs::write(carpeta.join("notas.txt"), b"x").unwrap();
+
+        let servicio = CarpetaDisco::nueva(&carpeta);
+        let consultados = AtomicUsize::new(0);
+        let entradas = servicio
+            .listar_con(&|ruta| {
+                consultados.fetch_add(1, Ordering::SeqCst);
+                // Lo único que se consulta lleva nombre de fichero de equipo.
+                let nombre = ruta.file_name().and_then(|nombre| nombre.to_str()).unwrap();
+                assert!(
+                    uuid_de_nombre(nombre).is_some(),
+                    "se pidieron los metadatos de un fichero ajeno: {nombre}"
+                );
+                std::fs::symlink_metadata(ruta)
+            })
+            .unwrap();
+        assert_eq!(
+            consultados.load(Ordering::SeqCst),
+            4,
+            "un stat por candidato y ninguno por lo ajeno"
+        );
+        // Y el resultado es el de siempre: fichero bueno y vacío; ni la
+        // carpeta ni el enlace.
+        assert_eq!(
+            entradas
+                .iter()
+                .map(|entrada| (entrada.nombre.clone(), entrada.tamano))
+                .collect::<Vec<_>>(),
+            vec![(nombre_fichero(uuid_b), 0), (nombre_fichero(uuid_a), 6)]
+        );
+        assert_eq!(servicio.listar().unwrap(), entradas);
+    }
+
+    #[test]
     fn el_servicio_de_carpeta_no_sigue_enlaces_simbolicos() {
         use std::os::unix::fs::symlink;
         let temporal = tempfile::tempdir().unwrap();
@@ -480,5 +597,29 @@ mod pruebas {
             "un fichero por encima del tope no se lista"
         );
         assert!(servicio.leer(&nombre, TAMANO_MAXIMO).is_err());
+    }
+
+    fn sin_chmod(_ruta: &Path, _modo: u32) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    }
+
+    #[test]
+    fn la_escritura_tolerante_solo_perdona_el_chmod() {
+        let temporal = tempfile::tempdir().unwrap();
+        let carpeta = temporal.path();
+        let uuid = "2f9a1c3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b";
+        // Estricta: el chmod que falla es un error y no queda ni el temporal.
+        assert!(escribir_con_ajuste(carpeta, uuid, b"a", false, &sin_chmod).is_err());
+        assert_eq!(std::fs::read_dir(carpeta).unwrap().count(), 0);
+        // Tolerante: se escribe y se dice que se ignoró.
+        let (ruta, ignorado) = escribir_con_ajuste(carpeta, uuid, b"b", true, &sin_chmod).unwrap();
+        assert!(ignorado);
+        assert_eq!(std::fs::read(&ruta).unwrap(), b"b");
+        assert_eq!(std::fs::read_dir(carpeta).unwrap().count(), 1);
+        // Con un chmod que funciona no hay nada que ignorar.
+        let (_, ignorado) = escribir_tolerante(carpeta, uuid, b"c").unwrap();
+        assert!(!ignorado);
+        // Un uuid que no es canónico se rechaza igual de tolerante.
+        assert!(escribir_tolerante(carpeta, "../fuera", b"x").is_err());
     }
 }

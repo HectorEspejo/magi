@@ -287,7 +287,7 @@ impl Ordenes {
 /// Busca la orden en el `PATH` inyectado: el primer fichero ejecutable que se
 /// llame así. Una orden con `/` no se busca (nunca se ejecuta una ruta que
 /// llegue de fuera) y las entradas vacías del `PATH` no cuentan como «aquí».
-fn buscar_en_path(programa: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+pub(crate) fn buscar_en_path(programa: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     if programa.is_empty() || programa.contains('/') || programa.contains('\0') {
         return None;
     }

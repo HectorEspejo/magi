@@ -13,7 +13,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::app::enlaces::{self, DialogoEnlace};
 use crate::app::escritura_varios::{EstadoEscritura, MotivoFin, Peticion};
 use crate::app::historial::{Busqueda, EstadoHistorial, RUEDA_FILAS};
-use crate::app::portapapeles::{self, Origen};
+use crate::app::portapapeles::{self, ParaQue};
 use crate::app::{
     paneles::PANELES_MAX, pegado, raton, AccionDialogo, App, CampoTexto, Dialogo,
     EntradaTextoAccion, Vista,
@@ -547,33 +547,11 @@ impl App {
 
     // ------------------------------------------------------------ portapapeles
 
-    /// Copia texto al portapapeles del sistema o por OSC 52.
-    pub(crate) fn copiar_texto(&mut self, texto: &str, que: &str) {
-        if texto.is_empty() {
-            self.mensaje("no hay nada que copiar", true);
-            return;
-        }
-        if !EstadoHistorial::cabe_en_copia(texto) {
-            self.mensaje(
-                "demasiado grande para copiar (más de 1 MiB): w para guardarlo",
-                true,
-            );
-            return;
-        }
-        if !self.efectos_externos {
-            self.mensaje(format!("{que} copiado"), false);
-            return;
-        }
-        match portapapeles::copiar(texto) {
-            Ok(Origen::Sistema(herramienta)) => {
-                self.mensaje(format!("{que} copiado con {herramienta}"), false)
-            }
-            Ok(Origen::Osc52) => self.mensaje(format!("{que} copiado por OSC 52"), false),
-            Err(motivo) => self.mensaje(format!("no se pudo copiar: {motivo}"), true),
-        }
-    }
+    // `copiar_texto`, la única vía para copiar, vive en `app/portapapeles.rs`.
 
-    /// Abre una URL con `[terminal] abrir_enlaces`, sin shell.
+    /// Abre una URL con `[terminal] abrir_enlaces`, sin shell. En Termux va por
+    /// las órdenes de Termux (con plazo y en una tarea) y, si falla, dice por
+    /// qué.
     fn abrir_url(&mut self, url: &str) {
         if !magi_nucleo::terminal::enlaces::es_web(url) {
             self.mensaje("solo se abren enlaces http y https", true);
@@ -582,6 +560,12 @@ impl App {
         let programa = self.config.terminal.abrir_enlaces.trim().to_string();
         if programa.is_empty() {
             self.mensaje("no hay [terminal] abrir_enlaces configurado", true);
+            return;
+        }
+        // Un programa dado por su ruta no se busca en el `PATH` de Termux: se
+        // lanza como en el escritorio.
+        if self.termux.activo && !programa.contains('/') {
+            self.abrir_enlace_en_termux(programa, url);
             return;
         }
         if !self.efectos_externos {
@@ -1055,6 +1039,18 @@ impl App {
         self.sucio = true;
     }
 
+    /// `prefijo w` y «nueva ventana» de la paleta: lanza `[terminal] comando` o,
+    /// en Termux, explica cómo abrir otra sesión. La explicación es información
+    /// (no un fallo): los dos caminos la tratan igual.
+    pub(crate) fn abrir_ventana_nueva(&mut self) {
+        use crate::cliente::ventana::{abrir_ventana_para, AperturaVentana};
+        match abrir_ventana_para(self.termux.activo, &self.config) {
+            AperturaVentana::Abierta => {}
+            AperturaVentana::Explicacion(texto) => self.mensaje(texto, false),
+            AperturaVentana::Error(error) => self.mensaje(error, true),
+        }
+    }
+
     fn portapapeles_remoto(&mut self, sesion_id: u32, texto: &str) {
         let host = self
             .pestanas
@@ -1064,6 +1060,12 @@ impl App {
             .unwrap_or_else(|| "el host".to_string());
         let bytes = texto.len() as u64;
         self.portapapeles_remoto.copias += 1;
+        if self.termux.activo {
+            // En Termux el resultado llega después: el aviso del host lo da la
+            // copia al terminar (o el motivo, si no cabe).
+            self.copiar(texto.to_string(), ParaQue::Remoto { host });
+            return;
+        }
         self.copiar_texto(texto, &host);
         self.mensaje(
             format!(
@@ -1314,11 +1316,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('w') => {
-                if let Err(error) = crate::cliente::ventana::abrir(&self.config) {
-                    self.mensaje(error, true);
-                }
-            }
+            KeyCode::Char('w') => self.abrir_ventana_nueva(),
             KeyCode::Char(' ') => self.cambiar_disposicion_paneles(),
             KeyCode::Char('z') => {
                 self.escritura_activa_del_motivo(MotivoFin::Disposicion);

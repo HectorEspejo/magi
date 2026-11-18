@@ -594,6 +594,9 @@ pub enum Evento {
     Inventario(sincronizacion::EventoInventario),
     /// Resultado de una tarea de scrypt del llavero de fichero (Fase 17).
     Llavero(llavero::EventoLlavero),
+    /// Lo que vuelve de una tarea de Termux: portapapeles, enlaces, visor y
+    /// estado del servidor (Fase 17).
+    Termux(termux::EventoTermux),
 }
 
 #[derive(Debug, Clone)]
@@ -3953,6 +3956,10 @@ impl App {
                 self.sucio = true;
                 self.evento_llavero(evento);
             }
+            Evento::Termux(evento) => {
+                self.sucio = true;
+                self.evento_termux(evento);
+            }
         }
         // Si el evento cambió de vista (una sesión que aparece, un aviso que
         // lleva a otra vista), se para lo que quedara de Servicios.
@@ -3963,6 +3970,7 @@ impl App {
         self.tick_sincronizacion();
         self.tick_servicios();
         self.tick_llavero();
+        self.tick_termux();
         // Las aperturas de sesiones persistentes que nunca recibieron pestaña
         // ni fallo caducan (Fase 16).
         self.caducar_creaciones(Instant::now());
@@ -3978,7 +3986,10 @@ impl App {
         }
         self.contador_ticks += 1;
         if let Some(mensaje) = &self.mensaje {
-            if mensaje.creado.elapsed() > Duration::from_secs(4) {
+            // Un aviso de la cola de la barra (Termux) dura su mínimo (Fase 17).
+            if mensaje.creado.elapsed() > Duration::from_secs(4)
+                && !self.aviso_vigente_en_la_barra()
+            {
                 self.mensaje = None;
                 self.sucio = true;
             }
@@ -7147,9 +7158,7 @@ impl App {
                     }
                     Some(AccionPaleta::NuevaVentana) => {
                         self.paleta = None;
-                        if let Err(error) = cliente::ventana::abrir(&self.config) {
-                            self.mensaje(error, true);
-                        }
+                        self.abrir_ventana_nueva();
                     }
                     Some(AccionPaleta::CerrarPestana(sesion_id)) => {
                         let sesion_id = *sesion_id;
@@ -8193,25 +8202,9 @@ impl App {
                 })
             });
         match texto {
-            Some(texto) => match crate::portapapeles::copiar(&texto) {
-                Ok(herramienta) => self.mensaje(
-                    format!("clave pública copiada con {}", herramienta.nombre()),
-                    false,
-                ),
-                Err(error) => {
-                    self.dialogo = Some(Dialogo::Detalle {
-                        tunel_caido: None,
-                        titulo: "CLAVE PÚBLICA".to_string(),
-                        lineas: vec![
-                            format!("No se pudo copiar al portapapeles ({error})."),
-                            String::new(),
-                            "Copia la línea a mano:".to_string(),
-                            String::new(),
-                            texto,
-                        ],
-                    });
-                }
-            },
+            // Por la única vía de copia; si no se puede, ella abre el diálogo
+            // con la línea para copiarla a mano.
+            Some(texto) => self.copiar(texto, portapapeles::ParaQue::ClavePublica),
             None => self.mensaje("no se pudo obtener la clave pública", true),
         }
     }
@@ -8335,20 +8328,19 @@ impl App {
         } else if clave.en_agente {
             texto.push_str(" · añadida al agente");
         }
-        if clave.copiada {
-            texto.push_str(" · pública copiada al portapapeles");
-        }
-        self.mensaje(texto, clave.aviso_agente.is_some());
-        if clave.solicito_copia && !clave.copiada {
-            self.dialogo = Some(Dialogo::Detalle {
-                tunel_caido: None,
-                titulo: "CLAVE PÚBLICA".to_string(),
-                lineas: vec![
-                    "No se pudo copiar al portapapeles; copia la línea a mano:".to_string(),
-                    String::new(),
-                    clave.publica.trim().to_string(),
-                ],
-            });
+        let aviso = clave.aviso_agente.is_some();
+        self.mensaje(texto.clone(), aviso);
+        if clave.solicito_copia {
+            // Por la única vía de copia: ella añade «pública copiada al
+            // portapapeles» al resumen o, si no se pudo, abre el diálogo con la
+            // línea para copiarla a mano.
+            self.copiar(
+                clave.publica,
+                portapapeles::ParaQue::ClaveGenerada {
+                    resumen: texto,
+                    error: aviso,
+                },
+            );
         }
     }
 
@@ -9038,7 +9030,9 @@ impl App {
         if tecla.kind == KeyEventKind::Release {
             return;
         }
-        self.mensaje = None;
+        // Un aviso de la cola de la barra (Termux) sobrevive a las teclas
+        // hasta su visibilidad mínima (Fase 17).
+        self.borrar_mensaje_por_tecla();
         if self.dialogo.is_some() {
             self.tecla_dialogo(tecla);
             self.restaurar_dialogo_apilado();
@@ -10196,6 +10190,8 @@ impl App {
         {
             self.avisar_quitado();
         }
+        // En Termux, lo que llegó a la carpeta mientras no se miraba se ve ya.
+        self.pedir_pasada_al_volver();
     }
 
     /// Entra en la vista CONFLICTOS.
@@ -10468,8 +10464,20 @@ impl App {
         };
         let generacion = self.sincronizacion.generacion_vigilancia;
         let eventos = self.eventos_tx.clone();
+        // En Termux no hay `notify` (Android no garantiza los avisos de lo que
+        // otra app cambia en el almacenamiento compartido): se sondea cada
+        // `[termux] sincronizacion_sondeo_seg` (Fase 17, §4.3).
+        let sondeo_termux =
+            crate::termux::es_termux().then(|| self.config.termux.sincronizacion_sondeo());
+        self.sincronizacion.sondeo_vigilancia = sondeo_termux;
         self.sincronizacion.vigilancia = Some(self.runtime.spawn(async move {
-            crate::app::sincronizacion::vigilar(carpeta, generacion, eventos).await;
+            crate::app::sincronizacion::vigilar_carpeta(
+                carpeta,
+                generacion,
+                eventos,
+                sondeo_termux,
+            )
+            .await;
         }));
     }
 
@@ -10559,12 +10567,31 @@ impl App {
         &mut self,
         politica: crate::sincronizacion::PoliticaBorrados,
     ) {
+        self.sincronizacion.pasadas_pedidas += 1;
         if !self.efectos_externos || !self.config.sincronizacion.activa() {
             return;
         }
         if self.sincronizacion.sincronizando {
             self.sincronizacion.reintentar = true;
             return;
+        }
+        // En Termux, con el almacenamiento compartido sin responder, la pasada
+        // leería la carpeta en este hilo sin plazo y congelaría la TUI: se
+        // aplaza hasta que responda (el sondeo vuelve a pedirla).
+        if crate::termux::es_termux() {
+            let carpeta = self.config.sincronizacion.ruta_carpeta(&self.rutas.hogar);
+            if carpeta.as_deref().is_some_and(|carpeta| {
+                crate::app::sincronizacion::lectura_de_carpeta_colgada(
+                    carpeta,
+                    self.sincronizacion.plazo_lectura_carpeta,
+                )
+            }) {
+                self.sincronizacion.estado = crate::sincronizacion::EstadoPasada::Error(
+                    "la carpeta de sincronización no responde: se reintentará".to_string(),
+                );
+                self.sucio = true;
+                return;
+            }
         }
         self.sincronizacion.sincronizando = true;
         self.sincronizacion.politica = politica;
@@ -10750,18 +10777,21 @@ impl App {
     /// ficheros de otros equipos). Si no vale, se vuelve a pedir.
     fn configurar_carpeta(&mut self, texto: &str) {
         let texto = texto.trim().to_string();
-        let ruta = conexion::cliente::expandir_home(&texto, &self.rutas.hogar);
-        if !ruta.is_dir() {
-            self.mensaje(
-                format!(
-                    "la carpeta {} no existe o no es un directorio",
-                    ruta.display()
-                ),
-                true,
-            );
-            self.reabrir_carpeta(&texto);
-            return;
-        }
+        // En Termux la carpeta se guarda resuelta con realpath y, sin
+        // `~/storage`, se da la instrucción (Fase 17, §4.3); fuera de Termux
+        // sigue siendo la de siempre.
+        let ruta = match crate::sincronizacion::almacenamiento::resolver_carpeta(
+            &texto,
+            &self.rutas.hogar,
+            crate::termux::es_termux(),
+        ) {
+            Ok(ruta) => ruta,
+            Err(motivo) => {
+                self.mensaje(motivo, true);
+                self.reabrir_carpeta(&texto);
+                return;
+            }
+        };
         match crate::sincronizacion::carpeta::hay_ficheros(&ruta) {
             Ok(true) => self.abrir_unir_equipo_para(&ruta),
             Ok(false) => self.crear_sincronizacion(&ruta, &texto),

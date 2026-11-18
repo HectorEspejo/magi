@@ -3,7 +3,12 @@
 //! atiende la vista previa y el renombrado.
 //!
 //! - **Vigilante.** Solo trabaja mientras haya alguna ventana conectada (un
-//!   cliente puntual de la CLI cuenta). Cada `[persistentes] vigilar_seg`, y
+//!   cliente puntual de la CLI cuenta) o, desde la Fase 17, en Termux con los
+//!   avisos de Android activos, Termux:API sin apagar y `termux-notification`
+//!   instalada: entonces sigue sin ventanas mientras viva el servidor, para
+//!   poder avisar de una atención (`debe_vigilar`). No mantiene vivo al
+//!   servidor. Cada `[persistentes]
+//!   vigilar_seg`, y
 //!   enseguida con `ConsultarSesionesPersistentes`, comprueba con la suborden
 //!   `estado` los hosts `ssh` que tienen fichas o la marca
 //!   `sesiones_persistentes`: 8 a la vez como mucho y 10 s por host, impuestos
@@ -156,6 +161,12 @@ pub struct Persistentes {
 }
 
 impl Persistentes {
+    /// La lista más reciente (la que se difunde), para quien necesita saber
+    /// qué fichas están vivas y con la campana (los avisos de Android).
+    pub fn lista_actual(&self) -> &ListaPersistentes {
+        &self.lista
+    }
+
     /// De los motivos de filas ilegibles de esta lectura, los que aún no se han
     /// avisado en el log. Olvida los que ya no están (la fila se arregló): si
     /// vuelven, se avisa de nuevo.
@@ -183,6 +194,20 @@ struct Comprobado {
 pub fn lista_para_ventana_nueva(estado: &EstadoServidor) -> Option<ListaPersistentes> {
     let lista = &estado.persistentes.lista;
     (!lista.fichas.is_empty() || !lista.hosts.is_empty()).then(|| lista.clone())
+}
+
+/// ¿Debe trabajar el vigilante? Con alguna ventana conectada o, en Termux con
+/// avisos de Android, Termux:API sin apagar y `termux-notification` instalada
+/// (`TermuxServidor::vigila_sin_ventanas`), aunque no haya ninguna mientras
+/// viva el servidor (§4.7). Sin el paquete `termux-api` sigue como en el
+/// escritorio. Es el único sitio que lo decide: no cambia cuándo se apaga el
+/// servidor (`revisar_inactividad` no lo mira).
+pub fn debe_vigilar(estado: &EstadoServidor) -> bool {
+    !estado.clientes.is_empty()
+        || estado
+            .termux
+            .as_ref()
+            .is_some_and(|termux| termux.vigila_sin_ventanas(&estado.config))
 }
 
 // --------------------------------------------------------------- lógica pura
@@ -601,14 +626,15 @@ pub async fn revisar(estado: EstadoCompartido) {
 /// Una pasada del vigilante: lee las fichas y los hosts, comprueba los que
 /// toca (8 a la vez) y difunde lo que haya cambiado.
 async fn pasada(estado: &EstadoCompartido) {
-    // Con ninguna ventana conectada no se trabaja: lo pendiente se olvida.
+    // Sin ventanas (y sin avisos de Android que dar) no se trabaja: lo
+    // pendiente se olvida.
     let (consulta, lectura_bd, rutas, repeticion) = {
         let mut estado_bloqueado = estado.lock().await;
         if estado_bloqueado.apagando {
             return;
         }
         let consulta = std::mem::take(&mut estado_bloqueado.persistentes.consulta);
-        if estado_bloqueado.clientes.is_empty() {
+        if !debe_vigilar(&estado_bloqueado) {
             return;
         }
         // Con el ritmo de pruebas (milisegundos) la regla de los 5 s no
@@ -725,7 +751,7 @@ async fn pasada(estado: &EstadoCompartido) {
                     return;
                 };
                 // Las ventanas pudieron irse mientras esperaba su turno.
-                if estado_tarea.lock().await.clientes.is_empty() {
+                if !debe_vigilar(&*estado_tarea.lock().await) {
                     return;
                 }
                 let inicio = Instant::now();
@@ -787,6 +813,12 @@ fn reconstruir_y_difundir(estado: &mut EstadoServidor, forzar: bool) {
     let clave = sin_marcas(&lista);
     let cambia = clave != estado.persistentes.difundida;
     estado.persistentes.lista = lista.clone();
+    if cambia {
+        // La atención de una ficha es lo que decide sus avisos de Android.
+        if let Some(termux) = &estado.termux {
+            termux.despertar_avisos();
+        }
+    }
     if !(cambia || forzar) {
         return;
     }

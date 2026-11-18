@@ -37,6 +37,49 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   llavero está cerrado y `magi sondear` solo si algún host que sondea usa la
   contraseña del llavero; sin TTY dan un error con instrucción.
 
+- **MAGI en Termux, segundo plano, avisos, sincronización y portapapeles (Fase
+  17, segunda entrega).**
+  - **`[termux]` en `config.toml`** (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a
+    30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota y se
+    avisa al arrancar; fuera de Termux se ignora y no se escribe mientras sea la
+    de siempre (una sección escrita a mano se conserva).
+  - **Wake lock.** El servidor toma el wake lock de Termux (`termux-wake-lock`)
+    mientras tiene trabajo (sesiones, túneles, transferencias, escritorios) y lo
+    suelta 30 s después de quedar sin él; con `wake_lock = "nunca"` no lo toma. Si
+    el servidor muere sin soltarlo (Android cierra Termux), el siguiente lo suelta
+    en cuanto no tenga trabajo y vuelve a tomarlo si lo hay. Si no se puede tomar,
+    la barra dice «sin wake lock: Android puede dormir MAGI»; en Android 12 o
+    posterior se avisa una sola vez de que Android puede cerrar procesos de Termux
+    (`magi diagnostico`).
+  - **Avisos de Android** (Termux:API, `[termux] avisos`): cuando una sesión
+    persistente (vigilante) o una pestaña pide atención con nadie mirando, el
+    servidor publica un aviso con solo el nombre y el host («◆ agente-api pide
+    atención» · «dev-01 · MAGI»); se retira al quitarse la atención, al cerrar la
+    pestaña o borrar la ficha y al terminar el servidor (los de un servidor muerto,
+    al arrancar el siguiente). En Termux el vigilante de las sesiones persistentes
+    corre también sin ventanas mientras viva el servidor y haya Termux:API.
+    `magi termux aviso` publica uno de prueba y lo retira a los 10 s. Si Termux:API
+    no responde, la barra lo dice una vez y todo sigue como en el escritorio.
+  - **Sincronización.** En Termux la carpeta se guarda resuelta con `realpath`
+    (`~/storage/shared/…` → `/storage/emulated/0/…`; sin `~/storage`, MAGI pide
+    ejecutar `termux-setup-storage`), se sondea cada
+    `[termux] sincronizacion_sondeo_seg` con una firma barata de la carpeta en vez
+    de usar `notify` (más una pasada de seguridad cada 10 min y otra al volver a
+    la vista; sin pasadas mientras el almacenamiento compartido no responde), y un
+    `chmod 600` que el almacenamiento no admite no es un error (una línea en el
+    log por sesión). El equipo se llama `termux-<modelo>` y escribe con la
+    plataforma `android`, sin `formato` nuevo.
+  - **Portapapeles y enlaces.** Copiar usa `termux-clipboard-set` por la entrada
+    estándar (hasta 512 KiB) y, si Termux:API no responde, OSC 52 (hasta 6 000
+    bytes codificados), con el aviso una sola vez; si no cabe, la barra dice el
+    tamaño y la alternativa. `[terminal] abrir_enlaces` vale `termux-open-url` y
+    `[escritorio] navegador = "auto"` abre el visor en el navegador de Android;
+    `prefijo w` explica cómo abrir otra sesión de Termux. La barra dice, una vez por
+    servidor, lo que este deja en el estado de Termux (Termux:API apagada, sin wake
+    lock, límite de procesos). Copiar la clave pública, el enlace del visor y la
+    clave generada comparten una sola vía; en el escritorio se comportan igual que
+    antes.
+
 - **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
   **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
   host (`tmux -L magi -f /dev/null`, con su configuración y sin tocar el tmux ni

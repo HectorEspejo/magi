@@ -8,16 +8,21 @@
 //! devuelve EventoInventario::Listo y es el bucle quien ejecuta
 //! sincronizacion::pasada con su propia conexión.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tracing::warn;
 
 use crate::almacen::conflictos::Conflicto;
 use crate::almacen::equipos::Equipo;
-use crate::app::Evento;
-use crate::sincronizacion::carpeta::Cerrojo;
+use crate::app::{App, Evento};
+use crate::sincronizacion::carpeta::{
+    CarpetaDisco, CarpetaSincronizacion, Cerrojo, EntradaCarpeta,
+};
 use crate::sincronizacion::cifrado::ClaveSincronizacion;
 use crate::sincronizacion::{
     BorradosPendientes, EstadoPasada, PoliticaBorrados, ResumenImportacion,
@@ -81,6 +86,19 @@ pub struct EstadoSincronizacion {
     pub generacion_vigilancia: u64,
     /// Vista a la que vuelve q desde el área de sincronización.
     pub vista_previa: Option<Vista>,
+    /// Cuántas pasadas se han pedido, se hagan o no (sin efectos externos no
+    /// se hacen). Lo mira la prueba de que Termux pide una al volver a la
+    /// vista; nada más.
+    pub pasadas_pedidas: u64,
+    /// Cada cuánto sondea la vigilancia en marcha: `Some` en Termux (en vez de
+    /// notify), `None` en el resto. Lo mira la prueba de que Termux no usa
+    /// notify; nada más.
+    pub sondeo_vigilancia: Option<Duration>,
+    /// Cuánto tarda una lectura de la carpeta en darse por colgada (la
+    /// pasada que provoca un aviso corre en el hilo de la UI y no se pide
+    /// mientras una lectura así siga sin responder). Lo cambia solo la prueba
+    /// de que Termux no pide una pasada al volver a una carpeta colgada.
+    pub plazo_lectura_carpeta: Duration,
 }
 
 impl Default for EstadoSincronizacion {
@@ -108,6 +126,9 @@ impl Default for EstadoSincronizacion {
             vigilancia: None,
             generacion_vigilancia: 0,
             vista_previa: None,
+            pasadas_pedidas: 0,
+            sondeo_vigilancia: None,
+            plazo_lectura_carpeta: PLAZO_FIRMA,
         }
     }
 }
@@ -158,6 +179,14 @@ const REINTENTO_CERROJO: Duration = Duration::from_millis(400);
 pub const AGRUPACION_CARPETA: Duration = Duration::from_secs(2);
 /// Sondeo de respaldo cuando notify no puede vigilar la carpeta.
 pub const SONDEO_CARPETA: Duration = Duration::from_secs(30);
+/// En Termux, cada cuánto se pide una pasada completa aunque la firma de la
+/// carpeta no haya cambiado (§4.3): una modificación que deje igual el nombre,
+/// el tamaño y la fecha, o un cambio que el sondeo no vio, no puede quedar sin
+/// importar para siempre.
+pub const SEGURIDAD_CARPETA_TERMUX: Duration = Duration::from_secs(600);
+/// Plazo de cada lectura de la carpeta compartida en el sondeo: el
+/// almacenamiento compartido de Android puede ir muy despacio.
+pub const PLAZO_FIRMA: Duration = Duration::from_secs(10);
 
 /// Lanza la tarea que espera el cerrojo y las claves y avisa al bucle. La
 /// pasada la ejecuta la UI, que es el único escritor de SQLite.
@@ -264,6 +293,286 @@ pub async fn vigilar(carpeta: PathBuf, generacion: u64, eventos: mpsc::Unbounded
             return;
         }
     }
+}
+
+/// Vigila la carpeta compartida como corresponde a la plataforma: con
+/// `sondeo_termux` (Termux, `[termux] sincronizacion_sondeo_seg`) la sondea
+/// con una firma barata; sin él, la vigilancia de siempre ([`vigilar`]: notify
+/// con respaldo de 30 s). Es lo único que cambia entre las dos: la pasada que
+/// provoca el aviso es la misma.
+pub async fn vigilar_carpeta(
+    carpeta: PathBuf,
+    generacion: u64,
+    eventos: mpsc::UnboundedSender<Evento>,
+    sondeo_termux: Option<Duration>,
+) {
+    match sondeo_termux {
+        Some(periodo) => {
+            sondear(
+                carpeta,
+                generacion,
+                eventos,
+                periodo,
+                SEGURIDAD_CARPETA_TERMUX,
+            )
+            .await;
+        }
+        None => vigilar(carpeta, generacion, eventos).await,
+    }
+}
+
+/// Lo que se compara entre dos sondeos de la carpeta: nombre, tamaño y fecha
+/// de modificación de los ficheros de equipo de MAGI, sin abrirlos. `None`: la
+/// carpeta no se pudo leer.
+pub type FirmaCarpeta = Option<Vec<EntradaCarpeta>>;
+
+/// La firma barata de la carpeta (§4.3): un listado y los metadatos de cada
+/// fichero de MAGI, sin leerlos ni calcular su hash. Los temporales, las
+/// copias en conflicto de la herramienta de sincronización, los enlaces y
+/// cualquier fichero ajeno no cuentan (las reglas de `CarpetaDisco`, que son
+/// las de la pasada).
+pub fn firma_carpeta(carpeta: &Path) -> FirmaCarpeta {
+    CarpetaDisco::nueva(carpeta).listar().ok()
+}
+
+/// Quién lee la firma de la carpeta y cómo se lanza esa lectura. Es el punto
+/// que las pruebas sustituyen para tener una carpeta que no responde o un
+/// sistema que no puede crear hilos; en el programa, siempre [`LectorReal`].
+#[doc(hidden)]
+pub trait LectorFirma: Send + Sync {
+    /// La firma de la carpeta (bloquea lo que tarde el almacenamiento).
+    fn leer(&self, carpeta: &Path) -> FirmaCarpeta {
+        firma_carpeta(carpeta)
+    }
+
+    /// Lanza `trabajo` en un hilo propio. Falla si el sistema no puede crear
+    /// más hilos (el límite de procesos de Android).
+    fn lanzar(&self, trabajo: Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()> {
+        std::thread::Builder::new()
+            .name("magi-firma-carpeta".to_string())
+            .spawn(trabajo)
+            .map(|_| ())
+    }
+}
+
+/// El lector de siempre: la firma real y un hilo del sistema.
+struct LectorReal;
+
+impl LectorFirma for LectorReal {}
+
+/// Una lectura de la firma que todavía no ha terminado: su hilo sigue vivo.
+struct LecturaEnVuelo {
+    id: u64,
+    carpeta: PathBuf,
+    desde: Instant,
+}
+
+/// Las lecturas de la firma en vuelo de todo el proceso. La UI las consulta
+/// antes de pedir una pasada (que corre en su hilo y lee la carpeta sin
+/// plazo): con el almacenamiento colgado, esa pasada congelaría la TUI.
+static LECTURAS_EN_VUELO: Mutex<Vec<LecturaEnVuelo>> = Mutex::new(Vec::new());
+static SIGUIENTE_LECTURA: AtomicU64 = AtomicU64::new(0);
+
+/// Anota una lectura en vuelo y la retira al soltarse, también si el hilo
+/// termina en pánico o no llega a crearse.
+struct MarcaDeLectura(u64);
+
+impl MarcaDeLectura {
+    fn nueva(carpeta: &Path) -> Self {
+        let id = SIGUIENTE_LECTURA.fetch_add(1, Ordering::Relaxed);
+        let mut lecturas = LECTURAS_EN_VUELO.lock().unwrap_or_else(|e| e.into_inner());
+        lecturas.push(LecturaEnVuelo {
+            id,
+            carpeta: carpeta.to_path_buf(),
+            desde: Instant::now(),
+        });
+        Self(id)
+    }
+}
+
+impl Drop for MarcaDeLectura {
+    fn drop(&mut self) {
+        let mut lecturas = LECTURAS_EN_VUELO.lock().unwrap_or_else(|e| e.into_inner());
+        lecturas.retain(|lectura| lectura.id != self.0);
+    }
+}
+
+/// ¿Hay una lectura de la carpeta que lleva `plazo` o más sin responder?
+/// Mientras la haya, no se pide ninguna pasada: leería la carpeta en el hilo
+/// de la UI, sin plazo, y la congelaría.
+pub fn lectura_de_carpeta_colgada(carpeta: &Path, plazo: Duration) -> bool {
+    let lecturas = LECTURAS_EN_VUELO.lock().unwrap_or_else(|e| e.into_inner());
+    lecturas
+        .iter()
+        .any(|lectura| lectura.carpeta == carpeta && lectura.desde.elapsed() >= plazo)
+}
+
+/// Sondea la carpeta cada `periodo` y avisa solo si la firma cambia, más una
+/// pasada de seguridad cada `seguridad` aunque no haya cambiado. Todo el
+/// trabajo de leer la carpeta va en un hilo aparte con plazo (la carpeta puede
+/// estar en un almacenamiento lento) y el bucle de la UI solo recibe el aviso.
+/// La primera firma es la línea base: no avisa (quien arranca la vigilancia ya
+/// pide su pasada). Mientras una lectura no responda no avisa de nada, ni por
+/// un cambio ni por la seguridad: la pasada que provocaría leería la carpeta
+/// en el hilo de la UI, sin plazo.
+pub async fn sondear(
+    carpeta: PathBuf,
+    generacion: u64,
+    eventos: mpsc::UnboundedSender<Evento>,
+    periodo: Duration,
+    seguridad: Duration,
+) {
+    sondear_con(
+        carpeta,
+        generacion,
+        eventos,
+        periodo,
+        seguridad,
+        PLAZO_FIRMA,
+        Arc::new(LectorReal),
+    )
+    .await;
+}
+
+/// [`sondear`] con el plazo de cada lectura y el lector inyectables
+/// (superficie de pruebas).
+#[doc(hidden)]
+pub async fn sondear_con(
+    carpeta: PathBuf,
+    generacion: u64,
+    eventos: mpsc::UnboundedSender<Evento>,
+    periodo: Duration,
+    seguridad: Duration,
+    plazo: Duration,
+    lector: Arc<dyn LectorFirma>,
+) {
+    let periodo = periodo.max(Duration::from_millis(10));
+    let mut anterior: Option<FirmaCarpeta> = None;
+    let mut ultima_pasada = tokio::time::Instant::now();
+    let mut en_curso: Option<oneshot::Receiver<FirmaCarpeta>> = None;
+    loop {
+        let mut pedir = false;
+        if let Some(firma) = leer_firma(&carpeta, &mut en_curso, plazo, &lector).await {
+            if anterior.as_ref().is_some_and(|previa| *previa != firma) {
+                pedir = true;
+            }
+            anterior = Some(firma);
+        }
+        if en_curso.is_some() {
+            // La lectura no ha respondido en su plazo: el almacenamiento está
+            // colgado. Ninguna pasada hasta que responda (la de seguridad
+            // sigue debida y saldrá entonces).
+            pedir = false;
+        } else if ultima_pasada.elapsed() >= seguridad {
+            pedir = true;
+        }
+        if pedir {
+            ultima_pasada = tokio::time::Instant::now();
+            if eventos
+                .send(Evento::Inventario(EventoInventario::CarpetaCambiada {
+                    generacion,
+                }))
+                .is_err()
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(periodo).await;
+    }
+}
+
+/// Dice una sola vez por sesión que no se pudo crear el hilo de lectura.
+static AVISADO_SIN_HILO: AtomicBool = AtomicBool::new(false);
+
+/// Lee la firma en un hilo propio y con plazo. Si la lectura anterior sigue
+/// sin terminar (almacenamiento colgado), no lanza otra encima: espera a esa.
+/// `None`: todavía no hay firma nueva (plazo agotado, el hilo murió o no se
+/// pudo crear). Con `en_curso` en `Some` al volver, la lectura sigue sin
+/// responder.
+///
+/// Es un hilo suelto y no `spawn_blocking`: un almacenamiento que no responde
+/// dejaría la tarea de bloqueo colgada y el runtime la esperaría al cerrarse
+/// MAGI; un hilo suelto muere con el proceso.
+///
+/// Si el sistema no deja crear el hilo, se avisa en el log (una sola vez por
+/// sesión y sin datos) y el sondeo sigue sin firma: solo queda la pasada de
+/// seguridad, que no depende de la lectura.
+async fn leer_firma(
+    carpeta: &Path,
+    en_curso: &mut Option<oneshot::Receiver<FirmaCarpeta>>,
+    plazo: Duration,
+    lector: &Arc<dyn LectorFirma>,
+) -> Option<FirmaCarpeta> {
+    if en_curso.is_none() {
+        let (enviar, recibir) = oneshot::channel();
+        let ruta = carpeta.to_path_buf();
+        let marca = MarcaDeLectura::nueva(carpeta);
+        let lector_del_hilo = Arc::clone(lector);
+        let lanzado = lector.lanzar(Box::new(move || {
+            let _marca = marca;
+            let _ = enviar.send(lector_del_hilo.leer(&ruta));
+        }));
+        if let Err(error) = lanzado {
+            if !AVISADO_SIN_HILO.swap(true, Ordering::Relaxed) {
+                warn!(
+                    "no se pudo crear el hilo que lee la carpeta de sincronización ({error}); \
+                     solo se pedirá la pasada de seguridad"
+                );
+            }
+            return None;
+        }
+        *en_curso = Some(recibir);
+    }
+    let recibir = en_curso.as_mut()?;
+    match tokio::time::timeout(plazo, recibir).await {
+        Ok(resultado) => {
+            *en_curso = None;
+            resultado.ok()
+        }
+        Err(_) => None,
+    }
+}
+
+impl App {
+    /// En Termux, al volver a la vista SINCRONIZACIÓN se pide una pasada: lo
+    /// que haya llegado a la carpeta desde el último sondeo se ve ya (§4.3).
+    /// No hace nada fuera de Termux.
+    pub(crate) fn pedir_pasada_al_volver(&mut self) {
+        let en_pausa = self.sincronizacion.pausa.is_some();
+        if !debe_pedir_pasada_al_volver(
+            crate::termux::es_termux(),
+            &self.sincronizacion.estado,
+            en_pausa,
+        ) {
+            return;
+        }
+        // Con la carpeta colgada (una lectura del sondeo sin responder), la
+        // pasada leería de ella en este hilo, sin plazo: se espera a que
+        // responda.
+        let colgada = self
+            .config
+            .sincronizacion
+            .ruta_carpeta(&self.rutas.hogar)
+            .is_some_and(|carpeta| {
+                lectura_de_carpeta_colgada(&carpeta, self.sincronizacion.plazo_lectura_carpeta)
+            });
+        if !colgada {
+            self.solicitar_pasada();
+        }
+    }
+}
+
+/// ¿Se pide una pasada al volver a la vista? Solo en Termux y no cuando la
+/// sincronización espera una decisión del usuario (borrados en pausa, clave
+/// nueva o equipo quitado): una pasada más no la resuelve y reabriría el
+/// diálogo.
+pub fn debe_pedir_pasada_al_volver(termux: bool, estado: &EstadoPasada, en_pausa: bool) -> bool {
+    termux
+        && !en_pausa
+        && !matches!(
+            estado,
+            EstadoPasada::Quitado | EstadoPasada::EsperandoClave(_)
+        )
 }
 
 /// ¿El nombre del fichero es de un equipo de MAGI? Los temporales y las

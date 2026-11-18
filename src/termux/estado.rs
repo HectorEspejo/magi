@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::config::Rutas;
 use crate::ficheros::escribir_atomico;
@@ -32,6 +33,13 @@ pub const DIRECTORIO: &str = "termux";
 /// Tope de lo que se lee de un fichero de estado (entrada no fiable: otro
 /// proceso pudo escribirlo).
 const TOPE_LECTURA: u64 = 64 * 1024;
+
+/// Ids distintos que se aceptan al leer el estado de los avisos: cuatro veces
+/// los que el servidor publica a la vez como mucho
+/// ([`super::avisos::MAXIMO_AVISOS`]). En 64 KiB caben unos 8 000 ids
+/// válidos, y retirarlos todos en un móvil sería una avalancha de órdenes: el
+/// resto se ignora.
+pub const MAXIMO_AVISOS_LEIDOS: usize = 4 * super::avisos::MAXIMO_AVISOS;
 
 /// Las marcas del estado de Termux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,33 +151,57 @@ pub fn id_de_aviso_valido(id: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase())
 }
 
-/// Lee un fichero de estado con tope; `None` si no existe o no se puede leer.
+/// Lee un fichero de estado con tope; `None` si no existe, no es un fichero
+/// normal o no se puede leer. Es entrada no fiable: se abre sin seguir
+/// enlaces y sin esperar (un FIFO dejaría el `open` colgado para siempre) y
+/// solo se lee si, ya abierto, es un fichero normal.
 fn leer(rutas: &Rutas, nombre: &str) -> Option<String> {
     use std::io::Read as _;
-    let mut texto = String::new();
-    std::fs::File::open(ruta(rutas, nombre))
-        .ok()?
-        .take(TOPE_LECTURA)
-        .read_to_string(&mut texto)
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let fichero = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(ruta(rutas, nombre))
         .ok()?;
+    if !fichero.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut texto = String::new();
+    fichero.take(TOPE_LECTURA).read_to_string(&mut texto).ok()?;
     Some(texto)
 }
 
 /// Los ids de los avisos publicados. Se ignora todo lo que no sea un id
 /// válido: el fichero es de otro proceso y nunca se pasa a una orden sin
-/// comprobarlo.
+/// comprobarlo. Y no se aceptan más de [`MAXIMO_AVISOS_LEIDOS`] ids distintos:
+/// los primeros del fichero, y de los demás solo se avisa en el log, sin sus
+/// ids.
 #[must_use]
 pub fn leer_avisos(rutas: &Rutas) -> BTreeSet<String> {
-    leer(rutas, "avisos")
-        .map(|texto| {
-            texto
-                .lines()
-                .map(str::trim)
-                .filter(|id| id_de_aviso_valido(id))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(texto) = leer(rutas, "avisos") else {
+        return BTreeSet::new();
+    };
+    let mut ids = BTreeSet::new();
+    let mut ignorados = 0_usize;
+    for id in texto
+        .lines()
+        .map(str::trim)
+        .filter(|id| id_de_aviso_valido(id))
+    {
+        if ids.len() < MAXIMO_AVISOS_LEIDOS || ids.contains(id) {
+            ids.insert(id.to_string());
+        } else {
+            ignorados += 1;
+        }
+    }
+    if ignorados > 0 {
+        warn!(
+            aceptados = ids.len(),
+            ignorados,
+            "el estado de los avisos de Android trae demasiados ids: se ignoran los que sobran"
+        );
+    }
+    ids
 }
 
 /// Guarda los ids de los avisos publicados (uno por línea). Vacío borra el
@@ -295,6 +327,58 @@ mod pruebas {
         guardar_avisos(&rutas, &BTreeSet::new()).unwrap();
         assert!(!directorio(&rutas).join("avisos").exists());
         guardar_avisos(&rutas, &BTreeSet::new()).unwrap();
+    }
+
+    #[test]
+    fn el_estado_de_los_avisos_acota_cuantos_ids_se_leen() {
+        let base = tempfile::tempdir().unwrap();
+        let rutas = rutas_en(base.path());
+        std::fs::create_dir_all(directorio(&rutas)).unwrap();
+        // Unos 4 000 ids válidos y distintos (caben en los 64 KiB de lectura):
+        // sin tope, la purga de arranque lanzaría una orden por cada uno.
+        let texto: String = (0..4000).map(|n| format!("magi-p{n}\n")).collect();
+        assert!(texto.len() < TOPE_LECTURA as usize);
+        std::fs::write(directorio(&rutas).join("avisos"), &texto).unwrap();
+        let leidos = leer_avisos(&rutas);
+        assert_eq!(leidos.len(), MAXIMO_AVISOS_LEIDOS);
+        assert_eq!(
+            MAXIMO_AVISOS_LEIDOS,
+            4 * super::super::avisos::MAXIMO_AVISOS
+        );
+        // Los primeros del fichero, no unos cualesquiera.
+        for n in 0..MAXIMO_AVISOS_LEIDOS {
+            assert!(leidos.contains(&format!("magi-p{n}")), "magi-p{n}");
+        }
+        // Un id repetido no cuenta dos veces ni expulsa a otro.
+        let repetidos: String = (0..MAXIMO_AVISOS_LEIDOS)
+            .chain(0..MAXIMO_AVISOS_LEIDOS)
+            .map(|n| format!("magi-p{n}\n"))
+            .collect();
+        std::fs::write(directorio(&rutas).join("avisos"), repetidos).unwrap();
+        assert_eq!(leer_avisos(&rutas).len(), MAXIMO_AVISOS_LEIDOS);
+        // Con menos ids que el tope, todos.
+        std::fs::write(directorio(&rutas).join("avisos"), "magi-p1\nmagi-p2\n").unwrap();
+        assert_eq!(leer_avisos(&rutas).len(), 2);
+    }
+
+    #[test]
+    fn un_fifo_o_un_enlace_no_cuelgan_la_lectura_del_estado() {
+        let base = tempfile::tempdir().unwrap();
+        let rutas = rutas_en(base.path());
+        std::fs::create_dir_all(directorio(&rutas)).unwrap();
+        // Un FIFO en el sitio de `servidor`: sin las banderas, `open` esperaría
+        // para siempre a que alguien escribiera.
+        let fifo = directorio(&rutas).join("servidor");
+        let nombre = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: `nombre` es una cadena C válida y vive durante la llamada.
+        assert_eq!(unsafe { nix::libc::mkfifo(nombre.as_ptr(), 0o600) }, 0);
+        assert_eq!(leer_servidor(&rutas), None);
+        std::fs::remove_file(&fifo).unwrap();
+        // Un enlace a un fichero válido tampoco se sigue.
+        let real = base.path().join("real.json");
+        std::fs::write(&real, r#"{"arranque":1,"avisos":[]}"#).unwrap();
+        std::os::unix::fs::symlink(&real, &fifo).unwrap();
+        assert_eq!(leer_servidor(&rutas), None);
     }
 
     #[test]

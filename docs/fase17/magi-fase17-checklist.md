@@ -10,7 +10,7 @@
   - AC: Dado `XDG_RUNTIME_DIR` sin poner y el `TMPDIR` de Termux, cuando arranca el servidor, entonces el socket queda en `$TMPDIR/magi-<uid>/` con una ruta de menos de 100 bytes
 - [x] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
 - [x] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
-- [ ] El núcleo no decide nada por `EQUIPOS.plataforma`: con `android` en un equipo escritor, la deliberación, el sondeo y la sincronización se portan como en el escritorio
+- [x] El núcleo no decide nada por `EQUIPOS.plataforma`: con `android` en un equipo escritor, la deliberación, el sondeo y la sincronización se portan como en el escritorio
   - AC: Dadas las pruebas de deliberación, sondeo y sincronización con la plataforma `android` inyectada en el escritorio, cuando corren, entonces dan lo mismo que con `linux`
 
 ## Instalación y publicación
@@ -43,35 +43,35 @@
 - [x] «Bloquear el llavero» desde la paleta borra de la memoria la frase y las entradas
 
 ## Sincronización
-- [ ] En Termux, el equipo se llama por defecto `termux-<modelo>` (`ro.product.model` con la regla de la etiqueta de la F15, 20 caracteres como mucho) y su plataforma es `android`, sin `formato` nuevo
+- [x] En Termux, el equipo se llama por defecto `termux-<modelo>` (`ro.product.model` con la regla de la etiqueta de la F15, 20 caracteres como mucho) y su plataforma es `android`, sin `formato` nuevo
   - AC: Dado un móvil con el modelo «ABC-X10», cuando se crea o se une la sincronización, entonces el equipo se llama `termux-abc-x10`
-- [ ] Termux sincroniza como un equipo escritor: escribe su `magi-<uuid>.age` y lee los de los demás, como el escritorio
+- [x] Termux sincroniza como un equipo escritor: escribe su `magi-<uuid>.age` y lee los de los demás, como el escritorio
   - AC: Dado el fichero escrito por Termux, cuando lo importan un escritorio 1.5.0 y la app Android, entonces lo leen sin «formato nuevo»
-- [ ] La carpeta de sincronización se guarda resuelta con `realpath` (`~/storage/shared/…` → `/storage/emulated/0/…`); sin `~/storage`, la instrucción de ejecutar `termux-setup-storage`
-- [ ] La carpeta se sondea cada `[termux] sincronizacion_sondeo_seg` (30 s) con MAGI abierto, en vez de usar `notify`, y también al volver a la vista Sincronización
-- [ ] Los permisos 600 que el almacenamiento compartido no admite no son un error (una línea en el log por sesión)
+- [x] La carpeta de sincronización se guarda resuelta con `realpath` (`~/storage/shared/…` → `/storage/emulated/0/…`); sin `~/storage`, la instrucción de ejecutar `termux-setup-storage`
+- [x] La carpeta se sondea cada `[termux] sincronizacion_sondeo_seg` (30 s) con MAGI abierto, en vez de usar `notify`, y también al volver a la vista Sincronización
+- [x] Los permisos 600 que el almacenamiento compartido no admite no son un error (una línea en el log por sesión)
 - [x] Unir este equipo pegando la clave en el diálogo (pegado entre corchetes de Termux); la clave va al llavero de fichero, que se crea si no existe
 
 ## Portapapeles, enlaces y escritorios
-- [ ] Copiar en Termux: `termux-clipboard-set` por la entrada estándar (hasta 512 KiB) si Termux:API responde; si no, OSC 52 hasta 6 000 bytes codificados; si no cabe, aviso con el tamaño y la alternativa
+- [x] Copiar en Termux: `termux-clipboard-set` por la entrada estándar (hasta 512 KiB) si Termux:API responde; si no, OSC 52 hasta 6 000 bytes codificados; si no cabe, aviso con el tamaño y la alternativa
   - AC: Dado Termux:API parada y una selección de 20 KiB, cuando se copia, entonces la barra dice «no cabe en el portapapeles de Termux (20 KiB): instala Termux:API o guárdalo» y no se manda OSC 52
-- [ ] `[terminal] abrir_enlaces` vale `termux-open-url` por defecto en Termux, con la URL como único argumento y sin shell
-- [ ] `[escritorio] navegador = "auto"` abre el visor con `termux-open-url {url}` en Termux; el visor sigue solo en `127.0.0.1` (T98)
-- [ ] `prefijo w` en Termux explica cómo abrir otra sesión de Termux con `magi` en vez de lanzar un terminal
+- [x] `[terminal] abrir_enlaces` vale `termux-open-url` por defecto en Termux, con la URL como único argumento y sin shell
+- [x] `[escritorio] navegador = "auto"` abre el visor con `termux-open-url {url}` en Termux; el visor sigue solo en `127.0.0.1` (T98)
+- [x] `prefijo w` en Termux explica cómo abrir otra sesión de Termux con `magi` en vez de lanzar un terminal
 
 ## Segundo plano
-- [ ] `[termux] wake_lock = "auto"`: el servidor toma el wake lock cuando `TrabajoServidor` deja de estar vacío y lo suelta 30 s después de quedar vacío; con `nunca`, no lo toca
+- [x] `[termux] wake_lock = "auto"`: el servidor toma el wake lock cuando `TrabajoServidor` deja de estar vacío y lo suelta 30 s después de quedar vacío; con `nunca`, no lo toca
   - AC: Dado un túnel que se abre y se cierra, cuando pasan 30 s sin trabajo, entonces el servidor ha ejecutado `termux-wake-lock` y `termux-wake-unlock` una vez cada una
-- [ ] Solo se suelta el wake lock que tomó MAGI; si el servidor muere sin soltarlo, el siguiente lo suelta en cuanto no tiene trabajo (marca `wake-lock` en el estado)
-- [ ] En Android 12 o posterior, un aviso único sobre el límite de procesos en segundo plano que remite a `magi diagnostico`
+- [x] Solo se suelta el wake lock que tomó MAGI; si el servidor muere sin soltarlo, el siguiente lo suelta en cuanto no tiene trabajo (marca `wake-lock` en el estado)
+- [x] En Android 12 o posterior, un aviso único sobre el límite de procesos en segundo plano que remite a `magi diagnostico`
 
 ## Avisos de Android
-- [ ] Con `[termux] avisos = true` y Termux:API, el servidor publica un aviso de Android cuando una sesión persistente (vigilante, F16) o una pestaña (marca `!`, F15) pide atención sin nadie mirando, con id `magi-<id>`, grupo `magi` y `--alert-once`
+- [x] Con `[termux] avisos = true` y Termux:API, el servidor publica un aviso de Android cuando una sesión persistente (vigilante, F16) o una pestaña (marca `!`, F15) pide atención sin nadie mirando, con id `magi-<id>`, grupo `magi` y `--alert-once`
   - AC: Dada una sesión persistente que toca la campana con la ventana de MAGI cerrada y su pestaña viva en el servidor, cuando el vigilante lo ve, entonces hay un aviso «◆ agente-api pide atención» con «dev-01 · MAGI» y ningún otro texto
-- [ ] El aviso lleva solo el nombre y el host (T140) y una acción fija que trae Termux delante; nunca el título, el texto del aviso ni la salida
-- [ ] El aviso se retira cuando se quita la atención, se cierra la pestaña o se borra la ficha; al terminar el servidor, todos los suyos; los de un servidor muerto, al arrancar el siguiente (ids en el estado)
-- [ ] En Termux con avisos, el vigilante corre también sin ventanas conectadas mientras viva el servidor (precisa D334)
-- [ ] Una pestaña delante pero sin foco (Termux en segundo plano) cuenta como sin mirar; si Termux no manda eventos de foco (prueba de concepto), el aviso sale igual y se retira al escribir en la pestaña
+- [x] El aviso lleva solo el nombre y el host (T140) y una acción fija que trae Termux delante; nunca el título, el texto del aviso ni la salida
+- [x] El aviso se retira cuando se quita la atención, se cierra la pestaña o se borra la ficha; al terminar el servidor, todos los suyos; los de un servidor muerto, al arrancar el siguiente (ids en el estado)
+- [x] En Termux con avisos, el vigilante corre también sin ventanas conectadas mientras viva el servidor (precisa D334)
+- [x] Una pestaña delante pero sin foco (Termux en segundo plano) cuenta como sin mirar; si Termux no manda eventos de foco (prueba de concepto), el aviso sale igual y se retira al escribir en la pestaña
 
 ## Teclado
 - [ ] Fila de teclas generada de la tabla de MAGI: `ESC TAB CTRL ALT ^] ← ↓ ↑ →` y `F1`-`F9`, con el prefijo configurado como macro (`{macro: 'CTRL ]', display: '^]'}` por defecto)
@@ -87,10 +87,10 @@
 
 ## CLI, configuración y diagnóstico
 - [ ] `magi llavero` y `magi termux` en la CLI, la página man y el autocompletado (`assets/` regenerado); fuera de Termux dicen por qué no aplican, con código 1
-- [ ] `[termux]` en `config.toml` (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a 30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota con aviso; fuera de Termux se ignora
+- [x] `[termux]` en `config.toml` (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a 30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota con aviso; fuera de Termux se ignora
 - [ ] `magi diagnostico` en Termux: bloque TERMUX (versiones de Termux y Android, Termux:API, almacenamiento, fila de teclas, wake lock y avisos), las líneas generales adaptadas (runtime, llavero sin pedir la frase, portapapeles, terminal) y lo que no se puede comprobar (procesos en segundo plano, batería) con `·`, sin contar como aviso
   - AC: Dado el Termux de Google Play, cuando se ejecuta `magi diagnostico`, entonces la línea de Termux sale con `!` y recomienda el de F-Droid o GitHub
-- [ ] Órdenes de Termux con el plazo `[termux] api_plazo_seg` y sin shell; si Termux:API no responde, la función se apaga en ese proceso con un aviso y MAGI nunca se queda esperando
+- [x] Órdenes de Termux con el plazo `[termux] api_plazo_seg` y sin shell; si Termux:API no responde, la función se apaga en ese proceso con un aviso y MAGI nunca se queda esperando
   - AC: Dado un `termux-clipboard-set` que no responde, cuando se copia, entonces a los 5 s se copia por OSC 52 y la barra lo dice una sola vez
 
 ## REGISTRO
@@ -100,10 +100,10 @@
 - [x] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
 - [x] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
 - [ ] `magi termux teclas [--instalar]`: sin `--instalar`, enseña la fila propuesta y la actual sin escribir
-- [ ] `magi termux aviso`: publica un aviso de prueba y lo retira a los 10 s
-- [ ] `termux-clipboard-set` (por la entrada estándar) y `termux-open-url` desde el cliente
-- [ ] `termux-wake-lock` y `termux-wake-unlock` desde el servidor
-- [ ] `termux-notification` y `termux-notification-remove` desde el servidor, con ids `magi-<id>`
+- [x] `magi termux aviso`: publica un aviso de prueba y lo retira a los 10 s
+- [x] `termux-clipboard-set` (por la entrada estándar) y `termux-open-url` desde el cliente
+- [x] `termux-wake-lock` y `termux-wake-unlock` desde el servidor
+- [x] `termux-notification` y `termux-notification-remove` desde el servidor, con ids `magi-<id>`
 - [ ] `termux-reload-settings` al instalar la fila y `termux-battery-status` en `magi diagnostico`
 
 ## Calidad
@@ -117,6 +117,6 @@
 
 ---
 
-**Progreso Fase 17:** 22 / 71 funcionalidades
+**Progreso Fase 17:** 46 / 71 funcionalidades
 
-**Total MAGI (Fases 1-17):** 1333 / 1389 funcionalidades
+**Total MAGI (Fases 1-17):** 1357 / 1389 funcionalidades

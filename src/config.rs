@@ -237,7 +237,17 @@ impl Default for SeccionTerminal {
 }
 
 fn abrir_enlaces_por_defecto() -> &'static str {
-    if cfg!(target_os = "macos") {
+    abrir_enlaces_por_defecto_para(crate::termux::es_termux())
+}
+
+/// Lo que abre un enlace por defecto: en Termux, `termux-open-url` (Fase 17,
+/// §5.3); en el escritorio, `open` en macOS y `xdg-open` en lo demás. Separada
+/// para probar la rama de Termux sin depender del proceso.
+#[doc(hidden)]
+pub fn abrir_enlaces_por_defecto_para(termux: bool) -> &'static str {
+    if termux {
+        "termux-open-url"
+    } else if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
@@ -1106,6 +1116,28 @@ vista_previa_lineas = 99999
             creada.persistentes.refresco_seg
         );
         assert_eq!(leida.persistentes.vista_previa_lineas, 20);
+    }
+
+    /// `[terminal] abrir_enlaces` por defecto (Fase 17, §5.3): `termux-open-url`
+    /// en Termux y, en el escritorio, lo de siempre.
+    #[test]
+    fn abrir_enlaces_por_defecto_es_termux_open_url_solo_en_termux() {
+        assert_eq!(abrir_enlaces_por_defecto_para(true), "termux-open-url");
+        let escritorio = abrir_enlaces_por_defecto_para(false);
+        assert_eq!(
+            escritorio,
+            if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            }
+        );
+        // El valor por defecto es el de la plataforma de este proceso (también
+        // si las pruebas se repiten con `MAGI_PLATAFORMA=termux`).
+        assert_eq!(
+            SeccionTerminal::default().abrir_enlaces,
+            abrir_enlaces_por_defecto_para(crate::termux::es_termux())
+        );
     }
 
     /// `[termux]` (Fase 17): valores por defecto, rangos acotados y avisos

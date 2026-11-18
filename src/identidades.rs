@@ -169,13 +169,19 @@ pub struct ClaveGenerada {
     pub comentario: Option<String>,
     pub en_agente: bool,
     pub aviso_agente: Option<String>,
+    /// Siempre `false` al salir de [`generar`]: desde la Fase 17 la tarea no
+    /// copia nada y es la `App` quien copia la clave pública al recibir el
+    /// resultado, por la única vía de copia (`App::copiar`). Se conserva el
+    /// campo por compatibilidad.
     pub copiada: bool,
+    /// El diálogo pidió copiar la pública al terminar.
     pub solicito_copia: bool,
 }
 
 /// Genera el par de claves con `ssh-key` y lo escribe en `~/.ssh` sin
 /// sobrescribir nunca. La parte CPU va en `spawn_blocking`; el alta en el
-/// agente se hace después con `add_identity`.
+/// agente se hace después con `add_identity`. No copia nada al portapapeles:
+/// devuelve la clave pública y es la `App` quien la copia (única vía).
 pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, String> {
     let anadir_agente = peticion.anadir_agente;
     let copiar_publica = peticion.copiar_publica;
@@ -194,7 +200,6 @@ pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, Stri
         }
     }
     drop(clave);
-    let copiada = copiar_publica && crate::portapapeles::copiar(&datos.publica).is_ok();
     Ok(ClaveGenerada {
         tipo: datos.tipo,
         huella: datos.huella,
@@ -203,7 +208,7 @@ pub async fn generar(peticion: PeticionGeneracion) -> Result<ClaveGenerada, Stri
         comentario: datos.comentario,
         en_agente,
         aviso_agente,
-        copiada,
+        copiada: false,
         solicito_copia: copiar_publica,
     })
 }

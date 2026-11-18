@@ -1,7 +1,7 @@
 # MAGI - Fase 17: MAGI en Termux — Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Sprint 1 hecho (plataforma, compilación y llavero); Sprints 2 y 3 por hacer.** La PoC en el plegable sigue sin pasar: el Sprint 1 se hizo sin ella por decisión de Hector, con las constantes que dependen de ella en su valor prudente (`PROVISIONAL-POC`, §6). Versión objetivo 1.6.0 (el árbol sigue en 1.5.0; se cambia en el Sprint 3).
-> Rama `fase17`. Entrega y reglas en `51dfb5c`; contrato del Sprint 1 en `73ed247`; el Sprint 1 va en un solo commit sobre él.
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado: **Sprints 1 y 2 hechos** (llavero, plataforma, sincronización, portapapeles, wake lock y avisos); **Sprint 3 por hacer** (teclado, diagnóstico, paquete, CI, TUR, README, versión 1.6.0 y revisión adversarial de cierre). La PoC en el plegable sigue sin pasar: se trabaja con las constantes que dependen de ella en su valor prudente (`PROVISIONAL-POC`, §6). Versión objetivo 1.6.0 (el árbol sigue en 1.5.0).
+> Rama `fase17`. Entrega y reglas en `51dfb5c`; Sprint 1 en `73ed247` (contrato) y `b4b60a4`; Sprint 2 en `92e31bc` (contrato) y el commit del sprint.
 
 ---
 
@@ -49,6 +49,27 @@ cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
 
 **Medidas.** `cargo ndk … build --release -p magi-ssh --locked` con el código del sprint: 3 min 25 s, 37 115 024 bytes, SHA-256 `00c49ac708924e1a8b9927c3e78ff51e0ac3bbd5e9c42bf60c49544ed5ba0b7f`, `readelf -d`: `libdl.so`, `libz.so`, `libm.so` y `libc.so` (la lista aceptada en §2.1). `git diff --stat android/` vacío.
 
+### Sprint 2 — Sincronización y sistema (hecho)
+
+**Método.** Contrato compilable en `92e31bc` (`[termux]` en `config.toml`, ficheros de estado de `src/termux/estado.rs` y `App.termux`; lo demás es interno de cada pista) → tres pistas en paralelo en worktrees aislados (servidor, sincronización, portapapeles y barra), cada una con su revisión adversarial de solo lectura → una ronda de correcciones en tres pistas y dos retoques de integración → verificación. Al cerrar el sprint no queda ninguna marca `CONTRATO-S2`.
+
+**`[termux]` en `config.toml` (adelantado del Sprint 3).** `wake_lock`, `avisos`, `api_plazo_seg` y `sincronizacion_sondeo_seg` con sus rangos; se acota donde se usa y se avisa al arrancar solo en Termux. Fuera de Termux, con los valores de siempre, la sección no se escribe (y si alguien la escribió a mano —un `config.toml` compartido con su móvil—, se conserva al guardar). Se adelantó porque las tres pistas la consumen.
+
+**Servidor (`src/termux/{wake_lock,avisos}.rs`, `src/servidor/android.rs`, `sesiones*.rs`).**
+- **Wake lock:** `MaquinaWakeLock` pura (reloj sintético, sin tokio) y un conductor `WakeLock` alimentado cada segundo desde `revisar_inactividad` con `!trabajo().vacio()` (las ventanas no cuentan, y cuándo se apaga el servidor no cambia). Toma con `termux-wake-lock`, suelta 30 s después de quedar sin trabajo, marca `wake-lock` en el estado (antes de ejecutar la orden, para que un servidor que muera en medio deje rastro), `termux-wake-unlock` con tres reintentos, y suelta al terminar el servidor con plazo. Si no puede tomarlo: `AvisoServidor::SinWakeLock`; en Android 12 o posterior (SDK ≥ 31) y una sola vez en la vida del equipo (marca `segundo-plano`): `LimiteProcesos`.
+- **Avisos de Android:** una tarea reconciliadora (Notify + tic de 3 s) compara lo deseado con lo publicado (estado `avisos`) y publica con `termux-notification --id magi-<id> --group magi --alert-once` o retira con `termux-notification-remove`; ids `magi-<uuid[:8]>` (fichas) y `magi-p<id>` (pestañas), validados; títulos «◆ nombre pide atención» / «! pestaña pide atención» y texto «host · MAGI», sin nada más; dedupe por (host, sesión de tmux); tope de 64; marca nueva `Sesion.atencion_remota` (solo BEL/OSC 9/OSC 777 del emulador, no los avisos internos), que se limpia al enfocar, al escribir y al quitar la sesión; `FOCO_FIABLE = false` (`PROVISIONAL-POC`: la PoC decide si Termux manda eventos de foco). Retira huérfanos al arrancar y todo al terminar, con plazo y a 4 órdenes a la vez como mucho.
+- **Vigilante F16:** predicado único `debe_vigilar` (alguna ventana, o Termux con avisos, Termux:API no apagada y `termux-notification` en el `PATH`); no mantiene vivo al servidor.
+- **Barra:** el servidor escribe `estado::escribir_servidor` (su `arranque` y los avisos nuevos) **antes** de crear el socket y lo quita al terminar. Inyección: `servidor::arrancar_con(rutas, config, Option<OpcionesTermux>)`; `arrancar` conserva su firma y en el escritorio el servidor es idéntico.
+- **`magi termux aviso`** publica un aviso de prueba (`magi-test`) y lo retira a los 10 s.
+
+**Sincronización (`src/app/sincronizacion.rs`, `src/sincronizacion/`, núcleo).** En Termux la carpeta se guarda resuelta con `realpath` (y un «permiso denegado» bajo `~/storage`, `/storage` o `/sdcard` remite a `termux-setup-storage`); no se usa `notify`: se sondea cada `[termux] sincronizacion_sondeo_seg` con una firma barata (nombre, tamaño y mtime en milisegundos de los ficheros de MAGI, listados con las reglas de la pasada y filtrando por nombre antes del `stat`), en un hilo con plazo de 10 s, y solo se pide pasada si la firma cambia, más una de seguridad cada 10 min y otra al volver a la vista Sincronización; mientras la carpeta no responda no se pide ninguna pasada (ni desde el sondeo ni desde `solicitar_pasada_con`). El fichero propio se escribe con `ficheros::escribir_atomico_tolerante` (un `chmod 600` que no se puede aplicar no es un error; una línea de log por sesión; fuera de Termux, estricto como siempre). Pruebas del checklist: con `android` inyectado, la deliberación, el sondeo y la sincronización dan lo mismo que con `linux` y una guarda de texto del código del núcleo y del móvil falla si alguien decide por la plataforma del equipo; el fichero de un equipo Termux lo leen el escritorio y el lector del móvil sin «formato nuevo»; «ABC-X10» → `termux-abc-x10`.
+
+**Portapapeles, enlaces y barra (`src/termux/portapapeles.rs`, `src/app/{portapapeles,termux,escritorios,sesion}.rs`, `src/cliente/ventana.rs`).** Una sola vía de copia (`App::copiar`): en Termux, `termux-clipboard-set` por la entrada estándar (hasta 512 KiB, con plazo, en una tarea) → si no responde, la API se apaga en el cliente con un aviso y se sigue con OSC 52 (≤ 6 000 bytes codificados, escrito por el hilo de UI; `TOPE_OSC52`, `PROVISIONAL-POC`) → si no cabe, el mensaje de §4.4 con el tamaño y sin OSC 52; las copias van serializadas (una en vuelo y, como mucho, una pendiente: gana la última). En el escritorio las tres vías que se saltaban `copiar_texto` (clave pública, enlace del visor, clave generada) pasan por la misma `App::copiar` pero con su comportamiento de siempre (solo `wl-copy`/`pbcopy` y sus respaldos). `abrir_enlaces` vale `termux-open-url` en Termux (con las `Ordenes`, URL como único argumento, plazo y salida del fallo), `[escritorio] navegador = "auto"` abre el visor con `termux-open-url {url}`, `prefijo w` y la paleta explican cómo abrir otra sesión de Termux (como información, en los dos sitios). La barra dice, una vez por servidor y sin que la primera tecla la borre, cada aviso que el servidor deja en `termux/servidor`; el cliente lo lee cada 5 s, con plazo, solo en Termux y tras la `Bienvenida`.
+
+**Revisión adversarial del sprint (una por pista, solo lectura) y su resultado.** Sin hallazgos de severidad alta. **Corregidos** (con prueba): wake lock que no se volvía a tomar con la marca de un servidor muerto (§7.5 tenía el mismo fallo); el vigilante sin ventanas se activaba sin el paquete `termux-api`; un aviso que vence el plazo perdía su id (y quedaba huérfano en Android); un ciclo completo del reconciliador por cada lote con campana; `leer_avisos` sin tope y retirada de decenas de avisos a la vez; el cliente leía el estado de un servidor muerto antes de que el nuevo lo reescribiera; la pasada de seguridad de 10 min congelaba la TUI con el almacenamiento compartido colgado; sondeo mudo si no se podía crear el hilo; `stat` de todo lo ajeno en una carpeta con miles de ficheros; **el escritorio dejaba de enseñar el diálogo de respaldo de la clave pública y el enlace visible** (OSC 52 colado en las tres vías unificadas); los avisos «una sola vez» desaparecían con la primera tecla; un FIFO en el sitio del estado colgaba la lectura; copias que se pisaban en el portapapeles; el diálogo de respaldo sustituía otro abierto; `prefijo w` salía rojo desde la paleta. **No corregidos, anotados** (§2 y §6): el coste de la pasada de F10 en el hilo de UI, el recorte de los mensajes a 48 columnas, la campana tocada al teclear con `FOCO_FIABLE = false`, y que `magi termux aviso` interrumpido deja su aviso hasta deslizarlo.
+
+**Medidas.** `cargo ndk … build --release -p magi-ssh --locked` con el código de los dos sprints: 3 min 50 s, 37 745 120 bytes, SHA-256 `1ad049d38fcc5487ef2eb03fae1f411b7d4f4dad63b0c281c96ae593c4fe4004`, `readelf -d`: `libdl.so`, `libz.so`, `libm.so`, `libc.so`. `TZ=UTC cargo test --workspace --locked --no-fail-fast`: 81 binarios, 0 fallos. `git diff --stat android/` vacío; instantáneas existentes sin cambios (4 nuevas).
+
 ---
 
 ## 2. Desviaciones respecto a la especificación (qué y por qué)
@@ -80,6 +101,17 @@ Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el
 15. **Plataforma.** (a) `ordenes::correr` reintenta hasta 5 veces con 20 ms si el programa está «ocupado» (ETXTBSY: actualización del paquete). (b) `Ordenes` añade `ejecutar_avisando` y `ejecutar_async_avisando`, que devuelven si esa llamada acaba de apagar Termux:API (con solo `ejecutar` no se puede dar el aviso único). (c) Un fallo de `Io` (no se puede lanzar, no se puede crear un hilo, un argumento con carácter nulo) **no** apaga Termux:API: la spec solo apaga por «no instalada», «plazo agotado» y «código distinto de 0». (d) `config::rutas_de_termux` y `usuario_local_con` existen para poder probar la rama de Termux sin el `OnceLock` de `es_termux()`. (e) `usuario_local` cae a `getpwuid_r` solo en Termux (consulta única, en caché) y allí una `USER` o `USERNAME` vacía cuenta como no puesta; en el escritorio queda exactamente como estaba (la primera variable puesta, aunque esté vacía; si no, `root`). La primera versión de la pista lo cambiaba también en el escritorio y la revisión lo señaló. (f) Un `ENOENT` al lanzar un guion con shebang a un intérprete que no existe se sigue viendo como «no instalada» y apaga con `Ausente`.
 16. **Pruebas.** `tests/termux_plataforma.rs` (5 pruebas, `#![cfg(debug_assertions)]` porque `MAGI_PLATAFORMA` no vale en release) cubre la rama de Termux de `plataforma_actual`, `nombre_actual`, `descubrir_rutas` y el proveedor de CASPER-3; `es_termux()` es un `OnceLock` por proceso y no puede probarse junto a la rama de Linux. Las pruebas con pty usan el `script` de util-linux (sin él fallan con `CI` puesta y se omiten con aviso sin ella). `tests/termux_ui.rs` lleva un `#[global_allocator]` de todo su binario para comprobar que los búferes de la frase se ponen a cero al caer; está acotado (un búfer vigilado a la vez, con cerrojo). La prueba `snippets_movil_e2e` (F14, móvil) tenía una carrera preexistente (esperaba `resultado` y asertaba `terminada_en`, que se fija un instante después) y falló 1 de cada 3 veces; ahora espera las dos cosas.
 
+
+**Desviaciones nuevas del Sprint 2** (**[analista]** = pide decisión):
+
+17. **`[termux]` en `config.toml` pasa del Sprint 3 al 2** (las tres pistas la consumen). Se escribe siempre en Termux y, fuera de él, solo si no es la de siempre; los avisos de rango salen solo en Termux.
+18. **El aviso del servidor a la barra va por un fichero** (`~/.local/state/magi/termux/servidor`, desviación 2 de §2): el servidor lo escribe antes de crear el socket (así un cliente nunca lee el de un servidor muerto) y lo quita al terminar; el cliente lo lee solo en Termux, tras la `Bienvenida`, cada 5 s y con plazo; se abre sin seguir enlaces y sin esperar (un FIFO no lo cuelga) y vale hasta 64 KiB. Un `AvisoServidor` desconocido invalida el fichero entero.
+19. **Wake lock.** (a) **[analista]** Con la marca `wake-lock` de un servidor anterior y trabajo, el servidor **vuelve a ejecutar `termux-wake-lock`** (idempotente) en vez de darlo por tomado: tras un cierre de Android el wake lock real ya no existe y §7.5 lo dejaba sin tomar hasta el primer descanso. Sin trabajo se suelta como dice la spec. (b) La marca se pone antes de la orden y se quita si falla (en vez de después), y el id de un aviso se anota antes de publicarlo: si el servidor muere en medio queda rastro y el siguiente retira o suelta. (c) Con `wake_lock = "nunca"` y una marca previa, el servidor sí suelta ese wake lock (es de MAGI) pero nunca toma otro, como en el pseudocódigo; el brief decía «no se toca nada». (d) Un `termux-wake-unlock` que falla se reintenta cada gracia y, a los 3 fallos seguidos, se abandona dejando la marca para el siguiente servidor. (e) Los tiempos de prueba (gracia de 30 s y tic de 3 s) se inyectan en `OpcionesTermux`, no por una clave oculta de `config.toml`.
+20. **Avisos de Android.** (a) La marca `atencion_remota` se pone si `!(FOCO_FIABLE && enfocada)`: con el valor prudente (`false`) avisa aunque una ventana la tenga enfocada y se retira al escribir (D379). (b) Un aviso ya publicado de una ficha de la que ahora no se sabe nada (host sin respuesta, sin comprobar, sin tmux) **se conserva**: no se retira una atención por no poder mirarla. **[analista]** (c) Tope de 64 avisos a la vez y de 256 ids al leer el estado. (d) Un aviso cuyo `termux-notification` vence el plazo **conserva su id** (pudo publicarse). (e) El vigilante sin ventanas exige que `termux-notification` esté en el `PATH` al arrancar el servidor: si se instala `termux-api` con el servidor ya en marcha, no se activa hasta el siguiente arranque. (f) `ApiApagada` en la barra se dice después de dejar el estado de `avisos` consistente.
+21. **Sincronización.** (a) La firma barata reutiliza `CarpetaDisco::listar` del núcleo (mismas reglas que la pasada, mtime en milisegundos, ficheros de hasta 16 MiB); un cambio que deje igual nombre, tamaño y milisegundo solo lo recoge la pasada de seguridad. (b) La lectura de la firma va en un `std::thread` suelto con plazo de 10 s, no en `spawn_blocking` (uno colgado impediría cerrar el runtime). (c) El registro de lecturas colgadas es **estado global del proceso** (`LECTURAS_EN_VUELO`, por carpeta), porque pasar esa información a la `App` obligaba a cambiar el evento y `app.rs` fuera del territorio de la pista; el integrador añadió la consulta en `solicitar_pasada_con` y queda como mejora sustituirlo por estado en `EstadoSincronizacion`. (d) La tolerancia a `chmod` entra por funciones nuevas (`pasada_con_permisos`) sin cambiar `ResultadoPasada` ni `OpcionesPasada`; `ficheros::escribir_atomico_con` y `ajustar_permisos` son `#[doc(hidden)] pub` para poder inyectar el `chmod` en pruebas. (e) El error de «no se puede escribir en la carpeta» sale ya en el campo de la carpeta (como pide el diagrama de §4.3), no al pegar la clave, con una sonda `.magi-escritura-<uuid>` más. (f) Al volver a la vista no se pide pasada si hay borrados en pausa, el equipo está quitado o espera clave nueva (otra pasada no lo resolvería). (g) `EstadoSincronizacion` gana `pasadas_pedidas`, `sondeo_vigilancia` y `plazo_lectura_carpeta` (observación y pruebas).
+22. **Portapapeles, enlaces y barra.** (a) El resolver del navegador está en `src/app/escritorios.rs`, no en `src/visor.rs` (que es el paginador de Archivos): ahí se añadió `Plataforma::Termux`. (b) En Termux los mensajes de éxito son los literales de §4.4 («copiado (3,2 KiB)») sin la etiqueta que lleva el escritorio, y el tope de copia de 1 MiB del historial no aplica (mandan 512 KiB y 6 000 bytes). (c) Un `abrir_enlaces` que sea una ruta (lleva `/`) se lanza como en el escritorio, porque `Ordenes` solo busca nombres. (d) **Añadidos sin estar en la spec:** «copiando…» mientras corre la orden, serialización de las copias (`COPIAS_A_LA_VEZ` pasa de 4 en paralelo a 1 en vuelo y 1 pendiente), el texto «sustituida por una copia más reciente» y un aviso «…; la línea saldrá al cerrar este diálogo» cuando el respaldo se apila. (e) `ventana::abrir` y `abrir_para` se quedan como envoltorios de `abrir_ventana`/`abrir_ventana_para` (enum `AperturaVentana`). (f) `ClaveGenerada.copiada` se conserva pero ahora siempre vale `false`: la `App` copia al terminar. (g) El aviso «Termux:API no responde» se usa igual si falta el paquete que si no responde, como dice la spec. **[analista]** valorar un texto aparte para «no instalada». (h) **[analista]** Los mensajes de §4.4 y la explicación de `prefijo w` miden 72-95 caracteres y a 48 columnas la barra los recorta con «…» (se pierde la alternativa): quedaron cuatro instantáneas a 48×20 que lo documentan; decidir variantes cortas o un mensaje de dos líneas. **[analista]** Una copia descartada de tipo clave pública abre el diálogo «CLAVE PÚBLICA» aunque la última salga bien; quizá suprimirlo si el texto de la sustituta es idéntico.
+23. **Escritorio sin Termux.** Una sola vía `App::copiar` no cambia nada en el escritorio: las tres vías antiguas conservan sus respaldos (una primera versión de la pista las llevaba a OSC 52 y la revisión lo señaló).
+
 ---
 
 ## 3. Estructura de archivos creada/modificada
@@ -97,6 +129,14 @@ Aprobadas con el plan (17 nov 2026); la 1 la decidió Hector después, al ver el
 - **Interfaz del llavero:** `src/llavero.rs` (`LlaveroCliente`, `EstadoLlavero`, `del_equipo`), `src/app.rs` (campo `llavero`), `src/app/llavero.rs` (nuevo, ~2 000 líneas), `src/app/{escritorios,sesion,sincronizacion}.rs`, `src/flota/mod.rs`, `src/ui/{llavero,barra,dialogos,disposicion,mod}.rs`; pruebas `tests/termux_ui.rs` (73) e instantáneas `tests/redimensionado/vistas_{g,p}.rs` + `tests/snapshots/llavero_*` y `sesion_48x20`, `flota_48x20`, `hosts_48x20`.
 - **CLI:** `src/llavero_cli.rs` (nuevo), `src/main.rs`, `assets/` regenerado; pruebas `tests/llavero_cli.rs` (55).
 - **Otros:** `CHANGELOG.md` («Sin publicar»), `crates/magi-movil/tests/snippets_movil_e2e.rs` (carrera preexistente), `CLAUDE.md` y `AGENTS.md` (comando de `shellcheck`).
+
+**Sprint 2 (36 ficheros tocados; `android/` sin tocar):**
+
+- **Configuración y estado:** `src/config.rs` (`SeccionTermux`), `src/termux/estado.rs` (nuevo: marcas, ids de avisos, fichero `servidor`), `src/app/termux.rs` (nuevo: `EstadoTermuxApp`, lectura del estado del servidor y cola de la barra).
+- **Servidor:** `src/termux/wake_lock.rs` (máquina pura y conductor), `src/termux/avisos.rs` (ids, textos, planificación, `FOCO_FIABLE`), `src/termux/cli.rs` (solo `magi termux aviso`), `src/servidor/android.rs` (nuevo: `OpcionesTermux`, `BarraServidor`, `TermuxServidor`, reconciliador y cierre), `src/servidor/{mod,sesiones,sesiones_persistentes,escritura_varios}.rs`; pruebas `tests/termux_servidor.rs` (42) y `tests/comun/mod.rs` (`termux` opcional en el escenario).
+- **Sincronización:** `src/app/sincronizacion.rs` (sondeo y registro de lecturas colgadas), `src/sincronizacion/{mod,almacenamiento,equipos}.rs`, `crates/magi-nucleo/src/sincronizacion/{carpeta,mod}.rs`, `crates/magi-nucleo/src/ficheros.rs`, `src/app.rs` (carpeta, vigilancia, pasada); pruebas `tests/termux_sincronizacion.rs` (45).
+- **Portapapeles y enlaces:** `src/termux/portapapeles.rs`, `src/app/{portapapeles,escritorios,sesion}.rs`, `src/portapapeles.rs`, `src/identidades.rs`, `src/cliente/ventana.rs`, `src/app.rs` (paleta y teclas); pruebas `tests/termux_portapapeles.rs` (45) e instantáneas `barra_mensaje_*_48x20` (4).
+- **Otros:** `README.md` (`abrir_enlaces` en Termux), `CLAUDE.md` y `AGENTS.md` (`--test termux_portapapeles`), `CHANGELOG.md`.
 
 ---
 
@@ -120,11 +160,20 @@ Tomadas durante el Sprint 1:
 - **Procesos de Termux:API:** tres hilos auxiliares por orden (escritor, lector de stdout y de stderr, con tope de 64 KiB y el resto descartado); al vencer el plazo se mata el grupo entero con el líder aún sin recoger (su pid no se puede reutilizar) y se recoge esperando hasta 2 s; un nieto fuera de grupo (`setsid`) que retenga las tuberías no bloquea al llamante.
 - **Lectura de la frase en la CLI:** modo raw antes de escribir la pregunta, guarda `Drop`, búfer `Zeroizing` de capacidad fija (nunca se reasigna) y comprobación con `poll(2)` de que el terminal sigue vivo.
 
+Tomadas durante el Sprint 2:
+
+- **Lo que habla con Android nunca espera con el cerrojo del estado en la mano:** ni en el servidor (el reconciliador copia lo que necesita, suelta el cerrojo y luego ejecuta; solo el cerrojo propio `publicados` se mantiene durante las órdenes y solo lo disputan el ciclo, la purga y el cierre) ni en el cliente (todo en tareas con evento de vuelta; el OSC 52 lo escribe el hilo de UI).
+- **Máquinas puras con reloj inyectado** para el wake lock y la planificación de avisos (lo deseado frente a lo publicado): la lógica se prueba sin tokio ni órdenes y los tiempos reales se sustituyen por inyectados en las pruebas de integración.
+- **El servidor no decide por lo que ve en `std::env`:** `arrancar_con` recibe `Option<OpcionesTermux>` (entorno, `Ordenes`, tiempos); `arrancar` pasa el del proceso solo en Termux.
+- **Entrada no fiable también en los ficheros de estado de MAGI:** ids de aviso validados antes de pasarlos a una orden, tope de lectura, apertura sin seguir enlaces ni esperar, y un fichero ilegible es «sin estado», nunca un pánico.
+- **Una firma barata de la carpeta no es la pasada:** el sondeo decide si pedirla; la pasada de F10 sigue siendo la que lee, hace SHA-256 e importa, en el bucle de UI (riesgo anotado en §6).
+- **Un fallo de lectura nunca se parece a una ausencia** (regla de CLAUDE.md) aplicado a los avisos (se conservan los de lo que no se puede comprobar), a la carpeta colgada (no se pide pasada) y a Termux:API (un fallo local de `Io` no la apaga).
+
 ---
 
 ## 5. Funcionalidades del checklist completadas (texto exacto)
 
-**22 / 71** tras el Sprint 1. Todas se han comprobado sin móvil (pruebas, compilación para Android o lectura del código); lo que solo se ve en el plegable queda en §6 y en el guion. Observaciones: la de compilación se da por cumplida con la lista de bibliotecas aceptada en §2.1 (`libdl`, `libz`, `libm`, `libc`); la de «Modelo, versión y SDK…» está implementada y compila para Android pero su lectura real va al guion; la de «Rutas en Termux…» se comprueba con el servidor arrancado de verdad en `tests/termux_ordenes.rs`; y la de «Modo Termux elegido al compilar» se comprobó además a mano con el binario `--release` de Linux (`MAGI_PLATAFORMA=termux magi llavero estado` dice que la orden solo existe en Termux, igual que sin la variable, y `magi diagnostico` calcula el runtime de siempre).
+**46 / 71** tras el Sprint 2. Todas se han comprobado sin móvil (pruebas, compilación para Android o lectura del código); lo que solo se ve en el plegable queda en §6 y en el guion. Observaciones: la de compilación se da por cumplida con la lista de bibliotecas aceptada en §2.1 (`libdl`, `libz`, `libm`, `libc`); la de «Modelo, versión y SDK…» está implementada y compila para Android, pero su lectura real va al guion; la de «Rutas en Termux…» se comprueba con el servidor arrancado de verdad en `tests/termux_ordenes.rs`; la de «Modo Termux elegido al compilar» se comprobó además a mano con el binario `--release` de Linux; la de «Una pestaña delante pero sin foco…» está completa para `FOCO_FIABLE = false` y su rama `true` solo en la lógica pura (la PoC decide); «`[termux]` en `config.toml`» se hizo en el Sprint 2 en vez del 3; y la de «Órdenes de Termux con el plazo…» está completa en cliente y servidor (el diagnóstico las usa en el Sprint 3).
 
 **Compilación y plataforma**
 
@@ -136,6 +185,8 @@ Tomadas durante el Sprint 1:
   - AC: Dado `XDG_RUNTIME_DIR` sin poner y el `TMPDIR` de Termux, cuando arranca el servidor, entonces el socket queda en `$TMPDIR/magi-<uid>/` con una ruta de menos de 100 bytes
 - [x] Lo local que va con shell (las comprobaciones propias de la deliberación, F14) usa `$PREFIX/bin/sh` en Termux; ninguna ruta fija a `/bin/sh` ni a `/usr/bin` en el código local del escritorio
 - [x] Modelo, versión y SDK de Android con `__system_property_get` de bionic, sin lanzar `getprop`
+- [x] El núcleo no decide nada por `EQUIPOS.plataforma`: con `android` en un equipo escritor, la deliberación, el sondeo y la sincronización se portan como en el escritorio
+  - AC: Dadas las pruebas de deliberación, sondeo y sincronización con la plataforma `android` inyectada en el escritorio, cuando corren, entonces dan lo mismo que con `linux`
 
 **Llavero con frase maestra**
 
@@ -159,18 +210,59 @@ Tomadas durante el Sprint 1:
 
 **Sincronización**
 
+- [x] En Termux, el equipo se llama por defecto `termux-<modelo>` (`ro.product.model` con la regla de la etiqueta de la F15, 20 caracteres como mucho) y su plataforma es `android`, sin `formato` nuevo
+  - AC: Dado un móvil con el modelo «ABC-X10», cuando se crea o se une la sincronización, entonces el equipo se llama `termux-abc-x10`
+- [x] Termux sincroniza como un equipo escritor: escribe su `magi-<uuid>.age` y lee los de los demás, como el escritorio
+  - AC: Dado el fichero escrito por Termux, cuando lo importan un escritorio 1.5.0 y la app Android, entonces lo leen sin «formato nuevo»
+- [x] La carpeta de sincronización se guarda resuelta con `realpath` (`~/storage/shared/…` → `/storage/emulated/0/…`); sin `~/storage`, la instrucción de ejecutar `termux-setup-storage`
+- [x] La carpeta se sondea cada `[termux] sincronizacion_sondeo_seg` (30 s) con MAGI abierto, en vez de usar `notify`, y también al volver a la vista Sincronización
+- [x] Los permisos 600 que el almacenamiento compartido no admite no son un error (una línea en el log por sesión)
 - [x] Unir este equipo pegando la clave en el diálogo (pegado entre corchetes de Termux); la clave va al llavero de fichero, que se crea si no existe
+
+**Portapapeles, enlaces y escritorios**
+
+- [x] Copiar en Termux: `termux-clipboard-set` por la entrada estándar (hasta 512 KiB) si Termux:API responde; si no, OSC 52 hasta 6 000 bytes codificados; si no cabe, aviso con el tamaño y la alternativa
+  - AC: Dado Termux:API parada y una selección de 20 KiB, cuando se copia, entonces la barra dice «no cabe en el portapapeles de Termux (20 KiB): instala Termux:API o guárdalo» y no se manda OSC 52
+- [x] `[terminal] abrir_enlaces` vale `termux-open-url` por defecto en Termux, con la URL como único argumento y sin shell
+- [x] `[escritorio] navegador = "auto"` abre el visor con `termux-open-url {url}` en Termux; el visor sigue solo en `127.0.0.1` (T98)
+- [x] `prefijo w` en Termux explica cómo abrir otra sesión de Termux con `magi` en vez de lanzar un terminal
+
+**Segundo plano**
+
+- [x] `[termux] wake_lock = "auto"`: el servidor toma el wake lock cuando `TrabajoServidor` deja de estar vacío y lo suelta 30 s después de quedar vacío; con `nunca`, no lo toca
+  - AC: Dado un túnel que se abre y se cierra, cuando pasan 30 s sin trabajo, entonces el servidor ha ejecutado `termux-wake-lock` y `termux-wake-unlock` una vez cada una
+- [x] Solo se suelta el wake lock que tomó MAGI; si el servidor muere sin soltarlo, el siguiente lo suelta en cuanto no tiene trabajo (marca `wake-lock` en el estado)
+- [x] En Android 12 o posterior, un aviso único sobre el límite de procesos en segundo plano que remite a `magi diagnostico`
+
+**Avisos de Android**
+
+- [x] Con `[termux] avisos = true` y Termux:API, el servidor publica un aviso de Android cuando una sesión persistente (vigilante, F16) o una pestaña (marca `!`, F15) pide atención sin nadie mirando, con id `magi-<id>`, grupo `magi` y `--alert-once`
+  - AC: Dada una sesión persistente que toca la campana con la ventana de MAGI cerrada y su pestaña viva en el servidor, cuando el vigilante lo ve, entonces hay un aviso «◆ agente-api pide atención» con «dev-01 · MAGI» y ningún otro texto
+- [x] El aviso lleva solo el nombre y el host (T140) y una acción fija que trae Termux delante; nunca el título, el texto del aviso ni la salida
+- [x] El aviso se retira cuando se quita la atención, se cierra la pestaña o se borra la ficha; al terminar el servidor, todos los suyos; los de un servidor muerto, al arrancar el siguiente (ids en el estado)
+- [x] En Termux con avisos, el vigilante corre también sin ventanas conectadas mientras viva el servidor (precisa D334)
+- [x] Una pestaña delante pero sin foco (Termux en segundo plano) cuenta como sin mirar; si Termux no manda eventos de foco (prueba de concepto), el aviso sale igual y se retira al escribir en la pestaña
+
+**CLI, configuración y diagnóstico**
+
+- [x] `[termux]` en `config.toml` (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a 30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota con aviso; fuera de Termux se ignora
+- [x] Órdenes de Termux con el plazo `[termux] api_plazo_seg` y sin shell; si Termux:API no responde, la función se apaga en ese proceso con un aviso y MAGI nunca se queda esperando
+  - AC: Dado un `termux-clipboard-set` que no responde, cuando se copia, entonces a los 5 s se copia por OSC 52 y la barra lo dice una sola vez
 
 **API: CLI y órdenes de Termux**
 
 - [x] `magi llavero estado`: si hay llavero, ruta, tamaño y fecha; nunca pide la frase ni enseña entradas
 - [x] `magi llavero cambiar` y `magi llavero borrar`, con la frase y la confirmación en el TTY
+- [x] `magi termux aviso`: publica un aviso de prueba y lo retira a los 10 s
+- [x] `termux-clipboard-set` (por la entrada estándar) y `termux-open-url` desde el cliente
+- [x] `termux-wake-lock` y `termux-wake-unlock` desde el servidor
+- [x] `termux-notification` y `termux-notification-remove` desde el servidor, con ids `magi-<id>`
 
 **Calidad**
 
 - [x] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
 
-Siguen sin marcar, a propósito, las de los Sprints 2 y 3 y la PoC (`src/termux/` completo, sincronización y equipo `termux-<modelo>`, portapapeles y enlaces, segundo plano, avisos, teclado, `[termux]`, diagnóstico, empaquetado y CI, README, revisión adversarial de cierre y versión 1.6.0), más las que dependen de ellos aunque el trabajo del Sprint 1 ya las toque (el núcleo no decide por `EQUIPOS.plataforma`, las instantáneas de FILA DE TECLAS, la paleta con «Instalar la fila de teclas», `magi termux` y los tipos de REGISTRO con `termux_teclas_instaladas`).
+Siguen sin marcar, a propósito, las del Sprint 3 y la PoC: `src/termux/` completo (teclas, diagnóstico y CLI de teclas), la fila de teclas y `termux.properties`, la ayuda y el primer arranque, las instantáneas y la paleta con la fila de teclas, `magi termux teclas`, `magi diagnostico`, `termux-reload-settings` y `termux-battery-status`, los tipos de REGISTRO con su etiqueta (`termux_teclas_instaladas` se emite en el Sprint 3), el paquete, la CI, TUR y el README, las pruebas que faltan (`termux_teclas`, `termux_paquete`), la revisión adversarial de cierre y la versión 1.6.0.
 
 ---
 
@@ -190,6 +282,17 @@ Siguen sin marcar, a propósito, las de los Sprints 2 y 3 y la PoC (`src/termux/
 - **Sondeo con el llavero cerrado [analista]:** un host de contraseña de llavero sale CAÍDA y anota `sondeo_fallido` (y `sondeo_recuperado` al desbloquear) aunque el host esté bien; no se relanza el sondeo al desbloquear. Propuesta: tratar el fallo por `BLOQUEADO` como «sin comprobar», sin REGISTRO, y relanzar tras desbloquear.
 - **Otros [analista]:** con SERVIDOR CAÍDO un diálogo del llavero que solo existía para una pregunta del servidor queda apilado y vacío; una pestaña Caída vuelve a enseñar «no hay ninguna guardada…» en la siguiente difusión del servidor aunque el llavero ya esté abierto; `quitar` un equipo comprueba `estado()` antes de borrar el fichero del otro equipo y, si otra ventana cambió la frase, falla después de borrarlo (la pasada lo reescribe); la ficha de escritorio con el llavero cerrado muestra «sin contraseña guardada» y, al guardar, cierra y descarta lo tecleado (rehacer `guardar_ficha` con `ficha_guardada_a_medias`); el pegado de otros diálogos con frase o contraseña (huella, servidor…) sigue sin borrar la `String` del evento (anterior a la fase).
 - **Las pruebas con pty** (`llavero_cli`) dependen de `script` de util-linux y de un margen de 1 s entre teclear y arrancar el binario: en un equipo muy cargado podrían dar un falso fallo, nunca un falso éxito. La de «no se puede lanzar» de `termux_ordenes` se omite con aviso si corre como root.
+
+**Pendientes y límites que deja el Sprint 2** (todo lo marcado se ha probado sin móvil, con los dobles de `tests/fijos/termux/`; lo siguiente solo se ve en el plegable y va al guion):
+
+- **Nada de Termux:API real se ha ejecutado:** la semántica de `termux-wake-lock` (¿es idempotente tras un cierre de Android?), `termux-notification` con `--action`, el permiso de notificaciones de Android 13+ (para eso es `magi termux aviso`), `termux-clipboard-set` y `termux-open-url` con latencias reales, el visor en Chrome de Android, la escritura real del OSC 52 en la terminal y que Android no cierre el servidor igualmente.
+- **Almacenamiento compartido real:** `chmod` sobre `/storage/emulated/0` (FUSE/sdcardfs), `realpath` de `~/storage/shared`, la granularidad del mtime, el coste de `read_dir` y la creación de hilos bajo los límites de Android. Hay que probar una carpeta que no responde.
+- **Foco (D379):** con `FOCO_FIABLE = false`, una campana que el remoto toca en respuesta a lo que se acaba de teclear (el autocompletado de bash) publica un aviso de Android hasta la siguiente pulsación, y con `--alert-once` vuelve a sonar tras cada retirada. La PoC decide si Termux manda eventos de foco; la rama `true` no tiene prueba de extremo a extremo.
+- **La pasada de F10 sigue en el hilo de UI y sin plazo [analista]:** lee la carpeta y hace SHA-256 de todo; el sondeo evita lanzarla sin cambios y se aplaza mientras la carpeta no responde, pero una pasada ya empezada, la inicial, `exportar_al_salir` o una pedida a mano sobre un almacenamiento colgado pueden congelar la TUI. Candidata a una mejora: hash por metadatos antes de leer y pasada en `spawn_blocking`.
+- **Una ficha sin pestaña no avisa con la ventana cerrada** cuando el servidor ya se apagó por inactividad (vive solo mientras haya trabajo): riesgo ya anotado en la spec. El vigilante sin ventanas solo corre mientras viva el servidor.
+- **`magi termux aviso` interrumpido** (Ctrl+C o SIGHUP) durante los 10 s deja el aviso `magi-test` hasta que se deslice a mano; no se añaden manejadores de señales.
+- **Los avisos de Termux:API no instalada y apagada comparten texto [analista].** Un `termux-api` instalado con el servidor en marcha no activa el vigilante sin ventanas hasta el siguiente arranque.
+- **Las pruebas de tiempos** (`termux_servidor`, `termux_sincronizacion`, `termux_portapapeles`) usan tiempos cortos inyectados y márgenes de ≥ 0,8 s: solo pueden fallar en la dirección segura (nada emitido); la de control positivo de `notify` necesita inotify en el CI.
 
 **Riesgos que se mantienen como dice la spec:** apertura de `llavero.age` con scrypt de hasta 2^20 (≈1 GiB; en un móvil el *low memory killer* podría cerrar Termux entero, servidor incluido, si alguien forja el fichero); escrituras de `equipos::crear/unir` con scrypt (~1 s) en el hilo de UI mientras la PoC mida ≤ 1,5 s; una ficha de sesión persistente sin pestaña no avisa con la ventana cerrada (el servidor muere a los 10 s sin trabajo).
 
@@ -291,6 +394,8 @@ TZ=UTC cargo test -p magi-ssh --test termux_ordenes --test termux_plataforma --t
 TZ=UTC cargo test --workspace --locked --no-fail-fast        # todo, sin parar al primer fallo
 cargo clippy --workspace --all-targets --locked -- -D warnings ; cargo fmt --all --check ; cargo deny check
 ```
+
+Sprint 2: `TZ=UTC cargo test -p magi-ssh --test termux_servidor --test termux_sincronizacion --test termux_portapapeles` (42, 45 y 45 pruebas; las de tiempo reales de `termux_servidor` tardan unos 12 s) y `cargo test -p magi-ssh --lib termux:: servidor::`.
 
 `termux_ordenes` y `termux_plataforma` también pasan con `MAGI_PLATAFORMA=termux` exportado (el checklist lo pide así). Para el binario de Termux: el bloque de compilación de §1 (con `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `ANDROID_NDK_HOME` exportadas) y `readelf -d`.
 

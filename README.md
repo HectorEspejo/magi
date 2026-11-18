@@ -420,7 +420,7 @@ Además de `comando`, la sección `[terminal]` admite:
 | `raton` | `false` | usos propios del ratón: rueda en el historial, clic para elegir panel y arrastre |
 | `teclado_mejorado` | `true` | pide la desambiguación de kitty si el terminal la admite |
 | `avisar_pegado` | `true` | aviso al pegar varias líneas en un remoto sin pegado entre corchetes |
-| `abrir_enlaces` | `"xdg-open"` (macOS: `"open"`) | programa que abre un enlace, sin shell |
+| `abrir_enlaces` | `"xdg-open"` (macOS: `"open"`; Termux: `"termux-open-url"`) | programa que abre un enlace, sin shell |
 | `reconexion_max_min` | `15` | minutos de reconexión automática antes de rendirse (1-120) |
 
 Un valor fuera de rango no impide arrancar: se acota y MAGI avisa al
@@ -926,7 +926,7 @@ historial_mib = 64              # tope de memoria del historial (8-512)
 raton = false                   # rueda en el historial y clic para elegir panel
 teclado_mejorado = true         # desambiguación de kitty si el terminal la admite
 avisar_pegado = true            # aviso al pegar varias líneas sin modo 2004
-abrir_enlaces = "xdg-open"      # macOS: open
+abrir_enlaces = "xdg-open"      # macOS: open · Termux: termux-open-url
 reconexion_max_min = 15         # minutos de reconexión automática (1-120)
 
 [servidor]

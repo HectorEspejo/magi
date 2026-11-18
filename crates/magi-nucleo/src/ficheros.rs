@@ -21,7 +21,11 @@ pub fn escribir_atomico_tolerante(ruta: &Path, contenido: &[u8], modo: u32) -> R
     escribir_atomico_con(ruta, contenido, modo, true, ajustar_permisos)
 }
 
-fn ajustar_permisos(ruta: &Path, modo: u32) -> std::io::Result<()> {
+/// El `chmod` de verdad: lo que usan todas las escrituras atómicas. Es público
+/// solo para que quien inyecta otro (las pruebas de una escritura que no puede
+/// aplicar permisos) pueda pasar el de siempre en las demás capas.
+#[doc(hidden)]
+pub fn ajustar_permisos(ruta: &Path, modo: u32) -> std::io::Result<()> {
     fs::set_permissions(ruta, fs::Permissions::from_mode(modo))
 }
 
@@ -42,8 +46,12 @@ impl Drop for TemporalPendiente<'_> {
 }
 
 /// Cuerpo común. Devuelve `true` si el `chmod` falló y se ignoró (solo en modo
-/// tolerante). `ajustar` es el `chmod`, inyectable para probar esa rama.
-fn escribir_atomico_con(
+/// tolerante). `ajustar` es el `chmod`, inyectable para probar esa rama: en
+/// Linux no hay forma de que un `chmod` sobre un fichero propio falle sin un
+/// sistema de ficheros como el almacenamiento compartido de Android, así que
+/// las pruebas de las capas de arriba lo inyectan (superficie de pruebas).
+#[doc(hidden)]
+pub fn escribir_atomico_con(
     ruta: &Path,
     contenido: &[u8],
     modo: u32,

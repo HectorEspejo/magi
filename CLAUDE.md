@@ -867,7 +867,8 @@ coméntalo con el desarrollador.
 - Pruebas de Termux (sin móvil):
   `cargo test -p magi-nucleo --test llavero_fichero` y
   `TZ=UTC cargo test -p magi-ssh` con `--test termux_ordenes`,
-  `--test termux_ui`, `--test termux_servidor`, `--test termux_sincronizacion` y
+  `--test termux_ui`, `--test termux_portapapeles`, `--test termux_servidor`,
+  `--test termux_sincronizacion` y
   `--test termux_teclas`, con los dobles de `tests/fijos/termux/` (anotan
   argumentos y entrada, y saben colgarse o fallar). `termux_paquete` lee el
   `.deb` de `MAGI_DEB`: con `CI` puesta falla si no lo hay y sin ella se omite

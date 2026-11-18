@@ -55,7 +55,26 @@ fn candidatas() -> &'static [Herramienta] {
 /// Cuánto se espera a que el programa de copia termine por sí solo.
 const ESPERA_COPIA: Duration = Duration::from_millis(750);
 
+#[cfg(test)]
+thread_local! {
+    /// Directorio donde buscar `wl-copy` y `pbcopy` en vez de en el `PATH`:
+    /// solo para las pruebas de la propia biblioteca y por hilo (la copia del
+    /// escritorio es síncrona), de modo que nadie toca el `PATH` del proceso
+    /// ni el portapapeles real.
+    pub(crate) static DIRECTORIO_DE_HERRAMIENTAS: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn intentar(programa: &str, texto: &str) -> Result<(), FalloCopia> {
+    #[cfg(test)]
+    let programa = DIRECTORIO_DE_HERRAMIENTAS
+        .with(|directorio| {
+            directorio
+                .borrow()
+                .as_ref()
+                .map(|directorio| directorio.join(programa).display().to_string())
+        })
+        .unwrap_or_else(|| programa.to_string());
     let mut comando = Command::new(programa);
     intentar_comando(&mut comando, texto)
 }

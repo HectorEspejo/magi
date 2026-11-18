@@ -448,9 +448,35 @@ fn hosts_a_borrar(plan: &fusion::PlanFusion, local: &[fusion::Candidato]) -> (Ve
     (borrados, total)
 }
 
+/// Cómo se escribe el fichero de este equipo en la carpeta compartida.
+///
+/// El núcleo no sabe en qué plataforma corre (no lee el entorno ni decide por
+/// `EQUIPOS.plataforma`): quien lo llama dice si la carpeta puede no admitir
+/// permisos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermisosCarpeta {
+    /// Un `chmod` 600 que no se puede aplicar es un error (escritorio).
+    #[default]
+    Estrictos,
+    /// Un `chmod` que no se puede aplicar no es un error: el almacenamiento
+    /// compartido de Android no admite permisos (Termux).
+    Tolerantes,
+}
+
+/// Una pasada y lo que ocurrió con los permisos del fichero propio.
+#[derive(Debug, Clone)]
+pub struct SalidaPasada {
+    pub resultado: ResultadoPasada,
+    /// El fichero propio se escribió sin poder aplicarle el 600 (solo con
+    /// [`PermisosCarpeta::Tolerantes`]). Quien llama decide si lo dice y
+    /// cuántas veces: la pasada no deja nada en el log.
+    pub permisos_ignorados: bool,
+}
+
 /// Una pasada completa de sincronización. Lee la carpeta, fusiona, aplica y
 /// exporta. No toma el cerrojo: lo hace quien llama (la UI sin bloquear, la
-/// CLI esperando hasta 10 s).
+/// CLI esperando hasta 10 s). El fichero propio se escribe con permisos
+/// estrictos; para una carpeta que puede no admitirlos, `pasada_con_permisos`.
 pub fn pasada(
     conexion: &Connection,
     rutas: &Rutas,
@@ -458,6 +484,87 @@ pub fn pasada(
     app: &str,
     claves: &[ClaveSincronizacion],
     opciones: &OpcionesPasada<'_>,
+) -> Result<ResultadoPasada> {
+    pasada_con_permisos(
+        conexion,
+        rutas,
+        ajustes,
+        app,
+        claves,
+        opciones,
+        PermisosCarpeta::Estrictos,
+    )
+    .map(|salida| salida.resultado)
+}
+
+/// Como [`pasada`], diciendo cómo tratar los permisos de la carpeta y
+/// devolviendo si hubo que ignorarlos.
+pub fn pasada_con_permisos(
+    conexion: &Connection,
+    rutas: &Rutas,
+    ajustes: &SeccionSincronizacion,
+    app: &str,
+    claves: &[ClaveSincronizacion],
+    opciones: &OpcionesPasada<'_>,
+    permisos: PermisosCarpeta,
+) -> Result<SalidaPasada> {
+    pasada_con_ajuste(
+        conexion,
+        rutas,
+        ajustes,
+        app,
+        claves,
+        opciones,
+        permisos,
+        &crate::ficheros::ajustar_permisos,
+    )
+}
+
+/// Cuerpo común de las pasadas, con el `chmod` del fichero propio inyectable
+/// (superficie de pruebas: en Linux un `chmod` sobre un fichero propio no
+/// falla, y sin inyectarlo no se puede probar la carpeta que no admite
+/// permisos).
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)] // lo que pide una pasada más el chmod; agruparlo solo mueve el problema
+pub fn pasada_con_ajuste(
+    conexion: &Connection,
+    rutas: &Rutas,
+    ajustes: &SeccionSincronizacion,
+    app: &str,
+    claves: &[ClaveSincronizacion],
+    opciones: &OpcionesPasada<'_>,
+    permisos: PermisosCarpeta,
+    ajustar: &dyn Fn(&Path, u32) -> std::io::Result<()>,
+) -> Result<SalidaPasada> {
+    let mut permisos_ignorados = false;
+    let resultado = pasada_interna(
+        conexion,
+        rutas,
+        ajustes,
+        app,
+        claves,
+        opciones,
+        permisos,
+        ajustar,
+        &mut permisos_ignorados,
+    )?;
+    Ok(SalidaPasada {
+        resultado,
+        permisos_ignorados,
+    })
+}
+
+#[allow(clippy::too_many_arguments)] // el cuerpo de las pasadas; ver `pasada_con_ajuste`
+fn pasada_interna(
+    conexion: &Connection,
+    rutas: &Rutas,
+    ajustes: &SeccionSincronizacion,
+    app: &str,
+    claves: &[ClaveSincronizacion],
+    opciones: &OpcionesPasada<'_>,
+    permisos: PermisosCarpeta,
+    ajustar: &dyn Fn(&Path, u32) -> std::io::Result<()>,
+    permisos_ignorados: &mut bool,
 ) -> Result<ResultadoPasada> {
     let Some(carpeta) = ajustes.ruta_carpeta(&rutas.hogar) else {
         return Ok(ResultadoPasada::nuevo(EstadoPasada::SinConfigurar));
@@ -847,11 +954,20 @@ pub fn pasada(
         let firma = clave.firmar(json.as_bytes())?;
         let plano = formato::componer(&json, &firma, documento.formato);
         let cifrado = clave.cifrar(&plano)?;
-        if let Err(error) = carpeta::escribir(&carpeta, &este.uuid, &cifrado) {
-            resultado.estado = EstadoPasada::Error(format!(
-                "no se pudo escribir el fichero de este equipo: {error}"
-            ));
-            return Ok(resultado);
+        match carpeta::escribir_con_ajuste(
+            &carpeta,
+            &este.uuid,
+            &cifrado,
+            permisos == PermisosCarpeta::Tolerantes,
+            ajustar,
+        ) {
+            Ok((_ruta, ignorado)) => *permisos_ignorados |= ignorado,
+            Err(error) => {
+                resultado.estado = EstadoPasada::Error(format!(
+                    "no se pudo escribir el fichero de este equipo: {error}"
+                ));
+                return Ok(resultado);
+            }
         }
         equipos_bd::fijar_hash_propio(conexion, este.id, &hash)?;
         resultado.exportado = true;

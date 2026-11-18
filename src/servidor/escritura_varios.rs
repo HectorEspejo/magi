@@ -317,11 +317,18 @@ pub async fn escribir(
         terminar(estado, id, &motivo, EjecucionResultado::Cancelada).await;
         return;
     }
+    let termux = estado_bloqueado.termux.clone();
     for pestana in &pestanas {
-        if let Some(sesion) = estado_bloqueado.sesiones.get(&pestana.sesion_id) {
+        if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&pestana.sesion_id) {
             let _ = sesion
                 .tx_comandos
                 .send(ComandoSesion::Teclas(pestana.bytes.clone()));
+            // Escribir en la pestaña es atenderla (aviso de Android, Fase 17).
+            if sesion.atendida() {
+                if let Some(termux) = &termux {
+                    termux.despertar_avisos();
+                }
+            }
         }
     }
     if let Some(concesion) = estado_bloqueado.escrituras.activas.get_mut(&id) {

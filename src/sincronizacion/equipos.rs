@@ -124,7 +124,7 @@ fn cerrojo_de_ciclo(rutas: &Rutas) -> Result<Option<carpeta::Cerrojo>> {
 }
 
 /// Comprueba que la carpeta existe y se puede escribir, sin dejar nada.
-fn comprobar_carpeta(carpeta: &Path) -> Result<()> {
+pub fn comprobar_carpeta(carpeta: &Path) -> Result<()> {
     let metadatos = std::fs::metadata(carpeta)
         .with_context(|| format!("la carpeta {} no existe", carpeta.display()))?;
     if !metadatos.is_dir() {
