@@ -2210,6 +2210,11 @@ fn texto_apertura_fallida(
             "{} · engánchate a la existente o cambia el nombre",
             base(format!("ya hay una sesión «{nombre}» en «{host}»"))
         ),
+        // CONTRATO-S1-B2: texto provisional de D349.
+        Causa::NoExiste => format!(
+            "{} · ya no está en el host",
+            base(format!("la sesión «{nombre}» ya no existe en «{host}»"))
+        ),
         Causa::Otra => base(format!("no se pudo abrir la sesión de tmux «{nombre}»")),
     }
 }

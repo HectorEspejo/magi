@@ -452,6 +452,7 @@ async fn crear_y_enganchar_abre_la_pestana_con_pty_y_exec() {
     assert_eq!(
         sesion.tmux,
         Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: "agente-api".to_string(),
             version: Some(VersionTmux::nueva(3, 4)),

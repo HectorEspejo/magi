@@ -927,6 +927,7 @@ fn info_persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesi
         titulo: None,
         aviso: None,
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: nombre.to_string(),
             version: None,

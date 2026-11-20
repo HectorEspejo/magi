@@ -491,6 +491,7 @@ fn pestana_persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoS
     InfoSesion {
         nombre: nombre.to_string(),
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: nombre.to_string(),
             version: Some(VersionTmux::nueva(3, 5)),
@@ -515,6 +516,7 @@ fn pestana_habitual(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesi
     InfoSesion {
         nombre: nombre.to_string(),
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Habitual,
             nombre: nombre.to_string(),
             version: Some(VersionTmux::nueva(3, 5)),

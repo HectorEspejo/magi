@@ -307,6 +307,7 @@ fn sesion_de(id: u32, host_id: i64, host: &str) -> InfoSesion {
 
 fn tmux_propio(nombre: &str) -> TmuxPestana {
     TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Magi,
         nombre: nombre.to_string(),
         version: Some(VersionTmux::nueva(3, 5)),
@@ -316,6 +317,7 @@ fn tmux_propio(nombre: &str) -> TmuxPestana {
 
 fn tmux_habitual(nombre: &str) -> TmuxPestana {
     TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Habitual,
         nombre: nombre.to_string(),
         version: None,

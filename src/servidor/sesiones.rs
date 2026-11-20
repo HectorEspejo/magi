@@ -273,6 +273,7 @@ impl Sesion {
             titulo: self.titulo.clone(),
             aviso: self.aviso.clone(),
             tmux: self.tmux.as_ref().map(|nombre| TmuxPestana {
+                creada: None,
                 servidor: self.tmux_servidor,
                 nombre: nombre.clone(),
                 version: self.tmux_version,
