@@ -290,6 +290,13 @@ jobs:
       CARGO_NDK_X86_64_LINUX_MUSL_SHA256: dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
     steps:
       - uses: actions/checkout@v4
+      # setup-android lanza sdkmanager, que exige JDK 17 o posterior; la imagen
+      # trae el 11 por defecto.
+      - name: Preparar JDK 21 (sdkmanager)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
       - uses: android-actions/setup-android@v4
       - name: Instalar el NDK r30
         # sdkmanager 23 identifica los paquetes como rutas («ndk/30.0.16248370»);

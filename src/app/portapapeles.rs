@@ -850,9 +850,15 @@ mod pruebas {
         escritorio
             .app
             .copiar(PUBLICA.to_string(), ParaQue::ClavePublica);
+        // La primera herramienta que prueba cada sistema (en macOS, `pbcopy`).
+        let herramienta = if cfg!(target_os = "macos") {
+            "pbcopy"
+        } else {
+            "wl-copy"
+        };
         assert_eq!(
             escritorio.mensaje(),
-            Some(("clave pública copiada con wl-copy".to_string(), false))
+            Some((format!("clave pública copiada con {herramienta}"), false))
         );
         assert_eq!(escritorio.copiado().as_deref(), Some(PUBLICA));
         assert!(escritorio.app.dialogo.is_none());

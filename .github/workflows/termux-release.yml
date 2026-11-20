@@ -230,6 +230,14 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "Se compila el commit $commit (etiqueta $TAG)."
 
+      # setup-android lanza sdkmanager, que exige JDK 17 o posterior; la imagen
+      # trae el 11 por defecto.
+      - name: Preparar JDK 21 (sdkmanager)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Preparar el SDK de Android
         uses: android-actions/setup-android@v4
 
