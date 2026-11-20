@@ -21,6 +21,7 @@ use crate::protocolo::{self, MensajeCliente};
 use crate::ui::componentes::CampoTexto;
 use crate::ui::Vista;
 
+use super::portapapeles::ParaQue;
 use super::{App, Dialogo};
 
 // ---------------------------------------------------------------- navegador
@@ -50,11 +51,15 @@ pub const DURACION_ENLACE: Duration = Duration::from_secs(60);
 pub enum Plataforma {
     Linux,
     Macos,
+    /// Termux (Fase 17): el navegador es el de Android, por `termux-open-url`.
+    Termux,
 }
 
 /// Plataforma de este binario.
 pub fn plataforma() -> Plataforma {
-    if cfg!(target_os = "macos") {
+    if crate::termux::es_termux() {
+        Plataforma::Termux
+    } else if cfg!(target_os = "macos") {
         Plataforma::Macos
     } else {
         Plataforma::Linux
@@ -72,6 +77,8 @@ pub enum OrigenNavegador {
     AplicacionMac(String),
     /// El abridor del sistema (xdg-open u open).
     Sistema,
+    /// `termux-open-url`, el navegador de Android (Fase 17).
+    Termux,
 }
 
 /// Navegador resuelto: argv completo y de dónde salió.
@@ -153,6 +160,12 @@ pub fn resolver_navegador(
         });
     }
     match plataforma {
+        // En Termux, `auto` es `termux-open-url {url}`: el navegador de Android
+        // (el visor sigue sirviéndose solo en 127.0.0.1).
+        Plataforma::Termux => Ok(Navegador {
+            args: vec!["termux-open-url".to_string(), url.to_string()],
+            origen: OrigenNavegador::Termux,
+        }),
         Plataforma::Macos => {
             for aplicacion in APPS_MAC {
                 if app(aplicacion) {
@@ -225,6 +238,7 @@ pub fn app_instalada(nombre: &str) -> bool {
 /// Nombres que el diagnóstico mira en el PATH para el visor.
 pub fn candidatos_para_diagnostico() -> Vec<&'static str> {
     match plataforma() {
+        Plataforma::Termux => vec!["termux-open-url"],
         Plataforma::Macos => vec!["open"],
         Plataforma::Linux => CHROMIUM
             .iter()
@@ -232,6 +246,19 @@ pub fn candidatos_para_diagnostico() -> Vec<&'static str> {
             .chain(std::iter::once("xdg-open"))
             .collect(),
     }
+}
+
+/// La orden que abre el visor en Termux si `[escritorio] navegador` es `auto`
+/// (`termux-open-url <enlace>`, el navegador de Android); `None` con una orden
+/// propia, que se lanza como en el escritorio.
+pub fn navegador_de_termux(config: &SeccionEscritorio, url: &str) -> Option<Vec<String>> {
+    if config.navegador.trim() != "auto" {
+        return None;
+    }
+    resolver_navegador(config, Plataforma::Termux, url, &|_| false, &|_| false)
+        .ok()
+        .filter(|navegador| navegador.origen == OrigenNavegador::Termux)
+        .map(|navegador| navegador.args)
 }
 
 /// Lanza el navegador con el enlace del visor. Nunca hereda la terminal y no
@@ -608,7 +635,7 @@ impl App {
             return;
         };
         if let Some(enlace) = self.enlace_reciente(escritorio_id) {
-            self.copiar_enlace(&enlace);
+            self.copiar_enlace(escritorio_id, &enlace);
             return;
         }
         self.pedir_enlace_escritorio(escritorio_id, false);
@@ -626,12 +653,14 @@ impl App {
         }
     }
 
-    /// Copia un enlace al portapapeles; si no se puede, la pestaña lo enseña.
-    pub(crate) fn copiar_enlace(&mut self, enlace: &str) {
-        // En las pruebas no se toca el portapapeles del sistema (wl-copy
-        // puede quedarse esperando a un lector): se comporta como si fallara.
-        if !self.efectos_externos {
-            let escritorio_id = self.escritorio_activo_id().unwrap_or(0);
+    /// Copia el enlace del visor de `escritorio_id` (el de la petición, no el de
+    /// la pestaña que esté activa cuando vuelve la respuesta) por la única vía
+    /// de copia; si no se puede, la pestaña de ese escritorio lo enseña.
+    pub(crate) fn copiar_enlace(&mut self, escritorio_id: u32, enlace: &str) {
+        // En las pruebas del escritorio no se toca el portapapeles del sistema
+        // (wl-copy puede quedarse esperando a un lector): se comporta como si
+        // fallara. En Termux las órdenes ya son las de la prueba.
+        if !self.efectos_externos && !self.termux.activo {
             self.enlace_visible = Some((escritorio_id, enlace.to_string(), Instant::now()));
             self.mensaje(
                 "sin portapapeles en este entorno; el enlace está en la pestaña",
@@ -640,23 +669,21 @@ impl App {
             self.sucio = true;
             return;
         }
-        match crate::portapapeles::copiar(enlace) {
-            Ok(_) => self.mensaje("enlace del visor copiado (vale 60 s)", false),
-            Err(error) => {
-                let escritorio_id = self.escritorio_activo_id().unwrap_or(0);
-                self.enlace_visible = Some((escritorio_id, enlace.to_string(), Instant::now()));
-                self.mensaje(
-                    format!("no se pudo copiar el enlace: {error}; está en la pestaña"),
-                    true,
-                );
-            }
-        }
+        self.copiar(enlace.to_string(), ParaQue::EnlaceVisor { escritorio_id });
         self.sucio = true;
     }
 
     /// Abre el visor en el navegador; si no se puede, deja el enlace a la
-    /// vista para copiarlo con y durante 60 s.
+    /// vista para copiarlo con y durante 60 s. En Termux, con `navegador =
+    /// auto`, es `termux-open-url` por las órdenes de Termux (con plazo y en
+    /// una tarea); con una orden propia, se lanza como en el escritorio.
     pub(crate) fn abrir_visor_escritorio(&mut self, escritorio_id: u32, enlace: &str) {
+        if self.termux.activo {
+            if let Some(argumentos) = navegador_de_termux(&self.config.escritorio, enlace) {
+                self.abrir_visor_en_termux(escritorio_id, enlace, argumentos);
+                return;
+            }
+        }
         match abrir_navegador(&self.config.escritorio, enlace) {
             Ok(()) => {
                 self.enlace_visible = None;
@@ -750,6 +777,23 @@ impl App {
             if let Some((usuario, contrasena)) =
                 self.contrasenas_escritorio_pendientes.remove(&info.id)
             {
+                // El llavero de fichero reescribe el fichero con scrypt: en un
+                // hilo, con el resultado por `Evento::Llavero` (Fase 17).
+                let nombre = self
+                    .hosts
+                    .iter()
+                    .find(|host| host.id == info.host_id)
+                    .map(|host| host.nombre.clone());
+                if let Some(nombre) = nombre {
+                    if self.guardar_contrasena_en_segundo_plano(
+                        info.host_id,
+                        nombre,
+                        usuario.clone(),
+                        &protocolo::Secreto::nuevo(contrasena.as_str()),
+                    ) {
+                        continue;
+                    }
+                }
                 match self.guardar_contrasena_escritorio(
                     info.host_id,
                     &usuario,
@@ -928,8 +972,11 @@ impl App {
             // Respuesta de una petición que ya no está en vuelo (cancelada o
             // contestada antes): se descarta.
             None => {}
-            Some(PeticionEscritorio::Enlace { abrir: false, .. }) => {
-                self.copiar_enlace(&enlace);
+            Some(PeticionEscritorio::Enlace {
+                escritorio_id: pedido,
+                abrir: false,
+            }) => {
+                self.copiar_enlace(pedido, &enlace);
             }
             Some(_) => self.abrir_visor_escritorio(escritorio_id, &enlace),
         }
@@ -950,8 +997,11 @@ impl App {
             Some(PeticionEscritorio::Enlace { abrir: true, .. }) => {
                 self.abrir_visor_escritorio(escritorio_id, &enlace);
             }
-            Some(PeticionEscritorio::Enlace { abrir: false, .. }) => {
-                self.copiar_enlace(&enlace);
+            Some(PeticionEscritorio::Enlace {
+                escritorio_id: pedido,
+                abrir: false,
+            }) => {
+                self.copiar_enlace(pedido, &enlace);
             }
             // El servidor contestó con Enlace a una reconexión (alternativa
             // acordada): el enlace se aprovecha.
@@ -1047,7 +1097,35 @@ impl App {
                 self.enviar_credenciales(credenciales, peticion_id);
                 return;
             }
+            // El host guarda la contraseña en el llavero y el de fichero está
+            // cerrado: antes de preguntarla se pide la frase (Fase 17).
+            let guarda_en_el_llavero = host.is_some_and(|host| host.identidad_ref.usa_llavero());
+            if guarda_en_el_llavero && self.llavero_cerrado() {
+                self.pedir_llavero(Some(super::llavero::Continuacion::ReintentarCredenciales {
+                    peticion_id,
+                    escritorio_id,
+                    host_nombre,
+                    peticion,
+                }));
+                return;
+            }
         }
+        self.abrir_dialogo_credenciales(peticion_id, escritorio_id, host_nombre, peticion, true);
+    }
+
+    /// El diálogo de credenciales del escritorio. Sin `permitir_recordar`
+    /// (el usuario dijo que no al llavero), la casilla sale desmarcada.
+    pub(crate) fn abrir_dialogo_credenciales(
+        &mut self,
+        peticion_id: u64,
+        escritorio_id: u32,
+        host_nombre: String,
+        peticion: PeticionCredenciales,
+        permitir_recordar: bool,
+    ) {
+        let host = self
+            .host_de_escritorio(escritorio_id)
+            .or_else(|| self.hosts.iter().find(|host| host.nombre == host_nombre));
         let usuario = peticion
             .usuario
             .clone()
@@ -1063,7 +1141,8 @@ impl App {
         } else {
             0
         };
-        let recordar = crate::llavero::disponible()
+        let recordar = permitir_recordar
+            && self.llavero.disponible()
             && host.is_some_and(|host| host.identidad_ref.usa_llavero());
         self.mostrar_dialogo_servidor(Dialogo::Escritorio(DialogoEscritorio::Credenciales {
             peticion_id,
@@ -1108,7 +1187,9 @@ impl App {
                 TipoHost::Vnc | TipoHost::Voxl => String::new(),
                 _ => super::usuario_local(),
             });
-        let contrasena = crate::llavero::recuperar(&host.nombre, &usuario)
+        let contrasena = self
+            .llavero
+            .recuperar_contrasena(&host.nombre, &usuario)
             .ok()
             .flatten()?;
         Some(CredencialesEscritorio {
@@ -1123,7 +1204,11 @@ impl App {
     }
 
     /// Manda unas credenciales al servidor (nunca van al log).
-    fn enviar_credenciales(&mut self, credenciales: CredencialesEscritorio, peticion_id: u64) {
+    pub(crate) fn enviar_credenciales(
+        &mut self,
+        credenciales: CredencialesEscritorio,
+        peticion_id: u64,
+    ) {
         self.servidor.enviar(MensajeCliente::Credenciales {
             peticion_id,
             usuario: credenciales.usuario,
@@ -1150,7 +1235,8 @@ impl App {
         else {
             return Err("el host ya no existe".to_string());
         };
-        crate::llavero::guardar(&nombre, usuario, contrasena)?;
+        self.llavero
+            .guardar_contrasena(&nombre, usuario, contrasena)?;
         if let Err(error) = self
             .almacen
             .marcar_identidad_ref(host_id, &IdentidadRef::ContrasenaLlavero)
@@ -1252,7 +1338,7 @@ impl App {
         else {
             return;
         };
-        match crate::llavero::olvidar(&nombre, usuario) {
+        match self.llavero.olvidar_contrasena(&nombre, usuario) {
             Ok(_) => {
                 if let Err(error) = self
                     .almacen
@@ -1389,7 +1475,7 @@ impl App {
                 error,
             } => {
                 let es_vnc = peticion.tipo == TipoHost::Vnc;
-                let con_casilla = crate::llavero::disponible();
+                let con_casilla = self.llavero.disponible();
                 let reponer = |app: &mut App,
                                usuario: CampoTexto,
                                dominio: CampoTexto,
@@ -1451,6 +1537,25 @@ impl App {
                             contrasena: zeroize::Zeroizing::new(contrasena.texto.clone()),
                             recordar,
                         };
+                        // Con «recordar» y el llavero de fichero sin abrir (o sin
+                        // crear), antes se pide la frase: las credenciales
+                        // esperan en la continuación y, con Esc, se usan sin
+                        // guardarse (Fase 17).
+                        if recordar
+                            && !contrasena.texto.is_empty()
+                            && self
+                                .necesidad_llavero(super::llavero::UsoLlavero::Escribir)
+                                .is_some()
+                        {
+                            self.pedir_llavero(Some(
+                                super::llavero::Continuacion::EnviarCredenciales {
+                                    peticion_id,
+                                    escritorio_id,
+                                    credenciales,
+                                },
+                            ));
+                            return;
+                        }
                         if recordar && !contrasena.texto.is_empty() {
                             // No se guarda todavía: el llavero se escribe
                             // cuando el servidor confirme que la sesión quedó
@@ -1520,7 +1625,8 @@ impl App {
             return false;
         }
         let usuario = usuario_llavero(host);
-        crate::llavero::recuperar(&host.nombre, &usuario)
+        self.llavero
+            .recuperar_contrasena(&host.nombre, &usuario)
             .ok()
             .flatten()
             .is_some()
@@ -1539,6 +1645,7 @@ pub fn descripcion_para_diagnostico(
         OrigenNavegador::Orden => format!("orden propia · {}", navegador.args.join(" ")),
         OrigenNavegador::Chromium(nombre) => format!("auto · {nombre} --app"),
         OrigenNavegador::AplicacionMac(nombre) => format!("auto · {nombre} (open -na)"),
+        OrigenNavegador::Termux => "auto · termux-open-url (el navegador de Android)".to_string(),
         OrigenNavegador::Sistema => {
             let abridor = navegador
                 .args
@@ -1585,6 +1692,40 @@ mod pruebas {
             ]
         );
         assert_eq!(resultado.origen, OrigenNavegador::Orden);
+    }
+
+    #[test]
+    fn en_termux_auto_es_termux_open_url_y_linux_y_macos_no_cambian() {
+        let url = "http://127.0.0.1:8080/entrar?t=abc";
+        let termux =
+            resolver_navegador(&config("auto"), Plataforma::Termux, url, &|_| true, &|_| {
+                true
+            })
+            .unwrap();
+        assert_eq!(
+            termux.args,
+            vec!["termux-open-url".to_string(), url.to_string()]
+        );
+        assert_eq!(termux.origen, OrigenNavegador::Termux);
+        // Sin Chromium en el PATH, Linux y macOS siguen con su abridor.
+        let linux =
+            resolver_navegador(&config("auto"), Plataforma::Linux, url, &|_| false, &|_| {
+                false
+            })
+            .unwrap();
+        assert_eq!(linux.args, vec!["xdg-open".to_string(), url.to_string()]);
+        assert_eq!(linux.origen, OrigenNavegador::Sistema);
+        let mac = resolver_navegador(&config("auto"), Plataforma::Macos, url, &|_| false, &|_| {
+            false
+        })
+        .unwrap();
+        assert_eq!(mac.args, vec!["open".to_string(), url.to_string()]);
+        // Una orden propia manda en las tres.
+        assert_eq!(navegador_de_termux(&config("brave --app={url}"), url), None);
+        assert_eq!(
+            navegador_de_termux(&config("  auto "), url),
+            Some(vec!["termux-open-url".to_string(), url.to_string()])
+        );
     }
 
     #[test]

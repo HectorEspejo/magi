@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ────────── 7 hosts · 3 nominal ─┐
+│  HOSTS                            ⇥ detalle  │
+│┌ CREAR LA FRASE MAESTRA ────────────────────┐│
+││                                            ││
+││  Frase    [ •••••••••••••••• ]             ││
+││  Repetir  [ ••••••••••••┃ ]                ││
+││                                            ││
+││  Guarda tus contraseñas y la clave de      ││
+││  sincronización. Al menos 12 caracteres;   ││
+││  mejor, varias palabras.                   ││
+││  Si la olvidas no se recupera: habría que  ││
+││  borrar el llavero y volver a unir este    ││
+││  equipo.                                   ││
+││                                            ││
+││  ↵ crear   Tab siguiente   Esc cancelar    ││
+││                                            ││
+│└────────────────────────────────────────────┘│
+│                                              │
+└──────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más

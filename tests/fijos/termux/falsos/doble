@@ -1,0 +1,101 @@
+#!/bin/sh
+# Doble de las órdenes de Termux (`termux-*`) para las pruebas de la Fase 17.
+#
+# Una sola copia de la lógica: `mod.rs` la instala con el nombre de cada orden
+# (termux-clipboard-set, termux-open-url, ...) y el script averigua cuál es por
+# `$0`. Sustituye `@DIR@` por el directorio de estado de cada juego de dobles
+# (así dos pruebas en paralelo no se pisan: nada pasa por variables de entorno).
+#
+# Cada llamada deja su registro en `@DIR@/llamadas/<orden>.<n>/`:
+#   args     los argumentos, cada uno terminado en NUL (robusto con espacios,
+#            saltos de línea y comillas)
+#   entrada  lo que llegó por la entrada estándar, tal cual
+#   pid      el pid del doble (solo en el modo `colgar`)
+#   hijo     el pid del proceso que deja vivo (solo en el modo `colgar`)
+#
+# El comportamiento sale de `@DIR@/modos/<orden>` (una línea):
+#   ok                  termina bien; `termux-battery-status` imprime un JSON
+#   fallar              mensaje en stderr y código 1
+#   error_largo         stderr con caracteres de control y 700 caracteres; código 2
+#   colgar              no lee la entrada, deja un proceso hijo y duerme 120 s
+#   lento <décimas>     espera esas décimas de segundo y luego como `ok`
+#   mucha_salida        1 MiB por stdout y otro por stderr; código 0
+#   mucha_salida_fallo  como mucha_salida, con código 1
+# Sin fichero de modo, `ok`.
+
+DIR='@DIR@'
+PATH="$PATH:/usr/bin:/bin"
+orden=${0##*/}
+
+# Un directorio por llamada, numerado de forma atómica con `mkdir`.
+n=1
+while ! mkdir "$DIR/llamadas/$orden.$n" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -gt 100000 ] && exit 99
+done
+llamada="$DIR/llamadas/$orden.$n"
+
+# Sin argumentos, `printf '%s\0'` imprimiría un argumento vacío de más.
+if [ "$#" -gt 0 ]; then
+    printf '%s\0' "$@" >"$llamada/args"
+else
+    : >"$llamada/args"
+fi
+
+modo=ok
+extra=
+if [ -f "$DIR/modos/$orden" ]; then
+    read -r modo extra <"$DIR/modos/$orden"
+    # Un fichero vacío deja `modo` vacío.
+    [ -n "$modo" ] || modo=ok
+fi
+
+if [ "$modo" = colgar ]; then
+    # Sin leer la entrada: lo que se escriba se queda en la tubería. El hijo
+    # hereda el grupo de procesos y las salidas, como un programa que lanza
+    # otros; ninguno sobrevive a la muerte del grupo.
+    echo "$$" >"$llamada/pid"
+    sleep 120 &
+    echo "$!" >"$llamada/hijo"
+    wait
+    exit 0
+fi
+
+cat >"$llamada/entrada"
+
+case $modo in
+    ok)
+        if [ "$orden" = termux-battery-status ]; then
+            printf '{"health":"GOOD","percentage":87,"plugged":"UNPLUGGED","status":"DISCHARGING"}\n'
+        fi
+        ;;
+    lento)
+        case $extra in
+            '' | *[!0-9]*) extra=0 ;;
+        esac
+        sleep "$((extra / 10)).$((extra % 10))"
+        if [ "$orden" = termux-battery-status ]; then
+            printf '{"percentage":87}\n'
+        fi
+        ;;
+    fallar)
+        echo "fallo simulado de $orden" >&2
+        exit 1
+        ;;
+    error_largo)
+        printf '\033[31mfallo\033[0m con\tcontrol\r\n\007' >&2
+        head -c 700 /dev/zero | tr '\0' e >&2
+        echo >&2
+        exit 2
+        ;;
+    mucha_salida | mucha_salida_fallo)
+        head -c 1048576 /dev/zero | tr '\0' x
+        head -c 1048576 /dev/zero | tr '\0' y >&2
+        [ "$modo" = mucha_salida_fallo ] && exit 1
+        ;;
+    *)
+        echo "modo desconocido: $modo" >&2
+        exit 97
+        ;;
+esac
+exit 0

@@ -34,6 +34,9 @@ _magi() {
             magi,importar)
                 cmd="magi__subcmd__importar"
                 ;;
+            magi,llavero)
+                cmd="magi__subcmd__llavero"
+                ;;
             magi,man)
                 cmd="magi__subcmd__man"
                 ;;
@@ -61,6 +64,9 @@ _magi() {
             magi,sondear)
                 cmd="magi__subcmd__sondear"
                 ;;
+            magi,termux)
+                cmd="magi__subcmd__termux"
+                ;;
             magi,tunel)
                 cmd="magi__subcmd__tunel"
                 ;;
@@ -84,6 +90,9 @@ _magi() {
                 ;;
             magi__subcmd__help,importar)
                 cmd="magi__subcmd__help__subcmd__importar"
+                ;;
+            magi__subcmd__help,llavero)
+                cmd="magi__subcmd__help__subcmd__llavero"
                 ;;
             magi__subcmd__help,man)
                 cmd="magi__subcmd__help__subcmd__man"
@@ -112,11 +121,23 @@ _magi() {
             magi__subcmd__help,sondear)
                 cmd="magi__subcmd__help__subcmd__sondear"
                 ;;
+            magi__subcmd__help,termux)
+                cmd="magi__subcmd__help__subcmd__termux"
+                ;;
             magi__subcmd__help,tunel)
                 cmd="magi__subcmd__help__subcmd__tunel"
                 ;;
             magi__subcmd__help,tuneles)
                 cmd="magi__subcmd__help__subcmd__tuneles"
+                ;;
+            magi__subcmd__help__subcmd__llavero,borrar)
+                cmd="magi__subcmd__help__subcmd__llavero__subcmd__borrar"
+                ;;
+            magi__subcmd__help__subcmd__llavero,cambiar)
+                cmd="magi__subcmd__help__subcmd__llavero__subcmd__cambiar"
+                ;;
+            magi__subcmd__help__subcmd__llavero,estado)
+                cmd="magi__subcmd__help__subcmd__llavero__subcmd__estado"
                 ;;
             magi__subcmd__help__subcmd__registro,exportar)
                 cmd="magi__subcmd__help__subcmd__registro__subcmd__exportar"
@@ -130,11 +151,41 @@ _magi() {
             magi__subcmd__help__subcmd__sincronizar,estado)
                 cmd="magi__subcmd__help__subcmd__sincronizar__subcmd__estado"
                 ;;
+            magi__subcmd__help__subcmd__termux,aviso)
+                cmd="magi__subcmd__help__subcmd__termux__subcmd__aviso"
+                ;;
+            magi__subcmd__help__subcmd__termux,teclas)
+                cmd="magi__subcmd__help__subcmd__termux__subcmd__teclas"
+                ;;
             magi__subcmd__help__subcmd__tunel,activar)
                 cmd="magi__subcmd__help__subcmd__tunel__subcmd__activar"
                 ;;
             magi__subcmd__help__subcmd__tunel,parar)
                 cmd="magi__subcmd__help__subcmd__tunel__subcmd__parar"
+                ;;
+            magi__subcmd__llavero,borrar)
+                cmd="magi__subcmd__llavero__subcmd__borrar"
+                ;;
+            magi__subcmd__llavero,cambiar)
+                cmd="magi__subcmd__llavero__subcmd__cambiar"
+                ;;
+            magi__subcmd__llavero,estado)
+                cmd="magi__subcmd__llavero__subcmd__estado"
+                ;;
+            magi__subcmd__llavero,help)
+                cmd="magi__subcmd__llavero__subcmd__help"
+                ;;
+            magi__subcmd__llavero__subcmd__help,borrar)
+                cmd="magi__subcmd__llavero__subcmd__help__subcmd__borrar"
+                ;;
+            magi__subcmd__llavero__subcmd__help,cambiar)
+                cmd="magi__subcmd__llavero__subcmd__help__subcmd__cambiar"
+                ;;
+            magi__subcmd__llavero__subcmd__help,estado)
+                cmd="magi__subcmd__llavero__subcmd__help__subcmd__estado"
+                ;;
+            magi__subcmd__llavero__subcmd__help,help)
+                cmd="magi__subcmd__llavero__subcmd__help__subcmd__help"
                 ;;
             magi__subcmd__registro,exportar)
                 cmd="magi__subcmd__registro__subcmd__exportar"
@@ -178,6 +229,24 @@ _magi() {
             magi__subcmd__sincronizar__subcmd__help,help)
                 cmd="magi__subcmd__sincronizar__subcmd__help__subcmd__help"
                 ;;
+            magi__subcmd__termux,aviso)
+                cmd="magi__subcmd__termux__subcmd__aviso"
+                ;;
+            magi__subcmd__termux,help)
+                cmd="magi__subcmd__termux__subcmd__help"
+                ;;
+            magi__subcmd__termux,teclas)
+                cmd="magi__subcmd__termux__subcmd__teclas"
+                ;;
+            magi__subcmd__termux__subcmd__help,aviso)
+                cmd="magi__subcmd__termux__subcmd__help__subcmd__aviso"
+                ;;
+            magi__subcmd__termux__subcmd__help,help)
+                cmd="magi__subcmd__termux__subcmd__help__subcmd__help"
+                ;;
+            magi__subcmd__termux__subcmd__help,teclas)
+                cmd="magi__subcmd__termux__subcmd__help__subcmd__teclas"
+                ;;
             magi__subcmd__tunel,activar)
                 cmd="magi__subcmd__tunel__subcmd__activar"
                 ;;
@@ -203,7 +272,7 @@ _magi() {
 
     case "${cmd}" in
         magi)
-            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
+            opts="-h -V --servidor --help --version importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico llavero termux autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -273,7 +342,7 @@ _magi() {
             return 0
             ;;
         magi__subcmd__help)
-            opts="importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico autocompletado man help"
+            opts="importar exportar sondear registro servidor conectar sesion sesiones tunel tuneles snippets sincronizaciones sincronizar diagnostico llavero termux autocompletado man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -359,6 +428,62 @@ _magi() {
         magi__subcmd__help__subcmd__importar)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__llavero)
+            opts="estado cambiar borrar"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__llavero__subcmd__borrar)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__llavero__subcmd__cambiar)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__llavero__subcmd__estado)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -552,6 +677,48 @@ _magi() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        magi__subcmd__help__subcmd__termux)
+            opts="teclas aviso"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__termux__subcmd__aviso)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__help__subcmd__termux__subcmd__teclas)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         magi__subcmd__help__subcmd__tunel)
             opts="activar parar"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -611,6 +778,132 @@ _magi() {
         magi__subcmd__importar)
             opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero)
+            opts="-h --help estado cambiar borrar help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__borrar)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__cambiar)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__estado)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__help)
+            opts="estado cambiar borrar help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__help__subcmd__borrar)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__help__subcmd__cambiar)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__help__subcmd__estado)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__llavero__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -941,6 +1234,104 @@ _magi() {
         magi__subcmd__sondear)
             opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux)
+            opts="-h --help teclas aviso help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__aviso)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__help)
+            opts="teclas aviso help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__help__subcmd__aviso)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__help__subcmd__teclas)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        magi__subcmd__termux__subcmd__teclas)
+            opts="-h --instalar --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

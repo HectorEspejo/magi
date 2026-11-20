@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ CAMBIAR LA FRASE MAESTRA ──────────┐│
+││ Actual   [ ••••••••••••••• ]       ││
+││ Nueva    [ ••••••••••••••••┃ ]     ││
+││ Repetir  [  ]                      ││
+││                                    ││
+││ La nueva, de 12 caracteres o más.  ││
+││ Si la olvidas no se recupera.      ││
+││                                    ││
+││ ↵ cambiar   Tab campo   Esc no     ││
+└└────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

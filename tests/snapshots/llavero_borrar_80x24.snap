@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ○ dgx-s┌ BORRAR EL LLAVERO ───────────────────────────────────────┐         │
+│  ● hetzn│                                                          │         │
+│  ● hetzn│  Se borrará llavero.age de este equipo.                  │         │
+│  ◐ mac-m│                                                          │         │
+│  ✕ rinco│  Se pierden las contraseñas guardadas de tus hosts y la  │         │
+│  ● vps-o│  clave de sincronización de este equipo: habrá que       │         │
+│         │  volver a escribir las contraseñas y a unir el equipo    │         │
+│         │  con la clave.                                           │         │
+│         │  El inventario y los demás equipos no cambian.           │         │
+│         │                                                          │         │
+│         │  Escribe borrar para confirmar:                          │         │
+│         │  [ borra┃ ]                                              │         │
+│         │                                                          │         │
+│         │  ↵ borrar   Esc cancelar                                 │         │
+│         │                                                          │         │
+│         └──────────────────────────────────────────────────────────┘         │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

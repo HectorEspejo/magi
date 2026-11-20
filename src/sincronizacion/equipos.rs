@@ -106,7 +106,9 @@ pub fn olvidar_anterior_si_vencida(
         return Ok(false);
     }
     if let Err(error) = llavero.olvidar(CUENTA_SINCRONIZACION_ANTERIOR) {
-        // No se toca la fecha: se reintentará en la siguiente pasada.
+        // No se toca la fecha: la TUI lo reintenta al abrirse el llavero (con
+        // el de fichero, cerrado al arrancar, es lo normal: ver
+        // `App::olvidar_clave_anterior_vencida`) y en el siguiente arranque.
         anyhow::bail!("no se pudo olvidar la clave anterior del llavero: {error}");
     }
     config.sincronizacion.clave_anterior_hasta = None;
@@ -124,7 +126,7 @@ fn cerrojo_de_ciclo(rutas: &Rutas) -> Result<Option<carpeta::Cerrojo>> {
 }
 
 /// Comprueba que la carpeta existe y se puede escribir, sin dejar nada.
-fn comprobar_carpeta(carpeta: &Path) -> Result<()> {
+pub fn comprobar_carpeta(carpeta: &Path) -> Result<()> {
     let metadatos = std::fs::metadata(carpeta)
         .with_context(|| format!("la carpeta {} no existe", carpeta.display()))?;
     if !metadatos.is_dir() {

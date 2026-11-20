@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "magi-ssh"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
@@ -87,6 +87,14 @@ strip = true
 inherits = "release"
 lto = "thin"
 strip = true
+
+# scrypt (el llavero de fichero de Termux, 2^17 al crear y al abrir) sin
+# optimizar tarda ~18 s por operacion en depuracion; optimizando solo ese
+# paquete (medido: salsa20, pbkdf2, hmac y sha2 no hacen falta) baja a ~0,4 s,
+# tambien en `cargo test`, que hereda de dev. Solo cambia como se compila
+# scrypt, no su codigo ni el de nadie mas.
+[profile.dev.package.scrypt]
+opt-level = 3
 
 # IronRDP 0.17 fija sspi 0.21 y picky 7.0.0-rc.25, que arrastran el arbol
 # criptografico de RustCrypto en preestreno (ecdsa 0.17.0-rc.22), incompatible con

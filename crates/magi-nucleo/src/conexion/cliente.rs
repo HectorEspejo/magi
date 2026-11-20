@@ -648,6 +648,11 @@ async fn autenticar_con_contrasena(
 /// Plazo para que el solicitante conteste con la contraseña de su llavero.
 pub const PLAZO_LLAVERO: Duration = Duration::from_secs(10);
 
+/// Lo que dice el error de una conexión automática cuando el solicitante no
+/// tiene la contraseña en su llavero. La interfaz de Termux lo reconoce para
+/// distinguirlo de un llavero cerrado (Fase 17): una sola fuente del texto.
+pub const SIN_CONTRASENA_EN_LLAVERO: &str = "no hay ninguna guardada en el llavero";
+
 /// Contraseña de una conexión automática: la pide al solicitante, que solo
 /// puede sacarla de su llavero (un intento, con plazo). Nunca hay diálogo.
 async fn autenticar_con_llavero_del_solicitante(
@@ -664,7 +669,7 @@ async fn autenticar_con_llavero_del_solicitante(
     });
     let Ok(Ok(Some(contrasena))) = tokio::time::timeout(PLAZO_LLAVERO, respuesta).await else {
         return Err(ErrorCliente::Mensaje(format!(
-            "«{}» usa contraseña y no hay ninguna guardada en el llavero; \
+            "«{}» usa contraseña y {SIN_CONTRASENA_EN_LLAVERO}; \
              conéctate una vez con ↵ y marca «recordar»",
             host.nombre
         )));

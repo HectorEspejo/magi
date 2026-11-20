@@ -34,6 +34,10 @@ pub struct PeticionSondeo {
     /// Motores de contenedores de `[servicios] contenedores` (R125): el
     /// sondeo los recibe como `<motores>`.
     pub motores: Vec<String>,
+    /// El llavero del cliente que sondea (el de fichero de Termux, abierto o
+    /// no). Un sondeo nunca abre diálogos: con el llavero cerrado falla con
+    /// «llavero bloqueado».
+    pub llavero: std::sync::Arc<dyn crate::llavero::LlaveroHost>,
 }
 
 /// Sondea un host y devuelve su `Sondeo` (nunca falla: los errores van dentro).
@@ -134,7 +138,7 @@ async fn intento(
         fuente_contrasena: crate::conexion::FuenteContrasena::Llavero,
         // El sondeo no acepta reenvíos: no es una conexión de túneles.
         reenvios: None,
-        llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
+        llavero: peticion.llavero.clone(),
     };
     let transporte = conectar_cadena(&cadena, &contexto).await.map_err(|error| {
         let motivo = error.to_string();

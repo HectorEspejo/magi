@@ -24,12 +24,15 @@ pub const PRIORIDAD_ATAJOS_FLOTA: u8 = 5;
 
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
-    // El indicador de sincronización reserva su ancho antes de los atajos: si
-    // no, se saldría de la línea y ratatui lo recortaría.
-    let indicador = indicador_sincronizacion(app);
-    let ancho_indicador = indicador
-        .as_ref()
-        .map_or(0, |(texto, _)| texto.chars().count() as u16 + 1);
+    // Los indicadores (llavero bloqueado y sincronización) reservan su ancho
+    // antes de los atajos: si no, se saldrían de la línea y ratatui los
+    // recortaría.
+    let indicadores = indicadores_de_la_barra(app);
+    let ancho_indicador = indicadores
+        .iter()
+        .map(|(texto, _)| texto.chars().count() as u16)
+        .sum::<u16>()
+        + u16::from(!indicadores.is_empty());
     let disponible = area.width.saturating_sub(ancho_indicador);
     let ancho = usize::from(disponible);
     let linea = if let Some(rechazo) = &app.servidor_incompatible {
@@ -83,28 +86,51 @@ pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion)
         linea_atajos(app, disponible, disp)
     };
     marco.render_widget(
-        Paragraph::new(con_indicador(linea, indicador, area.width)),
+        Paragraph::new(con_indicadores(linea, indicadores, area.width)),
         area,
     );
 }
 
-/// Pega el indicador de sincronización al final de la línea, dejando un hueco
-/// si el contenido no la llena.
-fn con_indicador(
+/// Marca «llavero bloqueado» (Fase 17, §6 «Marcas»): algo necesitó el llavero
+/// de fichero y estaba cerrado; Ctrl+P lo desbloquea. Solo con el de fichero.
+/// La barra se pinta muchas veces por segundo y no hace entrada/salida: lee la
+/// marca que la `App` calcula en el tick y cuando algo cambia.
+fn indicador_llavero(app: &App) -> Option<(String, ratatui::style::Color)> {
+    app.marca_llavero_bloqueado()
+        .then(|| (" llavero bloqueado ".to_string(), app.tema.paleta.critico))
+}
+
+/// Los indicadores de la derecha de la barra, de izquierda a derecha.
+fn indicadores_de_la_barra(app: &App) -> Vec<(String, ratatui::style::Color)> {
+    indicador_llavero(app)
+        .into_iter()
+        .chain(indicador_sincronizacion(app))
+        .collect()
+}
+
+/// Pega los indicadores al final de la línea, dejando un hueco si el contenido
+/// no la llena.
+fn con_indicadores(
     mut linea: Line<'static>,
-    indicador: Option<(String, ratatui::style::Color)>,
+    indicadores: Vec<(String, ratatui::style::Color)>,
     ancho: u16,
 ) -> Line<'static> {
-    let Some((texto, color)) = indicador else {
+    if indicadores.is_empty() {
         return linea;
-    };
+    }
+    let texto_total: usize = indicadores
+        .iter()
+        .map(|(texto, _)| texto.chars().count())
+        .sum();
     let usado = linea.width();
-    let hueco = usize::from(ancho).saturating_sub(usado + texto.chars().count());
+    let hueco = usize::from(ancho).saturating_sub(usado + texto_total);
     if hueco > 0 {
         linea.spans.push(Span::raw(" ".repeat(hueco)));
-        linea
-            .spans
-            .push(Span::styled(texto, Style::default().fg(color)));
+        for (texto, color) in indicadores {
+            linea
+                .spans
+                .push(Span::styled(texto, Style::default().fg(color)));
+        }
     }
     linea
 }

@@ -18,9 +18,19 @@ const ANCHO_AYUDA: u16 = 62;
 /// Columna de teclas con sitio de sobra.
 const COLUMNA_TECLAS: usize = 16;
 
+/// La línea que recuerda, solo en Termux, cómo dar F1…F10 sin la fila de
+/// teclas: Volumen arriba + 1…9 (F1…F9) y + 0 (F10).
+pub const TECLAS_DE_FUNCION_EN_TERMUX: (&str, &str) =
+    ("Volumen arriba", "+ 1…9 (F1…F9) y + 0 (F10)");
+
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
     let (titulo, mut atajos) = atajos_de(app);
+    // Solo en Termux (Fase 17): las teclas de función sin la fila de teclas de
+    // Termux, con el teclado del móvil. Fuera de Termux la ayuda es la de siempre.
+    if app.termux.activo {
+        atajos.push(TECLAS_DE_FUNCION_EN_TERMUX);
+    }
     // Común a todas las vistas: los diálogos y la propia ayuda se desplazan.
     atajos.push(("↑↓ PgUp PgDn", "desplazar diálogos y esta ayuda"));
     let (_, ancho_texto) = dialogos::medidas(area, ANCHO_AYUDA);

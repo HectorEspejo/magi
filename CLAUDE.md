@@ -12,6 +12,7 @@ Desde la Fase 13 maneja los servicios y timers de systemd, sus logs y los conten
 Desde la Fase 14 la app Android es también el móvil de guardia: Flota con sondeo (su pantalla de inicio), Servicios, snippets con deliberación y Registro, con la lógica del núcleo; sigue siendo lectora de la sincronización.
 Desde la Fase 15 la vista Sesión tiene paneles, historial con búsqueda y copia, enlaces, escritura en varios, reconexión automática y sesión persistente con tmux, y MAGI se comporta como un terminal de verdad para lo que corre dentro (Claude Code incluido).
 Desde la Fase 16 hay sesiones persistentes: viven en un tmux propio de MAGI en el host (`tmux -L magi`), se marcan al abrirlas o para todo un host, sus fichas viajan con la sincronización y se retoman desde cualquier equipo de escritorio.
+Desde la Fase 17 MAGI corre también en Android, dentro de Termux: el mismo binario compilado para `aarch64-linux-android`, con lo propio de Termux en `src/termux/`, publicado como `.deb` en cada release y con receta para TUR; allí el llavero es un fichero `age` con frase maestra.
 
 ## Documentación del proyecto
 
@@ -27,8 +28,14 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/publicar.md` — cómo se publica una versión (lo creas en la Fase 9; lo sigue el desarrollador)
 - `docs/formato-sincronizacion.md` — formato del fichero de sincronización (lo creas en la Fase 10; referencia del formato: la app Android usa el mismo código del núcleo)
 - `docs/publicar-android.md` — cómo se publica la app Android (lo creas en la Fase 11; lo sigue el desarrollador)
+- `docs/publicar-termux.md` — cómo se publica el `.deb` de Termux y cómo se propone la receta a TUR (lo creas en la Fase 17; lo sigue el desarrollador)
 - `android/CHANGELOG.md` — cambios de la app Android (Keep a Changelog; desde la Fase 11)
 - `visor/README.md` — origen (voxl), cambios y cómo se genera el visor (lo creas en la Fase 12)
+
+El `CLAUDE.md` que vale es el de la raíz. El que llega con cada entrega del
+analista (y queda tal cual en `docs/faseN/`) trae cambios, no lo sustituye:
+aplícalos sin borrar las reglas de la raíz que no estén en él, y deja
+`AGENTS.md` igual que la raíz.
 
 El informe de fase manda sobre tu criterio: si algo te parece incorrecto o
 incompleto, no lo cambies por tu cuenta — impleméntalo como está o párate y
@@ -70,8 +77,9 @@ coméntalo con el desarrollador.
   `cargo fmt --all --check` y `cargo deny check`. Si tocas workflows o
   empaquetado: `actionlint`, `dist plan --tag vX.Y.Z` y
   `desktop-file-validate assets/magi.desktop`. Si tocas scripts: `shellcheck
-  scripts/*.sh crates/magi-nucleo/scripts/*.sh` (desde la Fase 14 incluye
-  el sondeo, `crates/magi-nucleo/scripts/sondeo.sh`). Para pruebas aisladas usa
+  scripts/*.sh crates/magi-nucleo/scripts/*.sh tests/fijos/terminal/tmux`
+  (desde la Fase 14 incluye el sondeo, `crates/magi-nucleo/scripts/sondeo.sh`,
+  y desde la Fase 16, el tmux falso). Para pruebas aisladas usa
   `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
   `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
@@ -233,7 +241,9 @@ coméntalo con el desarrollador.
   en el mismo proceso, fija los modos de los ficheros de prueba de forma
   explícita.
 - Antes de lanzar pistas en paralelo, fija un contrato compilable (tipos,
-  mensajes, módulos vacíos y enganches) en un commit provisional.
+  mensajes, módulos vacíos y enganches) en un commit provisional. Marca con
+  `CONTRATO-S<n>-*` lo que deben completar las pistas y con `LEGADO-S<n>` lo que
+  se retira después: al cerrar ese sprint no queda ninguno.
 - La revisión adversarial de cierre no es opcional: si el desarrollador pide
   saltarla, anótalo como pendiente con lo que queda sin revisar.
 - Distribución (desde la Fase 9): el paquete es `magi-ssh`, pero el comando, la
@@ -272,7 +282,10 @@ coméntalo con el desarrollador.
   conjunto). Si algún día usas `agent::server`, sube russh antes. La
   fecha de la página man es la de la versión (la constante
   `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
-  `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`.
+  `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`. Al
+  cambiar `version`, actualiza también la DA2 que espera
+  `tests/fijos/terminal/tui_prueba.rs` (`10600` en la 1.6.0) y las instantáneas
+  `servidor_anterior_*`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
   mensaje, siempre validado (1 < pid ≤ i32::MAX y distinto del propio). Nunca
   señales a un servidor más nuevo, tampoco desde `magi servidor parar`.
@@ -699,6 +712,28 @@ coméntalo con el desarrollador.
   enganchar; nunca cargues `~/.tmux.conf` ni cambies opciones del tmux habitual
   del usuario (solo se lista, se engancha y se termina a petición). tmux 3.0 o
   posterior; las opciones más nuevas, según la versión que da `comprobar`.
+  `set-option` y `capture-pane` apuntan a `=<nombre>:`, con dos puntos. Entre
+  tmux y `awk` el separador es el tabulador (tmux 3.4 y 3.5 escriben 0x1F como
+  `\037`); 0x1F solo en la salida `MAGI_SES` del script. El script hace
+  `unset TMUX`, aplica la configuración antes de crear la sesión
+  (`start-server`, `set` y `new-session` en una sola orden) y lleva
+  `extended-keys` en la constante `EXTENDED_KEYS` (D338). El tmux falso y su
+  README viven en `tests/fijos/terminal/` de la raíz.
+- Los scripts remotos se escriben para un canal `exec`, que no es una sesión de
+  login: sin UTF-8 en el entorno, con variables heredadas (`TMUX`), `dash` como
+  `/bin/sh` y mawk. No fijes `LC_ALL` en un script que arranca procesos que se
+  quedan (tmux lo heredaría). Lo que dependa de cómo se porta la herramienta del
+  host se prueba también con el binario real (`tmux_real`).
+- Ningún script se escribe en el shell de una pestaña (deja eco e historial).
+  Desde la Fase 16 tampoco se mete en la línea de órdenes del `exec` (Dropbear
+  limita su longitud): va por la entrada estándar, leído entero antes de
+  ejecutar nada, y lo que necesita PTY, en un script mínimo aparte; en la línea
+  de órdenes solo van los argumentos validados. Los scripts anteriores siguen
+  como están mientras no se acerquen al límite.
+- Un fallo de lectura nunca se parece a una ausencia: comprueba siempre el
+  código de salida de lo que lees del host y distingue «no hay» de «no se pudo
+  leer». Ante la duda, «sin respuesta» (inalcanzable, caída), nunca «vacío» ni
+  «terminado».
 - `HOSTS.reconectar` y `portapapeles_remoto` (migración 10) son propios del
   equipo: no viajan ni suben la versión del host. Se guardan con
   `almacen::hosts::fijar_*`, fuera de `DatosHost`, para que la importación de
@@ -721,35 +756,128 @@ coméntalo con el desarrollador.
   `crates/magi-nucleo/src/sesiones_persistentes/`; el vigilante, la vista previa
   y renombrar, en `src/servidor/sesiones_persistentes.rs`; la lista, en el
   bloque «Persistentes» de la vista Sesiones.
-- El host es la fuente de verdad: las fichas (SESIONES_PERSISTENTES) viajan; el
-  estado de una sesión (viva, clientes, equipo, actividad, atención, título) y
-  su contenido (vista previa, historial de tmux) no: se leen del host cuando
-  hace falta, viven en memoria y nunca van a disco, al log ni a REGISTRO. Un
-  host que no responde deja sus fichas «sin comprobar», nunca «terminadas».
+- El host es la fuente de verdad: las fichas (SESIONES_PERSISTENTES) viajan,
+  sin sus fechas (`creada_en` y `actualizado_en` son locales); el estado de una
+  sesión (viva, clientes, equipo, actividad, atención, título) y su contenido
+  (vista previa, historial de tmux) no: se leen del host cuando hace falta,
+  viven en memoria y nunca van a disco, al log ni a REGISTRO. Un host que no
+  responde deja sus fichas «sin comprobar», nunca «terminadas».
 - El cliente guarda una ficha solo cuando la sesión ya existe en el host.
   Borrar una ficha nunca termina la sesión; terminar (`T`) siempre pide
   confirmación. Dos fichas con el mismo host y nombre se unen (queda la de
   `uuid` menor): no se renombran.
+- Una pestaña de tmux que no se abre, o una reconexión o un `enganchar` que
+  fallan, se avisan con `AperturaTmuxFallida{host_id, nombre, causa, mensaje}`
+  (sin `peticion_id`), nunca con un `Error` genérico. `tmux_terminada` la anota
+  solo el servidor, tras la barrera.
+- REGISTRO de las sesiones persistentes, con el efecto: `_creada` cuando la
+  sesión ya existe en el host y la ficha está guardada (también con `a`),
+  `_enganchada` cuando la pestaña pasa a tener su tmux, una sola vez y nunca en
+  las reconexiones. Un host marcado solo da ficha a las pestañas nuevas que abre.
+- Lo que escribe algo que viaja a partir de lo que dice un host (añadir una
+  ficha descubierta, borrar las terminadas) exige una comprobación de menos de
+  120 s. La interfaz no afirma lo que no sabe: sin comprobación fresca, «puede
+  que exista»; con el servidor caído, las filas no se accionan.
+- El JSON de `magi sesiones` (9 campos en orden fijo, documentado en el README y
+  en `src/sesiones_cli.rs`) es un formato exportado: no quites ni reordenes
+  campos sin subir MAJOR.
+- La `Bienvenida` sale dentro del mismo bloqueo que registra al cliente: ninguna
+  difusión puede adelantarla.
+- Una tecla nueva de Hosts o Flota que choque con los atajos configurables va a
+  `config::TECLAS_DE_FLOTA` (el atajo se ignora con aviso) y lleva su línea en el
+  CHANGELOG.
 - Engancharse sin compartir suelta a los demás (`attach -d`) y pone
   `@magi_equipo`; el script sale de `enganchar` con 100 si te sueltan, con 0 si
-  la sesión terminó y con 75 si no existía. La reconexión automática nunca
-  quita una sesión a otro equipo: si la tiene otro, la pestaña queda soltada.
+  la sesión terminó, con 75 si no existía, con 74 o 76 si tmux es antiguo o no
+  está, y con el código de tmux si no pudo engancharse; sigue la sesión por
+  `#{session_id}`. Un canal cerrado sin código es una caída, nunca «terminada».
+  La reconexión automática parte del estado vivo de la pestaña y nunca quita una
+  sesión a otro equipo: si la tiene otro, la pestaña queda soltada. El tmux
+  habitual solo se lista, se engancha compartiendo, se lee y se termina: sin
+  `@magi_equipo` y sin crear.
 - El vigilante es una operación automática: solo con alguna ventana conectada,
   sin diálogos, por el pool o una conexión efímera no interactiva, 8 hosts a la
   vez y 10 s de plazo; solo hosts con fichas o marcados. La atención es la
-  campana de tmux (OSC 9 y 777 no pasan por tmux).
+  campana de tmux (OSC 9 y 777 no pasan por tmux). La vista previa y el
+  renombrado tampoco abren diálogos. `[persistentes] vigilar_ms_pruebas` existe
+  solo para las pruebas.
 - El comando de arranque de una sesión es texto del usuario, como un snippet:
   llega al script como argumento, corre con el shell de acceso del usuario
   dentro del envoltorio fijo del script y nunca va a REGISTRO.
 - `modifyOtherKeys` (`CSI > 4 ; n m`) se codifica en la tabla de teclas del
   núcleo, por pestaña y solo mientras el remoto lo pide: es como tmux pide las
-  teclas extendidas.
+  teclas extendidas. Con el modo apagado la tabla no cambia ni un byte (prueba
+  contra `teclas_clasicas.txt`).
 - Pruebas de las sesiones persistentes: `cargo test -p magi-nucleo --test
   sesiones_persistentes --test tmux_script --test tmux_real --test
-  sincronizacion_sesiones` y `TZ=UTC cargo test -p magi-ssh --test
-  sesiones_persistentes_servidor --test sesiones_persistentes_ui --test
-  sesiones_persistentes_e2e --test redimensionado`. `tmux_real` y la de extremo
-  a extremo necesitan tmux (en CI, `apt install tmux`) y se omiten sin él.
+  sincronizacion_sesiones --test terminal_teclas` y `TZ=UTC cargo test -p
+  magi-ssh --test sesiones_persistentes_servidor --test
+  sesiones_persistentes_ui --test sesiones_persistentes_e2e --test
+  sesiones_persistentes_cli --test redimensionado`
+  (`sesiones_persistentes_servidor` tarda ~50 s y `sesiones_persistentes_cli`
+  ~7 s, a propósito). `tmux_real` y la de extremo a extremo necesitan tmux (en
+  CI, `apt install tmux`) y el `script` de util-linux: con `CI` puesta fallan si
+  faltan, y sin ella se omiten con un aviso (solo se ve con `--nocapture`). Las
+  dos usan el tmux del `PATH` o el de `MAGI_TMUX_DIR`, para repetirlas con otras
+  versiones.
+- Termux (desde la Fase 17): el mismo binario, compilado para
+  `aarch64-linux-android` (API 24) con
+  `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh` y enlazado
+  solo con bionic (compruébalo con `readelf -d`). Lo propio de Termux vive en
+  `src/termux/` y se elige al compilar (`cfg(target_os = "android")`);
+  `MAGI_PLATAFORMA=termux` lo activa en Linux solo en compilaciones de
+  depuración, para las pruebas. Fuera de `src/termux/` nada pregunta por la
+  plataforma, y el núcleo nunca decide por `EQUIPOS.plataforma` (el equipo de
+  Termux escribe con `android`).
+- En Termux, las rutas salen siempre del entorno (`$HOME`, `XDG_*`, `$TMPDIR` y
+  `$PREFIX`), nunca del uid; sin `XDG_RUNTIME_DIR`, el socket va en
+  `$TMPDIR/magi-<uid>/`. No hay `/bin/sh`: lo local con shell usa
+  `$PREFIX/bin/sh`, así que no escribas rutas fijas a `/bin` ni a `/usr/bin` en
+  código local. Las propiedades de Android se leen con `__system_property_get`,
+  sin lanzar `getprop`.
+- Las órdenes de Termux (`termux-*`) van por `src/termux/ordenes.rs`: sin shell,
+  con el plazo `[termux] api_plazo_seg` y con tope de salida. Si una de
+  Termux:API no responde, esa función se apaga en ese proceso con un aviso;
+  nunca esperes sin plazo a otra app. La acción de los avisos es una constante,
+  porque Termux:API la ejecuta con un shell.
+- En Termux, el llavero es `LlaveroFichero`
+  (`crates/magi-nucleo/src/llavero_fichero.rs`): `llavero.age`, age con una
+  entrada scrypt (2^17 al crear, hasta 2^20 al abrir), escrito por `ficheros.rs`
+  bajo `flock` y releído antes de escribir. La frase maestra vive solo en la
+  memoria del cliente (`Zeroizing`, NFC): nunca va a disco, al log, a REGISTRO
+  ni al servidor. Con el llavero cerrado, lo interactivo pide la frase y lo
+  automático da error con instrucción. Un llavero dañado se aparta con fecha;
+  nunca se borra solo.
+- Avisos de Android: los publica el servidor con ids `magi-<id>` sin datos del
+  inventario, y llevan solo el nombre y el host. Se retiran al quitarse la
+  atención, al cerrar la pestaña o borrar la ficha y al terminar el servidor;
+  los ids publicados quedan en `~/.local/state/magi/termux/avisos` para
+  retirarlos si el servidor muere. En Termux, el vigilante corre también sin
+  ventanas mientras viva el servidor.
+- Wake lock: lo toma solo el servidor, solo mientras `TrabajoServidor` no está
+  vacío (y 30 s después), y solo suelta el que tomó MAGI (marca `wake-lock` en
+  el estado).
+- Escribir fuera de los ficheros de MAGI y de `~/.ssh` (hoy,
+  `termux.properties`) exige confirmación, una copia con fecha antes, tocar solo
+  su línea y su entrada en REGISTRO.
+- El `.deb` de Termux sale solo de `termux-release.yml`, con un tag `vX.Y.Z`
+  (nunca con `android-v*`), y lo arma `scripts/paquete-termux.sh`. La receta de
+  TUR vive en `packaging/termux/build.sh`: tú no subes paquetes ni abres la PR a
+  TUR; lo hace el desarrollador siguiendo `docs/publicar-termux.md`.
+- Pruebas de Termux (sin móvil):
+  `cargo test -p magi-nucleo --test llavero_fichero` y
+  `TZ=UTC cargo test -p magi-ssh` con `--test termux_ordenes`,
+  `--test termux_ui`, `--test termux_portapapeles`, `--test termux_servidor`,
+  `--test termux_sincronizacion` y
+  `--test termux_teclas`, con los dobles de `tests/fijos/termux/` (anotan
+  argumentos y entrada, y saben colgarse o fallar). `termux_paquete` lee el
+  `.deb` de `MAGI_DEB`: con `MAGI_EXIGIR_DEB=1` (solo el job `termux` de CI;
+  GitHub pone `CI` en todos los jobs) falla si no lo hay y sin ella se omite
+  con un aviso. `scripts/paquete-termux.sh` necesita `dpkg-deb` (con
+  `--comprobar-binario` solo mira `readelf -d`). Si tocas el empaquetado o los
+  dobles: `shellcheck scripts/paquete-termux.sh packaging/termux/build.sh
+  tests/fijos/termux/falsos/*`. Lo que solo se ve en el móvil va al guion del
+  informe de implementación.
 
 ## Al terminar una fase (o al pausar la sesión)
 

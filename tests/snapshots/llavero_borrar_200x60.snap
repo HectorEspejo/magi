@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.0.2.140:22                                                                                                                      │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │      ┌ BORRAR EL LLAVERO ───────────────────────────────────────┐                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  Se borrará llavero.age de este equipo.                  │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  Se pierden las contraseñas guardadas de tus hosts y la  │                                                                     │
+│                                                              │      │  clave de sincronización de este equipo: habrá que       │                                                                     │
+│                                                              │      │  volver a escribir las contraseñas y a unir el equipo    │                                                                     │
+│                                                              │      │  con la clave.                                           │                                                                     │
+│                                                              │      │  El inventario y los demás equipos no cambian.           │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  Escribe borrar para confirmar:                          │                                                                     │
+│                                                              │      │  [ borra┃ ]                                              │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      │  ↵ borrar   Esc cancelar                                 │                                                                     │
+│                                                              │      │                                                          │                                                                     │
+│                                                              │      └──────────────────────────────────────────────────────────┘                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda

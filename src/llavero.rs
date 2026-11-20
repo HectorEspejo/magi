@@ -3,9 +3,12 @@
 //! y sin argv visible); en Linux con `secret-tool` por stdin.
 
 pub use magi_nucleo::llavero::{
-    LlaveroEnMemoria, LlaveroHost, LlaveroSecreto, CUENTA_SINCRONIZACION,
+    es_bloqueado, LlaveroEnMemoria, LlaveroHost, LlaveroSecreto, BLOQUEADO, CUENTA_SINCRONIZACION,
     CUENTA_SINCRONIZACION_ANTERIOR, SERVICIO,
 };
+pub use magi_nucleo::llavero_fichero::LlaveroFichero;
+
+use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
@@ -408,6 +411,125 @@ impl LlaveroHost for LlaveroDelSistema {
         usuario: &str,
     ) -> Result<Option<Zeroizing<String>>, String> {
         recuperar(host, usuario)
+    }
+}
+
+// ------------------------------------------------------------- llavero del cliente
+
+/// En qué estado está el llavero de este cliente (Fase 17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EstadoLlavero {
+    /// Listo: el del sistema, o el de fichero con la frase en memoria.
+    Abierto,
+    /// De fichero: existe y la frase no está en memoria (hay que pedirla).
+    Bloqueado,
+    /// De fichero: todavía no hay `llavero.age` (hay que crear la frase).
+    SinCrear,
+    /// De fichero: cabecera o contenido ilegibles, con el motivo.
+    Danado(String),
+}
+
+/// El llavero que usa un cliente (la TUI o la CLI): lo que necesita para
+/// guardar, leer y olvidar secretos y contraseñas y para saber si puede.
+///
+/// Se inyecta (`App.llavero`, `PeticionSondeo.llavero`…): nada de este crate
+/// construye un `LlaveroDelSistema` por su cuenta fuera de `del_equipo`, para
+/// que Termux (llavero de fichero con frase maestra) y las pruebas (en
+/// memoria) pasen por el mismo sitio.
+pub trait LlaveroCliente: LlaveroSecreto + LlaveroHost {
+    fn estado(&self) -> EstadoLlavero;
+
+    /// ¿Se puede guardar algo (o crear el llavero para poder hacerlo)? El
+    /// del sistema pregunta por `secret-tool`; el de fichero siempre puede.
+    fn disponible(&self) -> bool;
+
+    /// Borra la contraseña guardada de un host. Devuelve si existía.
+    fn olvidar_contrasena(&self, host: &str, usuario: &str) -> Result<bool, String>;
+
+    /// El llavero de fichero, para las operaciones de la frase maestra
+    /// (crear, desbloquear, cambiar, borrar, apartar); `None` en el resto.
+    fn de_fichero(&self) -> Option<&LlaveroFichero> {
+        None
+    }
+
+    /// Pone lo que el llavero tiene en memoria al día con lo que hay guardado
+    /// ahora. El de fichero guarda las entradas en memoria y otra ventana de
+    /// MAGI puede haber reescrito el fichero (rotar la clave de sincronización,
+    /// desactivarla): quien va a usar una clave para algo que sale de este
+    /// equipo, como la pasada de sincronización, lo llama antes de leerla. El
+    /// del sistema y el de memoria siempre leen lo último: no hacen nada.
+    ///
+    /// Puede bloquear (el cerrojo del fichero y, si cambió, scrypt): desde una
+    /// interfaz, en `spawn_blocking`. El error es texto, como en
+    /// `LlaveroSecreto`; con la frase que ya no abre el fichero es `BLOQUEADO`.
+    fn refrescar(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl LlaveroCliente for LlaveroDelSistema {
+    fn estado(&self) -> EstadoLlavero {
+        EstadoLlavero::Abierto
+    }
+
+    fn disponible(&self) -> bool {
+        disponible()
+    }
+
+    fn olvidar_contrasena(&self, host: &str, usuario: &str) -> Result<bool, String> {
+        olvidar(host, usuario)
+    }
+}
+
+impl LlaveroCliente for LlaveroEnMemoria {
+    fn estado(&self) -> EstadoLlavero {
+        EstadoLlavero::Abierto
+    }
+
+    fn disponible(&self) -> bool {
+        true
+    }
+
+    fn olvidar_contrasena(&self, host: &str, usuario: &str) -> Result<bool, String> {
+        LlaveroSecreto::olvidar(self, &format!("{usuario}@{host}"))
+    }
+}
+
+impl LlaveroCliente for LlaveroFichero {
+    fn estado(&self) -> EstadoLlavero {
+        use magi_nucleo::llavero_fichero::EstadoFichero;
+        match LlaveroFichero::estado(self) {
+            EstadoFichero::Inexistente => EstadoLlavero::SinCrear,
+            EstadoFichero::Cerrado => EstadoLlavero::Bloqueado,
+            EstadoFichero::Abierto => EstadoLlavero::Abierto,
+            EstadoFichero::Danado(motivo) => EstadoLlavero::Danado(motivo),
+        }
+    }
+
+    fn disponible(&self) -> bool {
+        true
+    }
+
+    fn olvidar_contrasena(&self, host: &str, usuario: &str) -> Result<bool, String> {
+        LlaveroSecreto::olvidar(self, &format!("{usuario}@{host}"))
+    }
+
+    fn de_fichero(&self) -> Option<&LlaveroFichero> {
+        Some(self)
+    }
+
+    fn refrescar(&self) -> Result<(), String> {
+        LlaveroFichero::refrescar(self).map_err(|error| error.to_string())
+    }
+}
+
+/// El llavero de este equipo: el de fichero con frase maestra en Termux y el
+/// del sistema (secret-tool o Keychain) en el resto. La decisión de plataforma
+/// vive en `termux`; aquí solo se pregunta.
+pub fn del_equipo(rutas: &crate::config::Rutas) -> Arc<dyn LlaveroCliente> {
+    match crate::termux::llavero_fichero(rutas) {
+        Some(llavero) => llavero,
+        None => Arc::new(LlaveroDelSistema),
     }
 }
 

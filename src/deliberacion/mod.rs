@@ -30,12 +30,26 @@ type Futuro<T> = nucleo::comprobaciones::Futuro<T>;
 /// Usuario local para `DELIBERACIONES.usuario`: el del uid del proceso (una
 /// variable de entorno se puede falsear y esto es un registro de auditoría);
 /// `$USER` solo si el sistema no lo sabe.
+///
+/// En Termux (Fase 17, §3.2 y §7.8) es `termux-<modelo>`, el mismo nombre del
+/// equipo: el uid de Android (`u0_a123`) no dice nada de quién delibera.
 pub fn usuario_del_sistema() -> String {
+    if crate::termux::es_termux() {
+        return usuario_de_termux(&crate::termux::Propiedades::del_sistema());
+    }
     nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
         .flatten()
         .map(|usuario| usuario.name)
         .unwrap_or_else(crate::conexion::usuario_local)
+}
+
+/// El usuario de las deliberaciones en Termux: `termux-<modelo>`, con el
+/// modelo de las propiedades de Android. Sin modelo (propiedades ausentes o
+/// vacías) sale `termux` a secas, nunca un nombre vacío. La parte de
+/// [`usuario_del_sistema`] que se puede probar sin depender del proceso.
+pub fn usuario_de_termux(propiedades: &crate::termux::Propiedades) -> String {
+    crate::termux::nombre_equipo(&propiedades.modelo().unwrap_or_default())
 }
 
 /// Los límites de `[deliberacion]` de `config.toml`, con los suelos del
@@ -74,6 +88,10 @@ pub struct ProveedoresEscritorio {
     /// Plazo de cada comprobación, medido desde el inicio de la deliberación:
     /// el mismo instante que recibe `lanzar`.
     limite: tokio::time::Instant,
+    /// La shell del comando local en Termux (`$PREFIX/bin/sh`, §7.1) o el
+    /// error con instrucción si no se pudo calcular; `None` fuera de Termux,
+    /// donde corre el `sh` del núcleo.
+    sh_local: Option<Result<PathBuf, String>>,
 }
 
 impl ProveedoresEscritorio {
@@ -83,11 +101,14 @@ impl ProveedoresEscritorio {
         hogar: PathBuf,
         limite: tokio::time::Instant,
     ) -> Self {
+        // Como el resto de lo fijado al abrir: la shell no se relee al ejecutar.
+        let sh_local = crate::termux::shell_local();
         Self {
             cliente,
             peticiones: Mutex::new(peticiones),
             hogar,
             limite,
+            sh_local,
         }
     }
 }
@@ -135,8 +156,14 @@ impl nucleo::Proveedores for ProveedoresEscritorio {
     ) -> Futuro<Result<(bool, String), nucleo::NoDisponible>> {
         let limite = self.limite;
         let hogar = self.hogar.clone();
+        let sh_local = self.sh_local.clone();
         Box::pin(async move {
-            Ok(magi_nucleo::deliberacion::tests::ejecutar(&comando, limite, &hogar).await)
+            Ok(match sh_local {
+                // En Termux no hay `/bin/sh`: la shell es la del prefijo.
+                Some(Ok(sh)) => nucleo::tests::ejecutar_con(&sh, &comando, limite, &hogar).await,
+                Some(Err(error)) => (false, error),
+                None => nucleo::tests::ejecutar(&comando, limite, &hogar).await,
+            })
         })
     }
 }
@@ -340,5 +367,21 @@ mod pruebas {
     #[test]
     fn el_usuario_del_sistema_no_esta_vacio() {
         assert!(!usuario_del_sistema().is_empty());
+    }
+
+    #[test]
+    fn el_usuario_de_termux_sale_del_modelo() {
+        let con_modelo = crate::termux::Propiedades::fijas(&[("ro.product.model", "ABC-X10")]);
+        assert_eq!(usuario_de_termux(&con_modelo), "termux-abc-x10");
+        // El mismo nombre que el del equipo (§7.8), con la misma regla.
+        assert_eq!(
+            usuario_de_termux(&con_modelo),
+            crate::termux::nombre_equipo("ABC-X10")
+        );
+        // Sin modelo, o con uno en blanco: «termux» a secas, nunca vacío.
+        let sin_modelo = crate::termux::Propiedades::fijas(&[]);
+        assert_eq!(usuario_de_termux(&sin_modelo), "termux");
+        let en_blanco = crate::termux::Propiedades::fijas(&[("ro.product.model", "   ")]);
+        assert_eq!(usuario_de_termux(&en_blanco), "termux");
     }
 }

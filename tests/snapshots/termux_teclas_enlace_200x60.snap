@@ -1,0 +1,63 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│              ▸ ◐ backup-nas   CARGA                          │   backup-nas                                                                                                                          │
+│                ○ dgx-spark    FRÍA                           │   192.0.2.140:22                                                                                                                      │
+│                ● hetzner-01   NOMINAL                        │                                                                                                                                       │
+│                ● hetzner-02   NOMINAL                        │   CARGA ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.1/8                                                                               │
+│                ◐ mac-mini-m1  CARGA                          │   MEM   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  20 %                                                                                │
+│                ✕ rincon-dev   CAÍDA                          │   DSK   █████████████████████████████████████░░░  93 %                                                                                │
+│                ● vps-openclaw NOMINAL                        │   NET   ↓ —  ↑ —                                                                                                                      │
+│                                                              │   UP    12 d 01 h                                                                                                                     │
+│                                                              │                                                                                                                                       │
+│                                                              │   sondeado hace NN s en 420 ms · CARGA                                                                                                │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │        ┌ FILA DE TECLAS DE TERMUX ────────────────────────────┐                                                                       │
+│                                                              │        │                                                      │                                                                       │
+│                                                              │        │  MAGI propone esta fila:                             │                                                                       │
+│                                                              │        │   ESC TAB CTRL ALT ^] ←  ↓  ↑  →                     │                                                                       │
+│                                                              │        │   F1  F2  F3   F4  F5 F6 F7 F8 F9                    │                                                                       │
+│                                                              │        │                                                      │                                                                       │
+│                                                              │        │  ~/.termux/termux.properties es un enlace a          │                                                                       │
+│                                                              │        │  /storage/emulated/0/termux/termux.properties: se    │                                                                       │
+│                                                              │        │  escribe ahí, solo la línea extra-keys. Antes, una   │                                                                       │
+│                                                              │        │  copia junto a él:                                   │                                                                       │
+│                                                              │        │  termux.properties.magi-2026-11-17                   │                                                                       │
+│                                                              │        │                                                      │                                                                       │
+│                                                              │        │  Ya tienes otra fila: se sustituye y la tuya queda   │                                                                       │
+│                                                              │        │  en la copia.                                        │                                                                       │
+│                                                              │        │                                                      │                                                                       │
+│                                                              │        │  ↵ instalar   Esc ahora no                           │                                                                       │
+│                                                              │        │                                                      │                                                                       │
+│                                                              │        └──────────────────────────────────────────────────────┘                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+│                                                              │                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  ↓↑ mover  r sondear  R todos  a auto  e editar  / filtrar  ! snippets  u servicios  ^p paleta  q salir  ? ayuda

@@ -292,6 +292,12 @@ pub fn dibujar(
         Dialogo::Persistentes(dialogo) => {
             crate::ui::persistentes::dibujar(marco, area, app, dialogo, disp);
         }
+        Dialogo::Llavero(dialogo) => {
+            crate::ui::llavero::dibujar(marco, area, app, dialogo, disp);
+        }
+        Dialogo::TeclasTermux(dialogo) => {
+            crate::ui::termux_teclas::dibujar(marco, area, app, dialogo, disp);
+        }
         Dialogo::Edicion(dialogo) => crate::ui::edicion::dibujar(marco, area, app, dialogo, disp),
         Dialogo::Permisos(dialogo) => {
             crate::ui::permisos::dibujar(marco, area, app, dialogo, disp);

@@ -16,6 +16,17 @@ pub const CUENTA_SINCRONIZACION: &str = "sincronizacion";
 /// Cuenta de la clave anterior, solo para leer durante una rotación.
 pub const CUENTA_SINCRONIZACION_ANTERIOR: &str = "sincronizacion-anterior";
 
+/// Texto del error de un llavero que existe pero está cerrado (el de fichero
+/// de Termux, Fase 17). La conexión interactiva lo convierte en el diálogo de
+/// la frase; la automática, en un error con esta instrucción, sin diálogo.
+pub const BLOQUEADO: &str = "llavero bloqueado: desbloquéalo (Ctrl+P)";
+
+/// ¿Este error de un llavero es el de «cerrado»? Una sola comparación para que
+/// nadie dependa del texto en otro sitio.
+pub fn es_bloqueado(error: &str) -> bool {
+    error == BLOQUEADO
+}
+
 /// Interfaz de los secretos genéricos del llavero (la clave de sincronización
 /// y su anterior, las contraseñas de host). La implementación real usa el
 /// llavero del sistema en el escritorio y el Keystore en el móvil; las pruebas

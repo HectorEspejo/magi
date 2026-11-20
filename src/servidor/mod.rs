@@ -4,6 +4,7 @@
 //! solicitante. Escribe en SQLite solo `REGISTRO` y `HOSTS.ultimo_estado` /
 //! `ultima_conexion_en`.
 
+pub mod android;
 pub mod cliente_remoto;
 pub mod conexiones;
 pub mod difusion;
@@ -172,6 +173,10 @@ pub struct EstadoServidor {
     /// Vigilante de las sesiones persistentes (Fase 16): lo que se sabe de
     /// cada host y la lista que se difunde. Solo memoria.
     pub persistentes: sesiones_persistentes::Persistentes,
+    /// Lo propio de Termux (Fase 17): el wake lock, los avisos de Android y lo
+    /// que se le dice a la barra del cliente. `None` fuera de Termux: el
+    /// servidor del escritorio no cambia en nada.
+    pub termux: Option<Arc<android::TermuxServidor>>,
 }
 
 impl EstadoServidor {
@@ -180,8 +185,39 @@ impl EstadoServidor {
     /// en curso, túneles activos y ejecuciones en curso. Las ventanas
     /// adjuntas las cuenta `tarea_conexion`, que es quien pregunta.
     pub fn trabajo(&self) -> crate::protocolo::TrabajoServidor {
+        self.trabajo_con_sesiones(self.sesiones.len() as u32)
+    }
+
+    /// Pestañas en estado `Caida` (reconexión agotada, reconexión desactivada
+    /// o sesión soltada por otro equipo): se conservan hasta que el usuario las
+    /// cierra, pero no hacen nada.
+    pub fn sesiones_caidas(&self) -> usize {
+        self.sesiones
+            .values()
+            .filter(|sesion| sesion.estado == crate::protocolo::EstadoSesionRemota::Caida)
+            .count()
+    }
+
+    /// Como [`Self::trabajo`], sin contar las pestañas caídas (Fase 17,
+    /// corrección de cierre A1). Una pestaña muerta sigue siendo custodia del
+    /// servidor, y por eso el servidor no se apaga ni un cliente anterior lo
+    /// sustituye sin preguntar, pero no es trabajo que mantenga despierto el
+    /// móvil: una reconexión en curso (`Abriendo` con `reconectando`) sí
+    /// cuenta. Solo lo usan el wake lock y el vigilante sin ventanas de
+    /// Termux; `trabajo` y `TrabajoServidor` no cambian.
+    pub fn trabajo_vivo(&self) -> crate::protocolo::TrabajoServidor {
+        self.trabajo_con_sesiones((self.sesiones.len() - self.sesiones_caidas()) as u32)
+    }
+
+    /// ¿Lo único que mantiene vivo al servidor son pestañas caídas? Hay al
+    /// menos una y no queda trabajo vivo de ninguna clase.
+    pub fn solo_mantienen_pestanas_caidas(&self) -> bool {
+        self.sesiones_caidas() > 0 && self.trabajo_vivo().vacio()
+    }
+
+    fn trabajo_con_sesiones(&self, sesiones: u32) -> crate::protocolo::TrabajoServidor {
         crate::protocolo::TrabajoServidor {
-            sesiones: self.sesiones.len() as u32,
+            sesiones,
             transferencias: self
                 .transferencias
                 .info()
@@ -221,6 +257,19 @@ pub fn ruta_lock(rutas: &Rutas) -> PathBuf {
 /// sirve a los clientes y se apaga cuando no quedan sesiones ni clientes
 /// durante la gracia.
 pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
+    arrancar_con(rutas, config, android::OpcionesTermux::del_proceso()).await
+}
+
+/// Como [`arrancar`], con lo de Termux dado: `None` es el servidor del
+/// escritorio; con `Some`, el wake lock, los avisos de Android y el vigilante
+/// sin ventanas (Fase 17). `arrancar` le pasa lo del proceso, que solo existe
+/// en Termux; las pruebas lo inyectan con unos dobles de `termux-*`, porque
+/// `es_termux()` se decide una sola vez por proceso.
+pub async fn arrancar_con(
+    rutas: Rutas,
+    config: Config,
+    termux: Option<android::OpcionesTermux>,
+) -> Result<()> {
     let directorio = rutas.dir_runtime();
     std::fs::create_dir_all(&directorio)
         .with_context(|| format!("creando {}", directorio.display()))?;
@@ -269,6 +318,14 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     sftp::preparar_temporales(&rutas);
     sftp::vaciar_temporales(&rutas);
 
+    // Lo de Termux, antes de crear el socket: escribe para la barra el
+    // `arranque` de este servidor (y sin avisos), así que un cliente que se
+    // conecta en cuanto el socket existe nunca lee lo que dejó un servidor
+    // anterior que murió sin borrarlo (el cliente mira ese fichero nada más
+    // conectar y no sabe de quién es). Con el lock en la mano, el que hubiera
+    // es de un servidor muerto.
+    let termux = termux.map(|opciones| android::TermuxServidor::nuevo(opciones, &config, &rutas));
+
     // El socket se crea con umask 077 para que solo el usuario pueda abrirlo.
     let ruta_socket = ruta_socket(&rutas);
     let anterior = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
@@ -276,9 +333,20 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         // Con el lock en la mano, un socket que queda es huérfano.
         std::fs::remove_file(&ruta_socket).ok();
     }
-    let listener = UnixListener::bind(&ruta_socket)
-        .with_context(|| format!("abriendo el socket {}", ruta_socket.display()))?;
+    let enlazado = UnixListener::bind(&ruta_socket);
     nix::sys::stat::umask(anterior);
+    let listener = match enlazado {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Este servidor no llega a existir: lo que escribió para la barra
+            // no puede quedarse diciendo que sí.
+            if let Some(termux) = &termux {
+                termux.barra.quitar();
+            }
+            return Err(error)
+                .with_context(|| format!("abriendo el socket {}", ruta_socket.display()));
+        }
+    };
     let estado = Arc::new(tokio::sync::Mutex::new(EstadoServidor {
         rutas: rutas.clone(),
         gracia: config.servidor.gracia_apagado_seg,
@@ -313,6 +381,7 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
         capturas_en_vuelo: std::collections::HashSet::new(),
         difusion_sesiones: difusion::DifusionSesiones::default(),
         persistentes: sesiones_persistentes::Persistentes::default(),
+        termux: termux.clone(),
     }));
 
     let (tx_cola, rx_cola) = mpsc::unbounded_channel::<()>();
@@ -346,6 +415,9 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
     tokio::spawn(revisar_sesiones(estado.clone()));
     tokio::spawn(ejecuciones::revisar(estado.clone()));
     tokio::spawn(escritorios::revisar(estado.clone()));
+    if termux.is_some() {
+        tokio::spawn(android::reconciliar(estado.clone()));
+    }
     if let Some(avisos) = estado.lock().await.escritorios.tomar_avisos() {
         tokio::spawn(escritorios::bucle_avisos(estado.clone(), avisos));
     }
@@ -370,6 +442,14 @@ pub async fn arrancar(rutas: Rutas, config: Config) -> Result<()> {
 
     // Salida: socket y lock fuera, aviso anotado y la base de datos cerrada
     // con todo lo pendiente escrito.
+    //
+    // Termux: el fichero de estado de la barra se quita ANTES que el socket y el
+    // lock (corrección de cierre A4). Quitar el lock deja entrar a un servidor
+    // nuevo, que escribe su propio fichero `servidor`: si el viejo lo quitara
+    // después, borraría el del nuevo y la barra perdería su `arranque`.
+    if let Some(termux) = &termux {
+        termux.barra.quitar();
+    }
     let _ = std::fs::remove_file(&ruta_socket);
     let _ = std::fs::remove_file(ruta_lock(&rutas));
     let detalle = "servidor detenido";
@@ -557,8 +637,20 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
     let gracia = Duration::from_secs(estado.lock().await.gracia);
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+        // Termux: el conductor del wake lock quiere saber si hay trabajo, que
+        // no es lo mismo que `ocupado` (cuenta ventanas): `TrabajoServidor` no
+        // vacío, sin contar las pestañas caídas (una pestaña muerta que el
+        // usuario no ha cerrado no puede tener el móvil despierto para
+        // siempre). Solo informa; cuándo se apaga el servidor no cambia.
+        let mut wake_lock = None;
         let apagar = {
             let mut estado_bloqueado = estado.lock().await;
+            if let Some(termux) = &estado_bloqueado.termux {
+                wake_lock = Some((
+                    Arc::clone(&termux.wake_lock),
+                    !estado_bloqueado.trabajo_vivo().vacio(),
+                ));
+            }
             let ocupado = !estado_bloqueado.clientes.is_empty()
                 || !estado_bloqueado.sesiones.is_empty()
                 || estado_bloqueado.escritorios.cuenta() > 0
@@ -579,6 +671,9 @@ async fn revisar_inactividad(estado: Arc<tokio::sync::Mutex<EstadoServidor>>) {
                 false
             }
         };
+        if let Some((wake_lock, hay_trabajo)) = wake_lock {
+            wake_lock.alimentar(hay_trabajo);
+        }
         if apagar {
             apagar_limpio(&estado).await;
             return;
@@ -735,7 +830,13 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
         )
     };
 
-    // Fase 2: la red, en paralelo y con plazo total.
+    // Fase 2: la red, en paralelo y con plazo total. Lo de Termux (retirar los
+    // avisos de Android y soltar el wake lock) corre a la vez, cada cosa con
+    // el plazo de su orden más 3 s: no alarga el apagado más que eso.
+    let cierre_termux = {
+        let estado = estado.clone();
+        tokio::spawn(async move { android::terminar(&estado).await })
+    };
     let red = async {
         let mut tareas: Vec<tokio::task::JoinHandle<()>> = tuneles
             .into_iter()
@@ -757,6 +858,7 @@ async fn apagar_limpio(estado: &Arc<tokio::sync::Mutex<EstadoServidor>>) {
     if tokio::time::timeout(PLAZO_APAGADO, red).await.is_err() {
         warn!("el apagado no cerró todas las conexiones en plazo; se sale igualmente");
     }
+    let _ = cierre_termux.await;
     // Los temporales no sobreviven al servidor.
     sftp::vaciar_temporales(&rutas);
     let mut estado_bloqueado = estado.lock().await;
@@ -1000,9 +1102,18 @@ async fn manejar_mensaje(
         }
         MensajeCliente::Teclas { sesion_id, bytes } => {
             let mut estado_bloqueado = estado.lock().await;
+            let termux = estado_bloqueado.termux.clone();
             if let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) {
                 if sesion.adjuntos.contains_key(&cliente_id) {
                     let _ = sesion.tx_comandos.send(ComandoSesion::Teclas(bytes));
+                    // Escribir en la pestaña es atenderla: el aviso de Android
+                    // se retira (D379, y con el foco poco fiable es lo único
+                    // que lo quita).
+                    if sesion.atendida() {
+                        if let Some(termux) = termux {
+                            termux.despertar_avisos();
+                        }
+                    }
                 } else {
                     warn!(sesion = sesion_id, "teclas de un cliente no adjunto");
                 }
@@ -1866,6 +1977,7 @@ async fn abrir_sesion(
             portapapeles_pendiente: None,
             adelantar: None,
             escritura_varios: false,
+            atencion_remota: false,
         },
     );
     estado_bloqueado.vacio_desde = None;

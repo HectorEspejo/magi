@@ -42,7 +42,21 @@ impl Drop for GrupoProceso {
 /// Ejecuta el comando de tests en dir con plazo hasta limite. Devuelve si
 /// aprueba y el dato que lo justifica.
 pub async fn ejecutar(comando: &str, limite: tokio::time::Instant, dir: &Path) -> (bool, String) {
-    let mut orden = tokio::process::Command::new("sh");
+    ejecutar_con(Path::new("sh"), comando, limite, dir).await
+}
+
+/// Como [`ejecutar`], con la shell que se indica en vez del `sh` del `PATH`
+/// (en Termux no existe `/bin/sh`: la plataforma pasa la de su prefijo). La
+/// mecánica es la misma —sesión propia, plazo duro, grupo entero muerto al
+/// vencer y la última línea de stderr como motivo— y solo cambia qué
+/// programa se lanza con `-c`.
+pub async fn ejecutar_con(
+    sh: &Path,
+    comando: &str,
+    limite: tokio::time::Instant,
+    dir: &Path,
+) -> (bool, String) {
+    let mut orden = tokio::process::Command::new(sh);
     orden
         .arg("-c")
         .arg(comando)
@@ -182,6 +196,51 @@ mod pruebas {
             .unwrap();
         let vivo = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
         assert!(!vivo, "el proceso {pid} sigue vivo");
+    }
+
+    /// Un `sh` que es un enlace al del sistema, con un nombre propio: dentro
+    /// de `sh -c`, `$0` es el programa tal como se lanzó, así que el comando
+    /// dice qué shell le ha tocado sin escribir un ejecutable nuevo.
+    fn sh_propio(raiz: &Path) -> std::path::PathBuf {
+        let sh = raiz.join("sh-propio");
+        std::os::unix::fs::symlink("/bin/sh", &sh).unwrap();
+        sh
+    }
+
+    /// La shell es un parámetro: `ejecutar_con` lanza la que se le da, con la
+    /// misma mecánica que `ejecutar` (código, última línea de stderr).
+    #[tokio::test]
+    async fn ejecutar_con_lanza_la_shell_que_se_le_da() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = sh_propio(dir.path());
+        let marca = dir.path().join("shell-usada");
+        let comando = format!("printf '%s' \"$0\" > '{}'", marca.display());
+        let (aprueba, texto) = ejecutar_con(&sh, &comando, limite(5), dir.path()).await;
+        assert!(aprueba, "{texto}");
+        assert_eq!(texto, "verde");
+        assert_eq!(
+            std::fs::read_to_string(&marca).unwrap(),
+            sh.to_str().unwrap()
+        );
+
+        let (aprueba, texto) = ejecutar_con(
+            &sh,
+            "echo '\x1b[31mtests en rojo\x1b[0m' >&2; exit 3",
+            limite(5),
+            dir.path(),
+        )
+        .await;
+        assert!(!aprueba);
+        assert_eq!(texto, "código 3: tests en rojo");
+    }
+
+    #[tokio::test]
+    async fn ejecutar_con_una_shell_que_no_existe_rechaza_con_un_motivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = dir.path().join("usr/bin/sh");
+        let (aprueba, texto) = ejecutar_con(&sh, "true", limite(5), dir.path()).await;
+        assert!(!aprueba);
+        assert!(texto.starts_with("no se pudo lanzar sh"), "{texto}");
     }
 
     /// Un nieto que se queda con el stderr abierto no alarga la espera ni

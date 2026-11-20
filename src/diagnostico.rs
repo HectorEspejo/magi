@@ -7,6 +7,12 @@
 //!
 //! El subcomando no escribe ficheros, no arranca el servidor, no lee secretos
 //! del llavero y no abre conexiones de red.
+//!
+//! En Termux (Fase 17) gana un bloque TERMUX y adapta algunas líneas generales
+//! (`termux/diagnostico.rs`): solo cuando `Datos.termux` es `Some`, que
+//! `recoger` rellena si `es_termux()`. Fuera de Termux no cambia ni un nombre
+//! ni una línea. Tampoco ahí pide la frase maestra ni abre el llavero: solo
+//! mira si `llavero.age` existe.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead as _, IsTerminal as _, Read as _, Write};
@@ -23,6 +29,7 @@ use crate::config::{Config, Rutas};
 use crate::protocolo::{MensajeCliente, MensajeServidor, VERSION_PROTOCOLO};
 use crate::servidor;
 use crate::tema;
+use crate::termux::diagnostico::DatosTermux;
 
 /// Ancho de la columna con el nombre de la comprobación.
 const ANCHO_NOMBRE: usize = 15;
@@ -169,6 +176,9 @@ pub struct Datos {
     pub incluye_magi_config: bool,
     /// Modo degradado ASCII (locale no UTF-8, `MAGI_ASCII` o configuración).
     pub ascii: bool,
+    /// Lo observado de Termux (Fase 17); `None` fuera de Termux, donde el
+    /// diagnóstico es el de siempre.
+    pub termux: Option<DatosTermux>,
 }
 
 /// Directorios de MAGI con su estado.
@@ -200,6 +210,10 @@ impl Datos {
 /// Resultado de una comprobación.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Estado {
+    /// Información: lo que MAGI no puede comprobar desde aquí (Termux, §6.5).
+    /// Se imprime con `·` (`-` en ASCII) y no cuenta como aviso ni como error:
+    /// no cambia el resumen ni el código de salida.
+    Info,
     Correcto,
     Aviso,
     Error,
@@ -219,7 +233,7 @@ pub struct Comprobacion {
 }
 
 impl Comprobacion {
-    fn correcto(nombre: &'static str, detalle: String) -> Self {
+    pub(crate) fn correcto(nombre: &'static str, detalle: String) -> Self {
         Self {
             nombre,
             estado: Estado::Correcto,
@@ -229,7 +243,7 @@ impl Comprobacion {
         }
     }
 
-    fn aviso(nombre: &'static str, detalle: String, arreglo: Option<String>) -> Self {
+    pub(crate) fn aviso(nombre: &'static str, detalle: String, arreglo: Option<String>) -> Self {
         Self {
             nombre,
             estado: Estado::Aviso,
@@ -249,17 +263,41 @@ impl Comprobacion {
         }
     }
 
-    fn con_nota(mut self, nota: Option<String>) -> Self {
+    /// Una línea informativa (`·`): no es un aviso ni un error.
+    pub(crate) fn info(nombre: &'static str, detalle: String, arreglo: Option<String>) -> Self {
+        Self {
+            nombre,
+            estado: Estado::Info,
+            detalle,
+            arreglo,
+            nota: None,
+        }
+    }
+
+    pub(crate) fn con_nota(mut self, nota: Option<String>) -> Self {
         self.nota = nota;
         self
     }
+}
+
+/// Un bloque con título dentro del informe (hoy solo `TERMUX`): sus líneas
+/// empiezan en `comprobaciones[inicio]` y se imprimen tras una línea en blanco
+/// y el título.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bloque {
+    pub inicio: usize,
+    pub titulo: &'static str,
 }
 
 /// Informe completo de `magi diagnostico`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Informe {
     pub comprobaciones: Vec<Comprobacion>,
+    /// Bloques con título (vacío fuera de Termux).
+    pub bloques: Vec<Bloque>,
+    /// Comprobaciones con `Estado::Aviso`; las informativas no cuentan.
     pub avisos: usize,
+    /// Comprobaciones con `Estado::Error`; las informativas no cuentan.
     pub errores: usize,
 }
 
@@ -309,6 +347,17 @@ pub fn opciones(datos: &Datos, es_terminal: bool) -> Opciones {
 
 /// Observa el sistema sin modificar nada.
 pub fn recoger(rutas: Rutas) -> Datos {
+    recoger_con(rutas, false).0
+}
+
+/// Lo mismo, con la posibilidad de que Ctrl+C pare la espera a Termux:API
+/// (`interrumpible`, solo desde la línea de comandos). Con `Some` en el segundo
+/// valor, el diagnóstico se interrumpió: los datos no valen y no hay informe
+/// que imprimir.
+fn recoger_con(
+    rutas: Rutas,
+    interrumpible: bool,
+) -> (Datos, Option<crate::termux::diagnostico::Interrumpido>) {
     let variables = variables_de_entorno();
     let config = leer_config(&rutas.fichero_config());
     let valores = config.config();
@@ -334,7 +383,42 @@ pub fn recoger(rutas: Rutas) -> Datos {
         estado: observar_directorio(&rutas.estado),
         runtime: observar_directorio(&rutas.dir_runtime()),
     };
-    Datos {
+    // Solo en Termux: lo que se mira del entorno de Termux se inyecta en
+    // `observar`, que no lee `std::env`.
+    let mut interrumpido = None;
+    let termux = if crate::termux::es_termux() {
+        let entorno = crate::termux::EntornoTermux::del_proceso();
+        let propiedades = crate::termux::Propiedades::del_sistema();
+        let plazo = valores.termux.api_plazo();
+        if interrumpible {
+            match crate::termux::diagnostico::observar_interrumpible(
+                &rutas,
+                &valores,
+                &entorno,
+                &propiedades,
+                &variables,
+                plazo,
+            ) {
+                Ok(datos) => Some(datos),
+                Err(motivo) => {
+                    interrumpido = Some(motivo);
+                    None
+                }
+            }
+        } else {
+            Some(crate::termux::diagnostico::observar(
+                &rutas,
+                &valores,
+                &entorno,
+                &propiedades,
+                &variables,
+                plazo,
+            ))
+        }
+    } else {
+        None
+    };
+    let datos = Datos {
         version_app: crate::VERSION_APP.to_string(),
         protocolo: VERSION_PROTOCOLO,
         commit: crate::COMMIT.to_string(),
@@ -349,7 +433,9 @@ pub fn recoger(rutas: Rutas) -> Datos {
         variables,
         incluye_magi_config,
         ascii,
-    }
+        termux,
+    };
+    (datos, interrumpido)
 }
 
 fn variables_de_entorno() -> BTreeMap<String, String> {
@@ -888,7 +974,7 @@ fn observar_agente(variables: &BTreeMap<String, String>) -> AgenteObservado {
 /// Calcula el informe a partir de los hechos observados: no toca el sistema.
 pub fn comprobar(datos: &Datos) -> Informe {
     let config = datos.config.config();
-    let comprobaciones = vec![
+    let mut comprobaciones = vec![
         comprobar_datos(datos),
         comprobar_configuracion(datos),
         comprobar_estado(datos),
@@ -904,6 +990,15 @@ pub fn comprobar(datos: &Datos) -> Informe {
         comprobar_ssh_config(datos),
         comprobar_sincronizacion(datos),
     ];
+    // En Termux, el bloque TERMUX va detrás de las comprobaciones generales.
+    let mut bloques = Vec::new();
+    if let Some(termux) = &datos.termux {
+        bloques.push(Bloque {
+            inicio: comprobaciones.len(),
+            titulo: "TERMUX",
+        });
+        comprobaciones.extend(crate::termux::diagnostico::bloque(datos, termux, &config));
+    }
     let avisos = comprobaciones
         .iter()
         .filter(|comprobacion| comprobacion.estado == Estado::Aviso)
@@ -914,13 +1009,14 @@ pub fn comprobar(datos: &Datos) -> Informe {
         .count();
     Informe {
         comprobaciones,
+        bloques,
         avisos,
         errores,
     }
 }
 
 /// Ruta con el `~` del hogar para que la salida se lea como en el informe.
-fn ruta_legible(ruta: &Path, hogar: &Path) -> String {
+pub(crate) fn ruta_legible(ruta: &Path, hogar: &Path) -> String {
     match ruta.strip_prefix(hogar) {
         Ok(relativa) => {
             let relativa = relativa.display().to_string();
@@ -936,7 +1032,7 @@ fn ruta_legible(ruta: &Path, hogar: &Path) -> String {
 
 /// Junta dos partes de una misma comprobación; el arreglo es el de la parte
 /// que peor está.
-fn combinar(
+pub(crate) fn combinar(
     primera: (Estado, String, Option<String>),
     segunda: (Estado, String, Option<String>),
 ) -> (Estado, String, Option<String>) {
@@ -953,7 +1049,16 @@ fn combinar(
 /// Estado de un directorio como parte de una comprobación: permisos 700 y
 /// escritura. Si no existe, dice si se podrá crear.
 fn estado_directorio(estado: &EstadoDirectorio, hogar: &Path) -> (Estado, String, Option<String>) {
-    let ruta = ruta_legible(&estado.ruta, hogar);
+    estado_directorio_como(estado, &|ruta| ruta_legible(ruta, hogar))
+}
+
+/// Lo mismo, con otra forma de escribir las rutas (en Termux, el directorio
+/// del socket se enseña como `$TMPDIR/magi-<uid>`).
+fn estado_directorio_como(
+    estado: &EstadoDirectorio,
+    mostrar: &dyn Fn(&Path) -> String,
+) -> (Estado, String, Option<String>) {
+    let ruta = mostrar(&estado.ruta);
     if !estado.existe {
         if estado.escribible {
             return (
@@ -965,7 +1070,7 @@ fn estado_directorio(estado: &EstadoDirectorio, hogar: &Path) -> (Estado, String
         let padre = estado
             .ruta
             .parent()
-            .map(|padre| ruta_legible(padre, hogar))
+            .map(mostrar)
             .unwrap_or_else(|| "el directorio padre".to_string());
         return (
             Estado::Error,
@@ -1091,8 +1196,13 @@ fn comprobar_estado(datos: &Datos) -> Comprobacion {
 }
 
 fn comprobar_runtime(datos: &Datos) -> Comprobacion {
-    let (estado, detalle, arreglo) =
-        estado_directorio(&datos.directorios.runtime, &datos.rutas.hogar);
+    let (estado, detalle, arreglo) = if datos.termux.is_some() {
+        estado_directorio_como(&datos.directorios.runtime, &|ruta| {
+            crate::termux::diagnostico::ruta_con_tmpdir(ruta, datos)
+        })
+    } else {
+        estado_directorio(&datos.directorios.runtime, &datos.rutas.hogar)
+    };
     let socket = datos.ruta_socket();
     let longitud = socket.as_os_str().len();
     let (estado_socket, detalle_socket, arreglo_socket) = if longitud >= SOCKET_MAXIMO {
@@ -1243,6 +1353,11 @@ fn comprobar_agente(datos: &Datos) -> Comprobacion {
 }
 
 fn comprobar_llavero(datos: &Datos) -> Comprobacion {
+    // En Termux, el llavero es el fichero con frase maestra: solo se mira si
+    // existe, nunca se abre ni se pide la frase.
+    if let Some(termux) = &datos.termux {
+        return crate::termux::diagnostico::llavero(termux);
+    }
     if cfg!(target_os = "macos") {
         if datos.disponible("security") {
             Comprobacion::correcto("llavero", "security (Keychain)".to_string())
@@ -1265,6 +1380,9 @@ fn comprobar_llavero(datos: &Datos) -> Comprobacion {
 }
 
 fn comprobar_portapapeles(datos: &Datos) -> Comprobacion {
+    if let Some(termux) = &datos.termux {
+        return crate::termux::diagnostico::portapapeles(termux);
+    }
     let candidatos: &[&str] = if cfg!(target_os = "macos") {
         &["pbcopy", "wl-copy"]
     } else {
@@ -1414,6 +1532,10 @@ fn comprobar_paginador(datos: &Datos, config: &Config) -> Comprobacion {
 }
 
 fn comprobar_terminal(datos: &Datos, config: &Config) -> Comprobacion {
+    // En Termux no hay otra ventana que abrir: se abre otra sesión de Termux.
+    if datos.termux.is_some() {
+        return crate::termux::diagnostico::terminal();
+    }
     let comando = config.terminal.comando.trim();
     let Some((programa, _)) = crate::visor::comando(comando) else {
         return Comprobacion::aviso(
@@ -1654,14 +1776,25 @@ pub fn imprimir(
     let verde = ansi(tema::CORRECTO);
     let ambar = ansi(tema::ACENTO);
     let rojo = ansi(tema::CRITICO);
-    for comprobacion in &informe.comprobaciones {
+    let gris = ansi(tema::INACTIVO);
+    for (indice, comprobacion) in informe.comprobaciones.iter().enumerate() {
+        for bloque in informe
+            .bloques
+            .iter()
+            .filter(|bloque| bloque.inicio == indice)
+        {
+            writeln!(escritor)?;
+            writeln!(escritor, "  {}", adaptar(bloque.titulo, opciones.ascii))?;
+        }
         let (signo, color) = match comprobacion.estado {
+            Estado::Info => ("·", &gris),
             Estado::Correcto => ("✓", &verde),
             Estado::Aviso => ("!", &ambar),
             Estado::Error => ("✕", &rojo),
         };
         let signo = if opciones.ascii {
             match comprobacion.estado {
+                Estado::Info => "-".to_string(),
                 Estado::Correcto => "ok".to_string(),
                 Estado::Aviso => "!".to_string(),
                 Estado::Error => "x".to_string(),
@@ -1684,13 +1817,17 @@ pub fn imprimir(
         }
         writeln!(escritor, "{linea}")?;
         if let Some(nota) = &comprobacion.nota {
-            writeln!(
-                escritor,
-                "{:ancho$}{}",
-                "",
-                adaptar(nota, opciones.ascii),
-                ancho = ANCHO_NOMBRE + 5
-            )?;
+            // Una nota puede ocupar varias líneas (las órdenes de adb de
+            // Termux): todas alineadas bajo el detalle.
+            for linea in nota.split('\n') {
+                writeln!(
+                    escritor,
+                    "{:ancho$}{}",
+                    "",
+                    adaptar(linea, opciones.ascii),
+                    ancho = ANCHO_NOMBRE + 5
+                )?;
+            }
         }
     }
     writeln!(escritor)?;
@@ -1710,9 +1847,18 @@ fn adaptar(texto: &str, ascii: bool) -> String {
 /// `magi diagnostico`: recoge, imprime en la salida estándar y devuelve el
 /// código de salida. No toca rutas ni log: se despacha antes que ellos en
 /// `main`.
+///
+/// En Termux, Ctrl+C (o `SIGTERM` o `SIGHUP`) durante la espera a Termux:API
+/// mata la orden con todo su grupo de procesos y sale sin imprimir informe, con
+/// el código de una shell para una señal (130 con Ctrl+C).
 pub fn ejecutar() -> anyhow::Result<i32> {
     let rutas = crate::config::descubrir_rutas()?;
-    let datos = recoger(rutas);
+    let (datos, interrumpido) = recoger_con(rutas, true);
+    if let Some(interrumpido) = interrumpido {
+        // Sin ventana de error (terminal cerrada) no hay a quién avisar.
+        let _ = writeln!(std::io::stderr(), "diagnóstico interrumpido");
+        return Ok(interrumpido.codigo_salida());
+    }
     let salida = std::io::stdout();
     let es_terminal = salida.is_terminal();
     let mut salida = salida.lock();

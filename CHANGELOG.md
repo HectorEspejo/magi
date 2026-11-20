@@ -9,6 +9,109 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Añadido
 
+- **MAGI en Termux, llavero con frase maestra (Fase 17, primera entrega).**
+  MAGI se prepara para correr en Android dentro de Termux: el mismo binario
+  (TUI, servidor y CLI) compilado para `aarch64-linux-android`, con lo propio de
+  Termux aislado en `src/termux/`. Allí las contraseñas de host y la clave de
+  sincronización viven en `llavero.age` (age con una entrada scrypt, 600) y se
+  abren con una **frase maestra** que solo existe en la memoria de MAGI: nunca
+  va a disco, al log, a REGISTRO ni al servidor. Diálogos LLAVERO DE MAGI (al
+  abrir), CREAR LA FRASE MAESTRA (al guardar el primer secreto: recordar una
+  contraseña, crear o unir la sincronización; con Esc la contraseña se usa sin
+  guardarse), CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO (escribiendo `borrar`)
+  y LLAVERO DAÑADO (se aparta como `llavero.age.danado-<fecha>`; un llavero
+  dañado nunca se borra solo), cinco frases incorrectas seguidas imponen 30 s de
+  espera, la barra dice «llavero bloqueado» cuando algo lo necesita y la paleta
+  trae «Desbloquear el llavero», «Bloquear el llavero», «Cambiar la frase
+  maestra» y «Borrar el llavero». Con el llavero cerrado, una conexión
+  interactiva pide primero la frase y lo automático (reconexión, sondeo,
+  ejecuciones) da un error con instrucción y nunca abre un diálogo. Dos ventanas
+  de MAGI escriben el fichero con `flock` y lo releen antes de escribir. En el
+  escritorio no cambia nada (siguen secret-tool y Keychain). Cinco tipos nuevos
+  en el historial: `llavero_creado`, `llavero_frase_cambiada`, `llavero_borrado`,
+  `llavero_desbloqueo_fallido` y `llavero_apartado`.
+- **`magi llavero estado|cambiar|borrar`**, solo en Termux (fuera de él dicen
+  por qué no aplican y salen con código 1): `estado` enseña ruta, tamaño y fecha
+  sin pedir la frase; `cambiar` y `borrar` piden la frase y la confirmación en
+  el TTY, sin eco. `magi sincronizar` pide la frase una sola vez cuando el
+  llavero está cerrado y `magi sondear` solo si algún host que sondea usa la
+  contraseña del llavero; sin TTY dan un error con instrucción.
+
+- **MAGI en Termux, segundo plano, avisos, sincronización y portapapeles (Fase
+  17, segunda entrega).**
+  - **`[termux]` en `config.toml`** (`wake_lock`, `avisos`, `api_plazo_seg` de 2 a
+    30 y `sincronizacion_sondeo_seg` de 10 a 600): fuera de rango se acota y se
+    avisa al arrancar; fuera de Termux se ignora y no se escribe mientras sea la
+    de siempre (una sección escrita a mano se conserva).
+  - **Wake lock.** El servidor toma el wake lock de Termux (`termux-wake-lock`)
+    mientras tiene trabajo (sesiones vivas, túneles, transferencias, escritorios;
+    una pestaña caída que espera a que la cierres no cuenta) y lo
+    suelta 30 s después de quedar sin él; con `wake_lock = "nunca"` no lo toma. Si
+    el servidor muere sin soltarlo (Android cierra Termux), el siguiente lo suelta
+    en cuanto no tenga trabajo y vuelve a tomarlo si lo hay. Si no se puede tomar,
+    la barra dice «sin wake lock: Android puede dormir MAGI»; en Android 12 o
+    posterior se avisa una sola vez de que Android puede cerrar procesos de Termux
+    (`magi diagnostico`).
+  - **Avisos de Android** (Termux:API, `[termux] avisos`): cuando una sesión
+    persistente (vigilante) o una pestaña pide atención con nadie mirando, el
+    servidor publica un aviso con solo el nombre y el host («◆ agente-api pide
+    atención» · «dev-01 · MAGI»); se retira al quitarse la atención, al cerrar la
+    pestaña o borrar la ficha y al terminar el servidor (los de un servidor muerto,
+    al arrancar el siguiente). En Termux el vigilante de las sesiones persistentes
+    corre también sin ventanas mientras viva el servidor y haya Termux:API.
+    `magi termux aviso` publica uno de prueba y lo retira a los 10 s. Si Termux:API
+    no responde, la barra lo dice una vez y todo sigue como en el escritorio.
+  - **Sincronización.** En Termux la carpeta se guarda resuelta con `realpath`
+    (`~/storage/shared/…` → `/storage/emulated/0/…`; sin `~/storage`, MAGI pide
+    ejecutar `termux-setup-storage`), se sondea cada
+    `[termux] sincronizacion_sondeo_seg` con una firma barata de la carpeta en vez
+    de usar `notify` (más una pasada de seguridad cada 10 min y otra al volver a
+    la vista; sin pasadas mientras el almacenamiento compartido no responde), y un
+    `chmod 600` que el almacenamiento no admite no es un error (una línea en el
+    log por sesión). El equipo se llama `termux-<modelo>` y escribe con la
+    plataforma `android`, sin `formato` nuevo.
+  - **Portapapeles y enlaces.** Copiar usa `termux-clipboard-set` por la entrada
+    estándar (hasta 512 KiB) y, si Termux:API no responde, OSC 52 (hasta 6 000
+    bytes codificados), con el aviso una sola vez; si no cabe, la barra dice el
+    tamaño y la alternativa. `[terminal] abrir_enlaces` vale `termux-open-url` y
+    `[escritorio] navegador = "auto"` abre el visor en el navegador de Android;
+    `prefijo w` explica cómo abrir otra sesión de Termux. La barra dice, una vez por
+    servidor, lo que este deja en el estado de Termux (Termux:API apagada, sin wake
+    lock, límite de procesos). Copiar la clave pública, el enlace del visor y la
+    clave generada comparten una sola vía; en el escritorio se comportan igual que
+    antes.
+
+- **MAGI en Termux, fila de teclas, diagnóstico y paquete (Fase 17, tercera
+  entrega).**
+  - **Fila de teclas de Termux.** `magi termux teclas` enseña la fila que MAGI
+    propone (`ESC TAB CTRL ALT ^] ← ↓ ↑ →` y `F1`-`F9`, con el prefijo configurado
+    como macro) y la que hay; con `--instalar` pregunta y la instala. También se
+    ofrece una vez en el primer arranque y desde la paleta («Instalar la fila de
+    teclas de Termux»), con el diálogo FILA DE TECLAS DE TERMUX. Antes de escribir
+    deja una copia `termux.properties.magi-<fecha>` (si la escritura falla, el
+    mensaje dice qué copia hay y el reintento la reutiliza), cambia solo la línea
+    lógica `extra-keys` (con sus continuaciones; el resto del fichero queda byte a
+    byte, y una continuación abierta al final no se contagia al comentario),
+    recarga con `termux-reload-settings` (si no responde: «reinicia Termux para ver
+    la fila») y anota `termux_teclas_instaladas`. La ayuda (`?`) recuerda Volumen
+    arriba + 1…9 y + 0. En Termux, la columna del tipo de Registro es de 26
+    caracteres; en el escritorio, la de siempre.
+  - **`magi diagnostico` en Termux.** Gana el bloque TERMUX (versiones de Termux y
+    Android, Termux:API con `termux-battery-status`, almacenamiento, fila de
+    teclas, wake lock y avisos) y las líneas generales adaptadas (runtime, llavero
+    sin pedir nunca la frase, portapapeles y terminal). Lo que MAGI no puede
+    comprobar desde Termux (procesos en segundo plano y batería) sale con `·`: no
+    cuenta como aviso ni cambia el código de salida. Con el Termux de Google Play,
+    avisa de que no está soportado. Ctrl+C durante la comprobación de Termux:API ya
+    no deja procesos huérfanos.
+  - **Paquete.** `scripts/paquete-termux.sh` arma `magi-ssh_<versión>_aarch64.deb`
+    (sin `Depends`; sugiere `termux-api` y `openssh`) con su `.sha256`;
+    `termux-release.yml` lo compila, comprueba con `readelf -d`, atesta y lo sube a
+    la release de cada etiqueta `vX.Y.Z` (también `-rc.N`), nunca con las de la app
+    Android; el job `termux` de CI lo arma en las PR que tocan el código; la receta
+    de TUR vive en `packaging/termux/` y la guía de publicación en
+    `docs/publicar-termux.md`. El README gana la sección «MAGI en Termux».
+
 - **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
   **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
   host (`tmux -L magi -f /dev/null`, con su configuración y sin tocar el tmux ni
@@ -218,6 +321,14 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ### Corregido
 
+- **La sincronización ya no se tumba, ni lee entero, un fichero ajeno con
+  nombre de MAGI en la carpeta compartida.** Un directorio, un FIFO o un fichero
+  de varios GiB llamado `magi-<uuid>.age` hacía fallar la pasada (o la dejaba
+  leyéndolo en la interfaz); ahora solo se admiten ficheros normales, con tope de
+  lectura, y lo demasiado grande se trata como dañado sin leerlo.
+- **Un fallo al escribir un fichero de MAGI ya no deja su temporal en la
+  carpeta.** La escritura atómica (`ficheros.rs`) borra el temporal si falla
+  antes del renombrado.
 - **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
   encoding».** Copiada de la terminal, la clave suele llegar partida en dos
   líneas o con espacios, y el escritorio solo quitaba los de los extremos.

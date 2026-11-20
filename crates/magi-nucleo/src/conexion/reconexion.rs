@@ -7,6 +7,8 @@
 
 use std::time::Instant;
 
+use crate::llavero::es_bloqueado;
+
 /// Esperas entre intentos, en segundos; después, 60 s cada vez.
 pub const ESPERAS: [u64; 4] = [2, 5, 10, 30];
 
@@ -80,6 +82,13 @@ impl Causa {
 #[must_use]
 pub fn clasificar(motivo: &str) -> Causa {
     let texto = motivo.to_lowercase();
+    // El llavero de fichero cerrado (Fase 17) no se arregla reintentando: sin
+    // esto, un texto sin «contraseña», «frase» ni «autentic» caería en
+    // `ConexionPerdida` y se reintentaría para siempre. Va primero porque el
+    // motivo puede venir envuelto en otro texto.
+    if es_bloqueado(motivo) || texto.contains("llavero bloqueado") {
+        return Causa::Credenciales;
+    }
     if texto.contains("exit") || texto.contains("cerró") || texto.contains("terminó") {
         return Causa::Exit;
     }

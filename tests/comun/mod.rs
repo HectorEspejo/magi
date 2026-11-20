@@ -1031,6 +1031,10 @@ pub struct OpcionesEscenario {
     /// Configuración con la que arranca el servidor de sesiones. `None` deja
     /// la de las pruebas (sin tocar `[terminal]`).
     pub config: Option<magi::config::Config>,
+    /// Lo de Termux del servidor de sesiones (Fase 17): `None` es el servidor
+    /// del escritorio. Con `Some`, el servidor arranca como el de Termux, con
+    /// las órdenes `termux-*` que den (los dobles de `tests/fijos/termux`).
+    pub termux: Option<magi::servidor::android::OpcionesTermux>,
 }
 
 impl Default for OpcionesEscenario {
@@ -1047,6 +1051,7 @@ impl Default for OpcionesEscenario {
             entorno_extra: Vec::new(),
             reconectar: None,
             config: None,
+            termux: None,
         }
     }
 }
@@ -1216,9 +1221,10 @@ pub async fn escenario(opciones: OpcionesEscenario) -> Escenario {
     };
 
     // 4. Servidor de sesiones y cliente del protocolo.
-    let tarea_magi = tokio::spawn(magi::servidor::arrancar(
+    let tarea_magi = tokio::spawn(magi::servidor::arrancar_con(
         rutas.clone(),
         entorno.config.clone(),
+        opciones.termux.clone(),
     ));
     esperar_socket(&magi::servidor::ruta_socket(&rutas)).await;
     let mut stream = UnixStream::connect(magi::servidor::ruta_socket(&rutas))

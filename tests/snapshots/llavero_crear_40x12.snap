@@ -1,0 +1,15 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ── 7 hosts · 3 nominal ─┐
+│┌ CREAR LA FRASE MAESTRA ────────────┐│
+││                                    ││
+││ Frase    [ •••••••••••••••• ]      ││
+││ Repetir  [ ••••••••••••┃ ]         ││
+││                                    ││
+││ Al menos 12 caracteres. Si la      ││
+││ olvidas no se recupera.            ││
+││                                    ││
+││ ↵ crear   Tab campo   Esc no       ││
+└└────────────────────────────────────┘┘
+ ↵ ssh  r sondear  ⇥ detalle  ? más

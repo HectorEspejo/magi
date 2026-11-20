@@ -13,6 +13,11 @@ pub use magi_nucleo::rutas::Rutas;
 /// Rutas de este equipo: el núcleo no lee el entorno, así que las descubre
 /// aquí la crate directories.
 pub fn descubrir_rutas() -> Result<Rutas> {
+    // En Termux, siempre del entorno (`$HOME`, `XDG_*`, `$TMPDIR`, `$PREFIX`)
+    // y nunca del uid: bionic no sabe dónde está el home de Termux (D383).
+    if crate::termux::es_termux() {
+        return rutas_de_termux(&crate::termux::EntornoTermux::del_proceso());
+    }
     let dirs = directories::ProjectDirs::from("org", "4d3", "magi")
         .context("no se pudo determinar el directorio de datos del usuario")?;
     let hogar = directories::BaseDirs::new()
@@ -30,9 +35,29 @@ pub fn descubrir_rutas() -> Result<Rutas> {
     ))
 }
 
+/// Las rutas de Termux a partir de un entorno dado (el del proceso en
+/// producción, uno de mentira en las pruebas). Si falta algo, el error lleva
+/// la instrucción.
+#[doc(hidden)]
+pub fn rutas_de_termux(entorno: &crate::termux::EntornoTermux) -> Result<Rutas> {
+    let rutas = crate::termux::rutas::calcular(entorno)
+        .map_err(|error| anyhow::anyhow!("rutas de Termux: {error}"))?;
+    Ok(Rutas::nuevas(
+        rutas.datos,
+        rutas.config,
+        rutas.estado,
+        rutas.hogar,
+        rutas.runtime,
+    ))
+}
+
 /// Plataforma de este equipo: los valores que entiende el formato de
-/// sincronización.
+/// sincronización. En Termux es `android`, el valor que el núcleo ya conoce
+/// por la app (nada en el núcleo decide por él).
 pub fn plataforma_actual() -> &'static str {
+    if crate::termux::es_termux() {
+        return "android";
+    }
     match std::env::consts::OS {
         "linux" => "linux",
         "macos" => "macos",
@@ -42,8 +67,16 @@ pub fn plataforma_actual() -> &'static str {
 }
 
 /// Nombre por defecto de este equipo: el hostname, o «magi» si no se puede
-/// leer. Nunca es vacío: el nombre viaja en el fichero.
+/// leer. Nunca es vacío: el nombre viaja en el fichero. En Termux el nombre
+/// del sistema es `localhost` y no sirve: sale del modelo del móvil
+/// (`termux-<modelo>`).
 pub fn nombre_actual() -> String {
+    if crate::termux::es_termux() {
+        let modelo = crate::termux::Propiedades::del_sistema()
+            .modelo()
+            .unwrap_or_default();
+        return crate::termux::nombre_equipo(&modelo);
+    }
     match nix::unistd::gethostname() {
         Ok(nombre) => {
             let texto = nombre.to_string_lossy().trim().to_string();
@@ -58,8 +91,11 @@ pub fn nombre_actual() -> String {
     }
 }
 
-/// Directorio de ejecución para el proceso real, según el sistema.
+/// Directorio de ejecución para el proceso real, según el sistema (Linux y
+/// macOS).
 fn runtime_del_usuario() -> std::path::PathBuf {
+    // Termux no pasa por aquí: `descubrir_rutas` calcula su directorio de
+    // ejecución con `termux::rutas` (no hay `/tmp`).
     if cfg!(target_os = "macos") {
         let dirs = directories::ProjectDirs::from("org", "4d3", "magi");
         if let Some(dirs) = dirs {
@@ -201,7 +237,17 @@ impl Default for SeccionTerminal {
 }
 
 fn abrir_enlaces_por_defecto() -> &'static str {
-    if cfg!(target_os = "macos") {
+    abrir_enlaces_por_defecto_para(crate::termux::es_termux())
+}
+
+/// Lo que abre un enlace por defecto: en Termux, `termux-open-url` (Fase 17,
+/// §5.3); en el escritorio, `open` en macOS y `xdg-open` en lo demás. Separada
+/// para probar la rama de Termux sin depender del proceso.
+#[doc(hidden)]
+pub fn abrir_enlaces_por_defecto_para(termux: bool) -> &'static str {
+    if termux {
+        "termux-open-url"
+    } else if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
@@ -625,6 +671,11 @@ pub struct Config {
     /// Sesiones persistentes: `[persistentes]` vigilante, refresco, «antigua»
     /// y vista previa (Fase 16).
     pub persistentes: SeccionPersistentes,
+    /// Termux: `[termux]` wake lock, avisos de Android, plazo de las órdenes y
+    /// sondeo de la carpeta de sincronización (Fase 17). Fuera de Termux se
+    /// ignora sin avisar y, si es la de siempre, ni se escribe.
+    #[serde(skip_serializing_if = "SeccionTermux::omitir")]
+    pub termux: SeccionTermux,
 }
 
 impl Default for Config {
@@ -643,7 +694,95 @@ impl Default for Config {
             escritorio: SeccionEscritorio::default(),
             servicios: SeccionServicios::default(),
             persistentes: SeccionPersistentes::default(),
+            termux: SeccionTermux::default(),
         }
+    }
+}
+
+/// `[termux]` (Fase 17, §5.3): solo cuenta en Termux.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeccionTermux {
+    /// `auto`: el servidor toma el wake lock mientras tiene trabajo y 30 s
+    /// después; `nunca`: no lo toca.
+    pub wake_lock: String,
+    /// Avisos de Android con Termux:API cuando una sesión o pestaña pide
+    /// atención sin nadie mirando.
+    pub avisos: bool,
+    /// Plazo de cada orden de Termux (2-30 s).
+    pub api_plazo_seg: u64,
+    /// Cada cuánto se mira la carpeta de sincronización con MAGI abierto
+    /// (10-600 s), en vez de `notify`.
+    pub sincronizacion_sondeo_seg: u64,
+}
+
+impl Default for SeccionTermux {
+    fn default() -> Self {
+        Self {
+            wake_lock: "auto".to_string(),
+            avisos: true,
+            api_plazo_seg: 5,
+            sincronizacion_sondeo_seg: 30,
+        }
+    }
+}
+
+impl SeccionTermux {
+    /// `skip_serializing_if` de `[termux]`: en Linux y macOS, con los valores
+    /// de siempre, la sección no aparece en `config.toml`; si alguien la
+    /// escribió (un `config.toml` compartido con su móvil), se conserva. En
+    /// Termux se escribe siempre, para que se vea qué se puede ajustar.
+    #[must_use]
+    pub fn omitir(&self) -> bool {
+        self.omitir_para(crate::termux::es_termux())
+    }
+
+    fn omitir_para(&self, termux: bool) -> bool {
+        !termux && *self == Self::default()
+    }
+
+    /// Avisos por valores fuera de rango: no impiden arrancar, se acotan donde
+    /// se usan y MAGI lo dice al arrancar (D261). Fuera de Termux, `[termux]`
+    /// se ignora sin avisar.
+    #[must_use]
+    pub fn validar(&self) -> Vec<String> {
+        self.validar_para(crate::termux::es_termux())
+    }
+
+    fn validar_para(&self, termux: bool) -> Vec<String> {
+        let mut avisos = Vec::new();
+        if !termux {
+            return avisos;
+        }
+        if !matches!(self.wake_lock.trim(), "auto" | "nunca") {
+            avisos.push("[termux] wake_lock debe ser \"auto\" o \"nunca\"".to_string());
+        }
+        if !(2..=30).contains(&self.api_plazo_seg) {
+            avisos.push("[termux] api_plazo_seg debe estar entre 2 y 30".to_string());
+        }
+        if !(10..=600).contains(&self.sincronizacion_sondeo_seg) {
+            avisos.push("[termux] sincronizacion_sondeo_seg debe estar entre 10 y 600".to_string());
+        }
+        avisos
+    }
+
+    /// ¿El servidor gestiona el wake lock? Todo lo que no sea `nunca` es
+    /// `auto` (el aviso ya lo dijo al arrancar).
+    #[must_use]
+    pub fn wake_lock_auto(&self) -> bool {
+        self.wake_lock.trim() != "nunca"
+    }
+
+    /// Plazo de cada orden de Termux, acotado a su rango.
+    #[must_use]
+    pub fn api_plazo(&self) -> Duration {
+        Duration::from_secs(self.api_plazo_seg.clamp(2, 30))
+    }
+
+    /// Cada cuánto se sondea la carpeta de sincronización, acotado a su rango.
+    #[must_use]
+    pub fn sincronizacion_sondeo(&self) -> Duration {
+        Duration::from_secs(self.sincronizacion_sondeo_seg.clamp(10, 600))
     }
 }
 
@@ -660,6 +799,7 @@ impl Config {
                     let mut avisos = config.servicios.validar();
                     avisos.extend(config.terminal.validar());
                     avisos.extend(config.persistentes.validar());
+                    avisos.extend(config.termux.validar());
                     let aviso = (!avisos.is_empty()).then(|| avisos.join(" · "));
                     (config, aviso)
                 }
@@ -976,5 +1116,90 @@ vista_previa_lineas = 99999
             creada.persistentes.refresco_seg
         );
         assert_eq!(leida.persistentes.vista_previa_lineas, 20);
+    }
+
+    /// `[terminal] abrir_enlaces` por defecto (Fase 17, §5.3): `termux-open-url`
+    /// en Termux y, en el escritorio, lo de siempre.
+    #[test]
+    fn abrir_enlaces_por_defecto_es_termux_open_url_solo_en_termux() {
+        assert_eq!(abrir_enlaces_por_defecto_para(true), "termux-open-url");
+        let escritorio = abrir_enlaces_por_defecto_para(false);
+        assert_eq!(
+            escritorio,
+            if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            }
+        );
+        // El valor por defecto es el de la plataforma de este proceso (también
+        // si las pruebas se repiten con `MAGI_PLATAFORMA=termux`).
+        assert_eq!(
+            SeccionTerminal::default().abrir_enlaces,
+            abrir_enlaces_por_defecto_para(crate::termux::es_termux())
+        );
+    }
+
+    /// `[termux]` (Fase 17): valores por defecto, rangos acotados y avisos
+    /// solo en Termux.
+    #[test]
+    fn la_seccion_termux_tiene_sus_defectos_y_se_acota_donde_se_usa() {
+        let termux = SeccionTermux::default();
+        assert_eq!(termux.wake_lock, "auto");
+        assert!(termux.avisos);
+        assert!(termux.wake_lock_auto());
+        assert_eq!(termux.api_plazo(), Duration::from_secs(5));
+        assert_eq!(termux.sincronizacion_sondeo(), Duration::from_secs(30));
+        assert!(termux.validar_para(true).is_empty());
+
+        let fuera = SeccionTermux {
+            wake_lock: "nunca".to_string(),
+            avisos: false,
+            api_plazo_seg: 1,
+            sincronizacion_sondeo_seg: 9_000,
+        };
+        assert!(!fuera.wake_lock_auto());
+        assert_eq!(fuera.api_plazo(), Duration::from_secs(2));
+        assert_eq!(fuera.sincronizacion_sondeo(), Duration::from_secs(600));
+        let avisos = fuera.validar_para(true);
+        assert_eq!(avisos.len(), 2, "{avisos:?}");
+        assert!(avisos[0].contains("api_plazo_seg"), "{avisos:?}");
+        assert!(
+            avisos[1].contains("sincronizacion_sondeo_seg"),
+            "{avisos:?}"
+        );
+        // Un valor de wake_lock que no existe se toma por `auto` y se dice.
+        let raro = SeccionTermux {
+            wake_lock: "siempre".to_string(),
+            ..SeccionTermux::default()
+        };
+        assert!(raro.wake_lock_auto());
+        assert!(raro.validar_para(true)[0].contains("wake_lock"));
+        // Fuera de Termux no se avisa de nada.
+        assert!(fuera.validar_para(false).is_empty());
+        assert!(raro.validar_para(false).is_empty());
+    }
+
+    /// Fuera de Termux la sección no aparece en `config.toml` mientras sea la
+    /// de siempre, pero una escrita a mano se conserva al guardar.
+    #[test]
+    fn la_seccion_termux_no_se_escribe_en_linux_salvo_que_se_haya_tocado() {
+        let predeterminada = Config::default();
+        assert!(predeterminada.termux.omitir_para(false));
+        assert!(!predeterminada.termux.omitir_para(true));
+        let texto = toml::to_string_pretty(&predeterminada).unwrap();
+        assert!(!texto.contains("[termux]"), "{texto}");
+
+        let directorio = tempfile::tempdir().unwrap();
+        let ruta = directorio.path().join("config.toml");
+        std::fs::write(&ruta, "[termux]\navisos = false\nwake_lock = \"nunca\"\n").unwrap();
+        let (config, aviso) = Config::cargar(&ruta);
+        assert_eq!(aviso, None, "fuera de Termux no se avisa");
+        assert!(!config.termux.avisos);
+        assert!(!config.termux.omitir_para(false), "tocada: se conserva");
+        config.guardar(&ruta).unwrap();
+        let texto = std::fs::read_to_string(&ruta).unwrap();
+        assert!(texto.contains("[termux]"), "{texto}");
+        assert!(texto.contains("avisos = false"), "{texto}");
     }
 }

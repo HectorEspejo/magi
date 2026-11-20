@@ -11,6 +11,7 @@ pub use magi_nucleo::{escritorio, ficheros, modelo, registro, rutas};
 pub mod flota;
 pub mod identidades;
 pub mod llavero;
+pub mod llavero_cli;
 pub mod portapapeles;
 pub mod protocolo;
 pub mod servidor;
@@ -20,6 +21,7 @@ pub mod snippets;
 pub mod sshconfig;
 pub mod teclas;
 pub mod tema;
+pub mod termux;
 pub mod ui;
 pub mod visor;
 
@@ -35,9 +37,9 @@ pub const COMMIT: &str = match option_env!("MAGI_COMMIT") {
     None => "desconocido",
 };
 
-/// Fecha de la versión 1.5.0 (Fase 16). Fija la cabecera de la página man: la
+/// Fecha de la versión 1.6.0 (Fase 17). Fija la cabecera de la página man: la
 /// generación de recursos no puede cambiar en cada compilación.
-pub const FECHA_DE_VERSION: &str = "2026-11-16";
+pub const FECHA_DE_VERSION: &str = "2026-11-18";
 
 /// Versión larga como la imprime magi --version: versión, protocolo y commit.
 /// Se calcula una sola vez y se devuelve como cadena estática porque clap la

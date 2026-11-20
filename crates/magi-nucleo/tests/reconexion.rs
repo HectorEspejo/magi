@@ -102,6 +102,31 @@ fn clasifica_los_motivos_que_da_la_conexion() {
 }
 
 #[test]
+fn el_llavero_bloqueado_son_credenciales_y_no_se_reintenta() {
+    use magi_nucleo::llavero::BLOQUEADO;
+
+    // El texto exacto del llavero de fichero cerrado (Fase 17)...
+    assert_eq!(clasificar(BLOQUEADO), Causa::Credenciales);
+    // ...también envuelto en otro motivo y con otras mayúsculas.
+    assert_eq!(
+        clasificar(&format!("sin contraseña guardada: {BLOQUEADO}")),
+        Causa::Credenciales
+    );
+    assert_eq!(
+        clasificar("Llavero BLOQUEADO: desbloquéalo (Ctrl+P)"),
+        Causa::Credenciales
+    );
+    assert_eq!(
+        clasificar(&format!("el host cerró algo, pero {BLOQUEADO}")),
+        Causa::Credenciales,
+        "va antes que el resto de comprobaciones"
+    );
+    assert!(!clasificar(BLOQUEADO).recuperable());
+    // Sin la palabra del llavero, «bloqueado» a secas no cambia nada.
+    assert_eq!(clasificar("puerto bloqueado"), Causa::ConexionPerdida);
+}
+
+#[test]
 fn todo_lo_desconocido_es_una_conexion_perdida() {
     assert_eq!(clasificar(""), Causa::ConexionPerdida);
     assert_eq!(clasificar("algo raro del canal"), Causa::ConexionPerdida);

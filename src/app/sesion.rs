@@ -8,11 +8,12 @@
 use std::collections::HashSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::enlaces::{self, DialogoEnlace};
 use crate::app::escritura_varios::{EstadoEscritura, MotivoFin, Peticion};
 use crate::app::historial::{Busqueda, EstadoHistorial, RUEDA_FILAS};
-use crate::app::portapapeles::{self, Origen};
+use crate::app::portapapeles::{self, ParaQue};
 use crate::app::{
     paneles::PANELES_MAX, pegado, raton, AccionDialogo, App, CampoTexto, Dialogo,
     EntradaTextoAccion, Vista,
@@ -61,12 +62,36 @@ impl crate::app::PestanaUI {
 
 /// Texto de un pegado para un campo de una línea: sin controles (los saltos
 /// de línea se juntan) y acotado para que un pegado enorme no infle el campo.
+///
+/// El búfer se reserva de una vez (la salida nunca pasa de los bytes de la
+/// entrada ni de 4096 caracteres de 4 bytes): sin reasignaciones que dejen
+/// copias a medias en memoria sin borrar, que importa si es una frase.
 fn texto_para_campo(texto: &str) -> String {
-    texto
-        .chars()
-        .filter(|caracter| !caracter.is_control())
-        .take(4096)
-        .collect()
+    let mut salida = String::with_capacity(texto.len().min(4096 * 4));
+    salida.extend(
+        texto
+            .chars()
+            .filter(|caracter| !caracter.is_control())
+            .take(4096),
+    );
+    salida
+}
+
+/// Pega un texto en el campo con foco de un diálogo. Si el campo es una frase
+/// del llavero, el texto del evento y el saneado se borran de la memoria
+/// (`zeroize`) en cuanto se han copiado al campo. Devuelve si el pegado lo
+/// consumió un campo.
+#[doc(hidden)]
+pub fn pegar_en_dialogo(dialogo: &mut Dialogo, texto: &mut String) -> bool {
+    let es_frase = matches!(dialogo, Dialogo::Llavero(llavero) if llavero.modo.es_secreto());
+    // Siempre se borra el saneado; solo el original si es una frase (el
+    // resto de los pegados no son secretos).
+    let saneado = Zeroizing::new(texto_para_campo(texto));
+    let consumido = dialogo.pegar_texto(&saneado);
+    if es_frase {
+        texto.zeroize();
+    }
+    consumido
 }
 
 impl App {
@@ -522,33 +547,11 @@ impl App {
 
     // ------------------------------------------------------------ portapapeles
 
-    /// Copia texto al portapapeles del sistema o por OSC 52.
-    pub(crate) fn copiar_texto(&mut self, texto: &str, que: &str) {
-        if texto.is_empty() {
-            self.mensaje("no hay nada que copiar", true);
-            return;
-        }
-        if !EstadoHistorial::cabe_en_copia(texto) {
-            self.mensaje(
-                "demasiado grande para copiar (más de 1 MiB): w para guardarlo",
-                true,
-            );
-            return;
-        }
-        if !self.efectos_externos {
-            self.mensaje(format!("{que} copiado"), false);
-            return;
-        }
-        match portapapeles::copiar(texto) {
-            Ok(Origen::Sistema(herramienta)) => {
-                self.mensaje(format!("{que} copiado con {herramienta}"), false)
-            }
-            Ok(Origen::Osc52) => self.mensaje(format!("{que} copiado por OSC 52"), false),
-            Err(motivo) => self.mensaje(format!("no se pudo copiar: {motivo}"), true),
-        }
-    }
+    // `copiar_texto`, la única vía para copiar, vive en `app/portapapeles.rs`.
 
-    /// Abre una URL con `[terminal] abrir_enlaces`, sin shell.
+    /// Abre una URL con `[terminal] abrir_enlaces`, sin shell. En Termux va por
+    /// las órdenes de Termux (con plazo y en una tarea) y, si falla, dice por
+    /// qué.
     fn abrir_url(&mut self, url: &str) {
         if !magi_nucleo::terminal::enlaces::es_web(url) {
             self.mensaje("solo se abren enlaces http y https", true);
@@ -557,6 +560,12 @@ impl App {
         let programa = self.config.terminal.abrir_enlaces.trim().to_string();
         if programa.is_empty() {
             self.mensaje("no hay [terminal] abrir_enlaces configurado", true);
+            return;
+        }
+        // Un programa dado por su ruta no se busca en el `PATH` de Termux: se
+        // lanza como en el escritorio.
+        if self.termux.activo && !programa.contains('/') {
+            self.abrir_enlace_en_termux(programa, url);
             return;
         }
         if !self.efectos_externos {
@@ -1030,6 +1039,18 @@ impl App {
         self.sucio = true;
     }
 
+    /// `prefijo w` y «nueva ventana» de la paleta: lanza `[terminal] comando` o,
+    /// en Termux, explica cómo abrir otra sesión. La explicación es información
+    /// (no un fallo): los dos caminos la tratan igual.
+    pub(crate) fn abrir_ventana_nueva(&mut self) {
+        use crate::cliente::ventana::{abrir_ventana_para, AperturaVentana};
+        match abrir_ventana_para(self.termux.activo, &self.config) {
+            AperturaVentana::Abierta => {}
+            AperturaVentana::Explicacion(texto) => self.mensaje(texto, false),
+            AperturaVentana::Error(error) => self.mensaje(error, true),
+        }
+    }
+
     fn portapapeles_remoto(&mut self, sesion_id: u32, texto: &str) {
         let host = self
             .pestanas
@@ -1039,6 +1060,12 @@ impl App {
             .unwrap_or_else(|| "el host".to_string());
         let bytes = texto.len() as u64;
         self.portapapeles_remoto.copias += 1;
+        if self.termux.activo {
+            // En Termux el resultado llega después: el aviso del host lo da la
+            // copia al terminar (o el motivo, si no cabe).
+            self.copiar(texto.to_string(), ParaQue::Remoto { host });
+            return;
+        }
         self.copiar_texto(texto, &host);
         self.mensaje(
             format!(
@@ -1289,11 +1316,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('w') => {
-                if let Err(error) = crate::cliente::ventana::abrir(&self.config) {
-                    self.mensaje(error, true);
-                }
-            }
+            KeyCode::Char('w') => self.abrir_ventana_nueva(),
             KeyCode::Char(' ') => self.cambiar_disposicion_paneles(),
             KeyCode::Char('z') => {
                 self.escritura_activa_del_motivo(MotivoFin::Disposicion);
@@ -1976,11 +1999,11 @@ impl App {
 
     // ------------------------------------------------------------ pegado
 
-    pub(crate) fn despachar_pegado(&mut self, texto: String) {
+    pub(crate) fn despachar_pegado(&mut self, mut texto: String) {
         // Fuera de la vista Sesión en vivo, el pegado va al campo con foco
         // (diálogo, búsqueda, filtro) si lo hay; si no, se descarta (§4.3).
         if let Some(dialogo) = self.dialogo.as_mut() {
-            if dialogo.pegar_texto(&texto_para_campo(&texto)) {
+            if pegar_en_dialogo(dialogo, &mut texto) {
                 self.sucio = true;
             }
             return;

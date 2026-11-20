@@ -26,7 +26,7 @@ source: tests/redimensionado/vistas_l.rs
 │                                                              │                                                                                                                                       │
 │                                                              │    ┌ SERVIDOR DE SESIONES ANTERIOR ───────────────────────────────┐                                                                   │
 │                                                              │    │                                                              │                                                                   │
-│                                                              │    │    Este magi:       1.5.0 · protocolo 10                     │                                                                   │
+│                                                              │    │    Este magi:       1.6.0 · protocolo 10                     │                                                                   │
 │                                                              │    │    Servidor activo: desconocida · protocolo 5 · pid 48211    │                                                                   │
 │                                                              │    │                                                              │                                                                   │
 │                                                              │    │    Custodia:                                                 │                                                                   │

@@ -44,6 +44,7 @@ pub mod geometria;
 pub mod guardadas;
 pub mod historial;
 pub mod lanzar;
+pub mod llavero;
 pub mod paneles;
 pub mod pegado;
 pub mod permisos;
@@ -60,6 +61,8 @@ pub mod sincronizacion;
 pub mod sincronizar;
 mod snippets;
 pub mod teclado;
+pub mod termux;
+pub mod termux_teclas;
 
 pub use dialogo_magi::DeliberacionAbierta;
 pub use geometria::Geometria;
@@ -590,6 +593,11 @@ pub enum Evento {
     /// Eventos de la sincronización del inventario (Fase 10): el bucle es el
     /// único escritor de SQLite y aquí llegan las esperas ya cumplidas.
     Inventario(sincronizacion::EventoInventario),
+    /// Resultado de una tarea de scrypt del llavero de fichero (Fase 17).
+    Llavero(llavero::EventoLlavero),
+    /// Lo que vuelve de una tarea de Termux: portapapeles, enlaces, visor y
+    /// estado del servidor (Fase 17).
+    Termux(termux::EventoTermux),
 }
 
 #[derive(Debug, Clone)]
@@ -2515,6 +2523,13 @@ pub enum Dialogo {
     Enlace(enlaces::DialogoEnlace),
     /// Paleta «abrir en rejilla…»: hasta 4 hosts con casillas o un grupo.
     Rejilla(rejilla::EstadoRejilla),
+    /// Llavero con frase maestra (Fase 17, Termux): LLAVERO DE MAGI, CREAR LA
+    /// FRASE MAESTRA, CAMBIAR LA FRASE MAESTRA, BORRAR EL LLAVERO y LLAVERO
+    /// DAÑADO.
+    Llavero(Box<llavero::DialogoLlavero>),
+    /// FILA DE TECLAS DE TERMUX (Fase 17, §6.4): instalar la fila `extra-keys`
+    /// de MAGI en `termux.properties`, con copia.
+    TeclasTermux(Box<termux_teclas::DialogoTeclasTermux>),
 }
 
 impl Dialogo {
@@ -2552,6 +2567,7 @@ impl Dialogo {
                 true
             }
             Dialogo::Persistentes(dialogo) => dialogo.pegar_texto(texto),
+            Dialogo::Llavero(dialogo) => dialogo.pegar_texto(texto),
             Dialogo::ExportarRegistro { estado } => {
                 estado.campo.insertar_texto(texto);
                 true
@@ -2752,6 +2768,18 @@ pub enum AccionPaleta {
     EscrituraVarios,
     /// Paleta: sesiones de tmux del host de la pestaña elegida.
     SesionesTmux,
+    // ------------------------------------------------ llavero (Fase 17)
+    /// Paleta: «Desbloquear el llavero» (solo con el de fichero cerrado).
+    DesbloquearLlavero,
+    /// Paleta: «Bloquear el llavero» (borra la frase y las entradas de la
+    /// memoria).
+    BloquearLlavero,
+    /// Paleta: «Cambiar la frase maestra».
+    CambiarFraseLlavero,
+    /// Paleta: «Borrar el llavero» (pide escribir `borrar`).
+    BorrarLlavero,
+    /// Paleta, solo en Termux: «Instalar la fila de teclas de Termux».
+    InstalarFilaDeTeclas,
 }
 
 pub struct PaletaCmd {
@@ -2795,6 +2823,19 @@ impl PaletaCmd {
 pub struct App {
     pub rutas: Rutas,
     pub config: Config,
+    /// El llavero de este equipo: el del sistema o, en Termux, el de fichero
+    /// con frase maestra (Fase 17). Se inyecta en la construcción y es el
+    /// único sitio de la TUI que lo elige.
+    pub llavero: Arc<dyn crate::llavero::LlaveroCliente>,
+    /// Interfaz del llavero de fichero (Fase 17): peticiones de scrypt en
+    /// vuelo y la marca «llavero bloqueado» de la barra.
+    pub llavero_ui: llavero::UiLlavero,
+    /// Órdenes `termux-*` del cliente y avisos del servidor en la barra (Fase
+    /// 17). Inerte fuera de Termux.
+    pub termux: termux::EstadoTermuxApp,
+    /// Lo propio de la fila de teclas de Termux en esta ventana (Fase 17): qué
+    /// instalación espera la recarga.
+    pub teclas_termux: termux_teclas::EstadoTeclasTermux,
     pub tema: Tema,
     pub almacen: Almacen,
     pub runtime: tokio::runtime::Runtime,
@@ -3099,9 +3140,15 @@ impl App {
         let prefijo = crate::teclas::parsear_prefijo(&config.prefijo_escape)
             .map_err(|error| anyhow::anyhow!("prefijo_escape no válido: {error}"))?;
         let auto_refresco = config.flota.auto_refresco_seg >= 15;
+        let llavero = crate::llavero::del_equipo(&rutas);
+        let plazo_termux = config.termux.api_plazo();
         let mut app = Self {
             rutas,
             config,
+            llavero,
+            llavero_ui: llavero::UiLlavero::default(),
+            termux: termux::EstadoTermuxApp::nuevo(plazo_termux),
+            teclas_termux: termux_teclas::EstadoTeclasTermux::default(),
             tema,
             almacen,
             runtime,
@@ -3288,7 +3335,7 @@ impl App {
                 self.sustituir_servidor_anterior(rechazo);
             }
             servidor_anterior::Decision::Preguntar => {
-                self.dialogo = Some(Dialogo::ServidorAnterior(
+                self.mostrar_sin_perder_el_llavero(Dialogo::ServidorAnterior(
                     servidor_anterior::DialogoServidorAnterior::Aviso(rechazo),
                 ));
             }
@@ -3323,7 +3370,7 @@ impl App {
                     // que hay un servidor anterior sin sustituir.
                     self.servidor_incompatible = None;
                 }
-                self.dialogo = Some(Dialogo::ServidorAnterior(
+                self.mostrar_sin_perder_el_llavero(Dialogo::ServidorAnterior(
                     servidor_anterior::DialogoServidorAnterior::Error {
                         rechazo,
                         motivo: fallo.texto(),
@@ -3401,6 +3448,13 @@ impl App {
     /// <host>` y `magi sesion <nombre>`), una sola vez.
     #[doc(hidden)]
     pub fn abrir_lo_del_arranque(&mut self) {
+        // Con el llavero de fichero (Termux) cerrado o dañado, lo primero que
+        // se ve es su diálogo; lo que abra la línea de órdenes se apila encima
+        // cuando el servidor pregunte (Fase 17).
+        self.abrir_llavero_del_arranque();
+        // Primer arranque en Termux (Fase 17): ofrece la fila de teclas una
+        // vez, sin pisar el diálogo del llavero.
+        self.ofrecer_fila_en_el_primer_arranque();
         match self.abrir_al_arrancar.take() {
             Some(AperturaInicial::Host(host_id)) => self.conectar(host_id),
             // `magi sesion <nombre>`: engancharse soltando a los demás.
@@ -3454,16 +3508,35 @@ impl App {
         }
         // Una exportación pendiente se hace antes de cerrar (Fase 10).
         self.exportar_al_salir();
+        // La frase y las entradas del llavero de fichero no sobreviven a la
+        // ventana (Fase 17); después de exportar, que las necesita.
+        self.bloquear_llavero_al_salir();
         crate::ui::desactivar_extras();
         crate::ui::restaurar_terminal();
         self.teclado.salir();
+        self.cerrar_al_salir()
+    }
+
+    /// Lo último de `ejecutar`, con la terminal ya devuelta: el adiós al
+    /// servidor, el aviso de salida, el almacén y el runtime. Aparte para
+    /// probarlo sin tocar la terminal real.
+    ///
+    /// El runtime no se suelta sin más: soltarlo espera a las tareas
+    /// bloqueantes (las órdenes `termux-*` y la lectura del estado del
+    /// servidor van en `spawn_blocking`), y el proceso no terminaría hasta que
+    /// la última agotase su plazo (hasta `[termux] api_plazo_seg`, 30 s como
+    /// mucho). Se apaga con un plazo corto (Fase 17, revisión de cierre).
+    #[doc(hidden)]
+    pub fn cerrar_al_salir(mut self) -> Result<()> {
         // Las sesiones sobreviven a la ventana; el servidor se entera del
         // adiós antes de que termine el proceso.
         self.servidor.enviar(protocolo::MensajeCliente::Adios);
         if let Some(aviso) = self.aviso_al_salir.take() {
             println!("{aviso}");
         }
-        self.almacen.cerrar()
+        let cierre = self.almacen.cerrar();
+        termux::apagar_runtime(&mut self.runtime, termux::PLAZO_APAGADO_RUNTIME);
+        cierre
     }
 
     /// Toma el tamaño real del terminal como aplicado y hace el primer pintado.
@@ -3908,6 +3981,14 @@ impl App {
                 self.sucio = true;
                 self.evento_inventario(evento);
             }
+            Evento::Llavero(evento) => {
+                self.sucio = true;
+                self.evento_llavero(evento);
+            }
+            Evento::Termux(evento) => {
+                self.sucio = true;
+                self.evento_termux(evento);
+            }
         }
         // Si el evento cambió de vista (una sesión que aparece, un aviso que
         // lleva a otra vista), se para lo que quedara de Servicios.
@@ -3917,6 +3998,8 @@ impl App {
     fn tick(&mut self) {
         self.tick_sincronizacion();
         self.tick_servicios();
+        self.tick_llavero();
+        self.tick_termux();
         // Las aperturas de sesiones persistentes que nunca recibieron pestaña
         // ni fallo caducan (Fase 16).
         self.caducar_creaciones(Instant::now());
@@ -3932,7 +4015,10 @@ impl App {
         }
         self.contador_ticks += 1;
         if let Some(mensaje) = &self.mensaje {
-            if mensaje.creado.elapsed() > Duration::from_secs(4) {
+            // Un aviso de la cola de la barra (Termux) dura su mínimo (Fase 17).
+            if mensaje.creado.elapsed() > Duration::from_secs(4)
+                && !self.aviso_vigente_en_la_barra()
+            {
                 self.mensaje = None;
                 self.sucio = true;
             }
@@ -4427,7 +4513,7 @@ impl App {
             cols,
             filas,
             registro: self.registro_sesiones.clone(),
-            llavero: std::sync::Arc::new(crate::llavero::LlaveroDelSistema),
+            llavero: self.llavero.clone(),
         };
         let comandos = conexion::lanzar(&self.runtime, plan, self.eventos_tx.clone());
         self.comandos_sesion = Some(comandos);
@@ -4497,7 +4583,7 @@ impl App {
                     host,
                     intento,
                     campo: CampoTexto::default(),
-                    recordar: recordar_por_defecto && crate::llavero::disponible(),
+                    recordar: recordar_por_defecto && self.llavero.disponible(),
                     foco_casilla: false,
                     responder,
                 });
@@ -4783,18 +4869,10 @@ impl App {
                 recordar_por_defecto,
             } => {
                 // El llavero lo resuelve este cliente: si el host usa
-                // contraseña guardada, se intenta primero sin diálogo.
-                if intento == 1 && self.intentar_llavero(sesion_id, &host) {
-                    return;
-                }
-                self.mostrar_dialogo_servidor(Dialogo::ContrasenaServidor {
-                    sesion_id,
-                    host,
-                    intento,
-                    campo: CampoTexto::default(),
-                    recordar: recordar_por_defecto && crate::llavero::disponible(),
-                    foco_casilla: false,
-                });
+                // contraseña guardada, se intenta primero sin diálogo. Con el
+                // llavero de fichero cerrado, antes se pide la frase
+                // (Fase 17).
+                self.pedir_contrasena_interactiva(sesion_id, host, intento, recordar_por_defecto);
             }
             protocolo::MensajeServidor::Bienvenida {
                 pid,
@@ -5057,14 +5135,30 @@ impl App {
         }
     }
 
-    /// Una conexión automática del servidor (una ejecución) pide la
-    /// contraseña del llavero: se contesta sin diálogo, desde una tarea (el
-    /// llavero puede tardar), con la contraseña o con `Cerrar` si no la hay.
+    /// Una conexión automática del servidor (una ejecución, una reconexión)
+    /// pide la contraseña del llavero: se contesta sin diálogo, desde una tarea
+    /// (el llavero puede tardar), con la contraseña o con `Cerrar` si no la hay.
+    /// Con el llavero de fichero cerrado nunca hay diálogo (Fase 17): la barra
+    /// lo dice y, si es una pestaña que se reconecta, no se contesta (un
+    /// `Cerrar` la cerraría) y vence el plazo del servidor; si el usuario lo
+    /// desbloquea antes, se contesta entonces (`llavero_abierto_ahora`).
     fn responder_con_llavero(&mut self, sesion_id: u32, host: String, usuario: String) {
+        if self.automatica_con_llavero_cerrado(sesion_id, &host, &usuario) {
+            return;
+        }
+        self.contestar_con_llavero(sesion_id, host, usuario);
+    }
+
+    /// La contestación de `PideLlavero` con el llavero abierto: la busca desde
+    /// una tarea y responde con la contraseña o, si no la hay y no es una
+    /// pestaña que se reconecta, con `Cerrar`.
+    pub(crate) fn contestar_con_llavero(&mut self, sesion_id: u32, host: String, usuario: String) {
+        let cerrar_si_no_hay = self.cerrar_si_no_hay_contrasena(sesion_id);
         let servidor = self.servidor.clone();
+        let llavero = self.llavero.clone();
         self.runtime.spawn(async move {
             let encontrada = tokio::task::spawn_blocking(move || {
-                crate::llavero::recuperar(&host, &usuario).ok().flatten()
+                llavero.recuperar_contrasena(&host, &usuario).ok().flatten()
             })
             .await
             .ok()
@@ -5075,32 +5169,12 @@ impl App {
                     contrasena: protocolo::Secreto::nuevo(contrasena.as_str()),
                     recordar: false,
                 }),
-                None => servidor.enviar(protocolo::MensajeCliente::Cerrar { sesion_id }),
+                None if cerrar_si_no_hay => {
+                    servidor.enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+                }
+                None => {}
             }
         });
-    }
-
-    /// Contraseña del llavero para una sesión que la pide; devuelve si se ha
-    /// enviado (sin diálogo).
-    fn intentar_llavero(&mut self, sesion_id: u32, host: &str) -> bool {
-        let Some(ficha) = self.hosts.iter().find(|ficha| ficha.nombre == *host) else {
-            return false;
-        };
-        if ficha.identidad_ref != IdentidadRef::ContrasenaLlavero {
-            return false;
-        }
-        // El mismo usuario con el que se guardó: el de la ficha o, sin él, el
-        // local (como hace la conexión al autenticar).
-        let usuario = ficha.usuario.clone().unwrap_or_else(usuario_local);
-        let Ok(Some(contrasena)) = crate::llavero::recuperar(host, &usuario) else {
-            return false;
-        };
-        self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
-            sesion_id,
-            contrasena: protocolo::Secreto::nuevo(contrasena.as_str()),
-            recordar: false,
-        });
-        true
     }
 
     /// Reconstruye las pestañas a partir de la lista difundida por el
@@ -5260,6 +5334,7 @@ impl App {
         }
         self.revisar_pestanas_snippet();
         self.purgar_dialogos_sin_sesion();
+        self.normalizar_motivos_llavero();
         self.sucio = true;
     }
 
@@ -5276,6 +5351,11 @@ impl App {
     fn restaurar_dialogo_apilado(&mut self) {
         if self.dialogo.is_none() {
             self.dialogo = self.pila_dialogos.pop();
+            // La fila de teclas del primer arranque empieza a ignorar `↵`
+            // desde que sale de debajo de otro diálogo (Fase 17).
+            if let Some(Dialogo::TeclasTermux(dialogo)) = self.dialogo.as_mut() {
+                dialogo.visto_en(Instant::now());
+            }
         }
     }
 
@@ -5307,7 +5387,20 @@ impl App {
             .find(|ficha| ficha.id == host_id)
             .and_then(|ficha| ficha.usuario.clone())
             .unwrap_or_else(usuario_local);
-        match crate::llavero::guardar(&host, &usuario, contrasena.como_str()) {
+        // El llavero de fichero reescribe el fichero con scrypt: en un hilo,
+        // con el resultado por `Evento::Llavero` (Fase 17).
+        if self.guardar_contrasena_en_segundo_plano(
+            host_id,
+            host.clone(),
+            usuario.clone(),
+            &contrasena,
+        ) {
+            return;
+        }
+        match self
+            .llavero
+            .guardar_contrasena(&host, &usuario, contrasena.como_str())
+        {
             Ok(()) => {
                 if let Err(error) = self
                     .almacen
@@ -5418,6 +5511,9 @@ impl App {
                 }
             }
         }
+        // Con el llavero cerrado, el motivo de una pestaña caída lo dice así
+        // (Fase 17): en un solo sitio, sin tocar el protocolo.
+        self.normalizar_motivos_llavero();
         self.sucio = true;
     }
 
@@ -5456,6 +5552,10 @@ impl App {
     fn servidor_caido(&mut self) {
         self.servidor = cliente::Cliente::sin_servidor();
         self.servidor_caido = true;
+        // Lo que el llavero guardaba para contestar al servidor (la contraseña
+        // o las credenciales de una sesión o un escritorio) ya no tiene a quién
+        // llegar: se cancela, incluido lo de los diálogos apilados.
+        self.cancelar_continuaciones_del_servidor();
         self.sesiones_perdidas = self.pestanas.len();
         // Los túneles se van con el servidor: sin esto la vista seguiría
         // enseñándolos activos y los glifos de Hosts y Flota mentirían.
@@ -5496,7 +5596,9 @@ impl App {
             "el servidor de sesiones ha caído",
             crate::modelo::ResultadoRegistro::Error,
         );
-        self.dialogo = Some(Dialogo::ServidorCaido {
+        // Un diálogo del llavero a la vista no se descarta: pasa a la pila con
+        // lo que le queda por continuar (rotar, quitar, unir…).
+        self.mostrar_sin_perder_el_llavero(Dialogo::ServidorCaido {
             perdidas: self.sesiones_perdidas,
         });
         self.sucio = true;
@@ -6924,6 +7026,10 @@ impl App {
             categoria: "sync",
             accion: AccionPaleta::IrAConflictos,
         });
+        // Llavero con frase maestra (Fase 17): solo con el de fichero.
+        entradas.extend(self.entradas_paleta_llavero());
+        // Fila de teclas de Termux (Fase 17): solo en Termux.
+        entradas.extend(self.entradas_paleta_teclas());
         let mut paleta = PaletaCmd {
             desplazamiento: 0,
             consulta: CampoTexto::default(),
@@ -7090,9 +7196,7 @@ impl App {
                     }
                     Some(AccionPaleta::NuevaVentana) => {
                         self.paleta = None;
-                        if let Err(error) = cliente::ventana::abrir(&self.config) {
-                            self.mensaje(error, true);
-                        }
+                        self.abrir_ventana_nueva();
                     }
                     Some(AccionPaleta::CerrarPestana(sesion_id)) => {
                         let sesion_id = *sesion_id;
@@ -7241,6 +7345,26 @@ impl App {
                             self.ir_a_vista(Vista::Sesiones);
                             self.pedir_lista_tmux();
                         }
+                    }
+                    Some(AccionPaleta::DesbloquearLlavero) => {
+                        self.paleta = None;
+                        self.paleta_desbloquear_llavero();
+                    }
+                    Some(AccionPaleta::BloquearLlavero) => {
+                        self.paleta = None;
+                        self.bloquear_llavero();
+                    }
+                    Some(AccionPaleta::CambiarFraseLlavero) => {
+                        self.paleta = None;
+                        self.paleta_dialogo_llavero(llavero::ModoLlavero::Cambiar);
+                    }
+                    Some(AccionPaleta::BorrarLlavero) => {
+                        self.paleta = None;
+                        self.paleta_dialogo_llavero(llavero::ModoLlavero::Borrar);
+                    }
+                    Some(AccionPaleta::InstalarFilaDeTeclas) => {
+                        self.paleta = None;
+                        self.paleta_instalar_fila_de_teclas();
                     }
                     None => {}
                 }
@@ -8120,25 +8244,9 @@ impl App {
                 })
             });
         match texto {
-            Some(texto) => match crate::portapapeles::copiar(&texto) {
-                Ok(herramienta) => self.mensaje(
-                    format!("clave pública copiada con {}", herramienta.nombre()),
-                    false,
-                ),
-                Err(error) => {
-                    self.dialogo = Some(Dialogo::Detalle {
-                        tunel_caido: None,
-                        titulo: "CLAVE PÚBLICA".to_string(),
-                        lineas: vec![
-                            format!("No se pudo copiar al portapapeles ({error})."),
-                            String::new(),
-                            "Copia la línea a mano:".to_string(),
-                            String::new(),
-                            texto,
-                        ],
-                    });
-                }
-            },
+            // Por la única vía de copia; si no se puede, ella abre el diálogo
+            // con la línea para copiarla a mano.
+            Some(texto) => self.copiar(texto, portapapeles::ParaQue::ClavePublica),
             None => self.mensaje("no se pudo obtener la clave pública", true),
         }
     }
@@ -8262,20 +8370,21 @@ impl App {
         } else if clave.en_agente {
             texto.push_str(" · añadida al agente");
         }
-        if clave.copiada {
-            texto.push_str(" · pública copiada al portapapeles");
-        }
-        self.mensaje(texto, clave.aviso_agente.is_some());
-        if clave.solicito_copia && !clave.copiada {
-            self.dialogo = Some(Dialogo::Detalle {
-                tunel_caido: None,
-                titulo: "CLAVE PÚBLICA".to_string(),
-                lineas: vec![
-                    "No se pudo copiar al portapapeles; copia la línea a mano:".to_string(),
-                    String::new(),
-                    clave.publica.trim().to_string(),
-                ],
-            });
+        let aviso = clave.aviso_agente.is_some();
+        self.mensaje(texto.clone(), aviso);
+        if clave.solicito_copia {
+            // Añade «pública copiada al portapapeles» al resumen o, si no se
+            // pudo, abre el diálogo con la línea para copiarla a mano. En el
+            // escritorio la copia ya la intentó la tarea de generación (la
+            // interfaz no espera a la herramienta del sistema); en Termux va
+            // por la única vía de copia.
+            self.publica_generada(
+                clave.publica,
+                clave.copiada,
+                clave.fallo_copia,
+                texto,
+                aviso,
+            );
         }
     }
 
@@ -8450,11 +8559,14 @@ impl App {
             hogar: self.rutas.hogar.clone(),
             usuario_local: usuario_local(),
             motores: self.config.servicios.contenedores.clone(),
+            llavero: self.llavero.clone(),
         }
     }
 
     /// Sondeo de un lote de Flota: cuenta para el progreso y se registra.
     fn sondeo_recibido(&mut self, sondeo: Sondeo) {
+        // Un sondeo que falló por el llavero cerrado deja la marca (Fase 17).
+        self.nota_llavero_necesitado(sondeo.error.as_deref());
         self.sondeando.remove(&sondeo.host_id);
         self.sondeo_hechos = self.sondeo_hechos.saturating_add(1);
         self.registrar_sondeo(sondeo);
@@ -8962,7 +9074,9 @@ impl App {
         if tecla.kind == KeyEventKind::Release {
             return;
         }
-        self.mensaje = None;
+        // Un aviso de la cola de la barra (Termux) sobrevive a las teclas
+        // hasta su visibilidad mínima (Fase 17).
+        self.borrar_mensaje_por_tecla();
         if self.dialogo.is_some() {
             self.tecla_dialogo(tecla);
             self.restaurar_dialogo_apilado();
@@ -9265,7 +9379,11 @@ impl App {
                 // Certificado y credenciales también se desplazan con ↑↓
                 // (el campo del certificado va fijo en el pie).
                 | Dialogo::Escritorio(_)
-        )
+                // La fila de teclas de Termux no tiene campos: si su texto no
+                // cabe (a 40×12, por ejemplo), `↵` no puede instalar sin que
+                // se pueda leer lo que va a hacer.
+                | Dialogo::TeclasTermux(_)
+        ) || matches!(dialogo, Dialogo::Llavero(llavero) if llavero.es_informativo())
     }
 
     /// ↑ ↓ PgUp PgDn sobre un diálogo informativo: mueven su desplazamiento
@@ -9298,6 +9416,8 @@ impl App {
         };
         match dialogo {
             Dialogo::Persistentes(dialogo) => self.tecla_dialogo_persistentes(dialogo, tecla),
+            Dialogo::Llavero(dialogo) => self.tecla_dialogo_llavero(dialogo, tecla),
+            Dialogo::TeclasTermux(dialogo) => self.tecla_dialogo_de_teclas(dialogo, tecla),
             Dialogo::Snippets(dialogo) => self.tecla_dialogo_snippets(dialogo, tecla),
             Dialogo::Ejecutar(dialogo) => self.tecla_dialogo_ejecutar(dialogo, tecla),
             Dialogo::Edicion(dialogo) => self.tecla_dialogo_edicion(dialogo, tecla),
@@ -9633,15 +9753,20 @@ impl App {
                 KeyCode::Enter => {
                     let contrasena = protocolo::Secreto::nuevo(campo.texto.clone());
                     campo.limpiar();
-                    if recordar {
-                        self.contrasenas_pendientes
-                            .insert(sesion_id, (contrasena.clone(), true));
+                    // Con «recordar» y el llavero de fichero sin abrir, antes
+                    // se pide la frase (o se crea): la contraseña espera en la
+                    // continuación y, con Esc, se usa sin guardarse (Fase 17).
+                    if !self.diferir_contrasena_por_llavero(sesion_id, &contrasena, recordar) {
+                        if recordar {
+                            self.contrasenas_pendientes
+                                .insert(sesion_id, (contrasena.clone(), true));
+                        }
+                        self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
+                            sesion_id,
+                            contrasena,
+                            recordar,
+                        });
                     }
-                    self.servidor.enviar(protocolo::MensajeCliente::Contrasena {
-                        sesion_id,
-                        contrasena,
-                        recordar,
-                    });
                 }
                 KeyCode::Esc => {
                     self.servidor
@@ -9764,7 +9889,20 @@ impl App {
                 KeyCode::Enter => {
                     let contrasena = Zeroizing::new(campo.texto.clone());
                     campo.limpiar();
-                    let _ = responder.send(Some((contrasena, recordar)));
+                    // Igual que con el servidor: «recordar» con el llavero de
+                    // fichero sin abrir pide antes la frase (Fase 17).
+                    if recordar
+                        && self
+                            .necesidad_llavero(llavero::UsoLlavero::Escribir)
+                            .is_some()
+                    {
+                        self.pedir_llavero(Some(llavero::Continuacion::ContrasenaLocal {
+                            contrasena,
+                            responder,
+                        }));
+                    } else {
+                        let _ = responder.send(Some((contrasena, recordar)));
+                    }
                 }
                 KeyCode::Esc => {
                     let _ = responder.send(None);
@@ -10101,6 +10239,8 @@ impl App {
         {
             self.avisar_quitado();
         }
+        // En Termux, lo que llegó a la carpeta mientras no se miraba se ve ya.
+        self.pedir_pasada_al_volver();
     }
 
     /// Entra en la vista CONFLICTOS.
@@ -10151,8 +10291,8 @@ impl App {
             self.sincronizacion.huella = Some("7f3a·91c2".to_string());
             return;
         }
-        let llavero = crate::llavero::LlaveroDelSistema;
-        self.sincronizacion.huella = crate::sincronizacion::equipos::clave_del_llavero(&llavero)
+        let llavero = self.llavero.clone();
+        self.sincronizacion.huella = crate::sincronizacion::equipos::clave_del_llavero(&*llavero)
             .ok()
             .flatten()
             .map(|clave| clave.huella_corta());
@@ -10346,14 +10486,9 @@ impl App {
 
     /// Primera pasada al abrir MAGI (solo con efectos externos y carpeta).
     pub(crate) fn iniciar_sincronizacion(&mut self) {
-        let llavero = crate::llavero::LlaveroDelSistema;
-        if let Ok(true) =
-            crate::sincronizacion::equipos::olvidar_anterior_si_vencida(&mut self.config, &llavero)
-        {
-            if let Err(error) = self.config.guardar(&self.rutas.fichero_config()) {
-                warn!("no se pudo guardar config.toml: {error}");
-            }
-        }
+        // Con el llavero de fichero (Termux) cerrado al arrancar esto no puede
+        // y se repite al abrirlo (`resultado_de_frase`).
+        self.olvidar_clave_anterior_vencida();
         self.sincronizacion.reloj_visto = self.reloj_de_este();
         if !self.efectos_externos || !self.config.sincronizacion.activa() {
             return;
@@ -10373,8 +10508,20 @@ impl App {
         };
         let generacion = self.sincronizacion.generacion_vigilancia;
         let eventos = self.eventos_tx.clone();
+        // En Termux no hay `notify` (Android no garantiza los avisos de lo que
+        // otra app cambia en el almacenamiento compartido): se sondea cada
+        // `[termux] sincronizacion_sondeo_seg` (Fase 17, §4.3).
+        let sondeo_termux =
+            crate::termux::es_termux().then(|| self.config.termux.sincronizacion_sondeo());
+        self.sincronizacion.sondeo_vigilancia = sondeo_termux;
         self.sincronizacion.vigilancia = Some(self.runtime.spawn(async move {
-            crate::app::sincronizacion::vigilar(carpeta, generacion, eventos).await;
+            crate::app::sincronizacion::vigilar_carpeta(
+                carpeta,
+                generacion,
+                eventos,
+                sondeo_termux,
+            )
+            .await;
         }));
     }
 
@@ -10396,6 +10543,7 @@ impl App {
     fn tick_sincronizacion(&mut self) {
         if !self.config.sincronizacion.activa() {
             self.sincronizacion.cambio_desde = None;
+            self.sincronizacion.pasada_aplazada = None;
             return;
         }
         let reloj = self.reloj_de_este();
@@ -10414,6 +10562,9 @@ impl App {
             self.sincronizacion.cambio_desde = None;
             self.solicitar_pasada();
         }
+        // Una pasada aplazada por tener la carpeta colgada (solo Termux) se
+        // reintenta en cuanto responde.
+        self.reintentar_pasada_aplazada();
     }
 
     /// Al salir: si queda un cambio local sin exportar (o la última pasada no
@@ -10428,8 +10579,14 @@ impl App {
         if !pendiente {
             return;
         }
-        let llavero = crate::llavero::LlaveroDelSistema;
-        let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &llavero)
+        let llavero = self.llavero.clone();
+        // Otra ventana pudo rotar la clave: se relee antes de exportar. Al
+        // salir se puede esperar (como mucho, el cerrojo y un scrypt si el
+        // fichero cambió); si ya no abre con la frase, la exportación se omite.
+        if llavero.refrescar().is_err() {
+            return;
+        }
+        let Ok(claves) = crate::sincronizacion::equipos::claves_para_leer(&self.config, &*llavero)
         else {
             return;
         };
@@ -10464,6 +10621,7 @@ impl App {
         &mut self,
         politica: crate::sincronizacion::PoliticaBorrados,
     ) {
+        self.sincronizacion.pasadas_pedidas += 1;
         if !self.efectos_externos || !self.config.sincronizacion.activa() {
             return;
         }
@@ -10471,14 +10629,28 @@ impl App {
             self.sincronizacion.reintentar = true;
             return;
         }
+        // En Termux, con el almacenamiento compartido sin responder, la pasada
+        // leería la carpeta en este hilo sin plazo y congelaría la TUI: se
+        // aplaza hasta que responda (el tick la reintenta; no se pierde).
+        if crate::termux::es_termux() && self.carpeta_de_sincronizacion_colgada() {
+            self.aplazar_pasada_por_carpeta_colgada(politica);
+            return;
+        }
         self.sincronizacion.sincronizando = true;
-        self.sincronizacion.politica = politica;
+        // Esta pasada cubre la que quedó aplazada; si lo aplazado era una
+        // decisión del usuario sobre unos borrados, no se pierde.
+        self.sincronizacion.politica = match (politica, self.sincronizacion.pasada_aplazada.take())
+        {
+            (crate::sincronizacion::PoliticaBorrados::Preguntar, Some(aplazada)) => aplazada,
+            (politica, _) => politica,
+        };
         self.sucio = true;
         crate::app::sincronizacion::lanzar_espera(
             &self.runtime,
             self.eventos_tx.clone(),
             self.rutas.clone(),
             self.config.clone(),
+            self.llavero.clone(),
         );
     }
 
@@ -10491,6 +10663,9 @@ impl App {
                 self.ejecutar_pasada(cerrojo, claves);
             }
             EventoInventario::Error(motivo) => {
+                // Una pasada que no pudo leer la clave por el llavero cerrado
+                // deja la marca de la barra (Fase 17).
+                self.nota_llavero_necesitado(Some(&motivo));
                 self.sincronizacion.sincronizando = false;
                 self.anotar_error_sincronizacion(&motivo, true);
                 self.sincronizacion.estado = crate::sincronizacion::EstadoPasada::Error(motivo);
@@ -10651,43 +10826,61 @@ impl App {
     /// ficheros de otros equipos). Si no vale, se vuelve a pedir.
     fn configurar_carpeta(&mut self, texto: &str) {
         let texto = texto.trim().to_string();
-        let ruta = conexion::cliente::expandir_home(&texto, &self.rutas.hogar);
-        if !ruta.is_dir() {
-            self.mensaje(
-                format!(
-                    "la carpeta {} no existe o no es un directorio",
-                    ruta.display()
-                ),
-                true,
-            );
-            self.reabrir_carpeta(&texto);
-            return;
-        }
+        // En Termux la carpeta se guarda resuelta con realpath y, sin
+        // `~/storage`, se da la instrucción (Fase 17, §4.3); fuera de Termux
+        // sigue siendo la de siempre.
+        let ruta = match crate::sincronizacion::almacenamiento::resolver_carpeta(
+            &texto,
+            &self.rutas.hogar,
+            crate::termux::es_termux(),
+        ) {
+            Ok(ruta) => ruta,
+            Err(motivo) => {
+                self.mensaje(motivo, true);
+                self.reabrir_carpeta(&texto);
+                return;
+            }
+        };
         match crate::sincronizacion::carpeta::hay_ficheros(&ruta) {
             Ok(true) => self.abrir_unir_equipo_para(&ruta),
-            Ok(false) => {
-                let llavero = crate::llavero::LlaveroDelSistema;
-                match crate::sincronizacion::equipos::crear(
-                    self.almacen.conexion(),
-                    &self.rutas,
-                    &ruta,
-                    &mut self.config,
-                    &llavero,
-                ) {
-                    Ok(clave) => {
-                        self.iniciar_vigilancia();
-                        self.abrir_clave(&clave, true);
-                        self.recargar_sincronizacion();
-                    }
-                    Err(error) => {
-                        self.mensaje(error.to_string(), true);
-                        self.reabrir_carpeta(&texto);
-                    }
-                }
-            }
+            Ok(false) => self.crear_sincronizacion(&ruta, &texto),
             Err(error) => {
                 self.mensaje(error.to_string(), true);
                 self.reabrir_carpeta(&texto);
+            }
+        }
+    }
+
+    /// Crea la sincronización en una carpeta sin ficheros de MAGI. La clave
+    /// nueva va al llavero: con el de fichero cerrado o sin crear, antes se
+    /// pide la frase (Fase 17). La escritura (que gasta ~1 s de scrypt con el
+    /// llavero de fichero) se queda en el hilo de la UI: va bajo el cerrojo de
+    /// la carpeta, como en el escritorio.
+    fn crear_sincronizacion(&mut self, ruta: &std::path::Path, texto: &str) {
+        if self.aplazar_por_llavero(llavero::UsoLlavero::Escribir, || {
+            llavero::Continuacion::CrearSincronizacion {
+                carpeta: ruta.to_path_buf(),
+                texto: texto.to_string(),
+            }
+        }) {
+            return;
+        }
+        let llavero = self.llavero.clone();
+        match crate::sincronizacion::equipos::crear(
+            self.almacen.conexion(),
+            &self.rutas,
+            ruta,
+            &mut self.config,
+            &*llavero,
+        ) {
+            Ok(clave) => {
+                self.iniciar_vigilancia();
+                self.abrir_clave(&clave, true);
+                self.recargar_sincronizacion();
+            }
+            Err(error) => {
+                self.mensaje(error.to_string(), true);
+                self.reabrir_carpeta(texto);
             }
         }
     }
@@ -10744,20 +10937,34 @@ impl App {
     /// Intenta unir este equipo con la clave pegada. Si la clave no abre los
     /// ficheros, el diálogo sigue abierto con el motivo.
     fn unir_equipo(&mut self, carpeta: &std::path::Path, texto: &str) {
-        let llavero = crate::llavero::LlaveroDelSistema;
+        let llavero = self.llavero.clone();
         match crate::sincronizacion::equipos::unir(
             self.almacen.conexion(),
             &self.rutas,
             carpeta,
             texto,
             &mut self.config,
-            &llavero,
+            &*llavero,
         ) {
             Ok(_clave) => {
                 self.iniciar_vigilancia();
                 self.recargar_sincronizacion();
                 self.mensaje("este equipo se ha unido a la sincronización", false);
                 self.solicitar_pasada();
+            }
+            // La clave ya abrió los ficheros y lo único que falta es el
+            // llavero (cerrado o sin crear): se pide y se vuelve a intentar
+            // (Fase 17, §4.3). Esc: «sin llavero no se puede guardar la clave».
+            Err(error)
+                if Self::es_error_de_llavero(&error.to_string())
+                    && self
+                        .necesidad_llavero(llavero::UsoLlavero::Escribir)
+                        .is_some() =>
+            {
+                self.pedir_llavero(Some(llavero::Continuacion::UnirEquipo {
+                    carpeta: carpeta.to_path_buf(),
+                    clave: Zeroizing::new(texto.to_string()),
+                }));
             }
             Err(error) => {
                 let equipos = match &self.dialogo {
@@ -10792,8 +10999,15 @@ impl App {
 
     /// k: muestra la clave guardada en el llavero.
     fn mostrar_clave(&mut self) {
-        let llavero = crate::llavero::LlaveroDelSistema;
-        match crate::sincronizacion::equipos::clave_del_llavero(&llavero) {
+        // Con el llavero de fichero cerrado, antes se pide la frase (Fase 17);
+        // sin fichero no hay clave que mostrar y se dice como siempre.
+        if self.aplazar_por_llavero(llavero::UsoLlavero::Leer, || {
+            llavero::Continuacion::MostrarClave
+        }) {
+            return;
+        }
+        let llavero = self.llavero.clone();
+        match crate::sincronizacion::equipos::clave_del_llavero(&*llavero) {
             Ok(Some(clave)) => self.abrir_clave(&clave, false),
             Ok(None) => self.mensaje("no hay clave de sincronización en el llavero", true),
             Err(error) => self.mensaje(error, true),
@@ -11192,13 +11406,22 @@ impl App {
         match accion {
             AccionInventario::MostrarClave => self.mostrar_clave(),
             AccionInventario::QuitarEquipo(uuid) => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                // Quitar borra el fichero del equipo antes de rotar la clave:
+                // el llavero tiene que estar listo antes de empezar (Fase 17).
+                if self
+                    .necesidad_llavero(llavero::UsoLlavero::Escribir)
+                    .is_some()
+                {
+                    self.pedir_llavero(Some(llavero::Continuacion::QuitarEquipo(uuid)));
+                    return;
+                }
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::quitar(
                     self.almacen.conexion(),
                     &self.rutas,
                     &mut self.config,
                     &uuid,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(clave) => {
                         self.iniciar_vigilancia();
@@ -11209,12 +11432,17 @@ impl App {
                 }
             }
             AccionInventario::RotarClave => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                if self.aplazar_por_llavero(llavero::UsoLlavero::Escribir, || {
+                    llavero::Continuacion::RotarClave
+                }) {
+                    return;
+                }
+                let llavero = self.llavero.clone();
                 match crate::sincronizacion::equipos::rotar(
                     self.almacen.conexion(),
                     &self.rutas,
                     &mut self.config,
-                    &llavero,
+                    &*llavero,
                 ) {
                     Ok(clave) => {
                         self.recargar_sincronizacion();
@@ -11224,7 +11452,15 @@ impl App {
                 }
             }
             AccionInventario::Desactivar => {
-                let llavero = crate::llavero::LlaveroDelSistema;
+                if self.aplazar_por_llavero(llavero::UsoLlavero::Leer, || {
+                    llavero::Continuacion::Desactivar
+                }) {
+                    return;
+                }
+                let llavero = self.llavero.clone();
+                // Sin fichero de llavero no hay clave que olvidar: desactivar
+                // sigue valiendo (Fase 17).
+                let llavero = llavero::OlvidoSinFichero(&*llavero);
                 match crate::sincronizacion::equipos::desactivar(
                     self.almacen.conexion(),
                     &self.rutas,
@@ -11591,7 +11827,7 @@ impl App {
                 host_id: _,
                 nombre,
                 usuario,
-            } => match crate::llavero::olvidar(&nombre, &usuario) {
+            } => match self.llavero.olvidar_contrasena(&nombre, &usuario) {
                 Ok(true) => self.mensaje(
                     format!("contraseña de «{nombre}» borrada del llavero"),
                     false,
@@ -11698,9 +11934,7 @@ fn conciliar_aviso(
 }
 
 fn usuario_local() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string())
+    crate::conexion::usuario_local()
 }
 
 /// Filas útiles para el PTY remoto: el alto de la ventana menos las cuatro

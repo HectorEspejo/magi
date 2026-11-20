@@ -14,6 +14,7 @@ pub mod flota;
 pub mod formulario_snippet;
 pub mod hosts;
 pub mod identidades;
+pub mod llavero;
 pub mod pager;
 pub mod paleta;
 pub mod permisos;
@@ -29,6 +30,7 @@ pub mod sincronizacion;
 pub mod sincronizaciones;
 pub mod sincronizar;
 pub mod snippets;
+pub mod termux_teclas;
 pub mod transferencias;
 pub mod tuneles;
 

@@ -1,0 +1,27 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ─────────────────────── 7 hosts · 3 nominal · sondeo hace NN s ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                                                        │
+│  ○ dgx-spark    FRÍA                                                         │
+│  ● hetzn┌ CREAR LA FRASE MAESTRA ──────────────────────────────────┐         │
+│  ● hetzn│                                                          │         │
+│  ◐ mac-m│  Frase    [ •••••••••••••••• ]                           │         │
+│  ✕ rinco│  Repetir  [ ••••••••••••┃ ]                              │         │
+│  ● vps-o│                                                          │         │
+│         │  Guarda tus contraseñas y la clave de sincronización.    │         │
+│         │  Al menos 12 caracteres; mejor, varias palabras.         │         │
+│         │  Si la olvidas no se recupera: habría que borrar el      │         │
+│         │  llavero y volver a unir este equipo.                    │         │
+│         │                                                          │         │
+│         │  ↵ crear   Tab siguiente   Esc cancelar                  │         │
+│         │                                                          │         │
+│         └──────────────────────────────────────────────────────────┘         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

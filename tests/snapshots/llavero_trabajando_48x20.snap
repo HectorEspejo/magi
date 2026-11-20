@@ -1,0 +1,23 @@
+---
+source: tests/redimensionado/arnes.rs
+---
+┌ MAGI · FLOTA ────────── 7 hosts · 3 nominal ─┐
+│  HOSTS                            ⇥ detalle  │
+│  ──────────────────────────────────────────  │
+│▸ ◐ backup-nas   CARGA                        │
+│┌ LLAVERO DE MAGI ───────────────────────────┐│
+││                                            ││
+││  Frase maestra                             ││
+││  [ ┃ ]                                     ││
+││                                            ││
+││  Desbloquea tus contraseñas y la clave de  ││
+││  sincronización de este equipo.            ││
+││                                            ││
+││  trabajando…                               ││
+││  espera…                                   ││
+││                                            ││
+│└────────────────────────────────────────────┘│
+│                                              │
+│                                              │
+└──────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  e editar  ? más
