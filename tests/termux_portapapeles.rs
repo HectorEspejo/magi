@@ -721,7 +721,11 @@ fn las_copias_se_serializan_y_el_portapapeles_queda_con_la_ultima() {
     prueba.copiar_url("https://ejemplo.org/ultima");
     assert_eq!(prueba.app.termux.copias_en_curso, 1);
     assert!(prueba.app.termux.copia_pendiente.is_some());
-    // Mientras la primera sigue en vuelo no sale ninguna otra orden.
+    // Mientras la primera sigue en vuelo no sale ninguna otra orden (se espera a
+    // que la primera haya arrancado de verdad).
+    prueba.esperar("la primera orden en vuelo", |p| {
+        !p.llamadas("termux-clipboard-set").is_empty()
+    });
     prueba
         .app
         .bombear(&mut prueba.terminal, Duration::from_millis(250))
@@ -770,6 +774,12 @@ fn con_una_orden_en_vuelo_nada_pasa_por_delante() {
         .dobles
         .programar("termux-clipboard-set", Modo::Lento(6));
     prueba.copiar_url("https://ejemplo.org/primera");
+    // La orden tiene que estar de verdad en vuelo antes de apagar la API: en un
+    // runner lento la tarea aún puede no haber arrancado y, con la API ya
+    // apagada, no llegaría a lanzarse.
+    prueba.esperar("la primera orden en vuelo", |p| {
+        p.llamadas("termux-clipboard-set").len() == 1
+    });
     // Algo apaga la API mientras la orden corre (otra orden que no respondió).
     prueba.api.apagar(EstadoApi::NoResponde);
     prueba.copiar_url("https://ejemplo.org/segunda");
