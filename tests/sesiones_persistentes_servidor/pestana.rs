@@ -1168,7 +1168,10 @@ async fn volver_a_una_pestana_soltada_suelta_a_los_demas_o_comparte() {
         "no volvió: {:?}",
         banco.pestana(sesion.id)
     );
-    let volcado = adjuntar(&mut banco.escenario, sesion.id).await;
+    // La pestaña pasa a `Abierta` al reconectar y la salida de `attach -d` llega
+    // un instante después: se espera a que la pantalla lleve `soltar=1` (si no,
+    // el volcado puede salir antes y la prueba fallar en un runner lento).
+    let volcado = adjuntar_hasta(&mut banco.escenario, sesion.id, "soltar=1").await;
     assert!(
         volcado.contains("soltar=1"),
         "volver soltando debía usar attach -d: {volcado:?}"
