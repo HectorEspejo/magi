@@ -22,17 +22,17 @@
 # bash, zsh y fish, y el README (las licencias las instala Termux por
 # TERMUX_PKG_LICENSE_FILE, en share/doc/magi-ssh/).
 
-TERMUX_PKG_HOMEPAGE=https://github.com/4d3-org/magi
+TERMUX_PKG_HOMEPAGE=https://github.com/HectorEspejo/magi
 TERMUX_PKG_DESCRIPTION="Gestor SSH de terminal con estética de cabina técnica"
 TERMUX_PKG_LICENSE="Apache-2.0, MIT"
 TERMUX_PKG_LICENSE_FILE="LICENSE-APACHE, LICENSE-MIT"
-TERMUX_PKG_MAINTAINER="@4d3-org"
+TERMUX_PKG_MAINTAINER="@HectorEspejo"
 
 # CAMBIAR EN CADA VERSIÓN (docs/publicar-termux.md, «Receta de TUR»): la versión
 # y el SHA-256 del tarball de ese tag. No se activa TERMUX_PKG_AUTO_UPDATE: cada
 # versión se revisa a mano antes de proponerla.
 TERMUX_PKG_VERSION="1.6.0"
-TERMUX_PKG_SRCURL="https://github.com/4d3-org/magi/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
+TERMUX_PKG_SRCURL="https://github.com/HectorEspejo/magi/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 # MARCADOR: sin sustituir (64 ceros), la compilación falla por la suma. Se
 # calcula con: curl -fsSL "$SRCURL" | sha256sum
 TERMUX_PKG_SHA256=0000000000000000000000000000000000000000000000000000000000000000

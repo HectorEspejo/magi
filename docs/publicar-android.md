@@ -22,12 +22,12 @@ No hay Google Play ni otro canal: la app no se publica en tiendas.
 | Tarea | Quién |
 |---|---|
 | Fijar la versión, la fecha y el contenido de la release | Desarrollador |
-| Actualizar `android/version.properties`, `android/CHANGELOG.md` y el README | Agente |
+| Actualizar `android/version.properties`, `android/CHANGELOG.md` y el manual (`docs/manual/app-android.md`) | Agente |
 | Dejar los workflows y esta guía preparados | Agente |
 | Crear el keystore de firma y los cuatro secretos | Desarrollador |
 | Etiquetar (`git tag`) y empujar la etiqueta | Desarrollador |
 | Relanzar jobs y verificar la release | Desarrollador |
-| Mover una etiqueta, subir binarios a mano, crear cuentas o cambiar la visibilidad del repositorio | **Nadie más que el desarrollador**; el agente no lo hace |
+| Mover una etiqueta, subir binarios a mano, crear cuentas o cambiar la visibilidad o los ajustes del repositorio | **Nadie más que el desarrollador**; el agente no lo hace |
 
 ## 2. Requisitos previos
 
@@ -75,7 +75,7 @@ keytool -genkeypair -v \
   -keystore magi-android-release.jks \
   -alias magi-release \
   -keyalg RSA -keysize 4096 -validity 10000 \
-  -dname "CN=MAGI Android, O=Cuatro de Tres S.A., C=ES"
+  -dname "CN=MAGI Android, O=Cuatro de Tres S. Coop. And., C=ES"
 ```
 
 - Guarda el `.jks` en un gestor de contraseñas y en dos copias de seguridad
@@ -118,7 +118,9 @@ Reglas de uso:
 La versión de la app sigue la política del escritorio (ver
 [`publicar.md`](publicar.md)): **MAJOR** si algo deja de ser compatible para
 el usuario, **MINOR** para funcionalidad nueva y **PATCH** para correcciones.
-La app empieza en `0.1.0`.
+La primera versión publicada es la `0.2.0`, en beta: la `0.1.0` se numeró
+durante el desarrollo y no llegó a salir, así que su entrada del CHANGELOG está
+junta con la `0.2.0`.
 
 El `versionCode` se deriva de la versión con la fórmula del informe §7.10:
 
@@ -132,9 +134,10 @@ la final siempre supere a sus candidatas y se actualice sin desinstalar.
 | Versión | versionCode |
 |---|---|
 | `0.1.0-rc.1` | 1001 |
-| `0.1.0-rc.2` | 1002 |
 | `0.1.0` | 1009 |
 | `0.1.1` | 1019 |
+| `0.2.0-rc.1` | 2001 |
+| `0.2.0-rc.2` | 2002 |
 | `0.2.0` | 2009 |
 | `1.2.3` | 102039 |
 
@@ -164,11 +167,31 @@ Flujo de una release:
 6. **Una etiqueta publicada no se mueve ni se reutiliza.** Si hace falta
    cambiar el contenido, se publica un PATCH (o un nuevo `rc`).
 
-Ensayo obligatorio antes de la primera estable: `version=0.1.0-rc.1`, etiqueta
-`android-v0.1.0-rc.1`. El resultado debe ser una **prerelease** con el APK,
-su `.sha256` y su atestación, sin tocar las releases del escritorio. Después,
-`version=0.1.0` y etiqueta `android-v0.1.0` (el `versionCode` de la final,
-1009, supera al de la candidata, 1001).
+### La primera publicación: `0.2.0-rc.1` y `0.2.0`
+
+Hay que pasar por una candidata antes de la primera estable, y hace falta que el
+keystore y sus cuatro secretos (§3) existan ya. En orden:
+
+1. PR que deja `version=0.2.0-rc.1` en `android/version.properties`; `android.yml`
+   verde; merge; etiqueta `android-v0.2.0-rc.1`. El resultado debe ser una
+   **prerelease** con el APK (`versionCode` 2001), su `.sha256` y su atestación,
+   sin tocar las releases del escritorio ni marcarse como «Latest». Las notas
+   salen de la sección `[0.2.0]` del CHANGELOG.
+2. **Guion corto de la candidata**, en el plegable, con Obtainium con las
+   prereleases activadas (§7):
+   1. Instalar el APK y comprobar su certificado (§6).
+   2. Desbloquear con huella o PIN.
+   3. Unir la sincronización (QR o pegando la clave) y ver Flota con el
+      inventario.
+   4. Abrir un terminal y un túnel local.
+   5. Abrir Servicios de un host.
+3. Si todo va, PR que deja `version=0.2.0`, merge y etiqueta
+   `android-v0.2.0` (`versionCode` 2009, que supera al de la candidata y se
+   instala encima sin desinstalar). Si algo falla, se corrige y se publica
+   `0.2.0-rc.2` (2002) y otra vuelta: nunca se mueve la etiqueta.
+
+Con la 1.6.x del escritorio, un móvil necesita una app que lea el `formato` 4
+de la sincronización: por eso la app sale a la vez que el escritorio.
 
 ## 5. Qué hace `android-release.yml`
 
@@ -196,16 +219,16 @@ Descarga de la release el APK y su `.sha256` y comprueba todo esto:
 
 ```sh
 # 1. Integridad (en macOS: shasum -a 256 -c)
-sha256sum -c magi-android-v0.1.0.apk.sha256
+sha256sum -c magi-android-v0.2.0.apk.sha256
 
 # 2. Firma y certificado (apksigner viene con las build-tools del SDK)
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs magi-android-v0.1.0.apk
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs magi-android-v0.2.0.apk
 
 # 3. Procedencia: que lo compiló el CI de este repositorio
-gh attestation verify magi-android-v0.1.0.apk --repo 4d3-org/magi
+gh attestation verify magi-android-v0.2.0.apk --repo HectorEspejo/magi
 
 # 4. ABI: la release es solo arm64-v8a
-unzip -l magi-android-v0.1.0.apk | grep lib/arm64-v8a
+unzip -l magi-android-v0.2.0.apk | grep lib/arm64-v8a
 ```
 
 - `apksigner` debe decir que verifica con los esquemas **v2** y **v3** y
@@ -221,7 +244,7 @@ unzip -l magi-android-v0.1.0.apk | grep lib/arm64-v8a
 1. Instala [Obtainium](https://github.com/ImranR98/Obtainium) (F-Droid o su
    release de GitHub).
 2. «Añadir app» → pega la URL del repositorio:
-   `https://github.com/4d3-org/magi`.
+   `https://github.com/HectorEspejo/magi`.
 3. En las opciones de esa app, filtra las etiquetas por `android-v` y el
    nombre del APK por `magi-android-`. Activa las prereleases solo si quieres
    probar candidatas `-rc.N`.
@@ -318,7 +341,7 @@ mueve.
 - [`publicar.md`](publicar.md): publicación del escritorio y política de
   versiones.
 - [`android/CHANGELOG.md`](../android/CHANGELOG.md): cambios de la app.
-- [`README.md`](../README.md): sección «App Android».
+- [`docs/manual/app-android.md`](manual/app-android.md): el capítulo de la app en el manual.
 - Keep a Changelog: <https://keepachangelog.com/es-ES/1.1.0/>
 - Obtainium: <https://github.com/ImranR98/Obtainium>
 - Syncthing-Fork: <https://github.com/Catfriend1/syncthing-android>

@@ -27,7 +27,7 @@ targets = [
 # estables: publish-prereleases queda en su valor por defecto (false), así que
 # dist no publica prereleases en Homebrew ni en AUR.
 installers = ["homebrew"]
-tap = "4d3-org/homebrew-tap"
+tap = "HectorEspejo/homebrew-tap"
 formula = "magi-ssh"
 # Publicadores: la fórmula de Homebrew (incorporada) y el workflow propio de AUR.
 publish-jobs = ["homebrew", "./publicar-aur"]

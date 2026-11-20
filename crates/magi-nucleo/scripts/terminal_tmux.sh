@@ -233,7 +233,7 @@ sesion_existe() {
 # el servidor, así que sirve para saber si «la misma» sesión sigue viva.
 id_de_sesion() {
     tmux_srv list-sessions -F "#{session_id}${TAB}#{session_name}" 2>/dev/null |
-        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 == nombre { print $1; exit }'
+        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 "" == nombre "" { print $1; exit }'
 }
 
 # ¿Sigue viva la sesión? sesion_viva <nombre> <identificador, o vacío>. Con
@@ -492,7 +492,7 @@ hacer_preparar() {
     # la misma aunque la renombren y aunque tmux se haya reiniciado y reutilice
     # identificadores.
     identidad=$(tmux_srv list-sessions -F "#{session_name}${TAB}#{session_id}${TAB}#{session_created}" 2>/dev/null |
-        LC_ALL=C awk -F "$TAB" -v nombre="$NOMBRE" '$1 == nombre { print $2 " " $3; exit }')
+        LC_ALL=C awk -F "$TAB" -v nombre="$NOMBRE" '$1 "" == nombre "" { print $2 " " $3; exit }')
     printf 'MAGI_ID=%s\nMAGI_CREADA=%s\n' "${identidad%% *}" "${identidad#* }"
     if [ "$SERVIDOR" = magi ]; then
         # Solo el tmux propio: el habitual no se toca (ni su configuración ni

@@ -63,7 +63,7 @@ por el Lead.
 
 ### Entorno Android (hecho)
 
-- SDK en `/home/hector/Android/Sdk`: commandline-tools 23.0.0, platform-tools
+- SDK en `$HOME/Android/Sdk`: commandline-tools 23.0.0, platform-tools
   37.0.1, build-tools 36.0.0 y 37.0.0, plataformas `android-37.0/37.1/37.2`,
   NDK r30 `30.0.16248370`, cmake 3.31.6, emulador 37.2.13 e imagen
   `system-images/android-30/default/x86_64` (AOSP, sin Google Play Services);
@@ -847,7 +847,7 @@ cargo-ndk:
 
     source /tmp/entorno-android.sh
 
-Deja `ANDROID_HOME` y `ANDROID_SDK_ROOT` en `/home/hector/Android/Sdk`,
+Deja `ANDROID_HOME` y `ANDROID_SDK_ROOT` en `$HOME/Android/Sdk`,
 `ANDROID_NDK_HOME` en `.../ndk/30.0.16248370` y el `PATH` con
 `cmdline-tools/latest/bin`, `platform-tools`, `emulator` y
 `build-tools/36.0.0`. Requisitos verificados: SDK con la plataforma 37.0 y

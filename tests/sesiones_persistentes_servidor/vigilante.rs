@@ -1603,6 +1603,59 @@ async fn tras_renombrar_la_siguiente_comprobacion_ve_la_sesion_con_su_nombre_nue
     assert!(lista.hosts[0].sin_ficha.is_empty());
 }
 
+/// Revisión de la 9b (C9B-1): terminar una sesión adelanta la siguiente
+/// comprobación del host aunque la última sea de hace menos de 5 s; si no, la
+/// lista seguiría enseñando viva la que acaba de terminar.
+#[tokio::test]
+async fn tras_terminar_una_sesion_la_siguiente_consulta_vuelve_a_mirar_el_host() {
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    banco.magi(1, &[linea("api", 0, "", false, "")]);
+    crear_ficha(&esc, host, "api");
+    esc.enviar(&consulta(1, None)).await;
+    esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::VivaLibre)
+    })
+    .await
+    .expect("lista inicial con la sesión viva");
+    assert_eq!(banco.comprobaciones(1), 1);
+
+    esc.enviar(&MensajeCliente::TerminarTmux {
+        peticion_id: RANGO_TERMINAL + 2,
+        host_id: host,
+        servidor: ServidorTmux::Magi,
+        nombre: "api".to_string(),
+    })
+    .await;
+    esc.esperar(|mensaje| {
+        matches!(
+            mensaje,
+            MensajeServidor::TmuxTerminada { peticion_id, .. } if *peticion_id == RANGO_TERMINAL + 2
+        )
+    })
+    .await;
+
+    // El cliente consulta justo después, como hace al cerrar una pestaña
+    // terminando la sesión: el host se mira otra vez y la ficha ya no está viva.
+    esc.enviar(&consulta(3, None)).await;
+    let lista = esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::Terminada)
+    })
+    .await
+    .expect("la lista deja de enseñarla viva");
+    assert_eq!(lista.fichas[0].estado, EstadoFicha::Terminada);
+    // El `estado` inicial, el propio `terminar` (que también empieza con `tmux
+    // -V`) y la mirada que fuerza terminar.
+    assert_eq!(banco.comprobaciones(1), 3, "terminar fuerza otra mirada");
+}
+
 #[tokio::test]
 async fn las_pestanas_enganchadas_siguen_enganchadas_con_el_nombre_nuevo() {
     use magi::protocolo::{CrearTmux, EstadoSesionRemota, PeticionTmux};

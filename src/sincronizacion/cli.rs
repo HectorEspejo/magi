@@ -71,7 +71,7 @@ pub const SIN_RESPUESTA: &str = "no se pudo preguntar al servidor";
 /// levanta un runtime solo para eso. No se puede llamar desde dentro de otro
 /// runtime de tokio (las pruebas asíncronas la llaman con `spawn_blocking`).
 pub fn consultar_en_runtime(rutas: &Rutas, plazo: Duration) -> ConsultaServidor {
-    match tokio::runtime::Builder::new_current_thread()
+    let consulta = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
@@ -79,7 +79,60 @@ pub fn consultar_en_runtime(rutas: &Rutas, plazo: Duration) -> ConsultaServidor 
         Err(error) => ConsultaServidor::Fallo(format!(
             "no se pudo preparar la consulta al servidor: {error}"
         )),
+    };
+    // «Sin servidor» solo vale si el socket de verdad no está donde lo buscamos.
+    if matches!(consulta, ConsultaServidor::Sin) {
+        let actual = crate::servidor::ruta_socket(rutas);
+        if let Some(otro) = socket_en_otra_ruta(
+            std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|valor| !valor.is_empty()),
+            std::path::Path::new("/run/user"),
+            nix::unistd::Uid::current().as_raw(),
+            &actual,
+        ) {
+            return ConsultaServidor::Fallo(format!(
+                "hay un servidor de sesiones en {} y XDG_RUNTIME_DIR no está definida: \
+                 defínela para que `magi sincronizar` lo encuentre",
+                otro.display()
+            ));
+        }
     }
+    consulta
+}
+
+/// Sin `XDG_RUNTIME_DIR` (cron, `su`, una sesión sin logind) la ruta del socket
+/// cae a `/tmp/magi-<uid>`, y el servidor de la sesión gráfica escucha en
+/// `/run/user/<uid>/magi`: «no hay socket» no sería cierto y se aplicarían
+/// borrados de hosts con trabajo vivo (revisión de la 9b, NUC-3). Devuelve el
+/// socket de esa otra ruta si existe. Solo en Linux de escritorio: en Termux las
+/// rutas salen siempre del entorno.
+fn socket_en_otra_ruta(
+    xdg_definida: bool,
+    raiz_run: &std::path::Path,
+    uid: u32,
+    actual: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::FileTypeExt as _;
+    if xdg_definida || cfg!(target_os = "android") {
+        return None;
+    }
+    // Solo si la consulta buscó en la ruta de reserva (`<tmp>/magi-<uid>`): con
+    // unas rutas propias (las de una prueba) no hay otro servidor que buscar.
+    let de_reserva = actual
+        .parent()
+        .and_then(|directorio| directorio.file_name())
+        .is_some_and(|nombre| nombre.to_string_lossy() == format!("magi-{uid}"));
+    if !de_reserva {
+        return None;
+    }
+    let candidato = raiz_run
+        .join(uid.to_string())
+        .join("magi")
+        .join("servidor.sock");
+    if candidato == actual {
+        return None;
+    }
+    let tipo = std::fs::symlink_metadata(&candidato).ok()?.file_type();
+    tipo.is_socket().then_some(candidato)
 }
 
 /// id del host al que pertenece un elemento que puede tener trabajo vivo: el
@@ -423,4 +476,59 @@ pub fn estado_con(
         salida: texto,
         errores: String::new(),
     })
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::socket_en_otra_ruta;
+    use std::os::unix::net::UnixListener;
+    use std::path::Path;
+
+    #[test]
+    fn un_servidor_en_la_ruta_de_la_sesion_se_ve_aunque_falte_xdg_runtime_dir() {
+        let temporal = tempfile::tempdir().unwrap();
+        let raiz = temporal.path();
+        let directorio = raiz.join("1000").join("magi");
+        std::fs::create_dir_all(&directorio).unwrap();
+        let socket = directorio.join("servidor.sock");
+        let _escucha = UnixListener::bind(&socket).unwrap();
+        let actual = Path::new("/tmp/magi-1000/servidor.sock");
+
+        // Sin XDG_RUNTIME_DIR y con un socket en /run/user/<uid>/magi: hay un
+        // servidor que la consulta normal no vio.
+        assert_eq!(
+            socket_en_otra_ruta(false, raiz, 1000, actual),
+            Some(socket.clone())
+        );
+        // Con XDG_RUNTIME_DIR la ruta de la consulta ya era esa.
+        assert_eq!(socket_en_otra_ruta(true, raiz, 1000, actual), None);
+        // Otro usuario, o la misma ruta que la de la consulta: nada.
+        assert_eq!(socket_en_otra_ruta(false, raiz, 1001, actual), None);
+        assert_eq!(socket_en_otra_ruta(false, raiz, 1000, &socket), None);
+        // Unas rutas propias (una prueba, un entorno aislado) no buscan más.
+        assert_eq!(
+            socket_en_otra_ruta(
+                false,
+                raiz,
+                1000,
+                Path::new("/tmp/prueba/runtime/servidor.sock")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn un_fichero_que_no_es_un_socket_no_cuenta_como_servidor() {
+        let temporal = tempfile::tempdir().unwrap();
+        let raiz = temporal.path();
+        let directorio = raiz.join("1000").join("magi");
+        std::fs::create_dir_all(&directorio).unwrap();
+        std::fs::write(directorio.join("servidor.sock"), b"no soy un socket").unwrap();
+        let actual = Path::new("/tmp/magi-1000/servidor.sock");
+        assert_eq!(socket_en_otra_ruta(false, raiz, 1000, actual), None);
+        assert_eq!(
+            socket_en_otra_ruta(false, &raiz.join("no-existe"), 1000, actual),
+            None
+        );
+    }
 }

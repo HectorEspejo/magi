@@ -53,10 +53,10 @@ export ANDROID_HOME="$HOME/Android/Sdk" ANDROID_SDK_ROOT="$HOME/Android/Sdk" \
 cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh --locked
 
 # El .deb y su .sha256 en target/termux/ (la versión es la de Cargo.toml)
-scripts/paquete-termux.sh 1.6.0
+scripts/paquete-termux.sh 1.6.1
 
 # La estructura del .deb armado, como la comprueba la CI
-MAGI_DEB="$PWD/target/termux/magi-ssh_1.6.0_aarch64.deb" MAGI_EXIGIR_DEB=1 \
+MAGI_DEB="$PWD/target/termux/magi-ssh_1.6.1_aarch64.deb" MAGI_EXIGIR_DEB=1 \
   TZ=UTC cargo test --locked -p magi-ssh --test termux_paquete
 ```
 
@@ -140,16 +140,19 @@ a la candidata con `apt` (con un guion ordenaría después y no se actualizaría
 **La etiqueta de una candidata tiene que ser idéntica a la `version` de
 `Cargo.toml` del commit que se etiqueta.** `verificar` (en este workflow) y `plan`
 (en `release.yml`, que lo exige `dist`) comparan la etiqueta, sin la `v`, con la
-`version` del paquete `magi-ssh`: con la etiqueta `v1.6.0-rc.1`, `Cargo.toml` debe
-decir `version = "1.6.0-rc.1"`. Como una etiqueta publicada no se mueve, un
+`version` del paquete `magi-ssh`: con la etiqueta `v1.6.1-rc.1`, `Cargo.toml` debe
+decir `version = "1.6.1-rc.1"`. Como una etiqueta publicada no se mueve, un
 `Cargo.toml` que diga otra cosa quema la etiqueta y obliga a `-rc.2`. Es lo mismo
-que hace [`publicar.md`](publicar.md) (§4, paso 8) con `v1.0.0-rc.1`:
+que hace [`publicar.md`](publicar.md) (§4, paso 8) con `v1.6.1-rc.1`:
 
 1. En un commit propio, pon `version = "X.Y.Z-rc.N"` en `Cargo.toml` y deja
    `Cargo.lock` al día (`cargo metadata --locked` falla si no lo está). Cambiar la
    `version` arrastra lo que lista `CLAUDE.md` para un cambio de versión
    (`FECHA_DE_VERSION`, `assets/`, la DA2 de `tui_prueba.rs` y las instantáneas
-   `servidor_anterior_*`): lo hace el agente en ese mismo PR.
+   `servidor_anterior_*`): lo hace el agente en ese mismo PR. Ojo con la DA2:
+   con una candidata (`1.6.1-rc.1`) el emulador no lee el parche (`1-rc`) y
+   responde `10600`, no `10601`; la prueba `tui_prueba.rs` debe esperar esa en el
+   commit de la candidata y volver a `10601` en el de la estable.
 2. PR → `ci.yml` verde → merge a `main`. Comprueba que `Cargo.toml` de `main` dice
    `X.Y.Z-rc.N` antes de etiquetar.
 3. Etiqueta y empuja `vX.Y.Z-rc.N`, como en el paso 4 de la lista de arriba.
@@ -165,6 +168,10 @@ patrones (`v[0-9]+.[0-9]+.[0-9]+` y la variante `-rc.N`) no encajan con
 ## 5. Probar el `.deb` en el móvil antes de publicar
 
 Se hace con una candidata (`vX.Y.Z-rc.1`), que no toca las releases estables.
+
+La del primer lanzamiento del proyecto es `v1.6.1-rc.1`: la misma candidata que
+lanza el escritorio (ver [`publicar.md`](publicar.md) §4), con `Cargo.toml` en
+`1.6.1-rc.1` en el commit etiquetado.
 
 **La primera publicación de Termux tiene que ser siempre una candidata
 `-rc.N`**, nunca una versión estable. Cuando se escribió esta guía, el script
@@ -188,20 +195,20 @@ versiones pueden ir directamente como estables.
    `scp` (`pkg install openssh`):
 
    ```sh
-   scp usuario@192.0.2.10:magi-ssh_1.6.0-rc.1_aarch64.deb .
+   scp usuario@192.0.2.10:magi-ssh_1.6.1-rc.1_aarch64.deb .
    ```
 
 2. Comprueba la integridad (y, si tienes `gh`, la procedencia):
 
    ```sh
-   sha256sum -c magi-ssh_1.6.0-rc.1_aarch64.deb.sha256
-   gh attestation verify magi-ssh_1.6.0-rc.1_aarch64.deb --repo 4d3-org/magi
+   sha256sum -c magi-ssh_1.6.1-rc.1_aarch64.deb.sha256
+   gh attestation verify magi-ssh_1.6.1-rc.1_aarch64.deb --repo HectorEspejo/magi
    ```
 
 3. Instálalo y mira que arranca:
 
    ```sh
-   apt install ./magi-ssh_1.6.0-rc.1_aarch64.deb
+   apt install ./magi-ssh_1.6.1-rc.1_aarch64.deb
    magi --version
    magi diagnostico
    ```
@@ -283,7 +290,7 @@ página man, el autocompletado y el README (las licencias las instala Termux por
    compilación si se olvida):
 
    ```sh
-   curl -fsSL https://github.com/4d3-org/magi/archive/refs/tags/v1.6.0.tar.gz | sha256sum
+   curl -fsSL https://github.com/HectorEspejo/magi/archive/refs/tags/v1.6.1.tar.gz | sha256sum
    ```
 
    Es el tarball que genera GitHub para la etiqueta, no el de `dist`. Ajusta
@@ -332,7 +339,7 @@ Hay dos formas de repetir, y no son equivalentes:
   etiqueta) o con `gh`:
 
 ```sh
-gh workflow run termux-release.yml --ref main -f tag=v1.6.0
+gh workflow run termux-release.yml --ref main -f tag=v1.6.1
 ```
 
 Compila y arma el `.deb` otra vez **a partir del árbol de la etiqueta** y lo sube a
@@ -352,7 +359,7 @@ el commit que lanzó el workflow, y con `--ref main` es la punta de `main`. Lo
 compilado sí es el árbol de la etiqueta: `verificar` fija su SHA, `compilar` lo
 descarga por SHA y lo escribe en su log («Se compila el commit …»), y `publicar`
 comprueba que la etiqueta sigue en él antes de subir. `gh attestation verify
-… --repo 4d3-org/magi` da por buenos los dos casos; si quieres comprobar además el
+… --repo HectorEspejo/magi` da por buenos los dos casos; si quieres comprobar además el
 origen, `--source-ref refs/tags/vX.Y.Z` solo vale para un `.deb` salido de un push
 de etiqueta.
 
@@ -438,7 +445,7 @@ gh release view vX.Y.Z --json assets --jq '.assets[].name'
 - [`publicar.md`](publicar.md): publicación del escritorio y política de versiones.
 - [`publicar-android.md`](publicar-android.md): la app Android, de la que este
   workflow toma el NDK y `cargo-ndk`.
-- [`README.md`](../README.md): sección «MAGI en Termux».
+- [`docs/manual/termux.md`](manual/termux.md): el capítulo de Termux en el manual.
 - Termux: <https://termux.dev> · TUR: <https://github.com/termux-user-repository/tur>
 - Atestaciones de procedencia:
   <https://docs.github.com/es/actions/security-for-github-actions/using-artifact-attestations>

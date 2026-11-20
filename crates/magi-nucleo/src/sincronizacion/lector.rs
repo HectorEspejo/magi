@@ -131,6 +131,10 @@ pub fn pasada_lector(
         Err(error) => return Ok(ResultadoLectura::nuevo(EstadoLectura::ErrorCarpeta(error))),
     };
     let mut ficheros: Vec<(String, EntradaCarpeta)> = Vec::new();
+    // Ficheros de equipos que cuentan y que esta pasada no ha podido leer
+    // (dañados, de formato nuevo, demasiado grandes…): con alguno, la fusión es
+    // parcial y no se resuelven los borrados aplazados.
+    let mut incompletos = 0usize;
     for entrada in entradas {
         let Some(uuid) = uuid_de_nombre(&entrada.nombre) else {
             // Copias en conflicto de la herramienta de sincronización,
@@ -148,6 +152,11 @@ pub fn pasada_lector(
                 entrada.tamano,
                 carpeta::TAMANO_MAXIMO
             ));
+            let quitado = equipos_bd::por_uuid(conexion, &uuid)?
+                .is_some_and(|equipo| equipo.estado == equipos_bd::ESTADO_QUITADO);
+            if !quitado {
+                incompletos += 1;
+            }
             continue;
         }
         ficheros.push((uuid, entrada));
@@ -182,6 +191,7 @@ pub fn pasada_lector(
                 "se ignora «{}»: supera el tamaño máximo",
                 entrada.nombre
             ));
+            incompletos += 1;
             continue;
         }
         let hash = cifrado::sha256_hex(&bytes);
@@ -244,6 +254,7 @@ pub fn pasada_lector(
                     equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_DANADO)?;
                 }
                 resultado.avisos.push(aviso_danado(uuid, &motivo));
+                incompletos += 1;
             }
             Err(FalloLectura::FormatoNuevo(_)) => {
                 if let Some(equipo) = &equipo {
@@ -260,12 +271,14 @@ pub fn pasada_lector(
                 resultado.avisos.push(format!(
                     "el equipo {nombre} usa una versión más nueva de MAGI; actualiza"
                 ));
+                incompletos += 1;
             }
             Err(FalloLectura::EquipoInvalido(motivo)) => {
                 if let Some(equipo) = &equipo {
                     equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_DANADO)?;
                 }
                 resultado.avisos.push(motivo);
+                incompletos += 1;
             }
         }
     }
@@ -423,10 +436,14 @@ pub fn pasada_lector(
     //    marca `recuperado`; si ya no existe, el borrado se aplicó y se marca
     //    `aceptado`. Sin esto, un conflicto pendiente obligaría a releer todos
     //    los ficheros en cada pasada para siempre.
-    // Si algún fichero no se pudo leer, la fusión es parcial: no se resuelven
-    // los borrados aplazados o se daría por «recuperado» un host que solo
-    // parecía vivo por no haber leído la lápida.
-    if fallos_de_lectura == 0 && !matches!(resultado.estado, EstadoLectura::EsperandoClave(_)) {
+    // Si algún fichero no se pudo leer (error de E/S, dañado, de formato nuevo o
+    // demasiado grande), la fusión es parcial: no se resuelven los borrados
+    // aplazados o se daría por «recuperado» un host que solo parecía vivo por no
+    // haber leído la lápida.
+    if fallos_de_lectura == 0
+        && incompletos == 0
+        && !matches!(resultado.estado, EstadoLectura::EsperandoClave(_))
+    {
         resolver_borrados_obsoletos(conexion, &plan)?;
     }
 

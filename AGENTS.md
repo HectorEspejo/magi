@@ -359,7 +359,15 @@ coméntalo con el desarrollador.
   sincronizacion_equipos --test sincronizacion_elementos --test
   sincronizacion_fusion --test sincronizacion_aplicacion --test
   sincronizacion_pasada --test sincronizacion_pasada_e2e --test
-  sincronizacion_huellas --test sincronizacion_ui`.
+  sincronizacion_huellas --test sincronizacion_ui --test sincronizacion_10b`.
+- `magi sincronizar` pregunta al servidor (`servidor::consultar_trabajo`, sin
+  arrancarlo nunca y con plazo de 5 s) antes de borrar hosts y túneles: sin
+  servidor aplica, con trabajo vivo en el host aplaza, y con otra versión o sin
+  respuesta aplaza todos los de hosts y túneles; un aplazado no es un error. Solo
+  «ninguna identidad coincide» pide la clave (un fichero a medio copiar se avisa
+  y se reintenta), y la clave anterior solo abre ficheros de equipos conocidos y
+  no quitados. Todo cambio de una tabla que viaja y su versión van en la misma
+  transacción (`versiones::cambiar_con_version`).
 - `age` está fijado en 0.11.5: la 0.12 no compila con el `ml-kem` que trae
   russh 0.63. No lo subas sin subir el conjunto russh, y al actualizar `age`
   revisa las excepciones RUSTSEC-2026-0173 y RUSTSEC-2026-0374 de
@@ -753,7 +761,12 @@ coméntalo con el desarrollador.
   `unset TMUX`, aplica la configuración antes de crear la sesión
   (`start-server`, `set` y `new-session` en una sola orden) y lleva
   `extended-keys` en la constante `EXTENDED_KEYS` (D338). El tmux falso y su
-  README viven en `tests/fijos/terminal/` de la raíz.
+  README viven en `tests/fijos/terminal/` de la raíz. El script viaja por la
+  entrada estándar del `exec`, leído entero (la línea de órdenes solo lleva
+  `OrdenTmux::ARRANQUE` y los argumentos validados), y el enganche con PTY es el
+  script mínimo `terminal_enganche.sh`; la preparación (`preparar`) va por la
+  entrada estándar. Las listas de caracteres válidos son explícitas, sin rangos
+  que dependan del locale (R159).
 - Los scripts remotos se escriben para un canal `exec`, que no es una sesión de
   login: sin UTF-8 en el entorno, con variables heredadas (`TMUX`), `dash` como
   `/bin/sh` y mawk. No fijes `LC_ALL` en un script que arranca procesos que se
@@ -824,8 +837,12 @@ coméntalo con el desarrollador.
 - Engancharse sin compartir suelta a los demás (`attach -d`) y pone
   `@magi_equipo`; el script sale de `enganchar` con 100 si te sueltan, con 0 si
   la sesión terminó, con 75 si no existía, con 74 o 76 si tmux es antiguo o no
-  está, y con el código de tmux si no pudo engancharse; sigue la sesión por
-  `#{session_id}`. Un canal cerrado sin código es una caída, nunca «terminada».
+  está, con 101 si la reconexión encontró la sesión en manos de otro equipo
+  (`FinEnganchar::OtroEquipo`), y con el código de tmux si no pudo engancharse;
+  sigue la sesión por `#{session_id}` y la hora de creación, no por el nombre
+  (un renombrado de otro equipo no la hace «terminada»). La marca
+  `@magi_equipo` la pone el enganche, después de la guarda. Un canal cerrado sin
+  código es una caída, nunca «terminada».
   La reconexión automática parte del estado vivo de la pestaña y nunca quita una
   sesión a otro equipo: si la tiene otro, la pestaña queda soltada. El tmux
   habitual solo se lista, se engancha compartiendo, se lee y se termina: sin
@@ -852,7 +869,8 @@ coméntalo con el desarrollador.
   (`sesiones_persistentes_servidor` tarda ~50 s y `sesiones_persistentes_cli`
   ~7 s, a propósito). `tmux_real` y la de extremo a extremo necesitan tmux (en
   CI, `apt install tmux`) y el `script` de util-linux: con `CI` puesta fallan si
-  faltan, y sin ella se omiten con un aviso (solo se ve con `--nocapture`). Las
+  faltan (las dos), y sin ella se omiten con un aviso (solo se ve con
+  `--nocapture`). Las
   dos usan el tmux del `PATH` o el de `MAGI_TMUX_DIR`, para repetirlas con otras
   versiones.
 - Termux (desde la Fase 17): el mismo binario, compilado para

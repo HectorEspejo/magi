@@ -258,7 +258,7 @@ No viaja `plegado` (es propio de cada equipo).
 | `etiquetas` | array de texto | Nombres de etiquetas. |
 | `verificaciones` | objeto o null | Comprobaciones previas de la deliberación (§7.2.2). |
 | `snippet_al_conectar` | uuid o null | Snippet que se escribe en cada pestaña. |
-| `sesiones_persistentes` | booleano | **Desde el formato 4.** Toda pestaña nueva del host es una sesión persistente, con nombre automático y ficha. Solo se escribe cuando es `true`: un host sin la marca no trae el campo, y un fichero anterior al formato 4 tampoco, y en los dos casos cuenta como `false`. |
+| `sesiones_persistentes` | booleano | **Desde el formato 4.** Toda pestaña nueva del host es una sesión persistente, con nombre automático y ficha. Solo se escribe cuando es `true`: un host sin la marca no trae el campo, y un fichero anterior al formato 4 tampoco, y en los dos casos cuenta como `false`. Solo un host `ssh` puede llevar la marca: si un fichero la trae en un host de otro tipo (`rdp`, `vnc`, `voxl`), la importación aplica el host y la ignora (cuenta como `false`) y deja un aviso en el log. |
 
 No viajan: `ultimo_estado`, `ultima_conexion_en`, `sftp_dir_local`,
 `sftp_dir_remoto`, `actualizado_en`, `reconectar`, `portapapeles_remoto` ni
@@ -440,7 +440,7 @@ verdad de si la sesión existe.
 | `comando_reanudar` | texto o null | Comando al reabrir una sesión terminada (por ejemplo `claude --continue`). `null`: el `comando`. |
 | `nota` | texto o null | Hasta 500 caracteres. |
 | `origen` | texto | `manual` (marcada al abrir), `host` (de un host marcado) o `descubierta` (añadida desde la lista). |
-| `creada_por` | texto | Etiqueta del equipo que la creó. No cambia después de crearla. |
+| `creada_por` | texto | Etiqueta del equipo que la creó. No cambia después de crearla. La importación la guarda recortada de espacios y rechaza la ficha, como conflicto de elemento, si queda vacía. |
 
 Un texto vacío es lo mismo que `null`: al exportar, MAGI escribe `null`.
 
@@ -636,6 +636,10 @@ seguir cualquier implementación (MAGI de escritorio y Android):
 10. **Aplicación.** Las versiones y los vectores se escriben **tal cual** vienen
     del fichero (nunca se regeneran al importar); el `reloj_ms` local sube a la
     mayor versión vista. Las ediciones locales posteriores ya serán más recientes.
+    Las filas que la importación aparta con un nombre temporal para evitar choques
+    de `UNIQUE` y que al final no se reescriben ni se borran (por omitirse o por
+    un borrado aplazado) recuperan su nombre original antes de terminar: el nombre
+    temporal nunca queda en la base de datos.
 
 ---
 

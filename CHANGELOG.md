@@ -7,6 +7,27 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ## [Sin publicar]
 
+## [1.6.1] - 2026-11-20
+
+**Resumen.** Primera versión publicada de MAGI: gestor SSH de terminal para Linux y macOS (y dentro de Termux, en Android), con pestañas y sesiones persistentes, SFTP, túneles, snippets con deliberación, sincronización cifrada entre equipos, escritorios remotos y servicios.
+
+**Summary.** First published release of MAGI: a terminal SSH manager for Linux and macOS (and inside Termux, on Android), with tabs and persistent sessions, SFTP, tunnels, snippets with deliberation, encrypted sync between machines, remote desktops and services.
+
+Primera versión publicada: reúne lo que se numeró durante el desarrollo (de la 1.0.0 a la 1.6.0) y no llegó a salir, más las correcciones de la sincronización y de las sesiones persistentes de esta versión. La app Android se publica aparte, con su propio registro de cambios (`android/CHANGELOG.md`).
+
+### Qué trae
+
+- **Inventario y conexión:** importación sin pérdida de `~/.ssh/config`, ficha completa, huellas estrictas, identidades y registro de todo lo que hace MAGI.
+- **Pestañas y terminal:** servidor de sesiones (las sesiones sobreviven a la ventana), paneles, historial con búsqueda y copia, enlaces, escritura en varios, reconexión y compatibilidad con Claude Code.
+- **Sesiones persistentes:** en un tmux propio del host, retomables desde cualquier equipo, con fichas que viajan por la sincronización y `magi sesiones`.
+- **Archivos y túneles:** SFTP en panel doble con edición remota y sincronización de carpetas; túneles locales, remotos y SOCKS5.
+- **Snippets, deliberación y flota:** órdenes guardadas con variables, deliberación MAGI antes de ejecutar y sondeo de la flota.
+- **Sincronización cifrada** del inventario entre equipos (carpeta compartida, `age`) y `magi sincronizar`.
+- **Escritorio remoto:** RDP, VNC y voxl en un visor web local.
+- **Servicios y contenedores:** systemd, Docker y Podman con sus logs, desde la vista Servicios.
+- **Termux:** MAGI dentro de Android, con el llavero cifrado con frase maestra, avisos y wake lock.
+- **Distribución:** AUR (`magi-ssh-bin`), Homebrew (`hectorespejo/tap/magi-ssh`), tarballs verificables y el `.deb` de Termux.
+
 ### Añadido
 
 - **MAGI en Termux, llavero con frase maestra (Fase 17, primera entrega).**
@@ -110,7 +131,7 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
     la release de cada etiqueta `vX.Y.Z` (también `-rc.N`), nunca con las de la app
     Android; el job `termux` de CI lo arma en las PR que tocan el código; la receta
     de TUR vive en `packaging/termux/` y la guía de publicación en
-    `docs/publicar-termux.md`. El README gana la sección «MAGI en Termux».
+    `docs/publicar-termux.md`. El manual gana el capítulo «Termux» (`docs/manual/termux.md`).
 
 - **Sesiones persistentes (Fase 16).** Una sesión de terminal con nombre que
   **sobrevive a MAGI y al equipo**: vive en un **tmux propio de MAGI** en el
@@ -140,7 +161,7 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   Nuevos subcomandos `magi sesion <nombre> [--host <host>]` (abre MAGI
   enganchado a la sesión) y `magi sesiones [--json]` (lista las fichas con su
   estado preguntando al servidor, sin diálogos; el JSON está documentado en el
-  README) y sección `[persistentes]` en `config.toml` (`vigilar_seg`,
+  manual) y sección `[persistentes]` en `config.toml` (`vigilar_seg`,
   `refresco_seg`, `antigua_dias` y `vista_previa_lineas`). Migración 11
   (tabla `SESIONES_PERSISTENTES` y `HOSTS.sesiones_persistentes`) y protocolo
   v10. La app Android lee el `formato` 4 (guarda las fichas y la marca del host
@@ -248,149 +269,6 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
   [`docs/formato-sincronizacion.md`](docs/formato-sincronizacion.md) para la app
   Android.
 
-### Cambiado
-
-- Versión 1.5.0 (MINOR: funcionalidad nueva, migración de esquema 11,
-  protocolo 10 y `formato` 4 de sincronización solo cuando hay fichas de
-  sesiones persistentes o hosts marcados).
-
-- **La marca «sesión persistente con tmux» de la 1.4.0 pasa a «Todas las
-  sesiones persistentes» y ahora viaja (Fase 16).** `HOSTS.tmux_persistente`
-  (propio de cada equipo y sin sincronizar) queda obsoleto: al abrir la 1.5.0,
-  la migración 11 copia su valor a `HOSTS.sesiones_persistentes` por el camino
-  que sube la versión del host, apaga la antigua y avisa una vez. La marca
-  ahora se sincroniza como el resto de la ficha del host (y está en el bloque
-  SESIONES, ya no en TERMINAL). Las sesiones nuevas ya no se llaman
-  `magi-<equipo>-<n>` sino `<equipo>-<n>`, van al tmux propio de MAGI y no al
-  habitual; las que creó la 1.4.0 en el tmux de siempre se siguen viendo,
-  enganchando y terminando desde Sesiones, pero no se migran (un proceso no se
-  puede mover de un servidor de tmux a otro).
-
-- **La lista de tmux de la 1.4.0 se integra en «Persistentes» (Fase 16).** `t`
-  en «Pestañas» y la entrada de paleta «sesiones de tmux» ya no abren una lista
-  propia: comprueban el host de la pestaña y enseñan sus sesiones (las del tmux
-  de MAGI sin ficha y las del tmux de siempre, «de tu tmux») en el bloque
-  «Persistentes» de la vista Sesiones, desde donde se enganchan y se terminan
-  igual que antes.
-
-- **La tecla `N` queda reservada en Flota (Fase 16).** Abre el diálogo «Nueva
-  sesión persistente» con el host de la fila (también desde Hosts). Un atajo
-  `N` de `[flota.atajos]` en `config.toml` se ignora ahora con el aviso de
-  siempre al arrancar; usa otra letra.
-
-- **Protocolo cliente ⇄ servidor v10 (Fase 16).** `AbrirSesion.tmux` pasa a
-  llevar `servidor`, `nombre`, `crear` y `compartir` (cambia la semántica: por
-  eso sube la versión), `TerminarTmux` y `SesionesTmux` distinguen el servidor
-  de tmux y se añaden `ConsultarSesionesPersistentes`, `SesionesPersistentes`,
-  `PedirVistaPrevia`, `RenombrarTmux` y `AperturaTmuxFallida`. Un servidor de la
-  1.4.0 en marcha se sustituye al abrir la 1.5.0 como siempre: solo si no
-  custodia nada, y si no, MAGI pregunta.
-
-- **Para quien actualiza de la 1.4.0 a la 1.5.0.** La base de datos pasa sola
-  de `user_version` 10 a 11 al abrir MAGI (hacia delante: una `magi.db` migrada
-  no la abre un binario anterior). Si tenías hosts con «sesión persistente con
-  tmux», pasan a «Todas las sesiones persistentes», que ahora viaja a tus otros
-  equipos (si dos equipos tenían valores distintos, gana el último cambio).
-  Actualiza todos los equipos de escritorio: uno con MAGI 1.4.0 o anterior verá
-  el fichero de sincronización como «formato nuevo» en cuanto otro equipo cree
-  una ficha de sesión persistente o marque un host, y no importará nada de él
-  hasta que se actualice; la app Android debe ser una versión que lea el
-  `formato` 4 (la de esta fase). Si el servidor de sesiones de la 1.4.0 sigue
-  abierto, `magi` lo sustituye solo si no custodia nada y, si no, te lo
-  pregunta. En el host hace falta tmux 3.0 o posterior (MAGI no lo instala), y
-  para ver los avisos de atención de Claude Code hay que activar en su
-  configuración la campana del terminal (`preferredNotifChannel =
-  "terminal_bell"`).
-
-- Versión 1.4.0 (MINOR: funcionalidad nueva, migración de esquema 10 y
-  protocolo 9; `formato` de sincronización sin cambios).
-
-- Versión 1.3.0 (MINOR: funcionalidad nueva, migración de esquema 9,
-  protocolo 8 y `formato` 3 de sincronización).
-
-- Versión 1.2.0 (MINOR: funcionalidad nueva, migración de esquema 8,
-  protocolo 7 y `formato` 2 de sincronización).
-
-- **Codificación de teclas del terminal unificada (Fase 11).** La tabla
-  de bytes de las teclas vive ahora en el núcleo compartido, como la usará la
-  app Android. El escritorio gana la codificación estándar de flechas e
-  Inicio/Fin con modificadores (`ESC [ 1 ; m X`), Ctrl+Alt+tecla y algunas
-  combinaciones de Ctrl que antes se ignoraban; el resto no cambia.
-
-- Versión 1.1.0 (MINOR: funcionalidad nueva y migración de esquema 7).
-
-### Corregido
-
-- **La sincronización ya no se tumba, ni lee entero, un fichero ajeno con
-  nombre de MAGI en la carpeta compartida.** Un directorio, un FIFO o un fichero
-  de varios GiB llamado `magi-<uuid>.age` hacía fallar la pasada (o la dejaba
-  leyéndolo en la interfaz); ahora solo se admiten ficheros normales, con tope de
-  lectura, y lo demasiado grande se trata como dañado sin leerlo.
-- **Un fallo al escribir un fichero de MAGI ya no deja su temporal en la
-  carpeta.** La escritura atómica (`ficheros.rs`) borra el temporal si falla
-  antes del renombrado.
-- **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
-  encoding».** Copiada de la terminal, la clave suele llegar partida en dos
-  líneas o con espacios, y el escritorio solo quitaba los de los extremos.
-  Ahora quita todos los espacios y la pasa a mayúsculas, como el móvil. Si la
-  clave no vale, el aviso dice por qué en castellano: está vacía, es la clave
-  pública (`age1…`), no empieza por `AGE-SECRET-KEY-1` o está incompleta.
-
-- **Los errores del llavero en Linux no decían qué pasaba.** MAGI descartaba
-  lo que `secret-tool` escribía por la salida de error y solo enseñaba «el
-  llavero devolvió exit status: 1». Ahora el aviso lleva ese mensaje y, en los
-  casos conocidos, qué hacer: sin servicio de llavero en la sesión, instalar
-  `gnome-keyring` (o activar KWallet o KeePassXC); sin sesión de D-Bus, abrir
-  MAGI desde la sesión gráfica. Si falta `secret-tool`, dice qué paquete
-  instalar en Debian y Ubuntu, Arch o Fedora. El README lo pone en los
-  requisitos de Linux.
-
-- **Copiar colgaba la aplicación en Wayland.** `wl-copy` se queda como daemon
-  sirviendo el portapapeles y hereda su salida de error; al esperar a leer su
-  fin la interfaz se quedaba bloqueada para siempre (parecía un cierre). Ahora
-  se espera un poco al proceso directo y, si sigue vivo sirviendo el
-  portapapeles, se recoge en segundo plano: copiar vuelve al instante. Con
-  pruebas de regresión, incluida la de `wl-copy` real cuando hay Wayland.
-
-- **Pegar, seleccionar con el ratón y el foco exterior no funcionaban** (Fase
-  15). El hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained`
-  y `FocusLost` del terminal exterior: pegar no hacía nada y, con el ratón
-  capturado (Claude Code u otros programas que lo piden), la rueda, el clic y
-  el arrastre se perdían; el remoto tampoco veía los cambios de foco. Ahora se
-  reenvían al bucle de la UI con test de regresión del hilo.
-
-- Dos aperturas simultáneas de una base de datos con WAL pendiente ya no
-  chocan al crear su copia temporal (los nombres llevan un contador además del
-  reloj): `magi.db` se valida igual y los tests dejan de fallar cuando corren
-  en paralelo.
-
-- **Pegar fuera de una pestaña va al campo con foco** (Fase 15). El texto
-  pegado en un diálogo, la búsqueda del historial, la paleta, un filtro, la
-  ficha o Servicios se inserta en su campo de texto (sin saltos de línea, que
-  se juntan) en vez de descartarse; los diálogos que no tienen campo lo
-  ignoran. Al ceder la terminal al visor o al editor se deshacen otra vez el
-  pegado entre corchetes, el foco, las banderas de kitty y el ratón (D314).
-
-- **Pantalla negra al abrir un escritorio RDP.** El visor recibía
-  `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente
-  RDP mandaba mapas de bits como rectángulos; el visor los pintaba en su búfer
-  y no los presentaba. Ahora la imagen de apertura es siempre «rectángulos» y
-  solo se anuncia H.264 cuando llega el primer fotograma de vídeo; además el
-  puente cachea el último GOP y pide un repintado completo (Refresh Rect) al
-  visor que entra tarde o vuelve a la pestaña.
-
-- Evita el error «database is locked» al escribir el inventario con el
-  servidor de sesiones activo: las transacciones del almacén se abren con
-  `BEGIN IMMEDIATE`, de modo que esperan el bloqueo en vez de fallar al
-  promoverlo.
-
-## [1.0.0] - 2026-10-30
-
-Primera versión pública de MAGI. Reúne las Fases 1-8 del proyecto y el
-empaquetado de la Fase 9.
-
-### Añadido
-
 - **Inventario y conexión (Fase 1).** Inventario de hosts en SQLite (WAL) con
   grupos, etiquetas, ficha completa, filtro incremental, paleta de comandos
   (`Ctrl+P`), ayuda contextual (`?`) y tema de Omarchy con paleta de respaldo
@@ -452,6 +330,72 @@ empaquetado de la Fase 9.
 
 ### Cambiado
 
+- **Protocolo v10 (campos opcionales):** `AperturaTmuxFallida` admite la causa
+  `no_existe` (la sesión ya no estaba en el host) y `InfoSesion.tmux.creada`
+  dice si la pestaña creó la sesión, para que dos ventanas del mismo equipo no
+  guarden dos fichas de una sesión que ya existía (R163).
+
+- **Aclaración sobre el aviso de la migración 11 (la marca de sesiones
+  persistentes de la 1.4.0).** El aviso («avisa una vez») lo muestra solo el
+  proceso que aplica la migración, y solo si es la ventana de MAGI: si el
+  primero en abrir la base con esta versión es otro proceso (el servidor o un
+  subcomando como `magi sesiones` o `magi exportar`), nadie lo enseña, aunque la
+  marca se haya copiado igual a «Todas las sesiones persistentes».
+
+- **La marca «sesión persistente con tmux» de la 1.4.0 pasa a «Todas las
+  sesiones persistentes» y ahora viaja (Fase 16).** `HOSTS.tmux_persistente`
+  (propio de cada equipo y sin sincronizar) queda obsoleto: al abrir la 1.5.0,
+  la migración 11 copia su valor a `HOSTS.sesiones_persistentes` por el camino
+  que sube la versión del host, apaga la antigua y avisa una vez. La marca
+  ahora se sincroniza como el resto de la ficha del host (y está en el bloque
+  SESIONES, ya no en TERMINAL). Las sesiones nuevas ya no se llaman
+  `magi-<equipo>-<n>` sino `<equipo>-<n>`, van al tmux propio de MAGI y no al
+  habitual; las que creó la 1.4.0 en el tmux de siempre se siguen viendo,
+  enganchando y terminando desde Sesiones, pero no se migran (un proceso no se
+  puede mover de un servidor de tmux a otro).
+
+- **La lista de tmux de la 1.4.0 se integra en «Persistentes» (Fase 16).** `t`
+  en «Pestañas» y la entrada de paleta «sesiones de tmux» ya no abren una lista
+  propia: comprueban el host de la pestaña y enseñan sus sesiones (las del tmux
+  de MAGI sin ficha y las del tmux de siempre, «de tu tmux») en el bloque
+  «Persistentes» de la vista Sesiones, desde donde se enganchan y se terminan
+  igual que antes.
+
+- **La tecla `N` queda reservada en Flota (Fase 16).** Abre el diálogo «Nueva
+  sesión persistente» con el host de la fila (también desde Hosts). Un atajo
+  `N` de `[flota.atajos]` en `config.toml` se ignora ahora con el aviso de
+  siempre al arrancar; usa otra letra.
+
+- **Protocolo cliente ⇄ servidor v10 (Fase 16).** `AbrirSesion.tmux` pasa a
+  llevar `servidor`, `nombre`, `crear` y `compartir` (cambia la semántica: por
+  eso sube la versión), `TerminarTmux` y `SesionesTmux` distinguen el servidor
+  de tmux y se añaden `ConsultarSesionesPersistentes`, `SesionesPersistentes`,
+  `PedirVistaPrevia`, `RenombrarTmux` y `AperturaTmuxFallida`. Un servidor de la
+  1.4.0 en marcha se sustituye al abrir la 1.5.0 como siempre: solo si no
+  custodia nada, y si no, MAGI pregunta.
+
+- **Para quien actualiza de la 1.4.0 a la 1.5.0.** La base de datos pasa sola
+  de `user_version` 10 a 11 al abrir MAGI (hacia delante: una `magi.db` migrada
+  no la abre un binario anterior). Si tenías hosts con «sesión persistente con
+  tmux», pasan a «Todas las sesiones persistentes», que ahora viaja a tus otros
+  equipos (si dos equipos tenían valores distintos, gana el último cambio).
+  Actualiza todos los equipos de escritorio: uno con MAGI 1.4.0 o anterior verá
+  el fichero de sincronización como «formato nuevo» en cuanto otro equipo cree
+  una ficha de sesión persistente o marque un host, y no importará nada de él
+  hasta que se actualice; la app Android debe ser una versión que lea el
+  `formato` 4 (la de esta fase). Si el servidor de sesiones de la 1.4.0 sigue
+  abierto, `magi` lo sustituye solo si no custodia nada y, si no, te lo
+  pregunta. En el host hace falta tmux 3.0 o posterior (MAGI no lo instala), y
+  para ver los avisos de atención de Claude Code hay que activar en su
+  configuración la campana del terminal (`preferredNotifChannel =
+  "terminal_bell"`).
+
+- **Codificación de teclas del terminal unificada (Fase 11).** La tabla
+  de bytes de las teclas vive ahora en el núcleo compartido, como la usará la
+  app Android. El escritorio gana la codificación estándar de flechas e
+  Inicio/Fin con modificadores (`ESC [ 1 ; m X`), Ctrl+Alt+tecla y algunas
+  combinaciones de Ctrl que antes se ignoraban; el resto no cambia.
+
 - El paquete se llama `magi-ssh`, pero el comando, la biblioteca, las rutas de
   datos y el socket siguen llamándose `magi`: actualizar el paquete nunca mueve
   los datos del usuario.
@@ -473,6 +417,209 @@ empaquetado de la Fase 9.
 - MAGI pasa a ser software libre bajo doble licencia MIT OR Apache-2.0.
 
 ### Corregido
+
+- **`magi sincronizar` ya no borra un host con trabajo vivo (corrección 10b).**
+  Antes de aplicar el borrado de un host o de un túnel que llega por la
+  sincronización, la orden pregunta al servidor de sesiones (sin arrancarlo
+  nunca, con plazo de 5 s): sin servidor, aplica; si el host tiene pestañas,
+  túneles, transferencias, ejecuciones o escritorios en marcha, aplaza ese
+  borrado (y el de sus túneles); con un servidor de otra versión o que no
+  responde, aplaza todos los de hosts y túneles. Un borrado aplazado no es un
+  error (código de salida 0): la salida dice el motivo («aplazado: borrar web-01
+  (tiene trabajo vivo en el servidor de sesiones: 1 sesión(es))»), queda como
+  conflicto de borrado y se resuelve desde la TUI. La salida de la orden se
+  reorganiza: una línea por tema, los avisos con «!» y un resumen al final.
+  `magi sincronizar estado` lista los «borrados aplazados» con su motivo.
+
+- **Un fichero cortado, vacío o a medio copiar ya no pide la clave nueva
+  (corrección 10b).** En el escritorio y en la app, solo «ninguna identidad
+  coincide» (un fichero cifrado para otra clave) detiene la sincronización y
+  pide la clave. Un fichero truncado, vacío o que no es age sale como
+  «magi-<uuid>.age: a medio copiar o dañado; se reintenta en la siguiente
+  pasada»: se importan los demás ficheros, no se pide nada y se vuelve a
+  intentar solo en la siguiente pasada (en la vista SINCRONIZACIÓN, el estado
+  del equipo es «a medio copiar o dañado: se reintenta»).
+
+- **La clave anterior solo abre ficheros de equipos conocidos (corrección
+  10b).** Durante los 30 días siguientes a rotar la clave, la clave anterior lee
+  únicamente los ficheros de equipos que este ya conocía y no están quitados. El
+  fichero de un equipo desconocido se rechaza con el aviso «rechazado: de un
+  equipo que este no conocía, cifrado con la clave anterior», sin crear ni
+  importar nada y sin parar la pasada; el escritorio deja una línea en el log,
+  sin su contenido, una vez por sesión de MAGI. La app no usa la clave anterior
+  si le falta la actual.
+
+- **El cambio de un elemento y su versión se escriben a la vez (corrección
+  10b).** Editar un host, un grupo, una identidad, un túnel o una sincronización
+  de directorio, cambiar sus etiquetas o sus verificaciones, y «mantener los
+  míos» al importar guardan el cambio, la versión nueva y el reloj en la misma
+  transacción: si algo falla entre medias, no queda ningún cambio sin su versión
+  (que otro equipo no habría podido ordenar).
+
+- **Sesiones persistentes en hosts con Dropbear:** MAGI ya no manda el script de
+  tmux (~27 KB) en la línea de órdenes del `exec`, que Dropbear limita (~9000
+  bytes): ahora lo manda por la entrada estándar, entero antes de ejecutar nada,
+  y el enganche con terminal usa un script aparte de ~4 KB
+  (`terminal_enganche.sh`). Comprobar, crear, listar, vista previa, historial,
+  renombrar y terminar dejan de depender de cuánto admita el servidor SSH.
+
+- **La reconexión automática no le quita la sesión a otro equipo, ni en una
+  carrera ni tras un renombrado:** el enganche comprueba y se engancha en el
+  mismo paso y solo si la sesión está libre o es de este equipo; si otro equipo
+  se la llevó entre medias, la pestaña queda soltada sin tocarle nada. Si otro
+  equipo renombra la sesión, la pestaña la sigue por su identificador de tmux y
+  la pestaña soltada sabe qué equipo la tiene y cómo se llama ahora, en vez de
+  cerrarse como si hubiera terminado.
+
+- **Aviso cuando una sesión se crea pero la pestaña no llega a abrirse:** si la
+  sesión de tmux se crea en el host y después falla la apertura (el host rechaza
+  el terminal, o se cierra la pestaña mientras se crea), MAGI avisa de que la
+  sesión sigue ahí y de que hay que engancharse desde Sesiones, en vez de
+  dejarla huérfana sin decir nada.
+
+- **El aviso de una pestaña (campana, OSC 9…) se limpia al mirarla:** el
+  servidor ya no guarda un aviso de una pestaña que alguna ventana tiene
+  enfocada y lo quita al enfocarla, al adjuntarse una ventana y al llegar datos
+  con la pestaña enfocada; antes solo se quitaba con el foco recién recibido y
+  otra ventana seguía enseñando el `!`.
+
+- **El aviso de atención de las sesiones persistentes ya no sale con la lista
+  vieja (cierre de la Fase 16).** La lista que recibe una ventana al conectarse
+  es la que el servidor guardó al irse la última, y podía traer una campana de
+  hace horas que ya no suena. Ahora el vigilante hace una pasada inmediata al
+  conectarse una ventana y difunde la lista aunque no haya cambiado nada, y MAGI
+  no avisa con una comprobación anterior a su conexión (dentro del margen de
+  repetición del servidor, como `magi sesiones`).
+
+- **Volver a una pestaña soltada con `r` o «reconectar» pide confirmación
+  (cierre de la Fase 16).** `r` en «Pestañas», «reconectar» de la paleta y
+  `prefijo r` sobre una pestaña que otro equipo se llevó le quitaban la sesión
+  sin avisar; ahora preguntan («VOLVER A LA SESIÓN», con quién la usa) y solo
+  `↵` o `s` la recuperan. `↵` y `c` en la propia pestaña soltada siguen como
+  estaban, porque su recuadro ya lo dice.
+
+- **Un host marcado ya no guarda la ficha de una sesión que no creó (cierre de
+  la Fase 16).** La ficha automática de «Todas las sesiones persistentes» solo
+  la guarda la pestaña que creó la sesión en el host (lo dice el servidor con el
+  campo opcional `creada`, dentro del protocolo 10): enganchar una sesión que ya
+  existía, reconectar o abrir otra ventana ya no la recrean aunque se hubiera
+  borrado; con un servidor anterior, que no manda el campo, no se crea la ficha
+  automática.
+
+- **Etiquetas legibles en CONFLICTOS y REGISTRO (cierre de la Fase 16).** Los
+  textos de CONFLICTOS dicen «túnel», «sesión persistente», «sincronización de
+  directorio» o «comprobación de servicio» en vez del nombre interno (`tunel`,
+  `sesion_persistente`…), y el tipo `huérfano` lleva su tilde. En REGISTRO, los
+  cuatro tipos de las sesiones persistentes, que la columna cortaba (25 a 29
+  caracteres), salen enteros como `persistente_creada`, `persistente_borrada`,
+  `persistente_reabierta` y `persistente_enganchada`; el detalle, el filtro y la
+  exportación siguen con el tipo real.
+
+- **Los textos de la sincronización solo salen con ella configurada (cierre de
+  la Fase 16).** Los diálogos «Nueva sesión persistente» y de la ficha de la
+  sesión, la confirmación de borrar una ficha, la cabecera «SESIONES (viaja a
+  tus equipos)» de la ficha del host y la ayuda de Sesiones solo dicen que la
+  ficha viaja a los otros equipos si hay una carpeta de sincronización; sin
+  ella, no.
+
+- **El diálogo «Nueva sesión persistente» vuelve con lo escrito cuando la
+  carpeta no existe (cierre de la Fase 16).** Si el host dice que la carpeta no
+  existe, el diálogo vuelve con el comando, la reanudación y la nota que habías
+  escrito, el foco en la carpeta y el motivo en el pie, en vez de perderlo todo
+  y dejar solo un aviso. Cerrar una pestaña terminando su sesión refresca
+  enseguida la lista de «Persistentes», y un título de tmux igual al nombre del
+  host (el que pone por defecto) ya no se enseña. Cuando una sesión ya no existe
+  al engancharla o reabrirla, el aviso lo dice y manda reabrirla desde Sesiones
+  si tiene ficha.
+
+- **La ayuda de Sesiones explica «tmux dentro de tmux» (cierre de la Fase 16).**
+  Si el shell del host ya arranca tmux por su cuenta (`~/.bashrc`,
+  `~/.zprofile`), la sesión persistente lleva tmux dentro de tmux; la ayuda
+  (`?`) dice que lo arranque solo con `$TMUX` vacío.
+
+- **La importación ignora la marca de sesiones persistentes en un host que no es
+  `ssh` (cierre de la Fase 16).** El host se aplica igual, y la etiqueta del
+  equipo de las fichas de sesión se guarda recortada, como en el resto de la
+  interfaz.
+
+- **Un elemento que la importación no reescribía ya no se queda con un nombre
+  temporal (R160).** Un túnel, una sincronización de directorio, una
+  comprobación de servicio o una ficha de sesión que la importación no llegaba a
+  reescribir (su host llegaba con datos ilegibles o su nombre ya lo ocupaba otra
+  fila), o un host cuyo borrado se aplazaba por tener un túnel en uso, podía
+  quedarse con el nombre temporal `__magi_sync__<uuid>` y exportarse así a los
+  demás equipos; ahora conservan su nombre.
+
+- **Una ficha de sesión persistente ilegible deja un solo aviso en el log**
+  mientras siga rota, en vez de uno por cada lectura de la lista.
+
+- **Interno (sin cambio visible):** los scripts de tmux validan nombre y equipo
+  con listas de caracteres explícitas, sin rangos que dependan del idioma del
+  host (R159), y las pruebas con tmux real cubren la vista previa, renombrar, el
+  historial y el tmux habitual.
+
+- **La sincronización ya no se tumba, ni lee entero, un fichero ajeno con
+  nombre de MAGI en la carpeta compartida.** Un directorio, un FIFO o un fichero
+  de varios GiB llamado `magi-<uuid>.age` hacía fallar la pasada (o la dejaba
+  leyéndolo en la interfaz); ahora solo se admiten ficheros normales, con tope de
+  lectura, y lo demasiado grande se trata como dañado sin leerlo.
+- **Un fallo al escribir un fichero de MAGI ya no deja su temporal en la
+  carpeta.** La escritura atómica (`ficheros.rs`) borra el temporal si falla
+  antes del renombrado.
+- **Unirse a una sincronización pegando la clave fallaba con «invalid Bech32
+  encoding».** Copiada de la terminal, la clave suele llegar partida en dos
+  líneas o con espacios, y el escritorio solo quitaba los de los extremos.
+  Ahora quita todos los espacios y la pasa a mayúsculas, como el móvil. Si la
+  clave no vale, el aviso dice por qué en castellano: está vacía, es la clave
+  pública (`age1…`), no empieza por `AGE-SECRET-KEY-1` o está incompleta.
+
+- **Los errores del llavero en Linux no decían qué pasaba.** MAGI descartaba
+  lo que `secret-tool` escribía por la salida de error y solo enseñaba «el
+  llavero devolvió exit status: 1». Ahora el aviso lleva ese mensaje y, en los
+  casos conocidos, qué hacer: sin servicio de llavero en la sesión, instalar
+  `gnome-keyring` (o activar KWallet o KeePassXC); sin sesión de D-Bus, abrir
+  MAGI desde la sesión gráfica. Si falta `secret-tool`, dice qué paquete
+  instalar en Debian y Ubuntu, Arch o Fedora. El manual lo pone en los
+  requisitos de Linux.
+
+- **Copiar colgaba la aplicación en Wayland.** `wl-copy` se queda como daemon
+  sirviendo el portapapeles y hereda su salida de error; al esperar a leer su
+  fin la interfaz se quedaba bloqueada para siempre (parecía un cierre). Ahora
+  se espera un poco al proceso directo y, si sigue vivo sirviendo el
+  portapapeles, se recoge en segundo plano: copiar vuelve al instante. Con
+  pruebas de regresión, incluida la de `wl-copy` real cuando hay Wayland.
+
+- **Pegar, seleccionar con el ratón y el foco exterior no funcionaban** (Fase
+  15). El hilo de teclas descartaba los eventos `Paste`, `Mouse`, `FocusGained`
+  y `FocusLost` del terminal exterior: pegar no hacía nada y, con el ratón
+  capturado (Claude Code u otros programas que lo piden), la rueda, el clic y
+  el arrastre se perdían; el remoto tampoco veía los cambios de foco. Ahora se
+  reenvían al bucle de la UI con test de regresión del hilo.
+
+- Dos aperturas simultáneas de una base de datos con WAL pendiente ya no
+  chocan al crear su copia temporal (los nombres llevan un contador además del
+  reloj): `magi.db` se valida igual y los tests dejan de fallar cuando corren
+  en paralelo.
+
+- **Pegar fuera de una pestaña va al campo con foco** (Fase 15). El texto
+  pegado en un diálogo, la búsqueda del historial, la paleta, un filtro, la
+  ficha o Servicios se inserta en su campo de texto (sin saltos de línea, que
+  se juntan) en vez de descartarse; los diálogos que no tienen campo lo
+  ignoran. Al ceder la terminal al visor o al editor se deshacen otra vez el
+  pegado entre corchetes, el foco, las banderas de kitty y el ratón (D314).
+
+- **Pantalla negra al abrir un escritorio RDP.** El visor recibía
+  `imagen: "h264"` antes de que la fuente lo confirmara, mientras el cliente
+  RDP mandaba mapas de bits como rectángulos; el visor los pintaba en su búfer
+  y no los presentaba. Ahora la imagen de apertura es siempre «rectángulos» y
+  solo se anuncia H.264 cuando llega el primer fotograma de vídeo; además el
+  puente cachea el último GOP y pide un repintado completo (Refresh Rect) al
+  visor que entra tarde o vuelve a la pestaña.
+
+- Evita el error «database is locked» al escribir el inventario con el
+  servidor de sesiones activo: las transacciones del almacén se abren con
+  `BEGIN IMMEDIATE`, de modo que esperan el bloqueo en vez de fallar al
+  promoverlo.
 
 - **Revisión adversarial de cierre (Fase 9).** El comando servidor parar cuenta las transferencias antes de pedir confirmación; el cliente valida el pid del rechazo y prefiere el del kernel; una magi.db futura con WAL pendiente ya no se modifica al comprobarla (y el diagnóstico no deja -shm/-wal); un servidor anterior zombi no bloquea la actualización; magi diagnostico no se cuelga con un agente SSH mudo y no cuenta el trabajo terminado; el aviso de sustitución dice la versión nueva y distingue «se paró pero el nuevo no arrancó»; TrabajoServidor rechaza campos desconocidos y build.rs no hereda el commit de un repositorio exterior.
 - **Pestañas (Fase 3).** Seis fallos detectados en la validación manual, entre
@@ -515,5 +662,5 @@ empaquetado de la Fase 9.
   integración continua y auditoría de secretos y datos reales antes de hacer
   público el repositorio.
 
-[Sin publicar]: https://github.com/4d3-org/magi/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/4d3-org/magi/releases/tag/v1.0.0
+[Sin publicar]: https://github.com/HectorEspejo/magi/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/HectorEspejo/magi/releases/tag/v1.6.1

@@ -501,9 +501,14 @@ pub fn aplicar(
     }
 
     // 9. Un conflicto de borrado aplazado deja de tener sentido si el elemento
-    //    sigue vivo (p. ej. resucitó con una edición nueva antes de aceptar el
-    //    borrado). Se marca como recuperado para que «a» no borre algo que ya
-    //    está vivo.
+    //    sigue vivo **porque llegó una edición nueva** (resucitó antes de
+    //    aceptar el borrado). Se marca como recuperado para que «a» no borre
+    //    algo que ya está vivo. Que el elemento esté en el plan no basta: con un
+    //    plan parcial (la pasada salta los ficheros que no han cambiado, entre
+    //    ellos el que traía el borrado) el elemento local sigue ahí sin que
+    //    nadie lo haya resucitado, y el borrado pendiente se perdería sin avisar.
+    //    La prueba es que la versión o el vector del plan difieran de los que
+    //    había en la fila local antes de aplicarlo.
     for conflicto in conflictos::listar_pendientes(&transaccion)? {
         if conflicto.tipo != conflictos::TIPO_BORRADO {
             continue;
@@ -511,10 +516,25 @@ pub fn aplicar(
         let Some(tabla) = Tabla::desde_tipo_elemento(&conflicto.elemento_tipo) else {
             continue;
         };
-        if vivos_uuids
+        if !vivos_uuids
             .get(&tabla)
             .is_some_and(|uuids| uuids.contains(&conflicto.uuid))
         {
+            continue;
+        }
+        let llego_algo_nuevo = match (
+            locales
+                .get(&tabla)
+                .and_then(|filas| filas.get(&conflicto.uuid)),
+            leido.vivos.metadatos(tabla, &conflicto.uuid),
+        ) {
+            (Some(fila), Some((version, vector))) => {
+                necesita_actualizar(fila, version, vector, false)
+            }
+            // Sin fila local, el elemento acaba de llegar de otro equipo.
+            _ => true,
+        };
+        if llego_algo_nuevo {
             conflictos::resolver(
                 &transaccion,
                 conflicto.id,

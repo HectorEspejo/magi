@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.86"
 description = "Núcleo compartido de MAGI: almacén, sincronización, conexión SSH, túneles, terminal y registro"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/4d3-org/magi"
+repository = "https://github.com/HectorEspejo/magi"
 publish = false
 
 [dependencies]

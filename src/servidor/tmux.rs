@@ -464,10 +464,13 @@ pub async fn manejar_terminar(
     };
     let resultado = ejecutar_orden(&tomada.handle, &OrdenTmux::Terminar { servidor, nombre })
         .await
-        .map(|(salida, _)| lectura::leer_terminar(&String::from_utf8_lossy(&salida)));
+        .and_then(|(salida, codigo)| {
+            interpretar_terminar(&String::from_utf8_lossy(&salida), codigo)
+        });
     tomada.soltar().await;
     match resultado {
         Ok(ResultadoTerminar::Ok) => {
+            super::sesiones_persistentes::pedir_recomprobacion(estado, host_id).await;
             let bd = estado.lock().await.bd.clone();
             let _ = bd.send(super::OrdenBd::Anotar {
                 tipo: crate::registro::TMUX_TERMINADA.to_string(),
@@ -490,6 +493,7 @@ pub async fn manejar_terminar(
             .await;
         }
         Ok(ResultadoTerminar::NoExiste) => {
+            super::sesiones_persistentes::pedir_recomprobacion(estado, host_id).await;
             responder(
                 estado,
                 cliente_id,
@@ -502,6 +506,29 @@ pub async fn manejar_terminar(
             .await;
         }
         Err(motivo) => responder_error(estado, cliente_id, peticion_id, &motivo).await,
+    }
+}
+
+/// Lee la respuesta de `terminar` sin confundir un fallo con una ausencia
+/// (CLAUDE.md): «ya no existía» solo si el script lo dijo (`MAGI_RESULTADO=
+/// no_existe`) y salió con 0. Una salida cortada, sin marca o con otro código
+/// (canal cerrado sin estado, el script que no llegó a ejecutarse…) es un fallo
+/// con su mensaje, nunca «ya no existía».
+fn interpretar_terminar(salida: &str, codigo: i32) -> Result<ResultadoTerminar, String> {
+    match lectura::leer_terminar(salida) {
+        ResultadoTerminar::Ok => Ok(ResultadoTerminar::Ok),
+        ResultadoTerminar::NoExiste => {
+            let dice_no_existe = salida
+                .lines()
+                .any(|linea| linea.trim() == "MAGI_RESULTADO=no_existe");
+            if codigo == 0 && dice_no_existe {
+                Ok(ResultadoTerminar::NoExiste)
+            } else {
+                Err(format!(
+                    "el host no confirmó que la sesión terminara (código de salida {codigo})"
+                ))
+            }
+        }
     }
 }
 
@@ -571,6 +598,33 @@ async fn responder_error(
 
 #[cfg(test)]
 mod pruebas {
+
+    #[test]
+    fn terminar_no_confunde_un_fallo_con_una_ausencia() {
+        use super::{interpretar_terminar, ResultadoTerminar};
+        assert_eq!(
+            interpretar_terminar("MAGI_RESULTADO=ok\n", 0),
+            Ok(ResultadoTerminar::Ok)
+        );
+        assert_eq!(
+            interpretar_terminar("MAGI_RESULTADO=no_existe\r\n", 0),
+            Ok(ResultadoTerminar::NoExiste)
+        );
+        // Canal cerrado sin estado de salida, script que no llegó a ejecutarse
+        // (70) o salida vacía: un fallo, no «ya no existía».
+        for (salida, codigo) in [
+            ("", -1),
+            ("", 70),
+            ("", 0),
+            ("basura\n", 0),
+            ("MAGI_RESULTADO=no_existe\n", 127),
+        ] {
+            assert!(
+                interpretar_terminar(salida, codigo).is_err(),
+                "{salida:?} con código {codigo} no es «ya no existía»"
+            );
+        }
+    }
     use super::*;
 
     #[test]

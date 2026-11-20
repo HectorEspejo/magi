@@ -438,7 +438,10 @@ pub fn buscar_sesion<'a>(
         .filter(del_servidor)
         .find(|sesion| sesion.nombre == nombre)
     {
-        let es_otra = matches!((id, sesion.id.as_deref()), (Some(a), Some(b)) if a != b);
+        // Otra sesión con el mismo nombre: otro identificador o, si tmux se
+        // reinició y reutilizó el mismo identificador, otra hora de creación.
+        let es_otra = matches!((id, sesion.id.as_deref()), (Some(a), Some(b)) if a != b)
+            || matches!(creada, Some(a) if a > 0 && sesion.creada > 0 && a != sesion.creada);
         if !es_otra {
             return Some(sesion);
         }
@@ -1143,6 +1146,26 @@ mod pruebas {
             Some(1000)
         )
         .is_none());
+        // Con tmux reiniciado, el mismo nombre **y el mismo identificador**
+        // (los números se reutilizan): solo la hora de creación los distingue.
+        let mismo_id = [vista(ServidorTmux::Magi, "agente", Some("$2"), 3000)];
+        assert!(buscar_sesion(
+            &mismo_id,
+            ServidorTmux::Magi,
+            "agente",
+            Some("$2"),
+            Some(1000)
+        )
+        .is_none());
+        // Con la misma hora, sí es la suya.
+        assert!(buscar_sesion(
+            &[vista(ServidorTmux::Magi, "agente", Some("$2"), 1000)],
+            ServidorTmux::Magi,
+            "agente",
+            Some("$2"),
+            Some(1000)
+        )
+        .is_some());
     }
 
     #[test]

@@ -50,9 +50,11 @@ sesion_existe() {
 }
 
 # Identificador interno de la sesión: sobrevive a un renombrado.
+# (Los awk de estas funciones comparan con «$campo "" == nombre ""», como texto:
+# awk toma «7» y «007» por el mismo número y casaría la primera.)
 id_de_sesion() {
     tmux_srv list-sessions -F "#{session_id}${TAB}#{session_name}" 2>/dev/null |
-        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 == nombre { print $1; exit }'
+        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 "" == nombre "" { print $1; exit }'
 }
 
 # Sigue viva: por el identificador si lo hay, por el nombre si no.
@@ -104,7 +106,7 @@ if [ "$SERVIDOR" = magi ]; then
         # (o de uno sin marca), la sesión no se toca.
         ajena=$(tmux_srv list-sessions -F "#{session_name}${TAB}#{session_attached}${TAB}#{@magi_equipo}" 2>/dev/null |
             LC_ALL=C awk -F "$TAB" -v nombre="$NOMBRE" -v equipo="$EQUIPO" '
-                $1 == nombre { if ($2 + 0 > 0 && $3 != equipo) print "si"; exit }')
+                $1 "" == nombre "" { if ($2 + 0 > 0 && $3 "" != equipo "") print "si"; exit }')
         if [ "$ajena" = si ]; then
             printf '%s\n' '[MAGI] la sesión la tiene ahora otro equipo' >&2
             exit 101

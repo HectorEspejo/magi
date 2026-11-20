@@ -370,7 +370,7 @@ cargo fmt --check
   - `cargo test` (25 verdes), `cargo clippy --all-targets -- -D warnings`
     y `cargo fmt` sin avisos.
   - CLI contra un `HOME`/XDG aislado con el `~/.ssh/config` real: importa 2
-    hosts, omite «Host ssh.4d3.org win-gp» con motivo, exporta `magi_config`
+    hosts, omite «Host ssh.ejemplo.org win-gp» con motivo, exporta `magi_config`
     correcto y crea BD/config/log con permisos 600.
   - TUI arrancada en un PTY de 42×130: render de Hosts, ficha con los cuatro
     bloques, menú de grupos, paleta difusa, ayuda `?`, mensaje de F3 y salida

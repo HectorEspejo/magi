@@ -3,7 +3,7 @@
 Esta guía la sigue el desarrollador para publicar una versión de MAGI. El
 agente prepara el árbol, la documentación y los workflows; **las acciones
 irreversibles o que necesitan credenciales las hace el desarrollador** (D124).
-Repositorio: `4d3-org/magi`. Paquete: `magi-ssh` (el comando sigue siendo
+Repositorio: `HectorEspejo/magi`. Paquete: `magi-ssh` (el comando sigue siendo
 `magi`).
 
 Canales de distribución:
@@ -13,7 +13,7 @@ Canales de distribución:
 | GitHub Releases | Tarballs de Linux (x86_64/aarch64) y macOS (arm64/x86_64), `.sha256` y atestaciones de procedencia |
 | GitHub Releases (Termux) | `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata), su `.sha256` y su atestación, en la misma release; los sube `termux-release.yml` (guía en [`publicar-termux.md`](publicar-termux.md)) |
 | AUR | `magi-ssh-bin` (Omarchy y Arch) |
-| Homebrew | Fórmula `magi-ssh` en el tap `4d3-org/homebrew-tap` (macOS) |
+| Homebrew | Fórmula `magi-ssh` en el tap `HectorEspejo/homebrew-tap` (macOS) |
 
 ## 1. Reparto de responsabilidades
 
@@ -23,51 +23,57 @@ Canales de distribución:
 | Actualizar `Cargo.toml`, el CHANGELOG y los recursos (`assets/`) | Agente |
 | Pasar la auditoría de secretos y datos reales (§2) | Agente |
 | Dejar CI, `dist`, PKGBUILD y fórmula preparados | Agente |
-| Transferir el repositorio a `4d3-org` y hacerlo público | Desarrollador |
+| Ajustes del repositorio (avisos privados, Dependabot, regla de `main`, ramas, issues, descripción y temas; §4) | Desarrollador |
 | Crear el tap de Homebrew, la cuenta de AUR y sus claves | Desarrollador |
 | Crear los secretos `HOMEBREW_TAP_TOKEN` y `AUR_SSH_PRIVATE_KEY` | Desarrollador |
 | Etiquetar (`git tag`) y empujar el tag | Desarrollador |
 | Relanzar jobs de publicación y verificar los canales | Desarrollador |
-| Cambiar la visibilidad del repositorio, crear cuentas o secretos, subir binarios a mano, mover un tag | **Nadie más que el desarrollador**; el agente no lo hace |
+| Cambiar la visibilidad o los ajustes del repositorio, crear cuentas o secretos, subir binarios a mano, mover un tag | **Nadie más que el desarrollador**; el agente no lo hace |
 
-## 2. Requisitos previos y auditoría (antes de hacer público)
+## 2. Requisitos previos y auditoría (antes de la primera publicación)
 
-Hacer público el repositorio es irreversible en la práctica: el historial
-completo pasa a ser visible. Antes de pulsar el botón:
+El repositorio es público desde antes de la Fase 9b, así que su historial ya es
+visible: lo que se protege desde ahora es lo que entra. Antes de etiquetar:
 
-1. **CI verde en `main`**: `cargo fmt --check`,
-   `cargo clippy --all-targets -- -D warnings`, `TZ=UTC cargo test --locked`,
-   el job de macOS, `cargo deny check` y la validación de la plantilla AUR.
-2. **Auditoría de secretos en todo el historial**. Es requisito previo a hacer
-   público:
+1. **CI verde en `main`**: `cargo fmt --all --check`,
+   `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+   `TZ=UTC cargo test --workspace --locked`, el job de macOS,
+   `cargo deny check` y la validación de la plantilla AUR.
+2. **Auditoría de secretos en todo el historial.** `gitleaks` se pasó **una
+   vez**, antes de la primera publicación; desde entonces, los secretos se
+   vigilan en el momento de publicar y no en la CI:
 
    ```sh
-   gitleaks detect --source . --log-opts="--all" --no-banner --redact
+   gitleaks git --redact --no-banner .
    ```
 
-   Resultado esperado: `no leaks found` y código de salida 0. Si aparece
-   **cualquier** hallazgo: **PARAR**, no hacer público el repositorio, no
-   reescribir el historial por cuenta propia y avisar al desarrollador con el
-   commit y el fichero exactos. La decisión de rotar el secreto y reescribir el
-   historial es suya.
+   Resultado de la primera publicación (20 de noviembre de 2026, 133 commits):
+   14 hallazgos, **todos en ficheros de pruebas** (11 claves `age` de
+   fixtures de sincronización y de la prueba de humo de Android, la clave de
+   host fija del servidor de pruebas y el certificado de pruebas de RDP), con
+   UUID y rutas inventadas y comentados como «solo pruebas». Si en una
+   publicación posterior aparece **cualquier hallazgo nuevo** o uno de esos
+   parece una clave real: **PARAR**, no etiquetar, no reescribir el historial
+   por cuenta propia y avisar al desarrollador con el commit y el fichero
+   exactos. La decisión de rotar el secreto es suya (el historial no se
+   reescribe, D391).
 
    Nota: no uses `--no-git` para esta comprobación; sin git, gitleaks escanea
    el árbol de trabajo (incluido `target/`) y da falsos positivos con claves
    embebidas en artefactos de compilación de dependencias.
 
-3. **Datos reales**. La documentación, los tests y los ejemplos usan datos de
-   ejemplo: IPs `192.0.2.x`, dominios `ejemplo.org` y rutas `/home/usuario`.
-   Revisa que no queden IPs reales, correos personales, credenciales ni rutas
-   con nombres de usuario reales:
+3. **Datos reales.** La documentación, los tests y los ejemplos usan datos de
+   ejemplo: IPs `192.0.2.x`, dominios `ejemplo.org`, el usuario `usuario` y
+   rutas `/home/usuario`. La prueba `repositorio_publico` lo comprueba en cada
+   PR (ninguna IP pública, ninguna ruta `/home/<nombre>`, ningún correo fuera
+   de su lista y ninguna referencia a la organización anterior de GitHub fuera
+   del archivo de diseño, además de los enlaces relativos de la documentación):
 
    ```sh
-   git grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' -- docs README.md tests src
-   git grep -nE '/(home|Users)/[A-Za-z0-9._-]+' -- docs README.md tests src
-   git grep -nE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- docs README.md tests src
+   cargo test -p magi-ssh --test repositorio_publico
    ```
 
-   Las IPs de documentación (rangos `192.0.2.0/24`, `198.51.100.0/24` y
-   `203.0.113.0/24`) y `127.0.0.1`/`0.0.0.0` son correctas.
+   Cada excepción vive en la propia prueba, con su motivo.
 
 4. **Revisión adversarial** del código y los workflows nuevos (sustitución del
    servidor, permisos de CI, cadena de suministro y PKGBUILD), con el resultado
@@ -103,13 +109,23 @@ completo pasa a ser visible. Antes de pulsar el botón:
 
 ## 4. Primera publicación (una sola vez)
 
-Se hace una sola vez, en este orden, después de completar §2.
+El repositorio ya es público y vive en `HectorEspejo/magi` (no hay
+transferencia). La primera release del escritorio es la **1.6.1** y la de la
+app, la **0.2.0** en beta (guía en [`publicar-android.md`](publicar-android.md)).
+Se hace una sola vez, en este orden, después de completar §2. Lo hace el
+desarrollador: el agente no cambia ajustes del repositorio, no crea secretos ni
+cuentas y no empuja etiquetas.
 
-1. **Transferir el repositorio a `4d3-org`** si aún vive en otra cuenta
-   (Settings → General → Transfer ownership). GitHub redirige la URL antigua;
-   `repository` y `homepage` de `Cargo.toml` ya apuntan a
-   `https://github.com/4d3-org/magi`. Comprueba que los secretos de Actions y
-   los workflows siguen ahí después de la transferencia.
+1. **Ajustes del repositorio** (Settings), todos a mano:
+
+   | Ajuste | Valor |
+   |---|---|
+   | Avisos privados de vulnerabilidades | Activados (Security → Private vulnerability reporting) |
+   | Dependabot | Alertas y actualizaciones **de seguridad** activadas; **sin** `dependabot.yml` (nada de actualizaciones de versión). Una PR que toque una versión fijada (russh, ratatui, crossterm, tui-term, vt100, rusqlite, IronRDP, `age`, UniFFI) no se fusiona tal cual: se cierra y se sube el conjunto a mano con sus pruebas |
+   | Regla de `main` | PR obligatoria y estos checks de `ci.yml`, **con el nombre con que salen en la PR**: `Formato`, `Clippy`, `Tests Linux (ubuntu-22.04)`, `Tests Linux (ubuntu-24.04)` (son los dos del job `tests-linux`), `macOS (arm64)`, `Visor web (TypeScript)`, `Licencias y avisos (cargo-deny)` y `Plantilla AUR`. Sin `push --force` ni borrado de `main`. **No** se exigen los de `android.yml` (tienen filtros de rutas y bloquearían las PR que no los disparan) ni `¿Toca el paquete de Termux?` y `Paquete de Termux (.deb)`, que son condicionales. Si renombras, quitas o añades un job de `ci.yml`, cambia aquí la regla |
+   | Ramas | Borrar la rama al fusionar; borrar las ya fusionadas (`fase*`, `correccion-*`), menos las abiertas |
+   | Issues | Activadas (plantillas en `.github/ISSUE_TEMPLATE/`, sin issues en blanco); Discussions y wiki, desactivadas |
+   | Descripción y temas | Una línea de qué es; temas `ssh`, `tui`, `terminal`, `rust`, `sftp`, `rdp`, `vnc` y `android` |
 
 2. **Comprobar que los nombres están libres.** Repite esta comprobación justo
    antes de publicar, porque los nombres pueden ocuparse:
@@ -129,12 +145,19 @@ Se hace una sola vez, en este orden, después de completar §2.
    resultados y ningún paquete oficial instala `/usr/bin/magi`. Si alguno
    estuviera ocupado, **PARAR** y consultar otro nombre antes de publicar.
 
-3. **Hacer público el repositorio** (Settings → General → Danger Zone → Change
-   visibility), solo después de §2.
+3. **Comprobar de quién es la organización anterior de GitHub** (R182). La
+   Fase 9 preparó la publicación en una organización cuyo nombre y direcciones
+   conservan los documentos de `docs/faseN/` y el maestro, y que ya no valen:
+   [`docs/README.md`](README.md) lo explica y da su nombre. Mira esa
+   organización en `https://github.com/<nombre>`: si está **libre**, créala
+   vacía para reservarla, de modo que nadie pueda ocuparla y dar sentido a esas
+   direcciones; si es de otra persona, no hace falta nada más (nada del código
+   ni de los workflows la usa).
 
-4. **Crear el tap `4d3-org/homebrew-tap`** (público, con un README mínimo). En
-   cada release estable, `dist` empuja `Formula/magi-ssh.rb` con el secreto
-   `HOMEBREW_TAP_TOKEN`.
+4. **Crear el tap `HectorEspejo/homebrew-tap`** (público, con un README
+   mínimo). En cada release estable, `dist` empuja `Formula/magi-ssh.rb` con el
+   secreto `HOMEBREW_TAP_TOKEN`. El comando de instalación queda
+   `brew install hectorespejo/tap/magi-ssh`.
 
 5. **Crear la cuenta de AUR y su clave SSH.** Registra la cuenta en
    <https://aur.archlinux.org/> con tu correo y una clave pública SSH. Genera
@@ -146,9 +169,10 @@ Se hace una sola vez, en este orden, después de completar §2.
    cat ~/.ssh/aur_magi.pub   # pégala en «SSH Public Key» del perfil de AUR
    ```
 
-   La clave de host de `aur.archlinux.org` la añade el workflow con
-   `ssh-keyscan`, pero **comprueba sus huellas** contra las que AUR publica en
-   <https://aur.archlinux.org> (ED25519, ECDSA y RSA): si un intermediario
+   El correo del mantenedor del PKGBUILD y el de los commits a AUR es
+   `hola@4d3.org`. La clave de host de `aur.archlinux.org` la añade el workflow
+   con `ssh-keyscan`, pero **comprueba sus huellas** contra las que AUR publica
+   en <https://aur.archlinux.org> (ED25519, ECDSA y RSA): si un intermediario
    sirviera otra clave, el job se para. No versionamos `known_hosts`. Si AUR
    rotara sus claves, actualiza la lista `esperadas` de
    `.github/workflows/publicar-aur.yml` con las nuevas huellas publicadas; no
@@ -159,41 +183,74 @@ Se hace una sola vez, en este orden, después de completar §2.
 
    | Secreto | Qué es | Alcance mínimo |
    |---|---|---|
-   | `HOMEBREW_TAP_TOKEN` | Token de grano fino de GitHub (fine-grained PAT) | Solo el repositorio `4d3-org/homebrew-tap`, permiso **Contents: Read and write**; nada más. Caducidad de 1 año |
+   | `HOMEBREW_TAP_TOKEN` | Token de grano fino de GitHub (fine-grained PAT) | Solo el repositorio `HectorEspejo/homebrew-tap`, permiso **Contents: Read and write**; nada más. Caducidad de 1 año |
    | `AUR_SSH_PRIVATE_KEY` | Clave privada dedicada del paso 5, con sus líneas `BEGIN`/`END` | Solo la cuenta de AUR del proyecto |
+   | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` y `ANDROID_KEY_PASSWORD` | El keystore de la app y sus claves (se crean según [`publicar-android.md`](publicar-android.md) §3; solo para la app) | Solo `android-release.yml` |
 
    No pegues secretos en issues, PRs, logs ni en la documentación. Si un job
    los imprime, considéralos comprometidos y rótalos (§8).
 
-7. **Proteger `main`**: PR obligatorio y `ci.yml` requerido antes de fusionar.
+7. **Guion corto de macOS** (D395), en el mac mini, con un binario compilado
+   allí desde el commit de la release:
 
-8. **Ensayo con `v1.0.0-rc.1`** (obligatorio antes de la primera estable).
-   `dist` exige que el tag coincida con la `version` de `Cargo.toml`:
+   1. `cargo build --release --locked`; `magi --version` y `magi diagnostico`.
+   2. Conectar a un host con una clave del agente y a otro con una contraseña
+      recordada en el Llavero.
+   3. Abrir dos pestañas, cerrar la ventana y volver con `magi`: siguen ahí.
+   4. SFTP: subir y bajar un fichero; un túnel local.
+   5. `magi servidor parar`.
+
+   Si falla el paso 1 o el 2, macOS **sale de esta release**: quita sus dos
+   objetivos de `dist-workspace.toml` y de `release.yml` (y el job de Homebrew)
+   y vuelven en una PATCH. Si el fallo es menor, sale «en pruebas» y se anota
+   en [`manual/estado.md`](manual/estado.md).
+
+8. **Candidata `v1.6.1-rc.1`** (obligatoria antes de la primera estable: es
+   también la primera publicación del `.deb` de Termux, que siempre pasa por una
+   candidata; ver [`publicar-termux.md`](publicar-termux.md) §4). `dist` exige
+   que el tag coincida con la `version` de `Cargo.toml`:
 
    ```sh
-   # Cargo.toml: version = "1.0.0-rc.1"
+   # Cargo.toml: version = "1.6.1-rc.1"  (y Cargo.lock al día)
    # commit + PR + CI verde + merge a main
-   git tag -a v1.0.0-rc.1 -m "MAGI 1.0.0-rc.1"
-   git push origin v1.0.0-rc.1
+   git tag -a v1.6.1-rc.1 -m "MAGI 1.6.1-rc.1"
+   git push origin v1.6.1-rc.1
    ```
+
+   Cambiar la `version` a una candidata arrastra lo que lista `CLAUDE.md` para
+   un cambio de versión: `FECHA_DE_VERSION`, `assets/` (la página man), las
+   instantáneas `servidor_anterior_*` y la DA2 de `tests/fijos/terminal/
+   tui_prueba.rs`, que para `1.6.1-rc.1` es **`10600`** (el emulador no lee el
+   parche `1-rc`) y para `1.6.1`, `10601`. El paso 9 lo deshace. Sin ello, la CI de
+   esa PR falla en `terminal_e2e`, `recursos` y `redimensionado`; se lo puedes
+   pedir al agente, que lo hace en el mismo PR.
 
    El resultado debe ser una **GitHub Release marcada como prerelease**, con
-   tarballs, `.sha256` y atestaciones, **sin tocar Homebrew ni AUR**. Descarga
+   tarballs, `.sha256`, atestaciones y el `.deb` de Termux
+   (`magi-ssh_1.6.1-rc.1_aarch64.deb`), **sin tocar Homebrew ni AUR**. Descarga
    un tarball, verifícalo (`sha256sum -c` y `gh attestation verify`) e
    instálalo a mano; comprueba `magi --version` y `magi diagnostico`. Si algo
-   falla, corrige y repite el ensayo con `v1.0.0-rc.2` (nunca muevas el tag).
+   falla, corrige y repite con `v1.6.1-rc.2` (nunca muevas el tag).
 
-9. **Publicar `v1.0.0`**: deja `version = "1.0.0"` en `Cargo.toml`, pasa la
-   sección «Sin publicar» del CHANGELOG a `[1.0.0] - fecha`, PR, CI verde,
-   merge y:
+9. **Publicar `v1.6.1`**: deja `version = "1.6.1"` en `Cargo.toml` (y
+   `Cargo.lock`), pon la fecha del día en el encabezado `## [1.6.1] - fecha` del
+   CHANGELOG, PR, CI verde, merge y:
 
    ```sh
-   git tag -a v1.0.0 -m "MAGI 1.0.0"
-   git push origin v1.0.0
+   git tag -a v1.6.1 -m "MAGI 1.6.1"
+   git push origin v1.6.1
    ```
 
-   Vigila `release.yml` hasta el final: release de GitHub, fórmula de Homebrew
-   y PKGBUILD en AUR. Después, haz las comprobaciones de §9.
+   Vigila `release.yml` y Release Termux hasta el final: release de GitHub
+   («Latest»), fórmula de Homebrew, PKGBUILD en AUR y el `.deb`. Después, haz
+   las comprobaciones de §9.
+
+10. **La app Android**: `android-v0.2.0-rc.1`, su guion corto en el plegable y
+    `android-v0.2.0`, según [`publicar-android.md`](publicar-android.md). Nunca
+    se marcan como «Latest».
+
+Orden de las etiquetas: `v1.6.1-rc.1` → `v1.6.1` → `android-v0.2.0-rc.1` →
+`android-v0.2.0`.
 
 ## 5. Flujo de una release (rutina)
 
@@ -298,7 +355,7 @@ que falló.
     o en el YAML del commit etiquetado.
 - Si falla Homebrew: revisa que el tap exista, que `HOMEBREW_TAP_TOKEN` no haya
   caducado y que tenga **Contents: Read and write** solo en
-  `4d3-org/homebrew-tap`; corrige y relanza el job. Si la fórmula necesita un
+  `HectorEspejo/homebrew-tap`; corrige y relanza el job. Si la fórmula necesita un
   arreglo manual en el tap, hazlo y vuelve a lanzar el job para que quede
   versionada.
 - Si falla AUR: el workflow tiene dos jobs. Si falla `empaquetar` (contenedor
@@ -323,7 +380,7 @@ invalida las releases ya publicadas.
 1. Revoca el token viejo en GitHub (Settings → Developer settings → Personal
    access tokens → Fine-grained tokens).
 2. Crea uno nuevo con el mismo alcance mínimo: solo el repositorio
-   `4d3-org/homebrew-tap` y permiso **Contents: Read and write**, con
+   `HectorEspejo/homebrew-tap` y permiso **Contents: Read and write**, con
    caducidad.
 3. Actualiza el secreto del repositorio (Settings → Secrets and variables →
    Actions → `HOMEBREW_TAP_TOKEN` → Update).
@@ -358,17 +415,22 @@ En una máquina limpia (o al menos con el canal recién actualizado):
 ```sh
 # Arch / Omarchy
 yay -S magi-ssh-bin
-magi --version                    # magi 1.0.0 (protocolo 6, <commit>)
+magi --version                    # magi 1.6.1 (protocolo 10, <commit>)
 pacman -Ql magi-ssh-bin           # binario, completions, man, .desktop, icono, licencias
 magi diagnostico
 
 # macOS
-brew update && brew install 4d3-org/tap/magi-ssh
+brew update && brew install hectorespejo/tap/magi-ssh
 magi --version
 
 # Tarball
 sha256sum -c magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256
-gh attestation verify magi-ssh-x86_64-unknown-linux-gnu.tar.xz --repo 4d3-org/magi
+gh attestation verify magi-ssh-x86_64-unknown-linux-gnu.tar.xz --repo HectorEspejo/magi
+
+# App Android (la guía completa está en publicar-android.md)
+sha256sum -c magi-android-v0.2.0.apk.sha256
+apksigner verify --print-certs magi-android-v0.2.0.apk
+gh attestation verify magi-android-v0.2.0.apk --repo HectorEspejo/magi
 ```
 
 Comprueba además:

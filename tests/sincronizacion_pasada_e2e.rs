@@ -523,6 +523,92 @@ fn un_borrado_con_trabajo_vivo_se_aplaza_y_queda_como_conflicto() {
     );
 }
 
+/// Los ficheros de la carpeta con su contenido, para saber cuál cambia.
+fn contenido_de_ficheros(carpeta: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    sincronizacion::carpeta::listar(carpeta)
+        .unwrap()
+        .into_iter()
+        .map(|fichero| (fichero.ruta.clone(), std::fs::read(&fichero.ruta).unwrap()))
+        .collect()
+}
+
+/// Revisión adversarial de la 9b (NUC-1): un plan parcial —la pasada salta los
+/// ficheros que no han cambiado, entre ellos el que traía el borrado— no puede
+/// dar por «recuperado» un borrado aplazado: el host local sigue en el plan sin
+/// que nadie lo haya resucitado, y el borrado pendiente se perdería sin avisar.
+#[test]
+fn un_borrado_aplazado_no_se_da_por_recuperado_con_un_plan_parcial() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let a = equipo(&carpeta, &clave);
+    let b = equipo(&carpeta, &clave);
+    let c = equipo(&carpeta, &clave);
+    a.crear_host("web", "192.0.2.5");
+    a.pasada(PoliticaBorrados::Preguntar);
+    b.pasada(PoliticaBorrados::Preguntar);
+    c.pasada(PoliticaBorrados::Preguntar);
+    a.pasada(PoliticaBorrados::Preguntar);
+
+    // B borra el host y publica; se identifica su fichero por lo que cambia.
+    let antes = contenido_de_ficheros(&carpeta);
+    let id_b = b.host_por_nombre("web").unwrap().id;
+    b.almacen.borrar_host(id_b).unwrap();
+    b.pasada(PoliticaBorrados::Preguntar);
+    let fichero_de_b = contenido_de_ficheros(&carpeta)
+        .into_iter()
+        .find(|(ruta, contenido)| {
+            antes
+                .iter()
+                .find(|(otra, _)| otra == ruta)
+                .is_some_and(|(_, previo)| previo != contenido)
+        })
+        .map(|(ruta, _)| ruta)
+        .expect("el fichero de B cambió al borrar el host");
+
+    // A ve el borrado, pero el host tiene trabajo vivo: se aplaza.
+    let con_trabajo = |equipo: &Equipo| {
+        sincronizacion::pasada(
+            equipo.almacen.conexion(),
+            &equipo.rutas,
+            &equipo.config,
+            &[equipo.clave()],
+            &OpcionesPasada {
+                politica_borrados: PoliticaBorrados::Preguntar,
+                trabajo_vivo: &|tipo, _uuid| tipo == "host",
+            },
+        )
+        .unwrap()
+    };
+    con_trabajo(&a);
+    let pendientes = |equipo: &Equipo| {
+        magi::almacen::conflictos::listar_pendientes(equipo.almacen.conexion())
+            .unwrap()
+            .into_iter()
+            .filter(|conflicto| conflicto.tipo == "borrado")
+            .count()
+    };
+    assert_eq!(pendientes(&a), 1, "el borrado queda aplazado");
+
+    // C todavía no ha recibido el fichero de B (se aparta mientras pasa): crea
+    // otro host y reexporta con «web» vivo, con la misma versión que tiene A.
+    let apartado = tempfile::tempdir().unwrap();
+    let destino = apartado.path().join("de-b.age");
+    std::fs::rename(&fichero_de_b, &destino).unwrap();
+    c.crear_host("otro", "192.0.2.9");
+    c.pasada(PoliticaBorrados::Preguntar);
+    std::fs::rename(&destino, &fichero_de_b).unwrap();
+
+    // La segunda pasada de A solo relee el fichero de C (el de B no cambió): el
+    // plan es parcial y «web» sigue vivo en él, sin ninguna edición nueva.
+    con_trabajo(&a);
+    assert_eq!(
+        pendientes(&a),
+        1,
+        "un plan parcial no es una prueba de que el host resucitó"
+    );
+    assert!(a.host_por_nombre("web").is_some());
+}
+
 #[test]
 fn mantener_los_mios_resucita_los_hosts_que_otro_borro() {
     let (_temporal, carpeta) = carpeta_compartida();

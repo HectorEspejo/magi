@@ -1,0 +1,142 @@
+# MAGI - Fase 9b: Primera Publicación · Informe de implementación
+
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado (20 nov 2026): **implementada y cerrada por el agente, a falta de lo que solo puede hacer el desarrollador** (el GIF de la demo, que necesita `vhs`, y todos los pasos de publicación). Checklist **52 / 58**. Rama `fase9b`, que parte de `main` con la F17 ya fusionada (`9227b33`, versión 1.6.0): versión **1.6.1**.
+
+## 1. Resumen de lo implementado
+
+Dos sprints, un commit por sprint sobre un contrato fijado antes (`490afc6` entrega y reglas, `45dbdd1` contrato, `4815fc4` Sprint 1; el Sprint 2 va en un commit propio).
+
+- **Paso 0.** `CLAUDE.md` y `AGENTS.md` reconciliados: el `CLAUDE.md` de la raíz estaba sobrescrito con el de la entrega (que no trae las reglas posteriores a la F17); se restauró desde `HEAD` y se aplicaron solo los bloques de la 9b. El maestro se copió a `docs/magi-maestro.md`.
+- **Sprint 1 · correcciones, con cuatro pistas en paralelo sobre un contrato mínimo.**
+  - **Corrección 10b.** `magi sincronizar` pregunta al servidor antes de borrar hosts y túneles (R83); el cambio y su versión van en una transacción en todas las tablas que viajan (R84); solo «ninguna identidad coincide» pide la clave y un fichero a medio copiar se avisa y se reintenta (R85); la clave anterior solo abre equipos conocidos y no quitados (R97).
+  - **Cierre de la F16.** El script de tmux va por la entrada estándar y el enganche es un script mínimo con PTY, `terminal_enganche.sh` (D357); la reconexión no suelta a otro equipo, ni en una carrera ni tras un renombrado (R157); `NoExiste` y `creada` opcionales en el protocolo v10 y el aviso de una sesión creada que no llega a abrirse (D349, D369, R163); aviso de atención sin la lista vieja (D368); los retoques de D370 y R164; etiquetas legibles; ayuda de «tmux dentro de tmux» (D367); listas explícitas de caracteres (R159); R160 confirmado y corregido; un solo aviso por ficha ilegible; los nuevos e2e con tmux real.
+- **Sprint 2 · publicación.** Referencias a `HectorEspejo` y datos personales fuera del árbol; `tests/repositorio_publico.rs`; README en los dos idiomas, el manual en `docs/manual/` (con `termux.md` y `estado.md`), `docs/README.md`, `CONTRIBUTING` en los dos idiomas, plantillas, `SECURITY.md`; la demo (cinta, inventario y script); versión 1.6.1, CHANGELOG de la primera publicación y `docs/publicar*.md`.
+- **Revisión adversarial de cierre** (`docs/fase9b/magi-fase9b-revision-adversarial.md`): 25 hallazgos, ninguno crítico ni alto; los 6 medios eran reales (4 rebajados a bajos por el verificador) y están corregidos con prueba de regresión, igual que 7 bajos más. Quedan 8 aceptados o pendientes, anotados abajo.
+
+## 2. Desviaciones respecto a la especificación
+
+1. **Versión 1.6.1, no 1.5.1 (decisión del desarrollador).** La entrega supone `main` en 1.5.0 con la F17 sin fusionar; el repositorio ya trae la F17 (PR #18, `Cargo.toml` en 1.6.0). Bajar a 1.5.1 sería un retroceso con el código de Termux dentro. Se aplica la lógica de D387 (los equipos de desarrollo ya tienen servidores de la versión anterior y la sustitución necesita ver otra): PATCH sobre lo que hay, **1.6.1**, DA2 `10601`, etiquetas `v1.6.1-rc.1` y `v1.6.1`. La app sigue en 0.2.0. Donde la especificación dice 1.5.1, `10501` o `v1.5.1`, aquí van 1.6.1, `10601` y `v1.6.1`.
+2. **Termux sale con la primera release (decisión del desarrollador).** Los workflows de la F17 se dejan: `termux-release.yml` se dispara con la misma etiqueta que `release.yml`. Como la F17 exige que la primera publicación del `.deb` sea una candidata, `docs/publicar.md` §4 añade `v1.6.1-rc.1` antes de `v1.6.1`. El README y el manual dicen «Termux, en pruebas». Se crea `docs/manual/termux.md` (D401: la F17 había dejado su documentación en el README) y `tests/termux_paquete.rs` pasa a leer ese capítulo.
+3. **`CLAUDE.md` reconciliado, no sustituido.** El de la entrega habría borrado las reglas de RUSTSEC-2026-0495, `rust-embed`, `emitir_flota`, `termux_portapapeles`, `MAGI_EXIGIR_DEB` y el `shellcheck` de `paquete-termux.sh`. Además se actualizaron las reglas de sincronización y de tmux con lo que cambia esta fase (consulta al servidor, transacción, script por la entrada estándar, código 101, seguimiento por identidad).
+4. **Los borrados aplazados no se reintentan en cada pasada del escritorio (decisión del desarrollador).** El informe (§4.1.2, §7.1) dice que sí, «como en la TUI (T73)»; el código salta los ficheros cuyo hash no cambió, un test lo fija y en la TUI el aplazado se aplica a mano con `a` en CONFLICTOS. Solo el lector del móvil reintenta. Queda como estaba. Relacionado: la revisión adversarial encontró que ese salto de ficheros hacía que un plan parcial diera por «recuperado» un aplazado (NUC-1), y está corregido.
+5. **El informe v1.2 de la F16 no está en el repositorio** (solo la v1.0): D368, D370, D367 y lo de `creada_por` se implementaron con el checklist y el maestro. Ambigüedades: `creada_por` ya se validaba igual en el CRUD y en la importación (solo cambia que ahora se guarda recortado); `DatosSesionPersistente::validar` es más estricta que el CRUD con los demás textos (no los recorta) y no se aflojó por ser entrada no fiable.
+6. **`magi sincronizar` consulta con otro camino que `estado_cli`.** No reutiliza `leer_bienvenida` porque esperaría 1 s de más por la lista de escritorios: tras la bienvenida pide `Listar` y lee hasta su respuesta. «Otra versión» incluye una `Bienvenida` de la misma versión de protocolo con otra versión de la app (como `estado_cli`). Un túnel `Parando` cuenta como trabajo vivo.
+7. **R157 y R159 llevan más de lo que pedía el informe.** El script grande acaba en `#MAGI-FIN` y el arranque exige verlo (si no sale con 70 sin ejecutar nada); `preparar` devuelve también la hora de creación y la sesión se sigue por identificador y hora (con tmux reiniciado se reutilizan los identificadores); la marca `@magi_equipo` la pone siempre el enganche, después de la guarda, no la preparación. Los ganchos nuevos del tmux falso están en `tests/fijos/terminal/README.md`.
+8. **D368 amplía la pasada inmediata a toda ventana con lista guardada**, no solo a la primera (si no, una segunda ventana con el vigilante vivo no vería nunca una lista fresca), y el umbral del cliente lleva 2 s de margen.
+9. **D370(e)** reabre el diálogo con lo escrito solo para carpeta inexistente y nombre en uso, y solo si la apertura venía del diálogo. **R164** pide confirmación en `r`, la paleta y `prefijo r`; `↵` y `c` en la propia pestaña no cambian (el recuadro «SOLTADA» ya informa).
+10. **R160 confirmado y corregido**, con una corrección genérica (`restaurar_nombres_apartados`) que además cubre las fichas con la clave ocupada y un host cuyo borrado se aplaza por un túnel en uso.
+11. **Etiquetas de CONFLICTOS y REGISTRO.** Las instantáneas `conflictos_*` («túnel», «huérfano») cambian por las etiquetas, no por D370: se aceptan, además de las de D370.
+12. **Referencias a `4d3-org` en cuatro ficheros que el checklist no nombra:** `docs/publicar-termux.md`, `packaging/termux/build.sh`, `scripts/paquete-termux.sh` y `tests/termux_paquete.rs` (la F17 los añadió después). El mantenedor de la receta de TUR pasa de `@4d3-org` a `@HectorEspejo`.
+13. **La regla de `main` son ocho checks, no siete.** `ci.yml` tiene nueve jobs: los siete que nombra la entrega más dos condicionales de la F17 (`cambios-termux` y `termux`); `tests-linux` es una matriz y da **dos** checks. `docs/publicar.md` §4 los lista con el nombre con que salen. No se renombra ni se quita ningún job.
+14. **El manual es el README «movido sin reescribir» con 19 cambios comprobables** (13 enlaces y 6 frases de versión, listados por el script de reparto), más los textos nuevos de esta fase (D367, la 10b, la F16) y `termux.md` (D401). `Desarrollo` y `Tests` pasan a `CONTRIBUTING.md` y `Licencia` al README, como dice la tabla de §5.1.
+15. **El checklist dice 1.5.1 en tres ítems** (versión, CHANGELOG, `dist plan`): se marcan como hechos con 1.6.1. Y su AC «todos los encabezados del README antiguo están en el manual» se cumple con tres excepciones deliberadas (`Desarrollo` y `Tests` en `CONTRIBUTING`, `Licencia` en el README); la prueba `repositorio_publico` lo comprueba con esa lista.
+16. **`gitleaks` no da «no leaks found»:** 14 hallazgos, todos en ficheros de pruebas (ver §6). `docs/publicar.md` §2 deja de esperar «no leaks found» y cuenta el resultado.
+17. **Se estabilizaron dos pruebas con carreras preexistentes, sin tocar código de producción:** `una_pestana_caida_no_mantiene_el_wake_lock_…` (`termux_servidor`, F17: la marca del wake lock se quita después de la orden de soltar y la prueba la comprobaba sin esperar; fallaba 2 de cada 6) y `el_comando_va_como_dato_y_nunca_se_interpola_en_el_envoltorio` (`tmux_real`, F16: comprobaba el pie «terminó con código 0» sin esperarlo; fallaba con la máquina cargada).
+18. **Cambios fuera de la lista del checklist, necesarios para que lo pedido funcione:** la consulta del servidor no se hace si no hay clave (no hay borrados que decidir); un equipo `danado` vuelve a `al_dia` si su fichero recupera el hash ya importado; el lector del móvil cuenta `incompletos`; `socket_en_otra_ruta` (NUC-3); `interpretar_terminar` y `pedir_recomprobacion` (S-02 y C9B-1); la dedupe de avisos de fichas ilegibles lleva un registro estático acotado a 256 filas.
+
+## 3. Estructura de archivos creada/modificada
+
+(Sobre `490afc6`; el detalle está en `git diff 490afc6 --stat`.)
+
+- **Núcleo (`crates/magi-nucleo/src/`)**
+  - `sincronizacion/`: `cifrado.rs` (`ErrorDescifrado`), `mod.rs` (`FalloLectura::Rechazado`, `ResultadoPasada` con aplazados, rechazados y equipos), `lector.rs` (R85, R97, `incompletos`), `aplicacion.rs` (R160, paso 9), `elementos.rs`, `equipos.rs`.
+  - `almacen/`: `versiones.rs` (`cambiar_con_version`), `hosts.rs`, `grupos.rs`, `identidades.rs`, `tuneles.rs`, `sincronizaciones.rs`, `verificaciones.rs`, `etiquetas.rs` (`fijar_de_host_en`), `sesiones_persistentes.rs` (un aviso por fila).
+  - `terminal/tmux.rs` (`OrdenTmux::ARRANQUE`, `lanzar_exec`, `FinEnganchar::OtroEquipo`), `sesiones_persistentes/` (`id` y `creada` en `SesionVista`, `buscar_sesion`, validadores).
+  - **Nuevo:** `scripts/terminal_enganche.sh`.
+- **Escritorio (`src/`)**: `servidor/mod.rs` (`consultar_trabajo`), `servidor/sesiones.rs`, `servidor/tmux.rs`, `servidor/sesiones_persistentes.rs`, `protocolo.rs` (`NoExiste`, `creada`), `app.rs`, `app/` (`sesion.rs`, `persistentes*.rs`), `ui/` (ayuda, persistentes, ficha, registro, sincronización), `main.rs`, `lib.rs` (versión y fecha). **Nuevo:** `sincronizacion/cli.rs` (las órdenes `sincronizar` y `sincronizar estado` en la biblioteca).
+- **Móvil**: `crates/magi-movil/src/sincro.rs`, `android/…/PruebaSincronizacionFicheroAjeno.kt`.
+- **Repositorio público (nuevo):** `README.en.md`, `CONTRIBUTING.md`, `CONTRIBUTING.en.md`, `docs/README.md`, `docs/magi-maestro.md`, `docs/manual/` (18 capítulos con `README.md` y `estado.md`), `.github/ISSUE_TEMPLATE/{fallo,propuesta,config}.yml`, `.github/pull_request_template.md`, `assets/demo/{magi.tape,inventario}`, `scripts/grabar-demo.sh`, `tests/repositorio_publico.rs`. **Reescritos:** `README.md` (1 689 → 102 líneas), `SECURITY.md`, `CHANGELOG.md` y `android/CHANGELOG.md` (primeras entradas publicadas), `docs/publicar.md` (§1, §2, §4, §9), `docs/publicar-android.md`, `docs/publicar-termux.md`.
+- **Referencias:** `Cargo.toml` ×3, `dist-workspace.toml`, `.github/workflows/{release,publicar-aur,android-release}.yml`, `packaging/aur/PKGBUILD`, `packaging/termux/build.sh`, `scripts/paquete-termux.sh`, `CLAUDE.md`, `AGENTS.md`; datos personales en `docs/fase1`, `docs/fase9` y `docs/fase11`.
+- **Pruebas nuevas o muy ampliadas:** `tests/sincronizacion_10b.rs` y `crates/magi-nucleo/tests/sincronizacion_10b.rs`, `tests/repositorio_publico.rs`, `tests/sesiones_persistentes_servidor/{pestana,vigilante}.rs`, `tests/sesiones_persistentes_ui/*`, `tests/sesiones_persistentes_e2e.rs`, `crates/magi-nucleo/tests/{tmux_script,tmux_real,sincronizacion_lector,sincronizacion_sesiones}.rs`, `tests/fijos/terminal/` (el tmux falso gana `MAGI_TMUX_OTRO_EQUIPO_TRAS_ESTADO` y `MAGI_TMUX_NEW_SESSION_TARDA`). 45 instantáneas tocadas: 9 `servidor_anterior_*` por la versión y el resto por D370 y las etiquetas.
+- **Versión 1.6.1:** `Cargo.toml` y `Cargo.lock`, `FECHA_DE_VERSION` (20 nov 2026), `assets/man/magi.1`, la DA2 de `tests/fijos/terminal/tui_prueba.rs` (`10601`) y las instantáneas `servidor_anterior_*`.
+
+## 4. Decisiones técnicas tomadas durante el desarrollo
+
+- **Contrato mínimo del Sprint 1.** Solo lo compartido entre pistas se fijó de antemano (`NoExiste`, `creada`): lo privado de cada pista lo decidió la pista. Cuatro pistas (A: 10b; B1: scripts y servidor; B2: cliente; B3: almacén) en worktrees propios, con el `target` sembrado por reflink, y fusión sin conflictos. Cada pista hizo su autorrevisión adversarial.
+- **El script por la entrada estándar.** La línea de órdenes lleva `OrdenTmux::ARRANQUE` (`S=$(cat); … eval "$S"`) y los argumentos escapados; el script entra por stdin, leído entero antes de ejecutar nada, y se envía con `canal.data()` antes del `eof()`, dentro del plazo. Los tres ejecutores duplicados se centralizaron en `lanzar_exec`.
+- **R157 sin compare-and-attach.** tmux no lo tiene: la guarda y el `attach` van en el mismo script y la ventana se reduce a milisegundos. Sin guarda (`prefijo r`, a mano) manda el usuario.
+- **Consulta al servidor fuera del cerrojo** y solo si hay clave; cada `Fallo` aplaza (la dirección segura).
+- **Reparto del README sin reescribir.** Script por rangos de encabezados con tabla fija de destino; comprueba que cada sección tiene destino, que no cambia el número de líneas y lista cada línea modificada.
+- **`repositorio_publico` sin dependencias nuevas:** escáner a mano con `std::net::Ipv4Addr` (el paquete raíz no tiene `regex`), lista de ficheros con `git ls-files --cached --others --exclude-standard`, cálculo propio del slug de GitHub para las anclas, y cada excepción con su motivo en la propia prueba.
+- **La guía de publicación no nombra la organización anterior** (R182): manda a `docs/README.md`, que sí la nombra, para no abrir una excepción más en la prueba.
+- **Demo.** `scripts/grabar-demo.sh` para el servidor de MAGI solo si el entorno aislado ya estaba en marcha y su `XDG_RUNTIME_DIR` es el suyo, con `--si`, sin leer del terminal y con plazo; valida la cinta con `vhs validate` antes de grabar.
+- **Medidas de los scripts embebidos frente a Dropbear (~9000 B, sin comprobar aquí)**, sin cambiar los que no tocaba el cierre: `servicios.sh` 37 977 B (39 016 escapado: **ya rebasa el límite**, de la F13), `terminal_tmux.sh` 27 460 B (ahora por la entrada estándar), `sondeo.sh` 3 110 B, `terminal_enganche.sh` 4 029 B (4 168 escapado), `escritorio_voxl.sh` 1 569 B, `instalar_clave.sh` 719 B. Hueco anotado: `crear` sigue metiendo la carpeta (hasta 1 024 B) y el comando (hasta 4 096 B) como argumentos de la línea de órdenes y, con comillas que se escapan, puede pasar de 9 000 B; la especificación dice «solo argumentos validados en la línea». Hay un fichero huérfano, `src/flota/sondeo.sh`, copia vieja y distinta de la que se incrusta.
+
+## 5. Funcionalidades del checklist completadas
+
+Las 52 marcadas en `docs/fase9b/magi-fase9b-checklist.md` con su texto exacto. Sin marcar (6):
+
+- `assets/demo/magi.tape` (VHS), `assets/demo/inventario` y `scripts/grabar-demo.sh`: escritos y revisados por lectura, **no ejecutados** (falta `vhs`).
+- `assets/demo/magi.gif` versionado: sin grabar. Mientras no exista, `repositorio_publico` falla en dos pruebas (enlace roto y falta del GIF): es la señal buscada.
+- **Publicación (la hace el desarrollador):** ajustes y secretos; `v1.6.1`; `android-v0.2.0-rc.1` y `android-v0.2.0`.
+
+- **«Todo en verde»:** `fmt`, `clippy`, `cargo deny`, `actionlint`, `shellcheck`, `dist plan`, las pruebas JVM de Android (`./gradlew lint testDebugUnitTest`) y la suite del workspace pasan, **salvo las dos pruebas de `repositorio_publico` que dependen del GIF** (enlace roto y falta del fichero). Se marcará cuando exista el GIF.
+
+## 6. Pendientes y bloqueos
+
+**Del agente / del entorno**
+
+- **`vhs` y `ttyd` no están instalados:** `sudo pacman -S vhs ttyd` y después `scripts/grabar-demo.sh`; revisa los fotogramas (el sondeo mide la máquina que graba) y que pese ≤ 2 MiB.
+- **R154 y R159 solo se verifican de forma indirecta:** no hay Dropbear, `dash` ni `mawk` en esta máquina (`shellcheck -s dash` limpio, `tmux` 3.7c real, `gawk`). La CI ejecuta `tmux_real` con el `dash` y el `awk` de Ubuntu.
+- **Pruebas instrumentadas de Android** (emulador) no ejecutadas: solo se reescribió el aviso esperado de `PruebaSincronizacionFicheroAjeno.kt`. La cadena `estado_equipo_danado` de `strings.xml` sigue diciendo «dañado».
+- **La vista SINCRONIZACIÓN no pinta todavía** la línea «Borrados aplazados» ni la fila «✕ rechazado» del mockup §6.4: requería un cambio de interfaz con instantáneas fuera de lo asignado. Los avisos salen en el pie y los aplazados, en CONFLICTOS.
+- **Un error de E/S al leer el fichero de un equipo conocido sigue parando la pasada entera**, como hoy (fuera de alcance).
+- **S-01:** una reconexión automática rechazada por la guarda deja una fila `sesion_reconectada` en REGISTRO en la carrera (ver la revisión adversarial).
+- **El `.deb` de Termux y los tarballs de `dist` incluyen `README.md`**, cuyos enlaces a `docs/` no existen dentro del paquete.
+- **`termux-release.yml` fija por rama o etiqueta mutable las acciones de terceros** de los jobs que atestan (F17).
+- **La F17 sigue con lo suyo pendiente** (el `.deb` real con `dpkg-deb`, la candidata, la prueba de concepto y su guion en el plegable); la 9b la deja listada, no la cierra.
+
+**Del desarrollador a confirmar**
+
+- **`gitleaks` sobre todo el historial (hecho una vez, 20 nov 2026):** 133 commits, **14 hallazgos, todos en ficheros de pruebas**, sin copiar su valor: 11 `age-secret-key` (claves de fixtures de sincronización y de las pruebas instrumentadas de Android, con UUID inventados; una es «clave inventada» en una instantánea) y 3 `private-key` (la clave de host fija del servidor de pruebas y su copia con el nombre anterior del ejemplo, ambas «solo pruebas», y el certificado de pruebas de RDP). **Ninguno parece real, pero lo confirmas tú** (si una clave de sincronización de fixture fuera una que usas, habría que rotarla; el historial no se reescribe, D391).
+- **Alias que pueden ser nombres reales** en la semilla de las instantáneas (`tests/redimensionado/semilla.rs`) y en más de 200 `.snap`: `hetzner-01`, `hetzner-02`, `vps-openclaw`, `mac-mini-m1`, `dgx-spark`, `backup-nas`, `rincon-dev`, y `cooperapp` (en `src/ui/ficha.rs` y `tests/redimensionado/vistas_b.rs`). No son IP, ruta ni correo (lo que cubre el checklist); decides tú si se renombran. Ya se corrigieron los baratos: `ssh.4d3.org`, «Héctor» y la ruta del SDK en los informes de la F9 y la F11.
+- **La prerelease pública `artefactos-prueba-fase13`** lleva un binario y un APK de depuración compilados en local, sin atestación: considera borrarla antes de publicar.
+- **El historial público lleva tu correo personal** en 18 merges hechos desde la web de GitHub (D391: no se reescribe).
+- **Esta rama no ha pasado por la CI de GitHub** (los siete jobs de `ci.yml` y los de `android.yml`), ni el job `termux`, que se disparará con esta PR por tocar `README.md` y `Cargo.toml`.
+
+**Para el analista** (entregar este informe antes de especificar la siguiente fase): las 18 desviaciones de §2, en especial 1 (la base ya tenía la F17: la 9b sale como 1.6.1), 2 (el manual lleva `termux.md`), 4 (los aplazados no se reintentan), 5 (falta el informe v1.2 de la F16), 13 (la regla de `main` y los nombres de los checks) y 16 (`gitleaks`); y que la 9b hace la revisión adversarial de cierre de la F16, que se había saltado.
+
+## 7. Ejecución y pruebas
+
+- **Compilar y arrancar:** `cargo run` abre la TUI; `cargo run -- sincronizar [estado]` y `cargo run -- sesiones` son las órdenes que cambia esta fase. Sin migración: `user_version` sigue en 11, protocolo v10 y `formato` 4.
+- **Suite completa:** `TZ=UTC cargo test --workspace --locked --no-fail-fast` (con `TMPDIR="$HOME/.cache/tmp"` si `/tmp` se llena). Resultado final (20 nov 2026, tras la revisión adversarial): 84 binarios y 3 280 pruebas en verde, 6 ignoradas. Fallaron dos binarios: `repositorio_publico` (las dos pruebas del GIF, esperado, y una tercera por un texto de mi propio informe que el escáner detectó y ya está corregido) y `tmux_real` (una carrera preexistente de la F16, `el_comando_va_como_dato…`, que comprobaba el pie «terminó con código 0» sin esperarlo; estabilizada y repetida tres veces en verde). Antes, en el Sprint 1, una carrera preexistente de la F17 (apartado 17 de §2).
+- **Pruebas de la fase:** `--test sincronizacion_10b` (raíz y núcleo), `--test sincronizacion_pasada_e2e`, `crates/magi-nucleo` `--test sincronizacion_lector`, `--test tmux_script --test tmux_real`, `--test sesiones_persistentes_servidor` (~50 s), `--test sesiones_persistentes_ui`, `--test sesiones_persistentes_e2e`, `--test repositorio_publico` (con `vhs` ausente falla dos pruebas por el GIF), `--test termux_paquete`, `--test redimensionado` (las instantáneas solo cambian por D370, las etiquetas y la versión).
+- **Controles:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `shellcheck scripts/*.sh crates/magi-nucleo/scripts/*.sh tests/fijos/terminal/tmux packaging/termux/build.sh tests/fijos/termux/falsos/* packaging/aur/generar.sh` (y `-s dash` sobre `terminal_enganche.sh`), `actionlint`, `dist plan --tag v1.6.1` (las notas salen con el resumen bilingüe), el paso de `aur-plantilla` reproducido en local (`makepkg --printsrcinfo`).
+- **Demo:** `scripts/grabar-demo.sh` (necesita `vhs`, `ttyd` y `ffmpeg`; no corre en CI).
+
+### Pasos del desarrollador, en orden (con lo ya hecho marcado)
+
+0. [x] Rama `fase9b` con S1, S2 y revisión adversarial; informe y checklist al día.
+1. [ ] `sudo pacman -S vhs ttyd` y `scripts/grabar-demo.sh`; revisar los fotogramas y hacer commit de `assets/demo/magi.gif` (≤ 2 MiB).
+2. [ ] Confirmar el resumen de `gitleaks` (§6) y decidir lo de los alias y la prerelease `artefactos-prueba-fase13`.
+3. [ ] Abrir la PR (`gh pr create` si me lo pides) y comprobar que la CI de GitHub pasa entera, incluido el job `termux`.
+4. [ ] Ajustes del repositorio (`docs/publicar.md` §4, paso 1): avisos privados, Dependabot de seguridad sin `dependabot.yml`, regla de `main` con los ocho checks, borrar las ramas al fusionar y las ya fusionadas, issues, descripción y temas.
+5. [ ] Comprobar que `magi-ssh-bin` sigue libre en AUR y de quién es la organización anterior (R182; `docs/README.md` da su nombre; si está libre, créala vacía para reservarla).
+6. [ ] Crear `HectorEspejo/homebrew-tap` y el secreto `HOMEBREW_TAP_TOKEN`.
+7. [ ] Crear la cuenta de AUR, su clave dedicada y el secreto `AUR_SSH_PRIVATE_KEY`.
+8. [ ] Crear el keystore de la app y sus cuatro secretos (`docs/publicar-android.md` §3), si no existen ya.
+9. [ ] **Guion corto de macOS** (abajo).
+10. [ ] Fusionar la 9b con la CI en verde.
+11. [ ] **Candidata del escritorio:** PR con `version = "1.6.1-rc.1"` (y `Cargo.lock`, la DA2 `10600`, las instantáneas y la página man: `docs/publicar.md` §4, paso 8), etiqueta `v1.6.1-rc.1`. Debe salir una prerelease con tarballs, atestaciones y el `.deb`, sin tocar Homebrew ni AUR. Instalar el `.deb` en Termux con el guion de la F17.
+12. [ ] **Estable:** PR que vuelve a `version = "1.6.1"` (fecha del día en `## [1.6.1] - fecha` del CHANGELOG), etiqueta `v1.6.1`; vigilar `release.yml` y Release Termux; comprobaciones de `docs/publicar.md` §9 (`yay`, `brew`, tarball con `sha256sum -c` y `gh attestation verify`). Después, actualizar `packaging/termux/build.sh` (`TERMUX_PKG_VERSION`) y proponer la receta a TUR (`docs/publicar-termux.md`).
+13. [ ] **App:** PR con `android/version.properties` a `0.2.0-rc.1`, etiqueta `android-v0.2.0-rc.1`, **guion corto de la app** (abajo) en el plegable, PR a `0.2.0` y etiqueta `android-v0.2.0` (nunca «Latest»).
+
+**Guion corto de macOS** (D395), en el mac mini, con un binario compilado allí desde el commit de la release:
+
+1. `cargo build --release --locked`; `magi --version` y `magi diagnostico`.
+2. Conectar a un host con una clave del agente y a otro con una contraseña recordada en el Llavero.
+3. Abrir dos pestañas, cerrar la ventana y volver con `magi`: siguen ahí.
+4. SFTP: subir y bajar un fichero; un túnel local.
+5. `magi servidor parar`.
+
+Si falla el paso 1 o el 2, **los objetivos de macOS salen de esta release** y vuelven en una PATCH (se quitan de `dist-workspace.toml` y de `release.yml`, con su job de Homebrew); si el fallo es menor, sale «en pruebas» y se anota en `docs/manual/estado.md`.
+
+**Guion corto de la versión candidata de la app** (con `android-v0.2.0-rc.1`, en el plegable, con Obtainium con las prereleases activadas):
+
+1. Instalar el APK y comprobar su certificado (`apksigner verify --print-certs`).
+2. Desbloquear con huella o PIN.
+3. Unir la sincronización (QR o pegando la clave) y ver Flota con el inventario.
+4. Abrir un terminal y un túnel local.
+5. Abrir Servicios de un host. Si todo va, `android-v0.2.0`; si algo falla, corrección y `0.2.0-rc.2` (versionCode 2002).
+
+**Aviso para el analista y el desarrollador:** entrega este informe al analista funcional antes de especificar la siguiente fase; hasta entonces el maestro y el checklist maestro no reflejan la realidad.

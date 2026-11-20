@@ -620,8 +620,11 @@ fn el_comando_va_como_dato_y_nunca_se_interpola_en_el_envoltorio() {
     );
     let salida = real.crear("raro", "", &comando);
     assert_eq!(salida.codigo, 0, "{}", salida.stderr);
-    let vista = real.esperar_en_vista("raro", "fin-del-comando");
-    assert!(vista.contains("terminó con código 0"), "{vista}");
+    real.esperar_en_vista("raro", "fin-del-comando");
+    // El pie «terminó con código N» se escribe después de la salida del comando:
+    // se espera, no se supone (con la máquina cargada llega más tarde).
+    let vista = real.esperar_en_vista("raro", "terminó con código 0");
+    assert!(vista.contains("fin-del-comando"), "{vista}");
     assert!(!existe(real.base.path(), "inyectado"));
 }
 
@@ -1143,4 +1146,49 @@ fn la_guarda_del_enganche_no_le_quita_la_sesion_a_otro_equipo_de_verdad() {
     assert_eq!(manual.esperar_codigo(PLAZO), Some(100));
     assert!(reconectado.hijo.try_wait().unwrap().is_none());
     real.esperar_clientes("revision", 1);
+}
+
+/// Revisión adversarial de la 9b (R1): `awk` toma «7» y «007» por el mismo
+/// número, así que la guarda de la reconexión y la identidad de `preparar`
+/// miraban la primera de las dos. Los nombres de sesión son texto.
+#[test]
+fn sesiones_con_nombres_que_parecen_el_mismo_numero_no_se_confunden_de_verdad() {
+    let Some(real) =
+        Real::nuevo("sesiones_con_nombres_que_parecen_el_mismo_numero_no_se_confunden_de_verdad")
+    else {
+        return;
+    };
+    // tmux lista «007» antes que «7»: es la que casaba antes.
+    assert_eq!(real.crear("007", "", "").codigo, 0);
+    assert_eq!(real.crear("7", "", "").codigo, 0);
+
+    // La identidad de «7» es la suya, no la de «007».
+    let salida = real.script(&["preparar", "magi", "7"]);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    let lectura = leer_preparar(&salida.stdout, Some(salida.codigo));
+    let vista = real.sesion(ServidorTmux::Magi, "7").expect("la sesión 7");
+    assert_eq!(lectura.id.as_deref(), vista.id.as_deref());
+    let otra = real
+        .sesion(ServidorTmux::Magi, "007")
+        .expect("la sesión 007");
+    assert_ne!(vista.id, otra.id);
+
+    // La sobremesa tiene «7»; la reconexión del portátil, con guarda, no se la
+    // lleva (antes miraba «007», que está libre, y se enganchaba).
+    let mut sobremesa = real.cliente(&["magi", "7", "1", "sobremesa"]);
+    real.esperar_clientes("7", 1);
+    real.esperar("la marca de la sobremesa", |real| {
+        real.sesion(ServidorTmux::Magi, "7")
+            .is_some_and(|sesion| sesion.equipo.as_deref() == Some("sobremesa"))
+    });
+    let mut portatil = real.cliente_con(&["magi", "7", "1", "portatil"], true);
+    assert_eq!(
+        portatil.esperar_codigo(PLAZO),
+        Some(101),
+        "la tiene otro equipo"
+    );
+    assert!(
+        sobremesa.hijo.try_wait().unwrap().is_none(),
+        "la sobremesa sigue enganchada"
+    );
 }

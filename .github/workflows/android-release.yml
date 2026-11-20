@@ -439,7 +439,7 @@ jobs:
             echo
             echo "    sha256sum -c magi-android-v${VERSION}.apk.sha256"
             echo "    apksigner verify --print-certs magi-android-v${VERSION}.apk"
-            echo "    gh attestation verify magi-android-v${VERSION}.apk --repo 4d3-org/magi"
+            echo "    gh attestation verify magi-android-v${VERSION}.apk --repo HectorEspejo/magi"
             echo
             echo "La huella del certificado debe coincidir con esta y con la de las releases anteriores de la app: si cambia, no instales el APK y avisa."
             echo

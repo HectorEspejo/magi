@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.86"
 description = "Puerta UniFFI de MAGI para Android: contrato del núcleo compartido"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/4d3-org/magi"
+repository = "https://github.com/HectorEspejo/magi"
 publish = false
 
 [lib]

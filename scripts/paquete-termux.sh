@@ -61,7 +61,7 @@ PREFIJO_TERMUX='data/data/com.termux/files/usr'
 # públicas del NDK, presentes en toda versión de Android. Con otra, el paquete
 # tendría que declarar una dependencia.
 BIBLIOTECAS_PERMITIDAS=(libc.so libm.so libdl.so liblog.so libz.so)
-HOMEPAGE='https://github.com/4d3-org/magi'
+HOMEPAGE='https://github.com/HectorEspejo/magi'
 
 error() {
   printf 'paquete-termux.sh: %s\n' "$*" >&2

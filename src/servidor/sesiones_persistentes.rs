@@ -1167,6 +1167,18 @@ async fn renombrar_en_host(
     }
 }
 
+/// Una sesión de ese host acaba de terminar (o ya no existía): adelanta la
+/// siguiente comprobación, aunque la última sea de hace menos de 5 s, para que
+/// la lista no siga enseñándola viva (revisión de la 9b, C9B-1).
+pub(super) async fn pedir_recomprobacion(estado: &EstadoCompartido, host_id: i64) {
+    estado
+        .lock()
+        .await
+        .persistentes
+        .recomprobar
+        .insert(host_id, Instant::now());
+}
+
 /// Lo que cambia en el servidor cuando el host renombró una sesión: lo que
 /// sabe de ese host en memoria (para no darla por terminada hasta la
 /// siguiente comprobación, que se adelanta) y las pestañas enganchadas, que
