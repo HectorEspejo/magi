@@ -282,6 +282,7 @@ fn sesion_tmux(nombre: &str, clientes: u32, ventanas: u32, creada: i64) -> Sesio
     SesionVista {
         servidor: ServidorTmux::Habitual,
         nombre: nombre.to_string(),
+        id: None,
         clientes,
         equipo: None,
         actividad: creada,

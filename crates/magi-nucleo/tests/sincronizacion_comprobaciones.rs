@@ -497,6 +497,124 @@ fn una_comprobacion_de_un_host_que_ya_no_existe_es_huerfana() {
             && conflicto.elemento_tipo == "comprobacion_servicio"));
 }
 
+/// R160: la importación aparta con un nombre temporal (aquí, el objetivo) toda
+/// fila que va a reescribir. Si su host llega con datos ilegibles, la
+/// comprobación no se reescribe, pero tampoco puede quedarse con el nombre
+/// temporal: la fila se exportaría así al resto de equipos.
+#[test]
+fn una_comprobacion_de_un_host_que_no_se_puede_leer_no_pierde_su_objetivo() {
+    let almacen = almacen();
+    let host = crear_host(&almacen, "web");
+    let (host_uuid, version_host, _) = fila_versionada(&almacen, Tabla::Hosts, host);
+    let id = almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx.service", "nginx -t")
+        .expect("comprobación local");
+    let (uuid, version_local, _) = fila_versionada(&almacen, Tabla::ComprobacionesServicio, id);
+    let ms = ms_de(&version_local).max(ms_de(&version_host)) + 1_000;
+
+    // El host llega con un puerto que no es un número: no se aplica y su fila
+    // local se conserva. La comprobación llega editada.
+    let mut host_roto = ElementoDocumento {
+        tipo: "host".to_string(),
+        uuid: host_uuid.clone(),
+        version: version_ajena(ms),
+        vector: vector_ajeno(ms),
+        datos: datos_host_documento("web", "192.0.2.10"),
+    };
+    host_roto.datos["puerto"] = json!("no-es-un-numero");
+    let documento = documento_con(
+        4,
+        vec![
+            host_roto,
+            elemento_comprobacion(
+                &uuid,
+                &host_uuid,
+                "unidad",
+                "nginx.service",
+                "nginx -t -q",
+                ms,
+            ),
+        ],
+        Vec::new(),
+    );
+    fusionar_y_aplicar(&almacen, &[documento]);
+
+    let comprobaciones = almacen
+        .comprobaciones_de_host(host)
+        .expect("comprobaciones");
+    assert_eq!(comprobaciones.len(), 1, "la comprobación sigue");
+    assert_eq!(
+        comprobaciones[0].objetivo.nombre, "nginx.service",
+        "no se queda con el nombre temporal"
+    );
+    assert_eq!(comprobaciones[0].comando, "nginx -t", "y no se toca");
+    assert_eq!(
+        comprobaciones[0].version.as_deref(),
+        Some(version_local.as_str())
+    );
+}
+
+/// Lo mismo cuando la comprobación que llega quiere un objetivo que ya ocupa
+/// otra fila del host: se descarta con un conflicto de nombre y la local, que
+/// se había apartado, conserva el suyo.
+#[test]
+fn una_comprobacion_cuya_clave_se_ocupa_conserva_su_objetivo() {
+    let almacen = almacen();
+    let host = crear_host(&almacen, "web");
+    let (host_uuid, _, _) = fila_versionada(&almacen, Tabla::Hosts, host);
+    let nginx = almacen
+        .guardar_comprobacion(host, TipoObjetivo::Unidad, "nginx.service", "nginx -t")
+        .expect("comprobación local");
+    let caddy = almacen
+        .guardar_comprobacion(
+            host,
+            TipoObjetivo::Unidad,
+            "caddy.service",
+            "caddy validate",
+        )
+        .expect("la otra comprobación local");
+    let (uuid_nginx, version_nginx, _) =
+        fila_versionada(&almacen, Tabla::ComprobacionesServicio, nginx);
+    let (_, version_caddy, _) = fila_versionada(&almacen, Tabla::ComprobacionesServicio, caddy);
+    let ms = ms_de(&version_nginx).max(ms_de(&version_caddy)) + 1_000;
+
+    // Otro equipo cambia el objetivo de la de nginx por el que ya tiene la
+    // de caddy (con un MAGI que lo permitiera): la clave natural choca.
+    let documento = documento_con(
+        3,
+        vec![elemento_comprobacion(
+            &uuid_nginx,
+            &host_uuid,
+            "unidad",
+            "caddy.service",
+            "nginx -t",
+            ms,
+        )],
+        Vec::new(),
+    );
+    fusionar_y_aplicar(&almacen, &[documento]);
+    let pendientes = conflictos::listar_pendientes(almacen.conexion()).expect("conflictos");
+    assert!(
+        pendientes.iter().any(|conflicto| conflicto.tipo == "nombre"
+            && conflicto.elemento_tipo == "comprobacion_servicio"
+            && conflicto.uuid == uuid_nginx),
+        "conflicto de nombre: {pendientes:?}"
+    );
+
+    let mut objetivos: Vec<String> = almacen
+        .comprobaciones_de_host(host)
+        .expect("comprobaciones")
+        .into_iter()
+        .map(|comprobacion| comprobacion.objetivo.nombre)
+        .collect();
+    objetivos.sort();
+    assert_eq!(
+        objetivos,
+        ["caddy.service", "nginx.service"],
+        "ninguna se queda con el nombre temporal"
+    );
+}
+
 #[test]
 fn una_comprobacion_de_un_host_que_no_es_ssh_es_huerfana() {
     let almacen = almacen();

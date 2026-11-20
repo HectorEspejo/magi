@@ -1,0 +1,14 @@
+---
+source: tests/sesiones_persistentes_ui/pestana.rs
+---
+ MAGI · SESIÓN ────────────── refactor ─
+▸┌ VOLVER A LA SESIÓN ────────────────┐
+▸│                                    │─
+ │ La sesión «refactor» de dev-01 la  │
+ │ usa ahora portátil.                │
+ │ Volver se la quita: allí se suelta │
+ │ y esta pestaña la recupera.        │
+ │                                    │
+ │ s confirmar   n / esc cancelar     │
+ │                                    │
+ └────────────────────────────────────┘

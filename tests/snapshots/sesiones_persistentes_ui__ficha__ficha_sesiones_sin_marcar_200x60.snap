@@ -25,7 +25,7 @@ source: tests/sesiones_persistentes_ui/ficha.rs
 │                                                               patrón [  ]  (< 24 h)                                                                                                                  │
 │                                         [ ] tests en verde    [  ]                                                                                                                                   │
 │                                                                                                                                                                                                      │
-│                                        SESIONES (viaja a tus equipos)                                                                                                                                │
+│                                        SESIONES                                                                                                                                                      │
 │                                         [ ] Todas las sesiones persistentes (tmux en el host)                                                                                                        │
 │                                             nombres automáticos: sobremesa-1, sobremesa-2…                                                                                                           │
 │                                         Espacio marca · Tab siguiente · Ctrl+S guardar                                                                                                               │

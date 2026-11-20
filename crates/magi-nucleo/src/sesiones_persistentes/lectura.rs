@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use crate::sesiones_persistentes::{ServidorTmux, SesionVista, VersionTmux};
 use crate::terminal::tmux::{
     equipo_valido, nombre_valido, version_de_texto, ResultadoTerminar, SALIDA_ANTIGUO,
-    SALIDA_EXISTE, SALIDA_SIN_CARPETA, SALIDA_SIN_TMUX,
+    SALIDA_EXISTE, SALIDA_NO_EXISTE, SALIDA_SIN_CARPETA, SALIDA_SIN_TMUX,
 };
 
 /// Sesiones que se aceptan por host (los dos servidores juntos).
@@ -35,8 +35,9 @@ pub const MAXIMO_HISTORIAL: usize = 8 * 1024 * 1024;
 /// Separador de los campos de `MAGI_SES` (0x1F).
 const SEPARADOR: char = '\u{1f}';
 /// Campos de una línea `MAGI_SES` sin contar la etiqueta: servidor, nombre,
-/// clientes, equipo, actividad, creada, campana, ventanas y título.
-const CAMPOS_SESION: usize = 9;
+/// identificador, clientes, equipo, actividad, creada, campana, ventanas y
+/// título.
+const CAMPOS_SESION: usize = 10;
 
 // ----------------------------------------------------------------- estado
 
@@ -123,8 +124,8 @@ pub fn leer_estado_bytes(salida: &[u8]) -> Option<LecturaEstado> {
     leer_estado(&String::from_utf8_lossy(&salida[..tope]))
 }
 
-/// Una línea `MAGI_SES` sin su etiqueta: servidor, nombre, clientes, equipo,
-/// actividad, creada, campana, ventanas y título.
+/// Una línea `MAGI_SES` sin su etiqueta: servidor, nombre, identificador,
+/// clientes, equipo, actividad, creada, campana, ventanas y título.
 fn leer_sesion(campos: &str) -> Option<SesionVista> {
     // Un campo de más no se busca más allá del siguiente: no hace falta
     // recorrer una línea entera de separadores.
@@ -140,14 +141,29 @@ fn leer_sesion(campos: &str) -> Option<SesionVista> {
     Some(SesionVista {
         servidor,
         nombre: nombre.to_string(),
-        clientes: numero_u32(campos[2]),
-        equipo: equipo_valido(campos[3]).then(|| campos[3].to_string()),
-        actividad: numero_i64(campos[4]),
-        creada: numero_i64(campos[5]),
-        campana: campos[6] == "1",
-        ventanas: numero_u32(campos[7]),
-        titulo: limpiar_titulo(campos[8]),
+        id: id_de_sesion_valido(campos[2]).then(|| campos[2].to_string()),
+        clientes: numero_u32(campos[3]),
+        equipo: equipo_valido(campos[4]).then(|| campos[4].to_string()),
+        actividad: numero_i64(campos[5]),
+        creada: numero_i64(campos[6]),
+        campana: campos[7] == "1",
+        ventanas: numero_u32(campos[8]),
+        titulo: limpiar_titulo(campos[9]),
     })
+}
+
+/// Bytes máximos de un identificador de sesión de tmux (`$` y hasta diez
+/// dígitos).
+const MAXIMO_ID_SESION: usize = 11;
+
+/// ¿Es un identificador interno de sesión de tmux (`$0`, `$12`…)? Lo que no lo
+/// es se descarta: nunca llega más lejos que `None`.
+#[must_use]
+pub fn id_de_sesion_valido(id: &str) -> bool {
+    id.len() <= MAXIMO_ID_SESION
+        && id.strip_prefix('$').is_some_and(|digitos| {
+            !digitos.is_empty() && digitos.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// Título saneado: sin caracteres de control ni de formato invisible (los que
@@ -331,6 +347,109 @@ pub fn leer_crear(salida: &str, codigo: Option<i32>) -> LecturaCrear {
     LecturaCrear { resultado, tmux }
 }
 
+/// Resultado de `preparar`, la primera mitad de engancharse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultadoPreparar {
+    /// La sesión existe y está lista para engancharse (código 0).
+    Lista,
+    /// La sesión ya no existe (código 75).
+    NoExiste,
+    /// El host no tiene tmux (código 76).
+    SinTmux,
+    /// tmux es anterior a 3.0 (código 74).
+    Antiguo,
+    /// Cualquier otra cosa: la salida no es la del script o no se sabe cómo
+    /// acabó. No equivale a «no existe».
+    Error,
+}
+
+/// Lo que dice `preparar`: el resultado y la identidad de la sesión.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LecturaPreparar {
+    pub resultado: ResultadoPreparar,
+    /// `MAGI_ID`, si lo dio y es un identificador válido.
+    pub id: Option<String>,
+    /// `MAGI_CREADA`: segundos Unix (hora del host) de la creación de la
+    /// sesión, si la dio y es un número.
+    pub creada: Option<i64>,
+}
+
+/// Lee la salida de `preparar` y su código de salida (que decide el resultado:
+/// sin código, `Error`). El primer `MAGI_ID=` y el primer `MAGI_CREADA=` mandan.
+#[must_use]
+pub fn leer_preparar(salida: &str, codigo: Option<i32>) -> LecturaPreparar {
+    let salida = prefijo_acotado(salida, MAXIMO_SALIDA_ESTADO);
+    let mut id = None;
+    let mut creada = None;
+    let (mut visto_id, mut visto_creada) = (false, false);
+    for linea in salida.split('\n') {
+        let linea = linea.strip_suffix('\r').unwrap_or(linea);
+        if linea.len() > MAXIMO_LINEA_ESTADO {
+            continue;
+        }
+        if let Some(valor) = linea.strip_prefix("MAGI_ID=") {
+            if !visto_id {
+                visto_id = true;
+                id = id_de_sesion_valido(valor).then(|| valor.to_string());
+            }
+        } else if let Some(valor) = linea.strip_prefix("MAGI_CREADA=") {
+            if !visto_creada {
+                visto_creada = true;
+                creada = valor.trim().parse::<i64>().ok().filter(|valor| *valor > 0);
+            }
+        }
+    }
+    let resultado = match codigo {
+        Some(0) => ResultadoPreparar::Lista,
+        Some(SALIDA_NO_EXISTE) => ResultadoPreparar::NoExiste,
+        Some(SALIDA_SIN_TMUX) => ResultadoPreparar::SinTmux,
+        Some(SALIDA_ANTIGUO) => ResultadoPreparar::Antiguo,
+        _ => ResultadoPreparar::Error,
+    };
+    LecturaPreparar {
+        resultado,
+        id,
+        creada,
+    }
+}
+
+/// La sesión de una lista de `estado` que es «la misma» que sigue una pestaña,
+/// aunque otro equipo la haya renombrado (R157).
+///
+/// 1. La que lleva ese nombre, si no se sabe que sea otra: o no se conoce el
+///    identificador de alguna de las dos, o es el mismo.
+/// 2. Si no, la que tiene el identificador de la pestaña **y** la misma hora de
+///    creación (con otro nombre: la renombraron). Sin la hora conocida no se
+///    sigue por identificador: tmux reutiliza `$0`, `$1`… tras reiniciarse, y
+///    una sesión ajena con el mismo número no es la de la pestaña.
+///
+/// Nunca devuelve una sesión del otro servidor de tmux.
+#[must_use]
+pub fn buscar_sesion<'a>(
+    sesiones: &'a [SesionVista],
+    servidor: ServidorTmux,
+    nombre: &str,
+    id: Option<&str>,
+    creada: Option<i64>,
+) -> Option<&'a SesionVista> {
+    let del_servidor = |sesion: &&SesionVista| sesion.servidor == servidor;
+    if let Some(sesion) = sesiones
+        .iter()
+        .filter(del_servidor)
+        .find(|sesion| sesion.nombre == nombre)
+    {
+        let es_otra = matches!((id, sesion.id.as_deref()), (Some(a), Some(b)) if a != b);
+        if !es_otra {
+            return Some(sesion);
+        }
+    }
+    let id = id?;
+    let creada = creada.filter(|creada| *creada > 0)?;
+    sesiones.iter().filter(del_servidor).find(|sesion| {
+        sesion.nombre != nombre && sesion.id.as_deref() == Some(id) && sesion.creada == creada
+    })
+}
+
 /// Resultado de `renombrar` (`MAGI_RESULTADO`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultadoRenombrar {
@@ -436,6 +555,7 @@ mod pruebas {
         linea(&[
             "magi",
             "agente-api",
+            "$7",
             "1",
             "portatil",
             "1794845343",
@@ -460,6 +580,7 @@ mod pruebas {
             vec![SesionVista {
                 servidor: ServidorTmux::Magi,
                 nombre: "agente-api".to_string(),
+                id: Some("$7".to_string()),
                 clientes: 1,
                 equipo: Some("portatil".to_string()),
                 actividad: 1794845343,
@@ -507,8 +628,8 @@ mod pruebas {
 
     #[test]
     fn el_servidor_desconocido_descarta_la_linea() {
-        let desconocido = linea(&["otro", "x", "0", "", "1", "1", "0", "1", ""]);
-        let vacio = linea(&["", "x", "0", "", "1", "1", "0", "1", ""]);
+        let desconocido = linea(&["otro", "x", "", "0", "", "1", "1", "0", "1", ""]);
+        let vacio = linea(&["", "x", "", "0", "", "1", "1", "0", "1", ""]);
         let lectura = leer_estado(&con_cabecera(&format!(
             "{desconocido}\n{vacio}\n{}",
             sesion_ok()
@@ -520,8 +641,8 @@ mod pruebas {
 
     #[test]
     fn campos_de_menos_o_de_mas_descartan_la_linea() {
-        let menos = linea(&["magi", "a", "0", "", "1", "1", "0", "1"]);
-        let mas = linea(&["magi", "b", "0", "", "1", "1", "0", "1", "t", "extra"]);
+        let menos = linea(&["magi", "a", "", "0", "", "1", "1", "0", "1"]);
+        let mas = linea(&["magi", "b", "", "0", "", "1", "1", "0", "1", "t", "extra"]);
         let muchos = format!("MAGI_SES{}", US.to_string().repeat(500));
         let solo_etiqueta = format!("MAGI_SES{US}");
         let sin_separador = "MAGI_SES".to_string();
@@ -543,12 +664,12 @@ mod pruebas {
             &"x".repeat(21),
             "",
         ] {
-            let texto = linea(&["magi", "a", "0", equipo, "1", "1", "0", "1", ""]);
+            let texto = linea(&["magi", "a", "", "0", equipo, "1", "1", "0", "1", ""]);
             let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
             assert_eq!(lectura.sesiones.len(), 1, "equipo {equipo:?}");
             assert_eq!(lectura.sesiones[0].equipo, None, "equipo {equipo:?}");
         }
-        let texto = linea(&["magi", "a", "0", "web-01", "1", "1", "0", "1", ""]);
+        let texto = linea(&["magi", "a", "", "0", "web-01", "1", "1", "0", "1", ""]);
         let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
         assert_eq!(lectura.sesiones[0].equipo.as_deref(), Some("web-01"));
     }
@@ -559,7 +680,7 @@ mod pruebas {
         let mut lineas = String::new();
         for nombre in ["con espacio", "a:b", "ñ", largo.as_str(), "a.b", "-a b"] {
             lineas.push_str(&linea(&[
-                "habitual", nombre, "0", "", "1", "1", "0", "1", "",
+                "habitual", nombre, "", "0", "", "1", "1", "0", "1", "",
             ]));
             lineas.push('\n');
         }
@@ -568,7 +689,7 @@ mod pruebas {
         let valido64 = "b".repeat(64);
         for nombre in ["0", "A_z-09", valido64.as_str()] {
             lineas.push_str(&linea(&[
-                "habitual", nombre, "0", "", "1", "1", "0", "1", "",
+                "habitual", nombre, "", "0", "", "1", "1", "0", "1", "",
             ]));
             lineas.push('\n');
         }
@@ -584,7 +705,7 @@ mod pruebas {
     #[test]
     fn el_titulo_se_sanea_y_se_acota_a_120_caracteres() {
         let con_controles = "\u{1b}[31mrojo\u{7}\u{0} y \u{202e}vuelta\u{200b}\u{feff}\u{85}";
-        let texto = linea(&["magi", "a", "0", "", "1", "1", "0", "1", con_controles]);
+        let texto = linea(&["magi", "a", "", "0", "", "1", "1", "0", "1", con_controles]);
         let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
         assert_eq!(
             lectura.sesiones[0].titulo.as_deref(),
@@ -592,7 +713,7 @@ mod pruebas {
         );
 
         let largo = "ñ".repeat(300);
-        let texto = linea(&["magi", "a", "0", "", "1", "1", "0", "1", &largo]);
+        let texto = linea(&["magi", "a", "", "0", "", "1", "1", "0", "1", &largo]);
         let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
         assert_eq!(
             lectura.sesiones[0]
@@ -603,7 +724,7 @@ mod pruebas {
         );
 
         for vacio in ["", "   ", "\u{1b}\u{7}", "\u{200b}"] {
-            let texto = linea(&["magi", "a", "0", "", "1", "1", "0", "1", vacio]);
+            let texto = linea(&["magi", "a", "", "0", "", "1", "1", "0", "1", vacio]);
             let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
             assert_eq!(lectura.sesiones[0].titulo, None, "título {vacio:?}");
         }
@@ -614,6 +735,7 @@ mod pruebas {
         let texto = linea(&[
             "magi",
             "a",
+            "",
             "muchos",
             "",
             "ayer",
@@ -642,6 +764,7 @@ mod pruebas {
             lineas.push_str(&linea(&[
                 "magi",
                 &format!("s-{numero}"),
+                "",
                 "0",
                 "",
                 "1",
@@ -663,8 +786,8 @@ mod pruebas {
         // El mismo nombre en los dos servidores son dos sesiones distintas.
         let dos = format!(
             "{}\n{}",
-            linea(&["magi", "x", "0", "", "1", "1", "0", "1", ""]),
-            linea(&["habitual", "x", "0", "", "1", "1", "0", "1", ""])
+            linea(&["magi", "x", "", "0", "", "1", "1", "0", "1", ""]),
+            linea(&["habitual", "x", "", "0", "", "1", "1", "0", "1", ""])
         );
         assert_eq!(leer_estado(&con_cabecera(&dos)).unwrap().sesiones.len(), 2);
     }
@@ -672,7 +795,7 @@ mod pruebas {
     #[test]
     fn una_linea_gigante_se_descarta_sin_leerla() {
         let gigante = format!(
-            "MAGI_SES{US}magi{US}a{US}0{US}{US}1{US}1{US}0{US}1{US}{}",
+            "MAGI_SES{US}magi{US}a{US}{US}0{US}{US}1{US}1{US}0{US}1{US}{}",
             "x".repeat(5000)
         );
         let lectura = leer_estado(&con_cabecera(&format!("{gigante}\n{}", sesion_ok()))).unwrap();
@@ -688,9 +811,11 @@ mod pruebas {
 
     #[test]
     fn el_utf8_invalido_no_provoca_panico() {
-        let mut bytes = b"MAGI_TMUX=tmux 3.4\nMAGI_AHORA=1\nMAGI_SES\x1fmagi\x1fa\x1f0\x1f\x1f1\x1f1\x1f0\x1f1\x1ft\xff\xfe\xc3(x\n"
+        let mut bytes = b"MAGI_TMUX=tmux 3.4\nMAGI_AHORA=1\nMAGI_SES\x1fmagi\x1fa\x1f\x1f0\x1f\x1f1\x1f1\x1f0\x1f1\x1ft\xff\xfe\xc3(x\n"
             .to_vec();
-        bytes.extend_from_slice(b"MAGI_SES\x1fmagi\x1f\xff\xfe\x1f0\x1f\x1f1\x1f1\x1f0\x1f1\x1f\n");
+        bytes.extend_from_slice(
+            b"MAGI_SES\x1fmagi\x1f\xff\xfe\x1f\x1f0\x1f\x1f1\x1f1\x1f0\x1f1\x1f\n",
+        );
         let lectura = leer_estado_bytes(&bytes).expect("legible");
         assert_eq!(lectura.sesiones.len(), 1);
         let titulo = lectura.sesiones[0].titulo.as_deref().unwrap();
@@ -873,5 +998,171 @@ mod pruebas {
         assert_eq!(prefijo_acotado("añb", 2), "a");
         assert_eq!(prefijo_acotado("añb", 0), "");
         assert_eq!(prefijo_acotado("ab", 5), "ab");
+    }
+
+    #[test]
+    fn el_identificador_de_sesion_solo_admite_dolar_y_digitos() {
+        for valido in ["$0", "$7", "$12", "$1234567890"] {
+            assert!(id_de_sesion_valido(valido), "{valido:?}");
+        }
+        for invalido in [
+            "",
+            "$",
+            "7",
+            "$a",
+            "$-1",
+            "$1 2",
+            "$12345678901",
+            "$1\n",
+            "@1",
+            "$１",
+        ] {
+            assert!(!id_de_sesion_valido(invalido), "{invalido:?}");
+        }
+    }
+
+    #[test]
+    fn una_sesion_sin_identificador_valido_se_lista_sin_el() {
+        for id in ["", "7", "$x", "$99999999999999"] {
+            let texto = linea(&["magi", "a", id, "0", "", "1", "1", "0", "1", ""]);
+            let lectura = leer_estado(&con_cabecera(&texto)).unwrap();
+            assert_eq!(lectura.sesiones.len(), 1, "id {id:?}");
+            assert_eq!(lectura.sesiones[0].id, None, "id {id:?}");
+        }
+    }
+
+    #[test]
+    fn preparar_lee_el_codigo_de_salida_y_el_identificador() {
+        let lista = leer_preparar("MAGI_ID=$4\n", Some(0));
+        assert_eq!(lista.resultado, ResultadoPreparar::Lista);
+        assert_eq!(lista.id.as_deref(), Some("$4"));
+        // Sin identificador (o con uno inválido), preparada igualmente: solo
+        // se pierde el seguimiento por identificador.
+        assert_eq!(leer_preparar("", Some(0)).id, None);
+        assert_eq!(leer_preparar("MAGI_ID=zz\n", Some(0)).id, None);
+        // El primero manda.
+        assert_eq!(
+            leer_preparar("MAGI_ID=$1\nMAGI_ID=$2\n", Some(0))
+                .id
+                .as_deref(),
+            Some("$1")
+        );
+        for (codigo, esperado) in [
+            (Some(SALIDA_NO_EXISTE), ResultadoPreparar::NoExiste),
+            (Some(SALIDA_SIN_TMUX), ResultadoPreparar::SinTmux),
+            (Some(SALIDA_ANTIGUO), ResultadoPreparar::Antiguo),
+            (Some(1), ResultadoPreparar::Error),
+            (Some(70), ResultadoPreparar::Error),
+            // Sin código, o cortado a mitad, nunca vale por «no existe»: la
+            // salida de arriba podría ser media.
+            (None, ResultadoPreparar::Error),
+        ] {
+            assert_eq!(
+                leer_preparar("MAGI_ID=$4\n", codigo).resultado,
+                esperado,
+                "{codigo:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preparar_lee_la_hora_de_creacion_solo_si_es_un_numero_positivo() {
+        let lectura = leer_preparar("MAGI_ID=$4\nMAGI_CREADA=1794845000\n", Some(0));
+        assert_eq!(lectura.creada, Some(1794845000));
+        for ilegible in ["", "ayer", "-5", "0", "12 34", "99999999999999999999"] {
+            let salida = format!("MAGI_ID=$4\nMAGI_CREADA={ilegible}\n");
+            assert_eq!(leer_preparar(&salida, Some(0)).creada, None, "{ilegible:?}");
+        }
+        assert_eq!(leer_preparar("MAGI_ID=$4\n", Some(0)).creada, None);
+    }
+
+    fn vista(servidor: ServidorTmux, nombre: &str, id: Option<&str>, creada: i64) -> SesionVista {
+        SesionVista {
+            servidor,
+            nombre: nombre.to_string(),
+            id: id.map(str::to_string),
+            clientes: 0,
+            equipo: None,
+            actividad: 0,
+            creada,
+            campana: false,
+            ventanas: 1,
+            titulo: None,
+        }
+    }
+
+    #[test]
+    fn la_sesion_se_busca_por_nombre_y_sigue_por_identificador_tras_un_renombrado() {
+        let lista = [
+            vista(ServidorTmux::Magi, "otra", Some("$1"), 500),
+            vista(
+                ServidorTmux::Magi,
+                "nueva-del-otro-equipo",
+                Some("$2"),
+                1000,
+            ),
+        ];
+        // Por nombre, aunque no se conozca el identificador de la pestaña.
+        let hallada = buscar_sesion(&lista, ServidorTmux::Magi, "otra", None, None);
+        assert_eq!(hallada.map(|s| s.nombre.as_str()), Some("otra"));
+        // Tras un renombrado: el nombre ya no está y el identificador, con su
+        // hora de creación, la encuentra.
+        let hallada = buscar_sesion(&lista, ServidorTmux::Magi, "agente", Some("$2"), Some(1000));
+        assert_eq!(
+            hallada.map(|s| s.nombre.as_str()),
+            Some("nueva-del-otro-equipo")
+        );
+        // Sin la hora de creación no se sigue por identificador (tmux reutiliza
+        // los números al reiniciarse), ni con otra hora.
+        assert!(buscar_sesion(&lista, ServidorTmux::Magi, "agente", Some("$2"), None).is_none());
+        assert!(
+            buscar_sesion(&lista, ServidorTmux::Magi, "agente", Some("$2"), Some(999)).is_none()
+        );
+        // Sin identificador, una sesión que ya no tiene el nombre no existe.
+        assert!(buscar_sesion(&lista, ServidorTmux::Magi, "agente", None, Some(1000)).is_none());
+    }
+
+    #[test]
+    fn un_nombre_reutilizado_por_otra_sesion_no_es_la_de_la_pestana() {
+        // La pestaña seguía a «agente» ($2, creada a las 1000); otro equipo la
+        // renombró y creó otra «agente» ($5).
+        let lista = [
+            vista(ServidorTmux::Magi, "agente", Some("$5"), 2000),
+            vista(ServidorTmux::Magi, "agente-viejo", Some("$2"), 1000),
+        ];
+        let hallada = buscar_sesion(&lista, ServidorTmux::Magi, "agente", Some("$2"), Some(1000));
+        assert_eq!(hallada.map(|s| s.nombre.as_str()), Some("agente-viejo"));
+        // Con tmux reiniciado (otro «agente» con otra hora) y sin nadie con el
+        // identificador viejo, no hay sesión: no se engancha a la ajena.
+        let reiniciado = [vista(ServidorTmux::Magi, "agente", Some("$0"), 3000)];
+        assert!(buscar_sesion(
+            &reiniciado,
+            ServidorTmux::Magi,
+            "agente",
+            Some("$2"),
+            Some(1000)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn la_busqueda_nunca_cruza_de_servidor() {
+        let lista = [
+            vista(ServidorTmux::Habitual, "agente", Some("$2"), 1000),
+            vista(ServidorTmux::Habitual, "otro-nombre", Some("$9"), 1000),
+        ];
+        assert!(
+            buscar_sesion(&lista, ServidorTmux::Magi, "agente", Some("$2"), Some(1000)).is_none()
+        );
+        assert!(buscar_sesion(
+            &lista,
+            ServidorTmux::Magi,
+            "otro-nombre",
+            Some("$9"),
+            Some(1000)
+        )
+        .is_none());
+        let habitual = buscar_sesion(&lista, ServidorTmux::Habitual, "agente", None, None);
+        assert_eq!(habitual.map(|s| s.nombre.as_str()), Some("agente"));
     }
 }

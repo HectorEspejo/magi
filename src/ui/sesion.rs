@@ -214,7 +214,7 @@ fn pintar_cabecera(marco: &mut Frame, zona: Rect, app: &App, panel: usize, indic
                 Style::default().fg(tema.paleta.critico),
             ));
         }
-        if let Some(titulo) = &pestaña.titulo {
+        if let Some(titulo) = pestaña.titulo_visible() {
             let hueco = usize::from(zona.width).saturating_sub(
                 spans
                     .iter()

@@ -58,30 +58,40 @@ pub fn por_host(conexion: &Connection) -> Result<HashMap<i64, Vec<String>>> {
     Ok(mapa)
 }
 
-/// Sustituye las etiquetas de un host creando las que falten.
+/// Sustituye las etiquetas de un host creando las que falten, en su propia
+/// transacción. Quien cambia el host y su versión a la vez usa
+/// [`fijar_de_host_en`] dentro de la suya.
 pub fn fijar_de_host(conexion: &Connection, host_id: i64, nombres: &[String]) -> Result<()> {
-    let normalizadas = normalizar(nombres);
     let transaccion = crate::almacen::transaccion(conexion)?;
-    transaccion.execute(
+    fijar_de_host_en(&transaccion, host_id, nombres)?;
+    transaccion.commit()?;
+    Ok(())
+}
+
+/// Como [`fijar_de_host`], con la conexión ya dentro de una transacción: no
+/// abre ni cierra ninguna (R84). Las etiquetas viajan con el host, así que su
+/// cambio y la versión nueva del host tienen que ir juntos.
+pub fn fijar_de_host_en(conexion: &Connection, host_id: i64, nombres: &[String]) -> Result<()> {
+    let normalizadas = normalizar(nombres);
+    conexion.execute(
         "DELETE FROM HOST_ETIQUETAS WHERE host_id = ?1",
         params![host_id],
     )?;
     for nombre in &normalizadas {
-        transaccion.execute(
+        conexion.execute(
             "INSERT OR IGNORE INTO ETIQUETAS (nombre) VALUES (?1)",
             params![nombre],
         )?;
-        let etiqueta_id: i64 = transaccion.query_row(
+        let etiqueta_id: i64 = conexion.query_row(
             "SELECT id FROM ETIQUETAS WHERE nombre = ?1",
             params![nombre],
             |fila| fila.get(0),
         )?;
-        transaccion.execute(
+        conexion.execute(
             "INSERT OR IGNORE INTO HOST_ETIQUETAS (host_id, etiqueta_id) VALUES (?1, ?2)",
             params![host_id, etiqueta_id],
         )?;
     }
-    transaccion.commit()?;
     limpiar_huerfanas(conexion)?;
     Ok(())
 }

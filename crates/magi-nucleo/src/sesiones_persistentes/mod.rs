@@ -134,6 +134,12 @@ impl VersionTmux {
 pub struct SesionVista {
     pub servidor: ServidorTmux,
     pub nombre: String,
+    /// Identificador interno de tmux (`$3`): no cambia si otro equipo la
+    /// renombra y no se repite mientras viva el servidor de tmux. Con él,
+    /// MAGI sigue «la misma» sesión tras un renombrado (R157). `None` si el host
+    /// no lo dio o no es un identificador válido.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Clientes enganchados ahora.
     pub clientes: u32,
     /// Etiqueta del último equipo que se enganchó (`@magi_equipo`); `None` si

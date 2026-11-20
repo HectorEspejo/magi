@@ -309,8 +309,6 @@ pub struct TmuxPestana {
     /// host; `None` (o `Some(false)`) en reconexiones y al engancharse a una
     /// que ya existía. Solo la ventana cuya pestaña la creó guarda la ficha
     /// `origen = host` (D369, R163). Opcional dentro de v10.
-    // CONTRATO-S1-B1: el servidor lo rellena desde `PlanEnganche.nueva`.
-    // CONTRATO-S1-B2: el cliente lo usa en vez de la heurística de edad.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creada: Option<bool>,
 }
@@ -388,8 +386,6 @@ pub enum CausaAperturaTmux {
     Conexion,
     /// La sesión ya no existe en el host (al reconectar o al engancharse a una
     /// ficha): D349. Opcional dentro de v10.
-    // CONTRATO-S1-B1: el servidor la emite donde hoy da `Otra`.
-    // CONTRATO-S1-B2: el cliente la explica en `texto_apertura_fallida`.
     NoExiste,
     /// Cualquier otra cosa (tmux no pudo, datos no válidos…); el `mensaje`
     /// dice cuál.
@@ -2942,6 +2938,7 @@ mod pruebas {
             SesionVista {
                 servidor: ServidorTmux::Magi,
                 nombre: "agente-api".to_string(),
+                id: None,
                 clientes: 1,
                 equipo: Some("portatil".to_string()),
                 actividad: 1_700_000_100,
@@ -2953,6 +2950,7 @@ mod pruebas {
             SesionVista {
                 servidor: ServidorTmux::Habitual,
                 nombre: "trabajo".to_string(),
+                id: None,
                 clientes: 0,
                 equipo: None,
                 actividad: 1_699_990_000,
@@ -3036,6 +3034,7 @@ mod pruebas {
         let sesion = SesionVista {
             servidor: ServidorTmux::Magi,
             nombre: "agente-api".to_string(),
+            id: None,
             clientes: 0,
             equipo: Some("sobremesa".to_string()),
             actividad: 1_700_000_100,

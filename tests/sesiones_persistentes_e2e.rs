@@ -1,7 +1,8 @@
 //! Prueba de extremo a extremo de las sesiones persistentes (Fase 16): el
 //! servidor de sesiones de MAGI en el mismo proceso, el servidor SSH de pruebas
 //! de `tests/comun` y el **tmux de verdad** (el del `PATH`, o el del directorio
-//! `MAGI_TMUX_DIR`) con el script `terminal_tmux.sh` sin tocar. Sin red
+//! `MAGI_TMUX_DIR`) con los scripts `terminal_tmux.sh` (por la entrada estándar
+//! de los `exec`, como lo manda MAGI) y `terminal_enganche.sh` sin tocar. Sin red
 //! externa y sin tocar el tmux ni el `~/.tmux.conf` del usuario: cada prueba
 //! lleva su `HOME` y su `TMUX_TMPDIR` y, al acabar, mata sus servidores de tmux.
 //!
@@ -9,8 +10,8 @@
 //! que `attach-session` (que necesita un terminal) pasa por un envoltorio de
 //! `tmux` que lo ejecuta dentro de `script -qefc`, el mismo recurso que usa
 //! `crates/magi-nucleo/tests/tmux_real.rs`. Las demás órdenes de tmux van tal
-//! cual. El «otro equipo» es un `enganchar` del propio script, lanzado también
-//! con `script` contra el mismo servidor `-L magi`.
+//! cual. El «otro equipo» es el enganche mínimo (`terminal_enganche.sh`), lanzado
+//! también con `script` contra el mismo servidor `-L magi`.
 //!
 //! Recorre lo que el informe exige de la fase: crear una sesión y escribir en
 //! ella; cerrar la ventana y volver desde otra con la sesión viva y su
@@ -44,15 +45,15 @@ use tokio_util::codec::FramedRead;
 
 use magi::protocolo::{
     codec, decodificar, CrearTmux, EstadoFicha, EstadoSesionRemota, FichaVista, InfoSesion,
-    LinesCodec, ListaPersistentes, MensajeCliente, MensajeServidor, PeticionTmux, ResultadoTmux,
-    ServidorTmux, RANGO_TERMINAL, VERSION_PROTOCOLO,
+    LinesCodec, ListaPersistentes, MensajeCliente, MensajeServidor, PeticionTmux,
+    ResultadoRenombrar, ResultadoTmux, ServidorTmux, RANGO_TERMINAL, VERSION_PROTOCOLO,
 };
 use magi_nucleo::sesiones_persistentes::{DatosFicha, OrigenFicha, VersionTmux};
 use magi_nucleo::terminal::emulador::PantallaEmulada;
 use magi_nucleo::terminal::teclas::{
     codificar as codificar_tecla, Modificadores, ModoTerminal, Tecla,
 };
-use magi_nucleo::terminal::tmux::{etiqueta_equipo, version_de_texto, SCRIPT};
+use magi_nucleo::terminal::tmux::{etiqueta_equipo, version_de_texto, SCRIPT, SCRIPT_ENGANCHE};
 
 use comun::{escenario, Escenario, OpcionesEscenario};
 
@@ -107,8 +108,9 @@ struct Real {
     tmux_real: PathBuf,
     /// `PATH` de las órdenes que lanza la propia prueba.
     path: String,
-    /// El script `terminal_tmux.sh` en disco (para el «otro equipo»).
-    script: PathBuf,
+    /// El enganche mínimo `terminal_enganche.sh` en disco (para el «otro
+    /// equipo»).
+    enganche: PathBuf,
     version: VersionTmux,
 }
 
@@ -180,8 +182,8 @@ impl Real {
         let envoltorio = binarios.join("tmux");
         std::fs::write(&envoltorio, ENVOLTORIO_TMUX).ok()?;
         std::fs::set_permissions(&envoltorio, std::fs::Permissions::from_mode(0o755)).ok()?;
-        let script = base.path().join("terminal_tmux.sh");
-        std::fs::write(&script, SCRIPT).ok()?;
+        let enganche = base.path().join("terminal_enganche.sh");
+        std::fs::write(&enganche, SCRIPT_ENGANCHE).ok()?;
         eprintln!(
             "sesiones_persistentes_e2e::{prueba}: con {} (versión {}.{})",
             tmux_real.display(),
@@ -195,7 +197,7 @@ impl Real {
             binarios,
             tmux_real,
             path,
-            script,
+            enganche,
             version,
         })
     }
@@ -334,13 +336,13 @@ impl Real {
         panic!("el panel de {nombre} no llegó a llevar {texto:?}: {ultimo:?}");
     }
 
-    /// Lanza `enganchar` como lo haría otro equipo (con un terminal de verdad)
+    /// Lanza el enganche como lo haría otro equipo (con un terminal de verdad)
     /// contra el mismo servidor de tmux, y deja la entrada abierta: queda
     /// enganchado hasta que se lo quiten.
     fn equipo_remoto(&self, nombre: &str, equipo: &str, soltar: bool) -> EquipoRemoto {
         let orden = format!(
-            "stty rows 24 cols 80; exec sh {} enganchar magi {nombre} {} {equipo}",
-            self.script.display(),
+            "stty rows 24 cols 80; exec sh {} magi {nombre} {} {equipo} 0",
+            self.enganche.display(),
             u8::from(soltar)
         );
         let mut comando = Command::new("script");
@@ -1663,4 +1665,464 @@ async fn mayus_intro_con_modify_other_keys_llega_dentro_del_tmux_de_magi() {
     );
     // El comando de arranque es texto del usuario: nunca va a REGISTRO.
     banco.exigir_registro_sin(&["tui_prueba", "modify-other-keys"]);
+}
+
+// ===========================================================================
+// Cierre de la Fase 16 (Fase 9b): la vista previa, renombrar, el historial de
+// tmux y el tmux habitual con tmux real, y la pestaña soltada que sigue a su
+// sesión tras un renombrado
+// ===========================================================================
+
+/// Espera la respuesta a una petición (por su `peticion_id`) entre los
+/// mensajes que la ventana ya vio.
+async fn esperar_respuesta<F>(
+    ventana: &mut Ven,
+    motivo: &str,
+    mut es_la_respuesta: F,
+) -> MensajeServidor
+where
+    F: FnMut(&MensajeServidor) -> bool,
+{
+    ventana
+        .exigir(motivo, |ven| ven.vistos.iter().any(&mut es_la_respuesta))
+        .await;
+    ventana
+        .vistos
+        .iter()
+        .rev()
+        .find(|mensaje| es_la_respuesta(mensaje))
+        .cloned()
+        .expect("la respuesta que se acaba de ver")
+}
+
+/// La vista previa (`PedirVistaPrevia`) lee de verdad lo que muestra la
+/// sesión: texto plano, solo para la ventana que la pide, sin guardarse ni
+/// anotarse, con el nombre exacto.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn la_vista_previa_lee_lo_que_muestra_la_sesion_de_verdad() {
+    let Some(banco) = Banco::nuevo("la_vista_previa_lee_lo_que_muestra_la_sesion_de_verdad").await
+    else {
+        return;
+    };
+    let host = banco.host_id;
+    let mut ventana = banco.ventana().await;
+    let mut otra = banco.ventana().await;
+    let pestana = ventana.abrir(host, peticion("vista-1", true, false)).await;
+    banco.real.esperar_clientes("vista-1", 1).await;
+    ventana.cerrar(pestana.id).await;
+    banco.real.teclear("vista-1", "echo previa-$((6*7))");
+    banco.real.esperar_en_panel("vista-1", "previa-42").await;
+
+    let id = RANGO_TERMINAL + 700;
+    ventana
+        .enviar(&MensajeCliente::PedirVistaPrevia {
+            peticion_id: id,
+            host_id: host,
+            servidor: ServidorTmux::Magi,
+            nombre: "vista-1".to_string(),
+        })
+        .await;
+    let respuesta = esperar_respuesta(&mut ventana, "la vista previa", |mensaje| {
+        matches!(mensaje, MensajeServidor::VistaPrevia { peticion_id, .. } if *peticion_id == id)
+    })
+    .await;
+    let MensajeServidor::VistaPrevia { lineas, error, .. } = respuesta else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    assert!(
+        lineas.iter().any(|linea| linea.contains("previa-42")),
+        "la vista previa lleva lo que se ve en la sesión: {lineas:?}"
+    );
+    assert!(
+        lineas
+            .iter()
+            .all(|linea| !linea.contains('\u{1b}') && !linea.ends_with(' ')),
+        "texto plano y sin espacios finales: {lineas:?}"
+    );
+
+    // Un prefijo que no es el nombre exacto no lee nada ajeno.
+    let id_prefijo = RANGO_TERMINAL + 701;
+    ventana
+        .enviar(&MensajeCliente::PedirVistaPrevia {
+            peticion_id: id_prefijo,
+            host_id: host,
+            servidor: ServidorTmux::Magi,
+            nombre: "vista".to_string(),
+        })
+        .await;
+    let respuesta = esperar_respuesta(&mut ventana, "la vista de un prefijo", |mensaje| {
+        matches!(
+            mensaje,
+            MensajeServidor::VistaPrevia { peticion_id, .. } if *peticion_id == id_prefijo
+        )
+    })
+    .await;
+    let MensajeServidor::VistaPrevia { lineas, error, .. } = respuesta else {
+        unreachable!()
+    };
+    assert!(lineas.is_empty(), "{lineas:?}");
+    assert!(error.is_some(), "un nombre que no existe da su motivo");
+
+    // La otra ventana no ve nada de esto, y no queda rastro: ni REGISTRO ni
+    // fichas.
+    otra.hasta(Duration::from_millis(800), |_| false).await;
+    assert!(
+        !otra
+            .vistos
+            .iter()
+            .any(|mensaje| matches!(mensaje, MensajeServidor::VistaPrevia { .. })),
+        "la vista previa llegó a otra ventana: {:?}",
+        otra.vistos
+    );
+    banco.exigir_registro_sin(&["previa-42", "echo "]);
+}
+
+/// Renombrar (`RenombrarTmux`) con tmux real: las pestañas enganchadas siguen
+/// enganchadas con el nombre nuevo, ocupado y fantasma se dicen, y el nombre
+/// viejo ya no existe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn renombrar_con_tmux_real_deja_las_pestanas_enganchadas_y_dice_ocupado_y_fantasma() {
+    let Some(banco) = Banco::nuevo(
+        "renombrar_con_tmux_real_deja_las_pestanas_enganchadas_y_dice_ocupado_y_fantasma",
+    )
+    .await
+    else {
+        return;
+    };
+    let host = banco.host_id;
+    let mut ventana = banco.ventana().await;
+    let uno = ventana.abrir(host, peticion("viejo", true, false)).await;
+    banco.real.esperar_clientes("viejo", 1).await;
+    let otra = ventana.abrir(host, peticion("ocupado", true, false)).await;
+    banco.real.esperar_clientes("ocupado", 1).await;
+    ventana.cerrar(otra.id).await;
+
+    let mut numero = 800;
+    let mut pedir = |nombre: &str, nuevo: &str| {
+        numero += 1;
+        (
+            numero,
+            MensajeCliente::RenombrarTmux {
+                peticion_id: RANGO_TERMINAL + numero,
+                host_id: host,
+                nombre: nombre.to_string(),
+                nuevo: nuevo.to_string(),
+            },
+        )
+    };
+    for (nombre, nuevo, esperado) in [
+        ("viejo", "ocupado", ResultadoRenombrar::Ocupado),
+        ("fantasma", "otra", ResultadoRenombrar::NoExiste),
+        ("viejo", "nuevo", ResultadoRenombrar::Ok),
+    ] {
+        let (numero, mensaje) = pedir(nombre, nuevo);
+        ventana.enviar(&mensaje).await;
+        let respuesta = esperar_respuesta(&mut ventana, "la respuesta a renombrar", |m| {
+            matches!(
+                m,
+                MensajeServidor::TmuxRenombrada { peticion_id, .. }
+                    if *peticion_id == RANGO_TERMINAL + numero
+            )
+        })
+        .await;
+        let MensajeServidor::TmuxRenombrada { resultado, .. } = respuesta else {
+            unreachable!()
+        };
+        assert_eq!(resultado, esperado, "{nombre} → {nuevo}");
+    }
+    // El nombre viejo ya no existe, el nuevo sí, y la pestaña sigue
+    // enganchada y con el nombre nuevo.
+    assert!(banco.real.sesion("viejo").is_none());
+    assert_eq!(
+        banco.real.sesion("nuevo").map(|(clientes, _)| clientes),
+        Some(1)
+    );
+    ventana
+        .exigir("la pestaña sigue con el nombre nuevo", |ven| {
+            ven.pestana(uno.id).is_some_and(|pestana| {
+                pestana.estado == EstadoSesionRemota::Abierta
+                    && pestana
+                        .tmux
+                        .as_ref()
+                        .is_some_and(|tmux| tmux.nombre == "nuevo")
+            })
+        })
+        .await;
+    assert!(
+        banco.real.sesion("ocupado").is_some(),
+        "la ocupada no se toca"
+    );
+    assert_eq!(banco.escenario.anotaciones("tmux_terminada"), 0);
+}
+
+/// El historial de tmux de una pestaña persistente (`CapturarHistorial`) sale
+/// de `capture-pane` y llega por lotes: lo que se escribió, también lo que ya
+/// salió de la pantalla.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn el_historial_de_una_pestana_persistente_es_el_de_tmux_de_verdad() {
+    let Some(banco) =
+        Banco::nuevo("el_historial_de_una_pestana_persistente_es_el_de_tmux_de_verdad").await
+    else {
+        return;
+    };
+    let host = banco.host_id;
+    let mut ventana = banco.ventana().await;
+    let pestana = ventana.abrir(host, peticion("historia", true, false)).await;
+    banco.real.esperar_clientes("historia", 1).await;
+    ventana.adjuntar(pestana.id).await;
+    // Más líneas de las que caben en la pantalla (24): las primeras ya solo
+    // están en el historial de tmux.
+    ventana
+        .teclear(
+            pestana.id,
+            "for i in $(seq 1 60); do echo linea-hist-$i; done\r",
+        )
+        .await;
+    banco
+        .real
+        .esperar_en_panel("historia", "linea-hist-60")
+        .await;
+
+    let id = RANGO_TERMINAL + 900;
+    ventana
+        .enviar(&MensajeCliente::CapturarHistorial {
+            peticion_id: id,
+            sesion_id: pestana.id,
+        })
+        .await;
+    let mut textos: Vec<String> = Vec::new();
+    let fin = Instant::now() + PLAZO;
+    loop {
+        let antes = ventana.vistos.len();
+        ventana.paso(Duration::from_millis(100)).await;
+        let mut terminado = false;
+        for mensaje in &ventana.vistos[antes.min(ventana.vistos.len())..] {
+            if let MensajeServidor::HistorialLote {
+                peticion_id,
+                lineas,
+                ultimo,
+                ..
+            } = mensaje
+            {
+                if *peticion_id == id {
+                    textos.extend(lineas.iter().map(|linea| linea.texto()));
+                    terminado |= *ultimo;
+                }
+            }
+        }
+        if terminado {
+            break;
+        }
+        assert!(Instant::now() < fin, "el historial no llegó entero");
+    }
+    // Las primeras líneas ya no están en la pantalla, pero sí en el historial.
+    assert!(
+        textos.iter().any(|texto| texto == "linea-hist-1"),
+        "falta el principio del historial de tmux: {} líneas",
+        textos.len()
+    );
+    assert!(textos.iter().any(|texto| texto == "linea-hist-60"));
+    // Nada de lo escrito llega a REGISTRO.
+    banco.exigir_registro_sin(&["linea-hist-", "seq 1 60"]);
+}
+
+/// El tmux habitual del usuario: se ve en la lista, se engancha sin soltar a
+/// nadie y sin cambiarle la configuración ni ponerle marca, y se termina por
+/// su nombre exacto a petición del usuario.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn el_tmux_habitual_se_lista_se_engancha_y_se_termina_sin_tocarle_nada() {
+    let Some(banco) =
+        Banco::nuevo("el_tmux_habitual_se_lista_se_engancha_y_se_termina_sin_tocarle_nada").await
+    else {
+        return;
+    };
+    let host = banco.host_id;
+    // La sesión del usuario, con su configuración, en el servidor habitual.
+    let suya = banco.real.tmux(
+        None,
+        &["new-session", "-d", "-s", "suya", "-x", "80", "-y", "24"],
+    );
+    assert_eq!(suya.codigo, 0, "{}", suya.stderr);
+    let opciones_antes = banco.real.tmux(None, &["show", "-g"]).stdout;
+    let mut ventana = banco.ventana().await;
+
+    // Se lista junto a las del tmux propio.
+    let id = RANGO_TERMINAL + 1000;
+    ventana
+        .enviar(&MensajeCliente::ListarTmux {
+            peticion_id: id,
+            host_id: host,
+        })
+        .await;
+    let respuesta = esperar_respuesta(&mut ventana, "la lista de tmux", |mensaje| {
+        matches!(mensaje, MensajeServidor::SesionesTmux { peticion_id, .. } if *peticion_id == id)
+    })
+    .await;
+    let MensajeServidor::SesionesTmux { sesiones, .. } = respuesta else {
+        unreachable!()
+    };
+    assert!(
+        sesiones
+            .iter()
+            .any(|s| s.servidor == ServidorTmux::Habitual && s.nombre == "suya"),
+        "{sesiones:?}"
+    );
+
+    // Engancharse (compartiendo): sin `attach -d`, sin marca y sin configuración.
+    let pestana = ventana
+        .abrir(
+            host,
+            PeticionTmux {
+                servidor: ServidorTmux::Habitual,
+                nombre: "suya".to_string(),
+                crear: None,
+                compartir: true,
+            },
+        )
+        .await;
+    let tmux = pestana.tmux.clone().expect("la pestaña lleva su tmux");
+    assert_eq!(tmux.servidor, ServidorTmux::Habitual);
+    assert_eq!(tmux.creada, Some(false), "no la creó MAGI");
+    banco
+        .real
+        .esperar("la pestaña engancha a la sesión del usuario", |real| {
+            let salida = real.tmux(
+                None,
+                &["list-sessions", "-F", "#{session_name} #{session_attached}"],
+            );
+            salida.stdout.lines().any(|linea| linea == "suya 1")
+        })
+        .await;
+    assert_eq!(
+        banco.real.tmux(None, &["show", "-g"]).stdout,
+        opciones_antes,
+        "no se le cambia ninguna opción al tmux del usuario"
+    );
+    let equipo = banco
+        .real
+        .tmux(None, &["show", "-t", "=suya:", "-v", "@magi_equipo"]);
+    assert!(equipo.stdout.trim().is_empty(), "{}", equipo.stdout);
+    assert!(
+        banco.real.sesion("suya").is_none(),
+        "en el tmux propio no hay ninguna «suya»"
+    );
+
+    // Escribir en ella llega, y MAGI no deja nada de lo escrito en REGISTRO.
+    ventana.adjuntar(pestana.id).await;
+    ventana
+        .teclear(pestana.id, "echo habitual-$((9*5))\r")
+        .await;
+    ventana.exigir_pantalla(pestana.id, "habitual-45").await;
+
+    // Terminarla es a petición del usuario y por el nombre exacto: un prefijo no
+    // mata nada.
+    for (numero, nombre, esperado) in [
+        (1001, "sui", ResultadoTmux::NoExiste),
+        (1002, "suya", ResultadoTmux::Ok),
+    ] {
+        let id = RANGO_TERMINAL + numero;
+        ventana
+            .enviar(&MensajeCliente::TerminarTmux {
+                peticion_id: id,
+                host_id: host,
+                servidor: ServidorTmux::Habitual,
+                nombre: nombre.to_string(),
+            })
+            .await;
+        let respuesta = esperar_respuesta(&mut ventana, "la respuesta a terminar", |mensaje| {
+            matches!(mensaje, MensajeServidor::TmuxTerminada { peticion_id, .. } if *peticion_id == id)
+        })
+        .await;
+        let MensajeServidor::TmuxTerminada {
+            resultado,
+            servidor,
+            ..
+        } = respuesta
+        else {
+            unreachable!()
+        };
+        assert_eq!((servidor, resultado), (ServidorTmux::Habitual, esperado));
+    }
+    let restantes = banco
+        .real
+        .tmux(None, &["list-sessions", "-F", "#{session_name}"]);
+    assert!(
+        !restantes.stdout.lines().any(|linea| linea == "suya"),
+        "{}",
+        restantes.stdout
+    );
+    // Su pestaña se va: la sesión terminó.
+    ventana
+        .exigir("la pestaña de la sesión terminada se va", |ven| {
+            ven.pestana(pestana.id).is_none()
+        })
+        .await;
+    assert_eq!(banco.escenario.anotaciones("tmux_terminada"), 1);
+    banco.exigir_registro_sin(&["habitual-45", "echo "]);
+}
+
+/// R157 con tmux real: otro equipo renombra la sesión y se la lleva con
+/// `attach -d`; la pestaña soltada sabe quién la tiene y cómo se llama ahora, y
+/// volver se engancha a ese nombre.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn la_pestana_soltada_sigue_a_su_sesion_si_otro_equipo_la_renombra() {
+    let Some(banco) =
+        Banco::nuevo("la_pestana_soltada_sigue_a_su_sesion_si_otro_equipo_la_renombra").await
+    else {
+        return;
+    };
+    let host = banco.host_id;
+    let ajeno = equipo_ajeno();
+    let mut ventana = banco.ventana().await;
+    let pestana = ventana.abrir(host, peticion("antes", true, false)).await;
+    banco.real.esperar_clientes("antes", 1).await;
+    ventana.adjuntar(pestana.id).await;
+    ventana.teclear(pestana.id, "echo sigue-$((5+5))\r").await;
+    ventana.exigir_pantalla(pestana.id, "sigue-10").await;
+
+    // El otro equipo la renombra (desde su propio cliente) y se la lleva.
+    let renombrada = banco
+        .real
+        .tmux(Some("magi"), &["rename-session", "-t", "=antes", "despues"]);
+    assert_eq!(renombrada.codigo, 0, "{}", renombrada.stderr);
+    let _otro = banco.real.equipo_remoto("despues", &ajeno, true);
+    ventana
+        .exigir(
+            "la pestaña soltada sabe quién la tiene y cómo se llama ahora",
+            |ven| {
+                ven.pestana(pestana.id).is_some_and(|p| {
+                    soltada_por(p).is_some_and(|por| por.as_deref() == Some(&*ajeno))
+                        && p.tmux.as_ref().is_some_and(|tmux| tmux.nombre == "despues")
+                })
+            },
+        )
+        .await;
+    assert_eq!(
+        ventana.pestana(pestana.id).unwrap().estado,
+        EstadoSesionRemota::Caida
+    );
+    // La sesión sigue siendo del otro equipo y la pestaña no la cerró.
+    assert_eq!(banco.real.sesion("despues"), Some((1, ajeno.clone())));
+
+    // Volver: se engancha a «despues» soltando al otro.
+    ventana
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id: pestana.id,
+            compartir: false,
+        })
+        .await;
+    ventana
+        .exigir("la pestaña vuelve a estar abierta, sin marca", |ven| {
+            ven.pestana(pestana.id).is_some_and(|p| {
+                p.estado == EstadoSesionRemota::Abierta && soltada_por(p).is_none()
+            })
+        })
+        .await;
+    banco
+        .real
+        .esperar("la pestaña es la única enganchada", |real| {
+            real.sesion("despues") == Some((1, equipo_propio()))
+        })
+        .await;
 }

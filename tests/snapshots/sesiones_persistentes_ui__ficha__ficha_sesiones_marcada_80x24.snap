@@ -12,7 +12,7 @@ source: tests/sesiones_persistentes_ui/ficha.rs
 │      comando                                                                 │
 │      [  ]                                                                    │
 │                                                                              │
-│ SESIONES (viaja a tus equipos)                                               │
+│ SESIONES                                                                     │
 │  [x] Todas las sesiones persistentes (tmux en el host)                       │
 │      nombres automáticos: sobremesa-1, sobremesa-2…                          │
 │  Espacio marca · Tab siguiente · Ctrl+S guardar                             ↓│

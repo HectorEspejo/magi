@@ -437,3 +437,141 @@ fn un_borrado_aplazado_no_se_recupera_y_lo_dice() {
     assert_eq!(direccion_de(&entorno, "backup-nas"), None);
     assert!(pendientes(&entorno).is_empty());
 }
+
+/// Siembra un conflicto sin versión perdedora, de cualquier tipo y elemento.
+fn sembrar_conflicto_simple(
+    entorno: &Entorno,
+    tipo: &str,
+    elemento_tipo: &str,
+    nombre: &str,
+    detectado_en: &str,
+) {
+    let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO CONFLICTOS (tipo, elemento_tipo, uuid, nombre, detectado_en)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                tipo,
+                elemento_tipo,
+                format!("00000000-0000-4000-8000-{:012}", nombre.len()),
+                nombre,
+                detectado_en
+            ],
+        )
+        .expect("conflicto");
+    almacen.cerrar().expect("cerrar");
+}
+
+#[test]
+fn conflictos_dice_los_elementos_con_su_nombre_legible_y_no_el_tipo_interno() {
+    // D370, etiquetas legibles: «sesion_persistente» y compañía no se ven tal
+    // cual en lo que se dice del conflicto.
+    let entorno = entorno();
+    sembrar_conflicto_simple(
+        &entorno,
+        "huerfano",
+        "tunel",
+        "socks",
+        "2026-10-30T10:00:00+00:00",
+    );
+    sembrar_conflicto_simple(
+        &entorno,
+        "elemento",
+        "sesion_persistente",
+        "agente-api",
+        "2026-10-30T11:00:00+00:00",
+    );
+    sembrar_conflicto_simple(
+        &entorno,
+        "borrado",
+        "comprobacion_servicio",
+        "nginx-ok",
+        "2026-10-30T12:00:00+00:00",
+    );
+    sembrar_conflicto_simple(
+        &entorno,
+        "elemento",
+        "sincronizacion_dir",
+        "copias",
+        "2026-10-30T13:00:00+00:00",
+    );
+    let (mut app, mut terminal) = con_app(&entorno);
+    abrir_paleta(&mut app, &mut terminal, "conflictos");
+    assert_eq!(app.vista, Vista::Conflictos);
+    assert_eq!(app.sincronizacion.conflictos.len(), 4);
+
+    // El detalle de cada fila, recorriéndolas con ↓.
+    let mut detalles = Vec::new();
+    for _ in 0..4 {
+        detalles.push(texto(&terminal));
+        tecla(&mut app, &mut terminal, KeyCode::Down);
+    }
+    let todo = detalles.join("\n");
+    assert!(
+        todo.contains("huérfano: túnel «socks» perdió su host"),
+        "{todo}"
+    );
+    assert!(todo.contains("sesión persistente «agente-api»"), "{todo}");
+    assert!(
+        todo.contains("borrado aplazado de comprobación de servicio «nginx-ok»"),
+        "{todo}"
+    );
+    assert!(
+        todo.contains("sincronización de directorio «copias»"),
+        "{todo}"
+    );
+    for interno in [
+        "sesion_persistente",
+        "comprobacion_servicio",
+        "sincronizacion_dir",
+        "tunel «",
+    ] {
+        assert!(
+            !todo.contains(interno),
+            "se ve «{interno}» tal cual:\n{todo}"
+        );
+    }
+    // El tipo del conflicto, con su tilde, en la columna TIPO.
+    assert!(
+        texto(&terminal).contains("huérfano"),
+        "{}",
+        texto(&terminal)
+    );
+}
+
+#[test]
+fn los_dialogos_de_un_conflicto_de_sesion_persistente_la_llaman_por_su_nombre() {
+    let entorno = entorno();
+    sembrar_conflicto_simple(
+        &entorno,
+        "elemento",
+        "sesion_persistente",
+        "agente-api",
+        "2026-10-30T11:00:00+00:00",
+    );
+    let (mut app, mut terminal) = con_app(&entorno);
+    abrir_paleta(&mut app, &mut terminal, "conflictos");
+    // Descartar: «conflicto de sesión persistente».
+    tecla(&mut app, &mut terminal, KeyCode::Char('d'));
+    let Some(Dialogo::Confirmar { lineas, .. }) = &app.dialogo else {
+        panic!("sin el diálogo de descartar");
+    };
+    let texto_del_dialogo = lineas.join(" ");
+    assert!(
+        texto_del_dialogo.contains("conflicto de sesión persistente «agente-api»"),
+        "{texto_del_dialogo}"
+    );
+    tecla(&mut app, &mut terminal, KeyCode::Esc);
+    // Recuperar: «escribir sesión persistente».
+    tecla(&mut app, &mut terminal, KeyCode::Char('r'));
+    let Some(Dialogo::Confirmar { lineas, .. }) = &app.dialogo else {
+        panic!("sin el diálogo de recuperar");
+    };
+    let texto_del_dialogo = lineas.join(" ");
+    assert!(
+        texto_del_dialogo.contains("escribir sesión persistente «agente-api»"),
+        "{texto_del_dialogo}"
+    );
+}

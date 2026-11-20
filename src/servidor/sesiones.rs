@@ -30,14 +30,16 @@ use crate::protocolo::{
     MensajeServidor, PeticionTmux, Secreto, ServidorTmux, Soltada, TmuxPestana, VersionTmux,
 };
 use magi_nucleo::conexion::reconexion::{self, Causa};
-use magi_nucleo::sesiones_persistentes::lectura::ResultadoCrear;
+use magi_nucleo::sesiones_persistentes::lectura::{
+    buscar_sesion, ResultadoCrear, ResultadoPreparar,
+};
 use magi_nucleo::sesiones_persistentes::nombres::nombre_automatico;
 use magi_nucleo::sesiones_persistentes::validadores;
 use magi_nucleo::terminal::emulador::PantallaEmulada;
 use magi_nucleo::terminal::historial::lineas_de_historial;
 use magi_nucleo::terminal::tmux::{
-    OrdenTmux, MAXIMO_LINEAS_HISTORIAL_TMUX, SALIDA_ANTIGUO, SALIDA_NO_EXISTE, SALIDA_SIN_TMUX,
-    SALIDA_SOLTADA,
+    OrdenTmux, MAXIMO_LINEAS_HISTORIAL_TMUX, SALIDA_ANTIGUO, SALIDA_NO_EXISTE, SALIDA_OTRO_EQUIPO,
+    SALIDA_SIN_TMUX, SALIDA_SOLTADA,
 };
 
 use super::cliente_remoto::Tamano;
@@ -169,6 +171,27 @@ pub enum DecisionDialogo {
     Contrasena(Secreto, bool),
 }
 
+/// Cómo se reconoce «la misma» sesión de tmux aunque otro equipo la renombre
+/// (R157): el identificador interno (`$3`) y la hora en que se creó, que se leen
+/// en el host al prepararla. Sin la hora no se sigue por identificador: tmux
+/// reutiliza los números cuando se reinicia.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentidadTmux {
+    pub id: String,
+    pub creada: i64,
+}
+
+impl IdentidadTmux {
+    /// La identidad que dio `preparar` o `estado`; `None` si falta alguna de
+    /// las dos mitades (entonces la sesión solo se sigue por su nombre).
+    pub fn de(id: Option<&str>, creada: Option<i64>) -> Option<Self> {
+        Some(Self {
+            id: id?.to_string(),
+            creada: creada.filter(|creada| *creada > 0)?,
+        })
+    }
+}
+
 /// Una sesión SSH custodiada por el servidor.
 pub struct Sesion {
     pub id: u32,
@@ -224,6 +247,13 @@ pub struct Sesion {
     /// Versión de tmux que dio el host al abrir (la barra de la pestaña la
     /// enseña).
     pub tmux_version: Option<VersionTmux>,
+    /// Con qué se reconoce su sesión de tmux aunque la renombren (R157). Solo
+    /// vale con `tmux`.
+    pub tmux_identidad: Option<IdentidadTmux>,
+    /// La apertura de esta pestaña creó la sesión en el host (y ninguna
+    /// reconexión posterior lo repite): es lo que dice `TmuxPestana.creada`
+    /// (D369, R163).
+    pub tmux_creada: bool,
     /// Engancharse sin soltar a los demás (lo que pidió el usuario al abrir o
     /// al volver): la reconexión automática lo respeta y no quita a nadie.
     pub tmux_compartir: bool,
@@ -273,7 +303,9 @@ impl Sesion {
             titulo: self.titulo.clone(),
             aviso: self.aviso.clone(),
             tmux: self.tmux.as_ref().map(|nombre| TmuxPestana {
-                creada: None,
+                // Siempre con valor: un servidor que lo sabe dice «no» y no
+                // deja a la ventana con la heurística de la edad (D369).
+                creada: Some(self.tmux_creada),
                 servidor: self.tmux_servidor,
                 nombre: nombre.clone(),
                 version: self.tmux_version,
@@ -593,8 +625,15 @@ async fn abrir_y_servir(
         //    de un host marcado sí cae a un shell normal con un aviso.
         let preparado = preparar_tmux(&estado, &datos, &handle, reintento, auto).await;
         // La pestaña pudo cerrarse mientras se hablaba con el host (por ejemplo,
-        // creando la sesión): no se abre un canal para nadie.
+        // creando la sesión): no se abre un canal para nadie. Si la sesión ya
+        // estaba creada, queda en el host y el solicitante lo sabe.
         if datos.cancelar.is_cancelled() {
+            if let Preparado::Enganchar(plan) = &preparado {
+                if plan.nueva {
+                    avisar_creada_sin_abrir(&estado, &datos, &plan.nombre, "la pestaña se cerró")
+                        .await;
+                }
+            }
             tomada.soltar().await;
             return;
         }
@@ -606,15 +645,15 @@ async fn abrir_y_servir(
                 apertura_tmux_fallida(&estado, &datos, causa, mensaje).await;
                 return;
             }
-            Preparado::Soltada(por_equipo) => {
+            Preparado::Soltada { por_equipo, nombre } => {
                 // La reconexión automática no le quita la sesión a otro equipo.
-                marcar_soltada(&estado, sesion_id, por_equipo).await;
+                marcar_soltada(&estado, sesion_id, por_equipo, Some(nombre)).await;
                 tomada.soltar().await;
                 return;
             }
-            Preparado::Terminada(motivo) => {
+            Preparado::Terminada(causa, motivo) => {
                 tomada.soltar().await;
-                sesion_terminada_en_el_host(&estado, &datos, &motivo).await;
+                sesion_terminada_en_el_host(&estado, &datos, causa, &motivo).await;
                 return;
             }
             Preparado::SinComprobar(motivo) => {
@@ -647,6 +686,12 @@ async fn abrir_y_servir(
                         cerrar_intento(&estado, sesion_id, &motivo, intento_auto).await;
                     } else {
                         apertura_fallida(&estado, &datos, &motivo).await;
+                    }
+                    // La sesión pudo crearse justo antes: queda en el host sin
+                    // pestaña, y el solicitante tiene que saberlo. El aviso va
+                    // el último, para que sea lo que el solicitante lea.
+                    if let Some(plan) = plan.as_ref().filter(|plan| plan.nueva) {
+                        avisar_creada_sin_abrir(&estado, &datos, &plan.nombre, &motivo).await;
                     }
                     return;
                 }
@@ -880,14 +925,17 @@ struct PlanEnganche {
     version: Option<VersionTmux>,
     /// Sin soltar a los demás clientes.
     compartir: bool,
-    /// El comando de `exec` con el que se engancha (el script y sus
-    /// argumentos, ya escapados).
+    /// El comando de `exec` con el que se engancha (el enganche mínimo y sus
+    /// argumentos, ya escapados): sin el script grande, que ya fue por la
+    /// entrada estándar en `preparar`.
     comando: String,
     /// La creó esta apertura.
     nueva: bool,
     /// Se creó con un comando de arranque propio: los comandos iniciales de
     /// la pestaña (snippet al conectar, comando inicial) no se escriben.
     con_comando_propio: bool,
+    /// Con qué se reconoce la sesión aunque otro equipo la renombre.
+    identidad: Option<IdentidadTmux>,
 }
 
 /// Lo que la pestaña guarda de su sesión de tmux al quedar abierta.
@@ -896,6 +944,10 @@ struct TmuxAbierta {
     nombre: String,
     version: Option<VersionTmux>,
     compartir: bool,
+    identidad: Option<IdentidadTmux>,
+    /// La creó esta apertura (y no una reconexión ni un enganche a una que ya
+    /// existía).
+    creada: bool,
 }
 
 impl TmuxAbierta {
@@ -905,6 +957,8 @@ impl TmuxAbierta {
             nombre: plan.nombre.clone(),
             version: plan.version,
             compartir: plan.compartir,
+            identidad: plan.identidad.clone(),
+            creada: plan.nueva,
         }
     }
 }
@@ -921,9 +975,16 @@ enum Preparado {
     /// instrucción para el cliente).
     Fallida(CausaAperturaTmux, String),
     /// Reconexión automática: la sesión la tiene otro equipo y no se le quita.
-    Soltada(Option<String>),
-    /// Reconexión: la sesión ya no existe en el host; la pestaña se cierra.
-    Terminada(String),
+    /// Con el equipo, si se sabe, y el nombre con el que está ahora la sesión
+    /// (otro equipo pudo renombrarla).
+    Soltada {
+        por_equipo: Option<String>,
+        nombre: String,
+    },
+    /// Reconexión: la sesión ya no existe en el host (o el host ya no tiene
+    /// tmux); la pestaña se cierra. Con la causa y la instrucción para el
+    /// solicitante.
+    Terminada(CausaAperturaTmux, String),
     /// Reconexión: no se pudo mirar la sesión; la pestaña queda caída.
     SinComprobar(String),
 }
@@ -967,22 +1028,111 @@ async fn preparar_tmux(
     }
 }
 
-/// El comando de `exec` con el que se engancha la pestaña. `None` si algún
-/// dato no es válido (nunca pasa con una etiqueta de equipo y un nombre ya
-/// validados).
+/// El comando de `exec` con el que se engancha la pestaña: el enganche mínimo
+/// con PTY y sus datos, sin el script grande (que fue por la entrada estándar
+/// en `preparar`). Con `guardar` (la reconexión automática), solo se engancha si
+/// la sesión está libre o es de este equipo (R157). `None` si algún dato no es
+/// válido (nunca pasa con una etiqueta de equipo y un nombre ya validados).
 fn comando_de_enganche(
     servidor: ServidorTmux,
     nombre: &str,
     soltar: bool,
     equipo: &str,
+    guardar: bool,
 ) -> Option<String> {
     OrdenTmux::Enganchar {
         servidor,
         nombre,
         soltar,
         equipo,
+        guardar,
     }
     .comando_exec()
+}
+
+/// La primera mitad de engancharse (`preparar`, por la entrada estándar): la
+/// sesión existe y tiene puesta la configuración de MAGI. Devuelve con qué se
+/// reconoce la sesión aunque la renombren, o el fallo con su causa y su
+/// instrucción. Nunca dialoga: la conexión ya está abierta.
+async fn preparar_enganche(
+    datos: &DatosApertura,
+    handle: &Arc<Handle<Cliente>>,
+    servidor: ServidorTmux,
+    nombre: &str,
+) -> Result<Option<IdentidadTmux>, (CausaAperturaTmux, String)> {
+    let host = datos.host.nombre.as_str();
+    let lectura = match super::tmux::preparar(handle, servidor, nombre).await {
+        Ok(lectura) => lectura,
+        Err(motivo) => {
+            warn!(
+                sesion = datos.sesion_id,
+                "no se pudo preparar el enganche de tmux: {motivo}"
+            );
+            return Err((
+                CausaAperturaTmux::Conexion,
+                format!("no se pudo hablar con tmux en «{host}»: {motivo}"),
+            ));
+        }
+    };
+    match lectura.resultado {
+        ResultadoPreparar::Lista => Ok(IdentidadTmux::de(lectura.id.as_deref(), lectura.creada)),
+        ResultadoPreparar::NoExiste => Err((
+            CausaAperturaTmux::NoExiste,
+            format!("la sesión «{nombre}» ya no existe en «{host}»"),
+        )),
+        ResultadoPreparar::SinTmux => Err((
+            CausaAperturaTmux::SinTmux,
+            format!("instala tmux en el host «{host}»"),
+        )),
+        ResultadoPreparar::Antiguo => Err((
+            CausaAperturaTmux::TmuxAntiguo,
+            format!("tmux demasiado antiguo (3.0 o posterior) en «{host}»"),
+        )),
+        ResultadoPreparar::Error => Err((
+            CausaAperturaTmux::Otra,
+            format!("tmux no pudo preparar la sesión «{nombre}» en «{host}»"),
+        )),
+    }
+}
+
+/// El fallo de una apertura que ya había creado la sesión en el host: la sesión
+/// sigue ahí sin pestaña y el mensaje lo dice, con la instrucción de
+/// engancharse desde Sesiones. Con causa `Otra`: el texto ya lo explica todo.
+fn fallo_tras_crear(host: &str, nombre: &str, motivo: &str) -> (CausaAperturaTmux, String) {
+    (
+        CausaAperturaTmux::Otra,
+        format!(
+            "la sesión «{nombre}» se creó en «{host}», pero la pestaña no llegó a abrirse ({motivo}) · engánchate desde Sesiones"
+        ),
+    )
+}
+
+/// Avisa al solicitante de que la sesión de tmux se creó en el host pero la
+/// pestaña no llegó a abrirse (el canal falló o se cerró la pestaña mientras
+/// tanto): la sesión sigue ahí, sin pestaña, y de otro modo nadie lo sabría. Si
+/// la ventana ya no está, no hay a quién avisar. No toca el estado ni anota
+/// nada: el efecto (crear la sesión) ya está anotado por quien la guarda.
+async fn avisar_creada_sin_abrir(
+    estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
+    datos: &DatosApertura,
+    nombre: &str,
+    motivo: &str,
+) {
+    warn!(
+        sesion = datos.sesion_id,
+        host = %datos.host.nombre,
+        "sesión de tmux creada sin pestaña"
+    );
+    let (causa, mensaje) = fallo_tras_crear(&datos.host.nombre, nombre, motivo);
+    let estado_bloqueado = estado.lock().await;
+    avisar_fallo_de_tmux(
+        &estado_bloqueado,
+        datos.solicitante,
+        datos.host.id,
+        Some(nombre),
+        causa,
+        &mensaje,
+    );
 }
 
 /// Un `crear` sin carpeta ni comando con el tamaño y el historial de la
@@ -1137,12 +1287,36 @@ async fn preparar_pedida(
         con_comando_propio = crear.comando.as_deref().is_some_and(|c| !c.is_empty());
     } else if !comprobada.existe {
         return Preparado::Fallida(
-            CausaAperturaTmux::Otra,
+            CausaAperturaTmux::NoExiste,
             format!("la sesión «{nombre}» ya no existe en «{host}»"),
         );
     }
+    // La primera mitad de engancharse. Si la sesión se acaba de crear y esto
+    // falla, queda en el host sin pestaña y el aviso lo dice.
+    let identidad = match preparar_enganche(datos, handle, peticion.servidor, nombre).await {
+        Ok(identidad) => identidad,
+        Err((causa, mensaje)) => {
+            // Si la sesión ya no está (o el host ya no puede con ella), no hay
+            // nada que decir de «se creó»; con cualquier otro fallo (la
+            // conexión, tmux…) puede seguir ahí, sin pestaña, y el aviso lo dice.
+            let queda = nueva
+                && !matches!(
+                    causa,
+                    CausaAperturaTmux::NoExiste
+                        | CausaAperturaTmux::SinTmux
+                        | CausaAperturaTmux::TmuxAntiguo
+                );
+            return if queda {
+                let (causa, mensaje) = fallo_tras_crear(host, nombre, &mensaje);
+                Preparado::Fallida(causa, mensaje)
+            } else {
+                Preparado::Fallida(causa, mensaje)
+            };
+        }
+    };
     let equipo = super::tmux::etiqueta_del_equipo(estado).await;
-    let Some(comando) = comando_de_enganche(peticion.servidor, nombre, soltar, &equipo) else {
+    let Some(comando) = comando_de_enganche(peticion.servidor, nombre, soltar, &equipo, false)
+    else {
         return Preparado::Fallida(
             CausaAperturaTmux::Otra,
             "los datos de la sesión no son válidos".to_string(),
@@ -1156,6 +1330,7 @@ async fn preparar_pedida(
         comando,
         nueva,
         con_comando_propio,
+        identidad,
     })
 }
 
@@ -1226,8 +1401,31 @@ async fn preparar_host_marcado(
         match super::tmux::crear(handle, &orden).await {
             Ok(creada) => match creada.lectura.resultado {
                 ResultadoCrear::Creada => {
+                    // La sesión ya existe en el host: si no se puede
+                    // engancharse, la pestaña cae a un shell normal y el aviso
+                    // dice dónde quedó la sesión.
+                    let identidad = match preparar_enganche(
+                        datos,
+                        handle,
+                        ServidorTmux::Magi,
+                        &nombre,
+                    )
+                    .await
+                    {
+                        Ok(identidad) => identidad,
+                        Err((_, mensaje)) => {
+                            avisar_en_pestana(
+                                    estado,
+                                    sesion_id,
+                                    format!(
+                                        "la sesión «{nombre}» se creó en «{host}», pero no se pudo engancharse ({mensaje}): esta pestaña no es persistente · engánchate desde Sesiones"
+                                    ),
+                                );
+                            return Preparado::Normal;
+                        }
+                    };
                     let Some(comando) =
-                        comando_de_enganche(ServidorTmux::Magi, &nombre, true, &equipo)
+                        comando_de_enganche(ServidorTmux::Magi, &nombre, true, &equipo, false)
                     else {
                         return Preparado::Normal;
                     };
@@ -1239,6 +1437,7 @@ async fn preparar_host_marcado(
                         comando,
                         nueva: true,
                         con_comando_propio: false,
+                        identidad,
                     });
                 }
                 ResultadoCrear::Existe => en_host.push(nombre),
@@ -1288,24 +1487,43 @@ async fn nombres_de_fichas(
     })
 }
 
-/// La sesión de tmux de la pestaña tal como está viva ahora: servidor, nombre
-/// y si se enganchó compartiendo. Es de donde sale la reconexión.
+/// La sesión de tmux de la pestaña tal como está viva ahora: servidor, nombre,
+/// si se enganchó compartiendo y con qué se reconoce aunque la renombren. Es de
+/// donde sale la reconexión.
+struct TmuxVivo {
+    servidor: ServidorTmux,
+    nombre: String,
+    compartir: bool,
+    identidad: Option<IdentidadTmux>,
+    /// La apertura de esta pestaña creó la sesión.
+    creada: bool,
+}
+
 async fn tmux_vivo(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
-) -> Option<(ServidorTmux, String, bool)> {
+) -> Option<TmuxVivo> {
     let estado_bloqueado = estado.lock().await;
     let sesion = estado_bloqueado.sesiones.get(&sesion_id)?;
-    Some((
-        sesion.tmux_servidor,
-        sesion.tmux.clone()?,
-        sesion.tmux_compartir,
-    ))
+    Some(TmuxVivo {
+        servidor: sesion.tmux_servidor,
+        nombre: sesion.tmux.clone()?,
+        compartir: sesion.tmux_compartir,
+        identidad: sesion.tmux_identidad.clone(),
+        creada: sesion.tmux_creada,
+    })
 }
 
 /// Reconexión de una pestaña con tmux (§4.4): mira el estado de la sesión con
 /// `estado` y decide. La automática nunca le quita la sesión a otro equipo; la
 /// manual (prefijo `r` o volver desde una pestaña soltada) manda el usuario.
+///
+/// La sesión se busca por su nombre y, si otro equipo la renombró, por su
+/// identificador (R157): con el nombre nuevo se engancha y se actualiza la
+/// pestaña. Mirar y engancharse no son un solo paso: la reconexión automática
+/// lleva además la guarda al enganche (`guardar`), que repite la comprobación
+/// dentro del mismo script que se engancha y sale con 101 sin tocar nada si
+/// entre medias otro equipo se llevó la sesión.
 async fn preparar_reconexion(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     datos: &DatosApertura,
@@ -1316,9 +1534,16 @@ async fn preparar_reconexion(
     let host = datos.host.nombre.as_str();
     // El nombre sale del estado vivo de la pestaña, no de lo que se pidió al
     // abrirla (un host marcado pone el nombre automático al abrir).
-    let Some((servidor, nombre, compartir)) = tmux_vivo(estado, sesion_id).await else {
+    let Some(vivo) = tmux_vivo(estado, sesion_id).await else {
         return Preparado::Normal;
     };
+    let TmuxVivo {
+        servidor,
+        nombre,
+        compartir,
+        identidad: identidad_previa,
+        ..
+    } = vivo;
     let lectura = match super::tmux::estado(handle).await {
         Ok(lectura) => lectura,
         Err(motivo) => {
@@ -1328,52 +1553,89 @@ async fn preparar_reconexion(
             ));
         }
     };
-    let perdida = |texto: String| match servidor {
+    let perdida = |causa: CausaAperturaTmux, texto: String| match servidor {
         // Una sesión propia que ya no existe: la pestaña se cierra, como al
         // hacer `exit`. En la del tmux habitual, la Fase 15 seguía con un
         // shell normal y un aviso.
-        ServidorTmux::Magi => Preparado::Terminada(texto),
+        ServidorTmux::Magi => Preparado::Terminada(causa, texto),
         ServidorTmux::Habitual => {
             avisar_en_pestana(estado, sesion_id, format!("{texto}: shell normal"));
             Preparado::Normal
         }
     };
     let Some(version) = lectura.tmux else {
-        return perdida(format!("«{host}» ya no tiene tmux"));
+        return perdida(
+            CausaAperturaTmux::Otra,
+            format!("«{host}» ya no tiene tmux"),
+        );
     };
     if servidor == ServidorTmux::Magi && version < VersionTmux::MINIMA {
         return Preparado::SinComprobar(format!(
             "tmux demasiado antiguo (3.0 o posterior) en «{host}»"
         ));
     }
-    let Some(sesion) = lectura
-        .sesiones
-        .iter()
-        .find(|sesion| sesion.servidor == servidor && sesion.nombre == nombre)
-    else {
-        return perdida(format!("la sesión «{nombre}» ya no existe en «{host}»"));
+    let Some(sesion) = buscar_sesion(
+        &lectura.sesiones,
+        servidor,
+        &nombre,
+        identidad_previa
+            .as_ref()
+            .map(|identidad| identidad.id.as_str()),
+        identidad_previa.as_ref().map(|identidad| identidad.creada),
+    ) else {
+        return perdida(
+            CausaAperturaTmux::NoExiste,
+            format!("la sesión «{nombre}» ya no existe en «{host}»"),
+        );
     };
+    // El nombre con el que está ahora: distinto del de la pestaña si otro equipo
+    // la renombró.
+    let nombre_actual = sesion.nombre.clone();
+    let identidad_vista = IdentidadTmux::de(sesion.id.as_deref(), Some(sesion.creada));
     let equipo = super::tmux::etiqueta_del_equipo(estado).await;
     // Solo en el tmux propio hay equipos y se suelta a nadie.
     let soltar = servidor == ServidorTmux::Magi && !compartir;
-    if servidor == ServidorTmux::Magi && auto && sesion.clientes > 0 {
+    let guardar = servidor == ServidorTmux::Magi && auto;
+    if guardar && sesion.clientes > 0 {
         // Clientes enganchados: si el último equipo en engancharse es este, son
         // los de la conexión caída y se vuelve; si no, la tiene otro.
         if sesion.equipo.as_deref() != Some(equipo.as_str()) {
-            return Preparado::Soltada(sesion.equipo.clone());
+            return Preparado::Soltada {
+                por_equipo: sesion.equipo.clone(),
+                nombre: nombre_actual,
+            };
         }
     }
-    let Some(comando) = comando_de_enganche(servidor, &nombre, soltar, &equipo) else {
+    // La primera mitad de engancharse. Si falla aquí no hay nada de lo que
+    // arrepentirse: la sesión no se ha tocado.
+    let identidad = match preparar_enganche(datos, handle, servidor, &nombre_actual).await {
+        Ok(identidad) => identidad,
+        Err((CausaAperturaTmux::NoExiste, mensaje)) => {
+            return perdida(CausaAperturaTmux::NoExiste, mensaje);
+        }
+        Err((CausaAperturaTmux::SinTmux, _)) => {
+            return perdida(
+                CausaAperturaTmux::Otra,
+                format!("«{host}» ya no tiene tmux"),
+            );
+        }
+        Err((_, mensaje)) => {
+            return Preparado::SinComprobar(format!("{mensaje} · prefijo r para reintentar"));
+        }
+    };
+    let Some(comando) = comando_de_enganche(servidor, &nombre_actual, soltar, &equipo, guardar)
+    else {
         return Preparado::SinComprobar("los datos de la sesión no son válidos".to_string());
     };
     Preparado::Enganchar(PlanEnganche {
         servidor,
-        nombre,
+        nombre: nombre_actual,
         version: Some(version),
         compartir,
         comando,
         nueva: false,
         con_comando_propio: false,
+        identidad: identidad.or(identidad_vista).or(identidad_previa),
     })
 }
 
@@ -1416,11 +1678,17 @@ async fn marcar_abierta(
             sesion.tmux_servidor = tmux.servidor;
             sesion.tmux_version = tmux.version;
             sesion.tmux_compartir = tmux.compartir;
+            sesion.tmux_identidad = tmux.identidad;
+            // Solo la apertura que creó la sesión: una reconexión (que vuelve a
+            // pasar por aquí) la deja en falso (D369).
+            sesion.tmux_creada = tmux.creada;
         }
         None => {
             sesion.tmux = None;
             sesion.tmux_version = None;
             sesion.tmux_compartir = false;
+            sesion.tmux_identidad = None;
+            sesion.tmux_creada = false;
         }
     }
     !otra_en_la_misma
@@ -1695,9 +1963,12 @@ async fn fin_de_canal(
         cerrar,
     };
     match codigo.map(|codigo| codigo as i32) {
-        Some(SALIDA_SOLTADA) => FinSesion::Soltada,
+        // 100: te soltaron. 101: la reconexión automática no se enganchó porque
+        // otro equipo se llevó la sesión entre mirar y engancharse (R157): la
+        // pestaña queda soltada igual y la sesión del otro no se tocó.
+        Some(SALIDA_SOLTADA | SALIDA_OTRO_EQUIPO) => FinSesion::Soltada,
         Some(SALIDA_NO_EXISTE) => fallo(
-            CausaAperturaTmux::Otra,
+            CausaAperturaTmux::NoExiste,
             "la sesión de tmux ya no existe en el host",
             true,
         ),
@@ -1789,7 +2060,12 @@ async fn procesar_datos(
             }
         }
         if let Some(aviso) = aviso {
-            if sesion.anotar_aviso(&aviso.texto, aviso.hora) {
+            // Una pestaña que alguna ventana mira (la tiene enfocada) no guarda
+            // el aviso: ya lo vio quien la mira, y otra ventana que no la mira no
+            // tiene por qué enseñar un `!` de algo atendido. Tampoco gasta el
+            // tope de uno cada 5 s. Una ventana adjunta pero sin el foco no la
+            // mira: el aviso se guarda.
+            if !sesion.enfocada() && sesion.anotar_aviso(&aviso.texto, aviso.hora) {
                 cosmetico = true;
             }
             // Un aviso del emulador del remoto (no los internos del servidor,
@@ -1808,6 +2084,11 @@ async fn procesar_datos(
                     termux.despertar_avisos();
                 }
             }
+        }
+        // Al llegar datos con la pestaña enfocada por alguna ventana, un aviso que
+        // quedara de antes (de cuando nadie la miraba) ya está atendido.
+        if sesion.enfocada() && sesion.aviso.take().is_some() {
+            cosmetico = true;
         }
         let ids = if sesion.adjuntos.is_empty() {
             sesion.actividad_no_vista = true;
@@ -2294,11 +2575,12 @@ async fn apertura_tmux_fallida(
 async fn sesion_terminada_en_el_host(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     datos: &DatosApertura,
+    causa: CausaAperturaTmux,
     motivo: &str,
 ) {
     let nombre = tmux_vivo(estado, datos.sesion_id)
         .await
-        .map(|(_, nombre, _)| nombre);
+        .map(|vivo| vivo.nombre);
     {
         let estado_bloqueado = estado.lock().await;
         avisar_fallo_de_tmux(
@@ -2306,7 +2588,7 @@ async fn sesion_terminada_en_el_host(
             datos.solicitante,
             datos.host.id,
             nombre.as_deref(),
-            CausaAperturaTmux::Otra,
+            causa,
             motivo,
         );
     }
@@ -2321,10 +2603,20 @@ async fn sesion_tmux_cerrada(
     causa: CausaAperturaTmux,
     mensaje: String,
 ) {
-    let nombre = tmux_vivo(estado, datos.sesion_id)
-        .await
-        .map(|(_, nombre, _)| nombre)
+    let vivo = tmux_vivo(estado, datos.sesion_id).await;
+    let creada = vivo.as_ref().is_some_and(|vivo| vivo.creada);
+    let nombre = vivo
+        .map(|vivo| vivo.nombre)
         .or_else(|| datos.tmux.as_ref().map(|tmux| tmux.nombre.clone()));
+    // Si esta apertura creó la sesión y el host no admitió lanzar tmux en la
+    // pestaña, la sesión queda en el host sin pestaña: el aviso lo dice. (Las
+    // demás causas, como que la sesión ya no existe, no dejan nada atrás.)
+    let (causa, aviso) = match (&nombre, causa) {
+        (Some(nombre), CausaAperturaTmux::Otra) if creada => {
+            fallo_tras_crear(&datos.host.nombre, nombre, &mensaje)
+        }
+        _ => (causa, mensaje.clone()),
+    };
     {
         let estado_bloqueado = estado.lock().await;
         avisar_fallo_de_tmux(
@@ -2333,7 +2625,7 @@ async fn sesion_tmux_cerrada(
             datos.host.id,
             nombre.as_deref(),
             causa,
-            &mensaje,
+            &aviso,
         );
     }
     cerrada(estado, datos.sesion_id, &mensaje).await;
@@ -2349,12 +2641,15 @@ fn motivo_soltada(por_equipo: Option<&str>) -> String {
 
 /// La pestaña queda caída con su última pantalla y sin conexión, marcada como
 /// soltada (nadie la cierra: se vuelve con `Reconectar` o se cierra a mano).
-/// Difunde la lista ya, antes de cualquier trabajo lento. Devuelve el instante
-/// en que se soltó (para no pisar una soltada posterior).
+/// Difunde la lista ya, antes de cualquier trabajo lento. `nombre` es el nombre
+/// con el que está ahora la sesión, si se sabe y es otro (otro equipo la
+/// renombró). Devuelve el instante en que se soltó (para no pisar una soltada
+/// posterior).
 async fn marcar_soltada(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
     por_equipo: Option<String>,
+    nombre: Option<String>,
 ) -> i64 {
     let desde = Utc::now().timestamp();
     let mut estado_bloqueado = estado.lock().await;
@@ -2369,6 +2664,9 @@ async fn marcar_soltada(
     // La conexión la suelta quien llama, por identidad.
     sesion.handle = None;
     sesion.soltada = Some(Soltada { por_equipo, desde });
+    if let Some(nombre) = nombre {
+        sesion.tmux = Some(nombre);
+    }
     let ids: Vec<u32> = sesion.adjuntos.keys().copied().collect();
     let aviso = MensajeServidor::Estado {
         sesion_id,
@@ -2386,26 +2684,36 @@ async fn marcar_soltada(
     desde
 }
 
-/// El script de enganche salió con 100: otro equipo se llevó la sesión. La
-/// pestaña pasa a soltada y se difunde ya; después, por la misma conexión y a la
-/// vez, se mira con `estado` quién la tiene ahora y con `vista` qué muestra. La
-/// última pantalla se deja en el emulador de la pestaña antes de difundir quién
-/// la tiene (si la captura falla, la pestaña queda soltada como estaba).
+/// El enganche de la pestaña terminó con 100 (otro equipo se llevó la sesión) o
+/// con 101 (la reconexión automática no llegó a engancharse porque otro equipo
+/// se la llevó entre mirar y engancharse): la pestaña pasa a soltada y se
+/// difunde ya; después, por la misma conexión y a la vez, se mira con `estado`
+/// quién la tiene ahora (y con qué nombre) y con `vista` qué muestra. La última
+/// pantalla se deja en el emulador de la pestaña antes de difundir quién la
+/// tiene (si la captura falla, la pestaña queda soltada como estaba).
 async fn sesion_soltada(
     estado: &Arc<tokio::sync::Mutex<EstadoServidor>>,
     sesion_id: u32,
     handle: &Arc<Handle<Cliente>>,
     plan: &PlanEnganche,
 ) {
-    let desde = marcar_soltada(estado, sesion_id, None).await;
+    let desde = marcar_soltada(estado, sesion_id, None, None).await;
     let Some(filas) = filas_de_la_pantalla(estado, sesion_id).await else {
         // La pestaña se cerró mientras tanto: no queda nada que actualizar.
         return;
     };
-    let (por_equipo, vista) = tokio::join!(
-        equipo_que_la_tiene(sesion_id, handle, plan),
+    let (quien, vista) = tokio::join!(
+        quien_la_tiene(sesion_id, handle, plan),
         super::tmux::vista(handle, plan.servidor, &plan.nombre, filas)
     );
+    // Si otro equipo la renombró, el nombre de la pestaña ya no existe: la vista
+    // se pide con el nombre que tiene ahora.
+    let vista = match (&vista, &quien) {
+        (Err(_), Some(quien)) if quien.nombre != plan.nombre => {
+            super::tmux::vista(handle, plan.servidor, &quien.nombre, filas).await
+        }
+        _ => vista,
+    };
     match vista {
         Ok(texto) => pintar_ultima_pantalla(estado, sesion_id, desde, &texto).await,
         // No es un error: la pestaña queda soltada como estaba.
@@ -2414,9 +2722,9 @@ async fn sesion_soltada(
             "no se pudo leer la última pantalla de la sesión soltada: {motivo}"
         ),
     }
-    if por_equipo.is_none() {
+    let Some(quien) = quien else {
         return;
-    }
+    };
     let mut estado_bloqueado = estado.lock().await;
     let Some(sesion) = estado_bloqueado.sesiones.get_mut(&sesion_id) else {
         return;
@@ -2431,25 +2739,57 @@ async fn sesion_soltada(
     if soltada.desde != desde {
         return;
     }
-    soltada.por_equipo = por_equipo.clone();
-    sesion.motivo = Some(motivo_soltada(por_equipo.as_deref()));
-    difundir_lista(&mut estado_bloqueado);
+    let mut cambio = false;
+    if quien.equipo.is_some() && soltada.por_equipo != quien.equipo {
+        soltada.por_equipo = quien.equipo.clone();
+        sesion.motivo = Some(motivo_soltada(quien.equipo.as_deref()));
+        cambio = true;
+    }
+    // La pestaña sabe cómo se llama ahora su sesión: «volver» se engancha a esa.
+    if sesion.tmux.as_deref() != Some(quien.nombre.as_str()) {
+        sesion.tmux = Some(quien.nombre);
+        cambio = true;
+    }
+    if cambio {
+        difundir_lista(&mut estado_bloqueado);
+    }
 }
 
-/// El equipo que tiene ahora la sesión de una pestaña soltada, si se sabe:
-/// el que dejó su marca en `@magi_equipo` y tiene algún cliente enganchado.
-async fn equipo_que_la_tiene(
+/// Quién tiene ahora la sesión de una pestaña soltada y cómo se llama.
+struct QuienLaTiene {
+    /// Su nombre ahora (distinto del de la pestaña si la renombraron).
+    nombre: String,
+    /// El equipo que dejó su marca en `@magi_equipo`, si tiene algún cliente
+    /// enganchado.
+    equipo: Option<String>,
+}
+
+/// La sesión de una pestaña soltada tal como está ahora en el host, buscada por
+/// su nombre y, si no está, por su identificador (la renombró otro equipo):
+/// con qué nombre y qué equipo la tiene. `None` si no se pudo mirar o ya no
+/// existe.
+async fn quien_la_tiene(
     sesion_id: u32,
     handle: &Arc<Handle<Cliente>>,
     plan: &PlanEnganche,
-) -> Option<String> {
+) -> Option<QuienLaTiene> {
     match super::tmux::estado(handle).await {
-        Ok(lectura) => lectura
-            .sesiones
-            .iter()
-            .find(|sesion| sesion.servidor == plan.servidor && sesion.nombre == plan.nombre)
-            .filter(|sesion| sesion.clientes > 0)
-            .and_then(|sesion| sesion.equipo.clone()),
+        Ok(lectura) => {
+            let identidad = plan.identidad.as_ref();
+            buscar_sesion(
+                &lectura.sesiones,
+                plan.servidor,
+                &plan.nombre,
+                identidad.map(|identidad| identidad.id.as_str()),
+                identidad.map(|identidad| identidad.creada),
+            )
+            .map(|sesion| QuienLaTiene {
+                nombre: sesion.nombre.clone(),
+                equipo: (sesion.clientes > 0)
+                    .then(|| sesion.equipo.clone())
+                    .flatten(),
+            })
+        }
         Err(motivo) => {
             warn!(
                 sesion = sesion_id,
@@ -2582,7 +2922,10 @@ pub async fn foco(
             sesion.enfocadas.remove(&cliente_id);
         }
         let despues = sesion.enfocada();
-        let limpiar_aviso = enfocada && sesion.aviso.take().is_some();
+        // Con la pestaña enfocada por alguna ventana, el aviso está atendido,
+        // también cuando lo que cambia es que otra ventana deja de enfocarla
+        // (antes solo se quitaba con `Foco(true)`).
+        let limpiar_aviso = sesion.enfocada() && sesion.aviso.take().is_some();
         let secuencia = if antes != despues {
             let pedido = sesion
                 .pantalla

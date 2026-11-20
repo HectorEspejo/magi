@@ -8,7 +8,7 @@ source: tests/terminal_ui.rs
 │      comando                                                                 │
 │      [  ]                                                                    │
 │                                                                              │
-│ SESIONES (viaja a tus equipos)                                               │
+│ SESIONES                                                                     │
 │  [ ] Todas las sesiones persistentes (tmux en el host)                       │
 │      nombres automáticos: sobremesa-1, sobremesa-2…                          │
 │  Espacio marca · Tab siguiente · Ctrl+S guardar                              │

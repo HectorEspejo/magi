@@ -612,14 +612,39 @@ fn en_termux_la_columna_del_tipo_llega_a_26() {
     assert_eq!(columna_del_host(&largo), columna_del_host(&de_22) + 3);
     let fila = fila_del_registro(&largo);
     assert!(fila.contains(TIPO_LARGO), "{fila}");
-    // Y a 26 se queda: uno de 29 caracteres se corta ahí.
-    let enorme = registro_con("sesion_persistente_enganchada", true, 100, 24);
+    // Y a 26 se queda: uno de 27 caracteres se corta ahí.
+    let enorme = registro_con("inventario_sinc_desactivada", true, 100, 24);
     let fila = fila_del_registro(&enorme);
     assert!(
-        fila.contains("sesion_persistente_enganc…"),
+        fila.contains("inventario_sinc_desactiva…"),
         "el tipo debería cortarse a 26 con «…»:\n{fila}"
     );
     assert_eq!(columna_del_host(&enorme), columna_del_host(&largo) + 1);
+}
+
+/// Los cuatro tipos de las sesiones persistentes (25 a 29 caracteres, que la
+/// columna cortaba) llevan una etiqueta corta: salen enteros, sin «…», en el
+/// escritorio y en Termux. El detalle de debajo sigue diciendo el tipo real.
+#[test]
+fn los_tipos_de_sesiones_persistentes_salen_enteros_con_su_etiqueta_corta() {
+    for (tipo, etiqueta) in [
+        ("sesion_persistente_creada", "persistente_creada"),
+        ("sesion_persistente_borrada", "persistente_borrada"),
+        ("sesion_persistente_reabierta", "persistente_reabierta"),
+        ("sesion_persistente_enganchada", "persistente_enganchada"),
+    ] {
+        for termux in [false, true] {
+            let prueba = registro_con(tipo, termux, 100, 24);
+            let fila = fila_del_registro(&prueba);
+            assert!(fila.contains(etiqueta), "{tipo} (termux: {termux}): {fila}");
+            assert!(!fila.contains('…'), "{tipo} (termux: {termux}): {fila}");
+            assert!(
+                prueba.texto().contains(tipo),
+                "el detalle dice el tipo real {tipo}:\n{}",
+                prueba.texto()
+            );
+        }
+    }
 }
 
 /// K3: instantánea del escritorio con un tipo largo (la tabla es la de

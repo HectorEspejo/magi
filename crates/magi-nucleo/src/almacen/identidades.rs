@@ -230,21 +230,18 @@ pub fn renombrar(conexion: &Connection, id: i64, alias: &str) -> Result<()> {
     if alias.is_empty() {
         anyhow::bail!("el alias no puede estar vacío");
     }
-    if existe_alias(conexion, alias, Some(id))? {
-        anyhow::bail!("ya existe una identidad con el alias «{alias}»");
-    }
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Identidades, id)?;
-    conexion.execute(
-        "UPDATE IDENTIDADES SET alias = ?1 WHERE id = ?2",
-        params![alias, id],
-    )?;
-    versiones::subir_si_cambio(
-        conexion,
-        versiones::Tabla::Identidades,
-        id,
-        antes.as_deref(),
-    )?;
-    Ok(())
+    // El cambio y la versión nueva en una sola transacción (R84); el alias
+    // libre se comprueba dentro, con el bloqueo de escritura ya tomado.
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Identidades, id, |conexion| {
+        if existe_alias(conexion, alias, Some(id))? {
+            anyhow::bail!("ya existe una identidad con el alias «{alias}»");
+        }
+        conexion.execute(
+            "UPDATE IDENTIDADES SET alias = ?1 WHERE id = ?2",
+            params![alias, id],
+        )?;
+        Ok(())
+    })
 }
 
 /// Marca el último uso por huella (autenticación con éxito).
@@ -365,16 +362,11 @@ pub fn revocar(conexion: &Connection, id: i64, hogar: &Path) -> Result<usize> {
 }
 
 pub fn reactivar(conexion: &Connection, id: i64) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Identidades, id)?;
-    conexion.execute(
-        "UPDATE IDENTIDADES SET revocada_en = NULL WHERE id = ?1",
-        params![id],
-    )?;
-    versiones::subir_si_cambio(
-        conexion,
-        versiones::Tabla::Identidades,
-        id,
-        antes.as_deref(),
-    )?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Identidades, id, |conexion| {
+        conexion.execute(
+            "UPDATE IDENTIDADES SET revocada_en = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    })
 }

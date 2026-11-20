@@ -162,54 +162,55 @@ pub fn crear(conexion: &Connection, datos: &DatosHost, origen: Origen) -> Result
             }
         })?;
     let id = transaccion.last_insert_rowid();
-    // Un host nuevo nace con uuid, versión y vector (Fase 10).
+    // Un host nuevo nace con uuid, versión y vector (Fase 10). Sus etiquetas
+    // viajan con él: van en la misma transacción (R84).
     versiones::registrar_nuevo(&transaccion, versiones::Tabla::Hosts, id, None)?;
+    etiquetas::fijar_de_host_en(&transaccion, id, &datos.etiquetas)?;
     transaccion.commit()?;
-    etiquetas::fijar_de_host(conexion, id, &datos.etiquetas)?;
     Ok(id)
 }
 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosHost) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion
-        .execute(
-            "UPDATE HOSTS SET
-                nombre = ?1, grupo_id = ?2, direccion = ?3, puerto = ?4,
-                usuario = ?5, identidad_ref = ?6, salto_host_id = ?7,
-                multiplexar = ?8, keepalive_seg = ?9, opciones_extra = ?10,
-                actualizado_en = ?11, servicios = ?12, escritorio_dominio = ?13,
-                escritorio_opciones = ?14
-             WHERE id = ?15",
-            params![
-                datos.nombre.trim(),
-                datos.grupo_id,
-                datos.direccion.trim(),
-                datos.puerto as i64,
-                datos.usuario.as_deref().filter(|u| !u.is_empty()),
-                datos.identidad_ref.a_bd(),
-                datos.salto_host_id,
-                datos.multiplexar as i64,
-                datos.keepalive_seg.map(|valor| valor as i64),
-                datos.opciones_extra,
-                fecha_ahora(),
-                datos.servicios,
-                datos.escritorio_dominio.as_deref(),
-                datos.escritorio_opciones.a_json(),
-                id,
-            ],
-        )
-        .map_err(|error| {
-            if crate::almacen::es_conflicto_unico(&error) {
-                anyhow::anyhow!("ya existe un host con el nombre «{}»", datos.nombre.trim())
-            } else {
-                anyhow::Error::new(error)
-            }
-        })?;
-    etiquetas::fijar_de_host(conexion, id, &datos.etiquetas)?;
-    // Solo sube si cambió algo que viaja: los campos propios del equipo no
-    // cuentan (Fase 10).
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    // El cambio, las etiquetas y la versión nueva van en una sola transacción
+    // (R84). Solo sube la versión si cambió algo que viaja: los campos propios
+    // del equipo no cuentan (Fase 10).
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion
+            .execute(
+                "UPDATE HOSTS SET
+                    nombre = ?1, grupo_id = ?2, direccion = ?3, puerto = ?4,
+                    usuario = ?5, identidad_ref = ?6, salto_host_id = ?7,
+                    multiplexar = ?8, keepalive_seg = ?9, opciones_extra = ?10,
+                    actualizado_en = ?11, servicios = ?12, escritorio_dominio = ?13,
+                    escritorio_opciones = ?14
+                 WHERE id = ?15",
+                params![
+                    datos.nombre.trim(),
+                    datos.grupo_id,
+                    datos.direccion.trim(),
+                    datos.puerto as i64,
+                    datos.usuario.as_deref().filter(|u| !u.is_empty()),
+                    datos.identidad_ref.a_bd(),
+                    datos.salto_host_id,
+                    datos.multiplexar as i64,
+                    datos.keepalive_seg.map(|valor| valor as i64),
+                    datos.opciones_extra,
+                    fecha_ahora(),
+                    datos.servicios,
+                    datos.escritorio_dominio.as_deref(),
+                    datos.escritorio_opciones.a_json(),
+                    id,
+                ],
+            )
+            .map_err(|error| {
+                if crate::almacen::es_conflicto_unico(&error) {
+                    anyhow::anyhow!("ya existe un host con el nombre «{}»", datos.nombre.trim())
+                } else {
+                    anyhow::Error::new(error)
+                }
+            })?;
+        etiquetas::fijar_de_host_en(conexion, id, &datos.etiquetas)
+    })
 }
 
 /// Filas de otra tabla que cuelgan de un host por `host_id` y dejan su propia
@@ -357,53 +358,55 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
 }
 
 pub fn mover_a_grupo(conexion: &Connection, id: i64, grupo_id: Option<i64>) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion.execute(
-        "UPDATE HOSTS SET grupo_id = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![grupo_id, fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion.execute(
+            "UPDATE HOSTS SET grupo_id = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![grupo_id, fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn marcar_origen(conexion: &Connection, id: i64, origen: Origen) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion.execute(
-        "UPDATE HOSTS SET origen = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![origen.como_texto(), fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion.execute(
+            "UPDATE HOSTS SET origen = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![origen.como_texto(), fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn fijar_salto(conexion: &Connection, id: i64, salto_host_id: Option<i64>) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion.execute(
-        "UPDATE HOSTS SET salto_host_id = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![salto_host_id, fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion.execute(
+            "UPDATE HOSTS SET salto_host_id = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![salto_host_id, fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn anadir_opciones_extra(conexion: &Connection, id: i64, linea: &str) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    let actuales: String = conexion.query_row(
-        "SELECT opciones_extra FROM HOSTS WHERE id = ?1",
-        params![id],
-        |fila| fila.get(0),
-    )?;
-    let nuevas = if actuales.trim().is_empty() {
-        linea.to_string()
-    } else {
-        format!("{}\n{}", actuales.trim_end(), linea)
-    };
-    conexion.execute(
-        "UPDATE HOSTS SET opciones_extra = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![nuevas, fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        // Se lee lo que hay dentro de la transacción: no se pisa lo que otro
+        // proceso acabe de añadir.
+        let actuales: String = conexion.query_row(
+            "SELECT opciones_extra FROM HOSTS WHERE id = ?1",
+            params![id],
+            |fila| fila.get(0),
+        )?;
+        let nuevas = if actuales.trim().is_empty() {
+            linea.to_string()
+        } else {
+            format!("{}\n{}", actuales.trim_end(), linea)
+        };
+        conexion.execute(
+            "UPDATE HOSTS SET opciones_extra = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![nuevas, fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 /// Cuántos hosts usan a este como salto.
@@ -423,13 +426,13 @@ pub fn marcar_identidad_ref(
     id: i64,
     identidad: &IdentidadRef,
 ) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion.execute(
-        "UPDATE HOSTS SET identidad_ref = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![identidad.a_bd(), fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion.execute(
+            "UPDATE HOSTS SET identidad_ref = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![identidad.a_bd(), fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 /// Marca una conexión abierta con éxito.
@@ -533,13 +536,13 @@ pub fn fijar_snippet_al_conectar(
     id: i64,
     snippet_id: Option<i64>,
 ) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, id)?;
-    conexion.execute(
-        "UPDATE HOSTS SET snippet_al_conectar_id = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![snippet_id, fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, id, |conexion| {
+        conexion.execute(
+            "UPDATE HOSTS SET snippet_al_conectar_id = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![snippet_id, fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 /// Guarda los últimos directorios de la vista Archivos de un host. No toca

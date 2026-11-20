@@ -265,9 +265,8 @@ impl DatosSesionPersistente {
         if OrigenFicha::desde_texto(&self.origen).is_none() {
             return Err(format!("el origen «{}» no se entiende", self.origen));
         }
-        if self.creada_por.trim().is_empty() {
-            return Err("no dice qué equipo la creó".to_string());
-        }
+        // La misma comprobación que el almacén: el equipo, recortado y no vacío.
+        validadores::normalizar_equipo(&self.creada_por).map_err(|error| error.to_string())?;
         validadores::validar_carpeta(self.carpeta.as_deref().unwrap_or(""))
             .map_err(|error| error.to_string())?;
         validadores::validar_comando(self.comando.as_deref().unwrap_or(""))

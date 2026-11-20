@@ -88,9 +88,15 @@ pub fn dibujar(
         DialogoPersistentes::VistaPrevia(vista) => {
             (ANCHO_VISTA_PREVIA, hoja_vista_previa(vista, estrecho, tema))
         }
-        DialogoPersistentes::Ficha(formulario) => {
-            (ANCHO_FICHA, hoja_ficha(formulario, estrecho, tema))
-        }
+        DialogoPersistentes::Ficha(formulario) => (
+            ANCHO_FICHA,
+            hoja_ficha(
+                formulario,
+                estrecho,
+                app.config.sincronizacion.activa(),
+                tema,
+            ),
+        ),
         DialogoPersistentes::Renombrar(dialogo) => {
             (ANCHO_RENOMBRAR, hoja_renombrar(dialogo, estrecho, tema))
         }
@@ -205,7 +211,7 @@ fn campo_entre_corchetes(
     ]
 }
 
-fn hoja_ficha(formulario: &FormularioFicha, estrecho: bool, tema: &Tema) -> Hoja {
+fn hoja_ficha(formulario: &FormularioFicha, estrecho: bool, sincroniza: bool, tema: &Tema) -> Hoja {
     let objetivo = &formulario.objetivo;
     let mut cuerpo = vec![
         destacado(
@@ -248,8 +254,14 @@ fn hoja_ficha(formulario: &FormularioFicha, estrecho: bool, tema: &Tema) -> Hoja
             "Carpeta absoluta o ~/…; vacía, la carpeta personal del host.",
             tema,
         ));
+        // Lo de los otros equipos solo es cierto con la sincronización
+        // configurada (D370).
         cuerpo.push(tenue(
-            "No pongas secretos en el comando: la ficha viaja cifrada a tus otros equipos.",
+            if sincroniza {
+                "No pongas secretos en el comando: la ficha viaja cifrada a tus otros equipos."
+            } else {
+                "No pongas secretos en el comando: queda guardado en la ficha."
+            },
             tema,
         ));
     }

@@ -1257,6 +1257,68 @@ fn las_filas_ilegibles_se_saltan_sin_romper_el_listado() {
     assert!(almacen.obtener_snippet(id).is_err());
 }
 
+/// Escritor que guarda lo que se loguea, para contar los avisos.
+#[derive(Clone, Default)]
+struct CapturaDeLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturaDeLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Ejecuta `cuerpo` con un suscriptor propio (solo de este hilo) y devuelve las
+/// líneas de log que dejó.
+fn con_log<T>(cuerpo: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let captura = CapturaDeLog::default();
+    let escritor = captura.clone();
+    let suscriptor = tracing_subscriber::fmt()
+        .with_writer(move || escritor.clone())
+        .with_ansi(false)
+        .finish();
+    let resultado = tracing::subscriber::with_default(suscriptor, cuerpo);
+    let texto = String::from_utf8(captura.0.lock().unwrap().clone()).expect("log en UTF-8");
+    (resultado, texto.lines().map(str::to_string).collect())
+}
+
+/// Una ficha ilegible (sin uuid, escrita por otro proceso) avisa una sola vez
+/// aunque se lea con `listar_fichas` cuantas veces se quiera: sin esto, el
+/// cliente la repetiría en cada refresco de la lista. Va en un fichero porque
+/// una base en memoria no se distingue de otra y avisa siempre.
+#[test]
+fn una_ficha_ilegible_avisa_una_sola_vez_aunque_se_lea_dos_veces() {
+    let dir = tempfile::tempdir().unwrap();
+    let almacen = magi::almacen::abrir(&dir.path().join("magi.db")).unwrap();
+    let host = almacen.crear_host(&datos("web"), Origen::Manual).unwrap();
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO SESIONES_PERSISTENTES
+                (host_id, nombre, origen, creada_por, creada_en, actualizado_en)
+             VALUES (?1, 'sin-uuid', 'manual', 'portatil',
+                     '2026-11-16T10:00:00+01:00', '2026-11-16T10:00:00+01:00')",
+            [host],
+        )
+        .unwrap();
+
+    let (primera, avisos) = con_log(|| almacen.listar_fichas().unwrap());
+    assert!(primera.is_empty());
+    assert_eq!(avisos.len(), 1, "{avisos:?}");
+    assert!(avisos[0].contains("ilegible"), "{avisos:?}");
+
+    let (segunda, avisos) = con_log(|| {
+        almacen.listar_fichas().unwrap();
+        almacen.fichas_de_host(host).unwrap()
+    });
+    assert!(segunda.is_empty());
+    assert!(avisos.is_empty(), "ya estaba avisada: {avisos:?}");
+}
+
 // ---------------------------------------------------------- verificaciones
 
 /// Una fila por host, creada al activar la primera comprobación y

@@ -6,8 +6,8 @@ las pruebas.
 
 Contenido:
 
-- `tmux`: un tmux falso, en `sh` POSIX, para probar `terminal_tmux.sh` y la
-  sesión persistente sin tmux de verdad.
+- `tmux`: un tmux falso, en `sh` POSIX, para probar `terminal_tmux.sh`,
+  `terminal_enganche.sh` y la sesión persistente sin tmux de verdad.
 - `tui_prueba.rs`: programa de prueba que habla como una TUI moderna y hace lo
   que Claude Code (lo usan `tests/terminal_e2e.rs` y
   `tests/sesiones_persistentes_e2e.rs`; ver «`tui_prueba`» más abajo).
@@ -17,10 +17,16 @@ Las pruebas con tmux de verdad (`crates/magi-nucleo/tests/tmux_real.rs` y
 
 ## `tmux`: tmux falso
 
-Responde a las órdenes que usan `magi_nucleo::terminal::tmux` y
-`crates/magi-nucleo/scripts/terminal_tmux.sh`. Nunca invoca al tmux real, ni
-toca sesiones del usuario, ni abre red: solo lee y escribe los ficheros de
-estado de la prueba.
+Responde a las órdenes que usan `magi_nucleo::terminal::tmux` y los dos scripts
+de `crates/magi-nucleo/scripts/`: `terminal_tmux.sh` (que MAGI manda por la
+entrada estándar del `exec`, D357) y `terminal_enganche.sh` (el enganche
+mínimo con PTY). Nunca invoca al tmux real, ni toca sesiones del usuario, ni
+abre red: solo lee y escribe los ficheros de estado de la prueba.
+
+Desde la Fase 9b, las pruebas ejecutan `terminal_tmux.sh` como lo hace MAGI en
+el host: `sh -c '<arranque>' magi-tmux <suborden> <argumentos…>` con el script
+entero por la entrada estándar (`OrdenTmux::argumentos` y `OrdenTmux::entrada`).
+El enganche es `sh -c '<terminal_enganche.sh>' magi-enganche <argumentos…>`.
 
 Necesita `sh` POSIX, `awk`, `sed`, `cat`, `date` y `mkdir`; no necesita tmux
 instalado. Pasa `shellcheck` y `sh -n`.
@@ -39,6 +45,8 @@ instalado. Pasa `shellcheck` y `sh -n`.
 | `MAGI_TMUX_ATTACH_MATA` | no | Con `1`, al acabar `attach-session` (fin de la entrada) la sesión desaparece, como si su programa hubiera terminado. |
 | `MAGI_TMUX_ATTACH_ESTADO` | no | Código de salida de `attach-session` (por defecto 0), para simular un cliente que no puede engancharse. |
 | `MAGI_TMUX_AL_SOLTAR_RENOMBRA` | no | Un nombre: cuando a un `attach-session` lo suelta otro cliente (ver «Soltar a un cliente»), la sesión se renombra a ese nombre antes de que el cliente salga, como si la hubieran renombrado mientras estaba enganchado. |
+| `MAGI_TMUX_NEW_SESSION_TARDA` | no | Segundos (admite decimales) que `new-session` espera, con la sesión ya creada, antes de devolver el control. Sirve para que una prueba cierre la pestaña mientras la sesión se crea. |
+| `MAGI_TMUX_OTRO_EQUIPO_TRAS_ESTADO` | no | Una etiqueta de equipo: tras el primer `list-windows -a` del servidor propio (`-L magi`), que solo hace la suborden `estado` justo después de leer las sesiones, otro equipo se engancha a todas sus sesiones (un cliente y `@magi_equipo` con esa etiqueta). Lo que `estado` ya leyó es de antes; lo que se lea después (la guarda del enganche de una reconexión automática, R157) ya lo ve. Una sola vez por fichero de estado (deja `<estado>.otro_equipo.hecho`). |
 
 ### Formato del estado
 
@@ -134,10 +142,21 @@ La prueba debe ejecutar el script o el binario con el directorio del tmux falso
 en el `PATH` **del hijo** (nunca en el `PATH` global del proceso de pruebas) y
 con `MAGI_TMUX_ESTADO` apuntando a un fichero de su temporal:
 
+El script grande llega por la entrada estándar, como lo manda MAGI (D357), y el
+enganche mínimo va en la línea de órdenes:
+
 ```sh
-PATH="$directorio_falso:$PATH" MAGI_TMUX_ESTADO="$temporal/estado" \
-    sh -c "$SCRIPT" magi-tmux estado
+# terminal_tmux.sh: el arranque en la línea de órdenes y el script por la entrada
+printf '%s\n' "$SCRIPT" | PATH="$directorio_falso:$PATH" MAGI_TMUX_ESTADO="$temporal/estado" \
+    sh -c "$ARRANQUE" magi-tmux estado
+# terminal_enganche.sh: <servidor> <nombre> <soltar> <equipo> <guardar>
+PATH="$directorio_falso:$PATH" MAGI_TMUX_ESTADO_MAGI="$temporal/magi" \
+    sh -c "$SCRIPT_ENGANCHE" magi-enganche magi agente 1 portatil 0
 ```
+
+`$SCRIPT`, `$ARRANQUE` y `$SCRIPT_ENGANCHE` son las constantes de
+`magi_nucleo::terminal::tmux`. Con tmux real el hijo necesita `cat` en el `PATH`
+(el arranque lo usa para leer el script).
 
 Desde Rust se puede:
 
@@ -145,8 +164,9 @@ Desde Rust se puede:
   directorio en el `PATH` del hijo, como hace
   `crates/magi-nucleo/tests/tmux_script.rs` con `include_str!`. Es lo más
   aislado y no depende de los permisos del árbol de trabajo. Se escribe una
-  sola vez para todas las pruebas: reescribirlo mientras otra lo ejecuta da
-  `ETXTBSY`.
+  sola vez para todas las pruebas, en `target/tmp` (con un nombre fijo, sin
+  dejar una carpeta nueva por ejecución) y con un rename atómico: reescribirlo
+  mientras otra lo ejecuta da `ETXTBSY`.
 - Poner `tests/fijos/terminal` directamente en el `PATH` del hijo (el fichero
   va versionado con permisos de ejecución).
 

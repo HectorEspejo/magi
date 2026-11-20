@@ -1,0 +1,27 @@
+---
+source: tests/sesiones_persistentes_ui/nueva.rs
+---
+┌ MAGI · FLOTA ────────────────────────────────────────── 2 hosts · 0 nominal ─┐
+│  HOSTS                                                            ⇥ detalle  │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│▸ ○ dev┌ NUEVA SESIÓN PERSISTENTE ────────────────────────────────────┐       │
+│  ○ web│                                                              │       │
+│       │  Host      [ dev-01 ▾                       ]                │       │
+│       │  Nombre    [ agente-api ]                                    │       │
+│       │  Carpeta   [ ~/proyectos/api┃ ]                              │       │
+│       │  Comando   [ claude ]                                        │       │
+│       │  Reanudar  [ claude --continue ]                             │       │
+│       │  Nota      [ refactor del módulo de pagos ]                  │       │
+│       │                                                              │       │
+│       │  Vive en dev-01 aunque cierres MAGI o apagues el equipo.     │       │
+│       │  No pongas secretos en el comando: queda guardado en la      │       │
+│       │  ficha.                                                      │       │
+│       │                                                              │       │
+│       │  ✕ la carpeta ~/proyectos/api no existe en «dev-01» ·        │       │
+│       │  créala o elige otra carpeta                                 │       │
+│       │  ↵ crear y engancharse   ⇥ siguiente   esc cancelar          │       │
+│       │                                                              │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

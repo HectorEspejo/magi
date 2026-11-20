@@ -78,13 +78,19 @@ fn juntar_anterior(hasta: i64, clave: &str) -> String {
 }
 
 /// Claves de sincronización guardadas en el llavero (la actual y, si existe y
-/// no ha caducado, la anterior de una rotación).
+/// no ha caducado, la anterior de una rotación). El núcleo trata la primera
+/// como la actual y la segunda como la anterior (R97): por eso, sin la actual,
+/// no se devuelve la anterior sola (pasaría por la actual y abriría ficheros de
+/// equipos que no conoce).
 pub fn claves_guardadas(estado: &EstadoNucleo) -> Vec<ClaveSincronizacion> {
     let mut claves = Vec::new();
     if let Ok(Some(texto)) = estado.llavero.leer(CUENTA_CLAVE) {
         if let Ok(clave) = ClaveSincronizacion::desde_texto(texto.as_str()) {
             claves.push(clave);
         }
+    }
+    if claves.is_empty() {
+        return claves;
     }
     if let Ok(Some(guardada)) = estado.llavero.leer(CUENTA_CLAVE_ANTERIOR) {
         match partir_anterior(guardada.as_str()) {

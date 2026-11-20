@@ -112,6 +112,13 @@ enum Comando {
     /// No es «magi sincronizaciones»: aquello lista las sincronizaciones de
     /// directorio de la Fase 8. Este comando hace una pasada de la Fase 10
     /// (importar, fusionar y exportar) y termina.
+    ///
+    /// Antes de aplicar el borrado de un host o de un túnel pregunta al
+    /// servidor de sesiones, sin arrancarlo nunca: sin servidor, lo aplica;
+    /// si el host tiene trabajo vivo, lo aplaza; y con un servidor de otra
+    /// versión o que no responde en 5 s, aplaza todos los de hosts y túneles.
+    /// Un borrado aplazado no es un error (código de salida 0): queda como
+    /// conflicto y se resuelve desde la TUI.
     Sincronizar {
         #[command(subcommand)]
         comando: Option<ComandoSincronizar>,
@@ -207,8 +214,9 @@ enum ComandoServidor {
 
 #[derive(Subcommand)]
 enum ComandoSincronizar {
-    /// Muestra la carpeta, los equipos con su estado y los conflictos
-    /// pendientes, sin descifrar ningún fichero ni leer la clave del llavero.
+    /// Muestra la carpeta, los equipos con su estado, los conflictos
+    /// pendientes y los borrados aplazados con su motivo, sin descifrar
+    /// ningún fichero ni leer la clave del llavero.
     Estado,
 }
 
@@ -654,22 +662,22 @@ fn exportar_registro(
 // ------------------------------------------------------- sincronización
 
 /// `magi sincronizar [estado]`: una pasada del inventario cifrado sin abrir
-/// la TUI. Devuelve el código de salida: 0 si va todo al día, 1 con error y 2
-/// si hace falta decidir algo (borrados masivos o clave nueva) sin haber
-/// aplicado nada.
+/// la TUI. Devuelve el código de salida: 0 si va todo al día (también con
+/// borrados aplazados por trabajo vivo), 1 con error y 2 si hace falta decidir
+/// algo (borrados masivos o clave nueva) sin haber aplicado nada.
+///
+/// Antes de aplicar borrados de hosts y túneles pregunta al servidor de
+/// sesiones, sin arrancarlo nunca (`magi::sincronizacion::cli`, R83).
 fn sincronizar_cli(
     rutas: &Rutas,
     config: &Config,
     comando: Option<ComandoSincronizar>,
 ) -> anyhow::Result<i32> {
     let almacen = crate::almacen::abrir(&rutas.base_datos())?;
-    let codigo = match comando {
+    let plazo = magi::servidor::PLAZO_CONSULTA_SERVIDOR;
+    let salida = match comando {
         Some(ComandoSincronizar::Estado) => {
-            print!(
-                "{}",
-                magi::sincronizacion::estado_texto(almacen.conexion(), config, &rutas.hogar)?
-            );
-            0
+            magi::sincronizacion::cli::estado(almacen.conexion(), rutas, config, plazo)?
         }
         None => {
             // El llavero se abre UNA vez por orden (con el llavero de fichero
@@ -692,138 +700,21 @@ fn sincronizar_cli(
                     }
                 }
             }
-            sincronizar_pasada(&almacen, rutas, &config, llavero.as_deref())
+            let secretos = llavero
+                .as_deref()
+                .map(|llavero| llavero as &dyn magi::llavero::LlaveroSecreto);
+            magi::sincronizacion::cli::sincronizar(
+                almacen.conexion(),
+                rutas,
+                &config,
+                secretos,
+                plazo,
+            )
         }
     };
+    salida.volcar();
     almacen.cerrar()?;
-    Ok(codigo)
-}
-
-/// Hace la pasada con el cerrojo de la sincronización. La CLI espera hasta
-/// `ESPERA_CERROJO`; si otra ventana lo tiene, no hace nada y lo dice.
-///
-/// `llavero` es el ya abierto por quien llama (`sincronizar_cli`): con la
-/// sincronización activa siempre viene; sin carpeta no se lee el llavero (la
-/// pasada devolverá «sin configurar» y no hay clave que buscar).
-fn sincronizar_pasada(
-    almacen: &Almacen,
-    rutas: &Rutas,
-    config: &Config,
-    llavero: Option<&dyn magi::llavero::LlaveroCliente>,
-) -> i32 {
-    let claves = match llavero {
-        Some(llavero) => match magi::sincronizacion::equipos::claves_para_leer(config, llavero) {
-            Ok(claves) => claves,
-            Err(error) => {
-                eprintln!("no se pudo leer la clave de sincronización del llavero: {error}");
-                return 1;
-            }
-        },
-        None => Vec::new(),
-    };
-    let _cerrojo = match magi::sincronizacion::carpeta::adquirir_cerrojo(
-        rutas,
-        Some(magi::sincronizacion::ESPERA_CERROJO),
-    ) {
-        Ok(Some(cerrojo)) => cerrojo,
-        Ok(None) => {
-            eprintln!(
-                "otro proceso está sincronizando ahora mismo; no se ha hecho nada (inténtalo dentro de un momento)"
-            );
-            return 1;
-        }
-        Err(error) => {
-            eprintln!("no se pudo tomar el cerrojo de sincronización: {error:#}");
-            return 1;
-        }
-    };
-    let opciones = magi::sincronizacion::OpcionesPasada::sin_trabajo_vivo(
-        magi::sincronizacion::PoliticaBorrados::Preguntar,
-    );
-    match magi::sincronizacion::pasada(almacen.conexion(), rutas, config, &claves, &opciones) {
-        Ok(resultado) => imprimir_resultado_pasada(&resultado),
-        Err(error) => {
-            eprintln!("la sincronización falló: {error:#}");
-            1
-        }
-    }
-}
-
-/// Resume la pasada en la salida estándar y devuelve su código de salida.
-fn imprimir_resultado_pasada(resultado: &magi::sincronizacion::ResultadoPasada) -> i32 {
-    for aviso in &resultado.avisos {
-        println!("aviso: {aviso}");
-    }
-    match &resultado.estado {
-        magi::sincronizacion::EstadoPasada::AlDia => {
-            match &resultado.resumen {
-                Some(resumen) => println!(
-                    "sincronizado: {} equipos · {} creados · {} actualizados · {} borrados · {} conflictos · {} huellas",
-                    resumen.equipos,
-                    resumen.creados,
-                    resumen.actualizados,
-                    resumen.borrados,
-                    resumen.conflictos,
-                    resumen.huellas
-                ),
-                None => println!("sincronizado: sin cambios"),
-            }
-            if resultado.exportado {
-                println!("fichero de este equipo exportado");
-            }
-            if resultado.conflictos_pendientes > 0 {
-                println!(
-                    "conflictos pendientes: {} (resuélvelos desde la vista CONFLICTOS de la TUI)",
-                    resultado.conflictos_pendientes
-                );
-            }
-            0
-        }
-        magi::sincronizacion::EstadoPasada::SinConfigurar => {
-            eprintln!(
-                "la sincronización no está configurada: añade [sincronizacion] carpeta a config.toml o configúrala desde la vista SINCRONIZACIÓN"
-            );
-            1
-        }
-        magi::sincronizacion::EstadoPasada::SinClave => {
-            eprintln!(
-                "hay carpeta de sincronización pero no hay clave en el llavero: abre la TUI para crear la sincronización o para unirte con la clave de la carpeta"
-            );
-            1
-        }
-        magi::sincronizacion::EstadoPasada::Quitado => {
-            eprintln!(
-                "este equipo ha sido quitado de la sincronización; vuelve a unirte como equipo nuevo desde la vista SINCRONIZACIÓN"
-            );
-            1
-        }
-        magi::sincronizacion::EstadoPasada::EsperandoClave(nombre) => {
-            eprintln!(
-                "el fichero del equipo «{nombre}» no se abre con la clave de este equipo: introduce la clave nueva desde la vista SINCRONIZACIÓN; no se ha aplicado nada"
-            );
-            2
-        }
-        magi::sincronizacion::EstadoPasada::DecisionPendiente(pendientes) => {
-            eprintln!(
-                "importación pendiente de confirmación: se borrarían {} de {} hosts:",
-                pendientes.hosts.len(),
-                pendientes.total_hosts
-            );
-            for host in &pendientes.hosts {
-                eprintln!("  · {host}");
-            }
-            eprintln!(
-                "copia de magi.db guardada antes de aplicar nada: {}",
-                pendientes.copia.display()
-            );
-            eprintln!("abre la TUI (vista SINCRONIZACIÓN) para decidir; no se ha aplicado nada");
-            2
-        }
-        magi::sincronizacion::EstadoPasada::Error(mensaje) => {
-            eprintln!("error de sincronización: {mensaje}");
-            1
-        }
-    }
+    Ok(salida.codigo)
 }
 
 fn sondear(

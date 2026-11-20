@@ -127,6 +127,11 @@ pub fn vector_a_json(vector: &BTreeMap<String, i64>) -> String {
 /// Emite el siguiente milisegundo del reloj híbrido, max(ahora, reloj + 1),
 /// y lo deja guardado en EQUIPOS.reloj_ms. Devuelve los milisegundos y el
 /// uuid de este equipo.
+///
+/// Escribe en EQUIPOS (el reloj) y quien la llama escribe la versión en la fila
+/// del elemento: los dos pasos y el cambio del elemento van en la misma
+/// transacción (R84), la que abre `cambiar_con_version` o la de quien crea o
+/// borra la fila.
 pub fn emitir(conexion: &Connection) -> Result<(i64, String)> {
     let equipo = equipos::este(conexion)?;
     let ahora = ms_ahora();
@@ -245,6 +250,31 @@ pub fn subir_si_cambio(
     }
     subir(conexion, tabla, id)?;
     Ok(true)
+}
+
+/// Cambia una fila que viaja y sube su versión en **una sola transacción**
+/// (R84): si algo falla entre el cambio y la versión, o la versión no llega a
+/// escribirse, no queda ningún cambio sin su versión. `cambio` recibe la
+/// conexión ya dentro de la transacción (`BEGIN IMMEDIATE`) y no puede abrir
+/// otra: las transacciones no anidan. El estado «antes» se lee dentro de la
+/// transacción, con el bloqueo de escritura ya tomado.
+///
+/// La versión solo sube si cambió algo de lo que viaja (los campos propios del
+/// equipo no cuentan). `tabla` e `id` son la fila cuya versión sube, que puede
+/// no ser la que cambia el closure: las verificaciones de un host suben la
+/// versión del host.
+pub fn cambiar_con_version<T>(
+    conexion: &Connection,
+    tabla: Tabla,
+    id: i64,
+    cambio: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let transaccion = crate::almacen::transaccion(conexion)?;
+    let antes = datos_de(&transaccion, tabla, id)?;
+    let resultado = cambio(&transaccion)?;
+    subir_si_cambio(&transaccion, tabla, id, antes.as_deref())?;
+    transaccion.commit()?;
+    Ok(resultado)
 }
 
 /// Sube la versión de varias filas (p. ej. los hosts a los que una cascada de

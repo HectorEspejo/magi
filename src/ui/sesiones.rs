@@ -309,9 +309,8 @@ fn lista(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion, enfoc
             crate::ui::sesion::formatear_duracion(pestaña.segundos())
         };
         let titulo = pestaña
-            .titulo
-            .clone()
-            .unwrap_or_else(|| super::tecla(tema, "—", "-").to_string());
+            .titulo_visible()
+            .map_or_else(|| super::tecla(tema, "—", "-").to_string(), str::to_string);
         let nombre = if app.escritura_varios.incluye(pestaña.sesion_id) {
             format!("{} {}", tema.glifos.escribiendo, pestaña.nombre)
         } else {

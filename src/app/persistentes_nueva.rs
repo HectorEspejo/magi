@@ -40,10 +40,6 @@ pub const CADUCIDAD_CREACION: Duration = Duration::from_secs(60);
 /// usuario puede estar contestando un diálogo (huella, frase, contraseña), que
 /// no tiene plazo propio (el servidor espera 5 min).
 pub const CADUCIDAD_CON_APERTURA: Duration = Duration::from_secs(6 * 60);
-/// Hasta cuántos segundos después de abrirla el servidor una pestaña de un
-/// host marcado sigue contando como «recién creada» para guardar su ficha.
-pub const EDAD_MAXIMA_HOST_MARCADO_SEG: i64 = 30;
-
 /// Qué se pidió abrir con `abrir_sesion_persistente` y se está esperando.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaseCreacion {
@@ -484,6 +480,14 @@ impl FormularioNueva {
     /// Deja un error de un intento de crear en el pie (no vale una sesión
     /// abierta con el servidor caído, por ejemplo).
     pub fn fijar_error(&mut self, mensaje: impl Into<String>) {
+        self.estado.error = Some(mensaje.into());
+    }
+
+    /// Vuelve al formulario con el foco en `campo` y el motivo de un intento
+    /// fallido en el pie. El error se retira en cuanto se cambia algo.
+    pub fn volver_con_error_en(&mut self, campo: CampoNueva, mensaje: impl Into<String>) {
+        self.estado.ocupado = None;
+        self.estado.foco = campo;
         self.estado.error = Some(mensaje.into());
     }
 
@@ -980,9 +984,16 @@ impl App {
     /// ese host y nombre, se guarda la ficha (al crear) o se anota lo que se
     /// pidió (reabrir, engancharse; un enganche a una sesión que ya existía no
     /// guarda ficha); sin pendiente, en un host marcado se crea la ficha con
-    /// `origen = host` si no la tiene.
+    /// `origen = host` si no la tiene **y la pestaña creó la sesión**
+    /// (`creada` es el `TmuxPestana.creada` que difunde el servidor: D369,
+    /// R163; un enganche a una sesión que ya existía no la crea).
     #[doc(hidden)]
-    pub fn pestana_persistente_abierta(&mut self, host_id: i64, nombre: &str) {
+    pub fn pestana_persistente_abierta(
+        &mut self,
+        host_id: i64,
+        nombre: &str,
+        creada: Option<bool>,
+    ) {
         // Una pestaña tardía (tras un diálogo del host) sigue siendo válida:
         // lo que caduca es la espera, no la sesión que ya existe.
         let pendiente = self
@@ -1021,7 +1032,7 @@ impl App {
                     );
                 }
             },
-            None => self.ficha_de_host_marcado(host_id, nombre),
+            None => self.ficha_de_host_marcado(host_id, nombre, creada),
         }
         self.sucio = true;
     }
@@ -1106,39 +1117,22 @@ impl App {
         }
     }
 
-    /// ¿La pestaña persistente la ha abierto el servidor hace poco? Al arrancar
-    /// una ventana (o al ver las de otra), el servidor difunde también las
-    /// pestañas que ya tenía: de esas no se crea ficha, o reaparecería la que el
-    /// usuario borró (la sesión sigue en el host) con una anotación «creada»
-    /// falsa. Sin pestaña a la vista no hay forma de saberlo y se da por nueva.
-    fn pestana_persistente_reciente(&self, host_id: i64, nombre: &str) -> bool {
-        let ahora = chrono::Utc::now().timestamp();
-        self.pestanas
-            .iter()
-            .find(|pestana| {
-                pestana.escritorio_id.is_none()
-                    && pestana.host_id == host_id
-                    && pestana
-                        .sesion_persistente()
-                        .is_some_and(|tmux| tmux.nombre == nombre)
-            })
-            .is_none_or(|pestana| {
-                ahora.saturating_sub(pestana.abierta_en) <= EDAD_MAXIMA_HOST_MARCADO_SEG
-            })
-    }
-
     /// Una pestaña persistente de un host marcado sin ficha de ese nombre
-    /// (el servidor eligió el nombre automático): ficha con `origen = host`.
-    fn ficha_de_host_marcado(&mut self, host_id: i64, nombre: &str) {
+    /// (el servidor eligió el nombre automático): ficha con `origen = host`,
+    /// solo si la pestaña **creó** la sesión en el host (`creada == Some(true)`).
+    /// Una pestaña que se enganchó a una sesión que ya existía, una
+    /// reconexión, o la lista de pestañas de una ventana que arranca no
+    /// llevan `creada`: de esas no se crea ficha, o reaparecería la que el
+    /// usuario borró (la sesión sigue en el host) con una anotación «creada»
+    /// falsa (R163). Un servidor anterior, que no manda el campo, tampoco la
+    /// crea: es lo seguro.
+    fn ficha_de_host_marcado(&mut self, host_id: i64, nombre: &str, creada: Option<bool>) {
         let marcado = self
             .hosts
             .iter()
             .find(|host| host.id == host_id)
             .is_some_and(|host| host.sesiones_persistentes && host.tipo.es_ssh());
-        if !marcado
-            || !self.pestana_persistente_reciente(host_id, nombre)
-            || self.hay_ficha(host_id, nombre)
-        {
+        if !marcado || creada != Some(true) || self.hay_ficha(host_id, nombre) {
             return;
         }
         let datos = DatosFicha {
@@ -1205,7 +1199,7 @@ impl App {
     /// Pide al servidor que vuelva a comprobar (las fichas las relee en cada
     /// pasada) para que la lista enseñe la ficha nueva sin esperar al
     /// vigilante.
-    fn consultar_persistentes_tras_crear(&mut self) {
+    pub(crate) fn consultar_persistentes_tras_crear(&mut self) {
         let peticion_id = self.siguiente_peticion_terminal;
         self.siguiente_peticion_terminal += 1;
         self.servidor
@@ -1223,17 +1217,22 @@ impl App {
 
     /// El servidor no pudo abrir la pestaña de tmux. La apertura pendiente de
     /// ese host y nombre se quita siempre: no queda ficha ni anotación.
-    /// Devuelve `true` si esta pista enseñó su diálogo (nombre ocupado:
-    /// engancharse a la existente o cambiar el nombre) y la pista B no debe
-    /// mostrar el error genérico; las demás causas (sin carpeta, sin tmux,
-    /// tmux antiguo, conexión…) devuelven `false` para que se diga el mensaje
-    /// con instrucción que trae el servidor.
+    /// Devuelve `true` si esta pista enseñó su diálogo y la barra no debe dar
+    /// el error genérico: con una sesión **nueva** que falló por el nombre
+    /// (ocupado: engancharse a la existente o cambiar el nombre) o por la
+    /// carpeta (no existe en el host), el diálogo vuelve con todo lo escrito
+    /// y el motivo en el pie (D370: el usuario corrige y vuelve a intentarlo
+    /// sin reescribir el comando ni la nota). `texto` es el motivo ya con su
+    /// instrucción. Las demás causas (sin tmux, tmux antiguo, conexión…) y las
+    /// aperturas que no vienen del diálogo devuelven `false` para que se diga
+    /// el mensaje con instrucción.
     #[doc(hidden)]
     pub fn persistentes_apertura_fallida(
         &mut self,
         host_id: i64,
         nombre: &str,
         causa: protocolo::CausaAperturaTmux,
+        texto: &str,
     ) -> bool {
         let Some(posicion) = self
             .persistentes
@@ -1244,17 +1243,28 @@ impl App {
             return false;
         };
         let pendiente = self.persistentes.creaciones.remove(posicion);
-        if causa != protocolo::CausaAperturaTmux::Existe
-            || matches!(pendiente.clase, ClaseCreacion::Enganchar { .. })
-        {
+        if matches!(pendiente.clase, ClaseCreacion::Enganchar { .. }) {
+            return false;
+        }
+        // La carpeta solo se vuelve a pedir en lo que se escribió en el
+        // diálogo: reabrir una ficha usa la suya y no tiene a dónde volver.
+        let por_carpeta = causa == protocolo::CausaAperturaTmux::SinCarpeta
+            && pendiente.clase == ClaseCreacion::Nueva;
+        if causa != protocolo::CausaAperturaTmux::Existe && !por_carpeta {
             return false;
         }
         let Some(mut formulario) = self.formulario_nueva(Some(host_id)) else {
             return false;
         };
         formulario.rellenar(&pendiente);
-        // El servidor dice que existe: engancharse, nunca reabrir.
-        formulario.poner_ocupado(false);
+        if por_carpeta {
+            formulario.volver_con_error_en(CampoNueva::Carpeta, texto);
+        } else {
+            // El servidor dice que existe: engancharse, nunca reabrir.
+            formulario.poner_ocupado(false);
+        }
+        // Ya no se está «creando» nada: el aviso de la barra sobraría.
+        self.mensaje = None;
         // Puede haber otro diálogo abierto: este se apila sobre él.
         self.mostrar_dialogo_servidor(Dialogo::Persistentes(DialogoPersistentes::Nueva(
             formulario,

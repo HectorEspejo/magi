@@ -15,12 +15,12 @@ source: tests/sesiones_persistentes_ui/lista.rs
   Si│  Nota     [  ]                                                       │
     │                                                                      │
     │  Carpeta absoluta o ~/…; vacía, la carpeta personal del host.        │
-    │  No pongas secretos en el comando: la ficha viaja cifrada a tus      │
-    │  otros equipos.                                                      │
+    │  No pongas secretos en el comando: queda guardado en la ficha.       │
     │                                                                      │
     │  ↵ guardar   Tab siguiente   Esc cancelar                            │
-────│                                                                      │────
-  ag└──────────────────────────────────────────────────────────────────────┘
+    │                                                                      │
+────└──────────────────────────────────────────────────────────────────────┘────
+  agente-api · web-01 · libre · ! pide atención
   servidor pid N · protocolo 10 · desde hace NN s
 
 

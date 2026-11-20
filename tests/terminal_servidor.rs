@@ -244,6 +244,166 @@ async fn el_titulo_y_el_aviso_llegan_en_la_lista_de_sesiones() {
     );
 }
 
+/// ¿Alguna lista de sesiones que vio la prueba lleva un aviso?
+fn algun_aviso_visto(escenario: &Escenario) -> bool {
+    escenario.vistos.iter().any(|mensaje| {
+        matches!(
+            mensaje,
+            MensajeServidor::Sesiones { lista } if lista.iter().any(|sesion| sesion.aviso.is_some())
+        )
+    })
+}
+
+/// ¿Llegó a alguna ventana la campana (0x07) del remoto?
+fn llego_la_campana(escenario: &Escenario) -> bool {
+    escenario.vistos.iter().any(|mensaje| {
+        matches!(
+            mensaje,
+            MensajeServidor::Datos { bytes, .. } if bytes.contains(&0x07)
+        )
+    })
+}
+
+#[tokio::test]
+async fn el_aviso_de_una_pestana_que_alguna_ventana_mira_no_se_guarda() {
+    // La campana suena con la pestaña enfocada por una ventana: ya la vio quien
+    // la mira, así que el servidor no guarda el aviso (otra ventana, que no la
+    // mira, enseñaría un `!` de algo ya atendido).
+    let mut escenario = escenario(OpcionesEscenario {
+        hosts: 1,
+        programa_shell: programa("sleep 1; printf '\\007'; exec sleep 30"),
+        ..Default::default()
+    })
+    .await;
+    let sesion = escenario.abrir_sesion(escenario.hosts[0]).await;
+    adjuntar(&mut escenario, sesion).await;
+    escenario
+        .enviar(&MensajeCliente::Foco {
+            sesion_id: sesion,
+            enfocada: true,
+        })
+        .await;
+    assert!(
+        escenario.hasta(PLAZO, llego_la_campana).await,
+        "la campana no llegó a la ventana adjunta"
+    );
+    // Se deja pasar el tiempo de una difusión coalescida (1 s).
+    escenario.escuchar(Duration::from_millis(1500)).await;
+    assert!(
+        !algun_aviso_visto(&escenario),
+        "una pestaña que se mira no guarda el aviso: {:?}",
+        escenario.sesiones
+    );
+}
+
+#[tokio::test]
+async fn una_ventana_adjunta_sin_el_foco_no_la_mira_y_el_aviso_se_guarda() {
+    // El terminal exterior sin foco (o la pestaña en un panel sin foco): la
+    // ventana la enseña pero no la está mirando, así que el aviso queda para
+    // quien sí la mire.
+    let mut escenario = escenario(OpcionesEscenario {
+        hosts: 1,
+        programa_shell: programa("sleep 1; printf '\\007'; exec sleep 30"),
+        ..Default::default()
+    })
+    .await;
+    let sesion = escenario.abrir_sesion(escenario.hosts[0]).await;
+    adjuntar(&mut escenario, sesion).await;
+    assert!(
+        escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .any(|pestana| pestana.aviso.is_some()))
+            .await,
+        "adjunta sin el foco no la mira: el aviso debía guardarse"
+    );
+}
+
+#[tokio::test]
+async fn el_aviso_guardado_se_limpia_cuando_una_ventana_adjunta_la_pestana() {
+    // Nadie la mira: el aviso se guarda y todas las ventanas lo ven. Cuando una
+    // ventana adjunta la pestaña, queda atendido y se quita para todas.
+    let mut escenario = escenario(OpcionesEscenario {
+        hosts: 1,
+        programa_shell: programa("printf '\\007'; exec sleep 30"),
+        ..Default::default()
+    })
+    .await;
+    let sesion = escenario.abrir_sesion(escenario.hosts[0]).await;
+    assert!(
+        escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .any(|pestana| pestana.aviso.is_some()))
+            .await,
+        "nadie la miraba: el aviso debía guardarse"
+    );
+    let mut otra = escenario.otra_ventana().await;
+    adjuntar_ventana(&mut otra, sesion).await;
+    assert!(
+        escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .all(|pestana| pestana.aviso.is_none()))
+            .await,
+        "al adjuntarla otra ventana, el aviso debía quitarse: {:?}",
+        escenario.sesiones
+    );
+}
+
+#[tokio::test]
+async fn el_aviso_se_limpia_al_enfocarla_una_ventana_aunque_otra_deje_de_hacerlo() {
+    // El foco se agrega: con una ventana que sigue mirando la pestaña, el
+    // cambio de foco de otra ventana tampoco deja un aviso atrás.
+    let mut escenario = escenario(OpcionesEscenario {
+        hosts: 1,
+        programa_shell: programa("printf '\\007'; exec sleep 30"),
+        ..Default::default()
+    })
+    .await;
+    let sesion = escenario.abrir_sesion(escenario.hosts[0]).await;
+    assert!(
+        escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .any(|pestana| pestana.aviso.is_some()))
+            .await
+    );
+    // Una ventana enfoca la pestaña (sin adjuntarla): el aviso se quita.
+    escenario
+        .enviar(&MensajeCliente::Foco {
+            sesion_id: sesion,
+            enfocada: true,
+        })
+        .await;
+    assert!(
+        escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .all(|pestana| pestana.aviso.is_none()))
+            .await,
+        "enfocarla debía quitar el aviso: {:?}",
+        escenario.sesiones
+    );
+    // Dejar de enfocarla sin que nadie más la mire no lo vuelve a poner.
+    escenario
+        .enviar(&MensajeCliente::Foco {
+            sesion_id: sesion,
+            enfocada: false,
+        })
+        .await;
+    escenario.escuchar(Duration::from_millis(600)).await;
+    assert!(escenario
+        .sesiones
+        .iter()
+        .all(|pestana| pestana.aviso.is_none()));
+}
+
 #[tokio::test]
 async fn el_foco_agregado_avisa_al_remoto_con_csi_i_y_csi_o() {
     let mut escenario = escenario(OpcionesEscenario {

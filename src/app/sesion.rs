@@ -58,6 +58,16 @@ impl crate::app::PestanaUI {
         self.sesion_persistente()
             .and_then(|tmux| tmux.soltada.as_ref())
     }
+
+    /// El título que enseña la pestaña: el del programa de dentro, salvo que
+    /// sea el propio nombre del host (el que tmux pone por defecto, sin nada
+    /// que contar: D370) o esté vacío.
+    #[must_use]
+    pub fn titulo_visible(&self) -> Option<&str> {
+        let titulo = self.titulo.as_deref()?.trim();
+        (!titulo.is_empty() && !titulo.eq_ignore_ascii_case(self.host_nombre.trim()))
+            .then_some(titulo)
+    }
 }
 
 /// Texto de un pegado para un campo de una línea: sin controles (los saltos
@@ -877,6 +887,9 @@ impl App {
                 self.mensaje(format!("la sesión «{nombre}» ya no existía"), true);
             }
         }
+        // La lista de Persistentes la enseñaba viva (o con su ficha): que el
+        // servidor vuelva a mirar el host sin esperar al vigilante (D370).
+        self.consultar_persistentes_tras_crear();
         self.sucio = true;
     }
 
@@ -1030,12 +1043,13 @@ impl App {
         motivo: &str,
     ) {
         self.aperturas_pendientes.remove(&host_id);
-        if self.persistentes_apertura_fallida(host_id, nombre, causa) {
+        let host = self.nombre_de_host(host_id);
+        let texto = texto_apertura_fallida(causa, nombre, &host, motivo);
+        if self.persistentes_apertura_fallida(host_id, nombre, causa, &texto) {
             self.sucio = true;
             return;
         }
-        let host = self.nombre_de_host(host_id);
-        self.mensaje(texto_apertura_fallida(causa, nombre, &host, motivo), true);
+        self.mensaje(texto, true);
         self.sucio = true;
     }
 
@@ -2210,9 +2224,11 @@ fn texto_apertura_fallida(
             "{} · engánchate a la existente o cambia el nombre",
             base(format!("ya hay una sesión «{nombre}» en «{host}»"))
         ),
-        // CONTRATO-S1-B2: texto provisional de D349.
+        // La sesión que se quería engancharse o reabrir ya no está en el host
+        // (D349): la ficha, si la hay, sigue en Sesiones y se vuelve a crear
+        // desde ahí.
         Causa::NoExiste => format!(
-            "{} · ya no está en el host",
+            "{} · si tiene ficha, reábrela desde Sesiones",
             base(format!("la sesión «{nombre}» ya no existe en «{host}»"))
         ),
         Causa::Otra => base(format!("no se pudo abrir la sesión de tmux «{nombre}»")),

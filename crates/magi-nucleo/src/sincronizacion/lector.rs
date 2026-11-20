@@ -39,8 +39,8 @@ use super::formato::Documento;
 use super::fusion::{self, ConflictoFusion, PlanFusion};
 use super::huellas;
 use super::{
-    aplicar_equipos_quitados, interpretar_fichero, plan_cambia, FalloLectura, FicheroLeido,
-    ResumenImportacion,
+    anterior_permitida, aplicar_equipos_quitados, aviso_danado, aviso_rechazado,
+    interpretar_fichero, plan_cambia, FalloLectura, FicheroLeido, ResumenImportacion,
 };
 
 /// Estado final de una pasada en modo lector, en los términos de la pantalla
@@ -188,11 +188,19 @@ pub fn pasada_lector(
         if !releer_todo {
             if let Some(equipo) = &equipo {
                 if equipo.hash_ultimo_fichero.as_deref() == Some(hash.as_str()) {
+                    // El fichero es el que ya se importó: si estaba a medio
+                    // copiar y ha vuelto a ser el mismo, el equipo vuelve a
+                    // estar al día.
+                    if equipo.estado == equipos_bd::ESTADO_DANADO {
+                        equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_AL_DIA)?;
+                    }
                     continue;
                 }
             }
         }
-        match interpretar_fichero(&bytes, claves, uuid) {
+        // La clave anterior solo abre ficheros de equipos conocidos y no
+        // quitados (R97).
+        match interpretar_fichero(&bytes, claves, uuid, anterior_permitida(equipo.as_ref())) {
             Ok(leido) => {
                 if equipo.is_none() {
                     equipos_bd::crear(
@@ -224,17 +232,18 @@ pub fn pasada_lector(
                     ));
                 }
             }
+            Err(FalloLectura::Rechazado) => {
+                // Sin fila en EQUIPOS, sin importar nada y sin parar la pasada.
+                resultado.avisos.push(aviso_rechazado(uuid));
+            }
             Err(FalloLectura::Danado(motivo)) => {
+                // Truncado, a medio copiar o dañado: no pide ninguna clave, no
+                // guarda el hash del fichero (se relee en la siguiente pasada)
+                // y no para la pasada (R85).
                 if let Some(equipo) = &equipo {
                     equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_DANADO)?;
                 }
-                let nombre = equipo
-                    .as_ref()
-                    .map(|equipo| equipo.nombre.clone())
-                    .unwrap_or_else(|| uuid.clone());
-                resultado.avisos.push(format!(
-                    "el fichero de {nombre} está dañado ({motivo}); se reintentará"
-                ));
+                resultado.avisos.push(aviso_danado(uuid, &motivo));
             }
             Err(FalloLectura::FormatoNuevo(_)) => {
                 if let Some(equipo) = &equipo {

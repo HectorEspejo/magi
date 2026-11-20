@@ -13,15 +13,15 @@ source: tests/sesiones_persistentes_ui/nueva.rs
 │       │  Reanudar  [ (el mismo comando) ]                            │       │
 │       │  Nota      [ (opcional) ]                                    │       │
 │       │                                                              │       │
-│       │  Vive en dev-01 aunque cierres MAGI o apagues el equipo, y   │       │
-│       │  la ves en todos tus equipos.                                │       │
-│       │  La ficha viaja cifrada a tus otros equipos: no pongas       │       │
-│       │  secretos en el comando.                                     │       │
+│       │  Vive en dev-01 aunque cierres MAGI o apagues el equipo.     │       │
+│       │  No pongas secretos en el comando: queda guardado en la      │       │
+│       │  ficha.                                                      │       │
 │       │                                                              │       │
 │       │  ✕ el nombre no puede llevar espacios                        │       │
 │       │  ↵ crear y engancharse   ⇥ siguiente   esc cancelar          │       │
 │       │                                                              │       │
 │       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
  ↵ ssh  r sondear  ⇥ detalle  R todos  a auto  e editar  / filtrar  ? más

@@ -943,7 +943,7 @@ async fn tarea_conexion(stream: UnixStream, estado: Arc<tokio::sync::Mutex<Estad
                 pendientes,
             ),
         );
-        enviar_bienvenida(&estado_bloqueado, cliente_id);
+        enviar_bienvenida(&mut estado_bloqueado, cliente_id);
         cliente_id
     };
     info!(cliente = cliente_id, pid = pid_cliente, "cliente conectado");
@@ -1023,7 +1023,7 @@ async fn encolar_servicios(
 /// con el mismo bloqueo del estado que registra al cliente: ninguna difusión
 /// puede adelantarla, y es síncrona a propósito para que no pueda volver a
 /// separarse del registro con un `await`.
-fn enviar_bienvenida(estado_bloqueado: &EstadoServidor, cliente_id: u32) {
+fn enviar_bienvenida(estado_bloqueado: &mut EstadoServidor, cliente_id: u32) {
     let Some(cliente) = estado_bloqueado.clientes.get(&cliente_id) else {
         return;
     };
@@ -1053,6 +1053,10 @@ fn enviar_bienvenida(estado_bloqueado: &EstadoServidor, cliente_id: u32) {
     if let Some(lista) = sesiones_persistentes::lista_para_ventana_nueva(estado_bloqueado) {
         difusion::enviar(cliente, MensajeServidor::SesionesPersistentes { lista });
     }
+    // La lista guardada puede ser de hace horas (la de cuando se fue la última
+    // ventana): el vigilante la renueva enseguida y la difunde aunque no cambie
+    // nada, y el cliente no avisa con lo anterior a su conexión (D368).
+    sesiones_persistentes::ventana_conectada(estado_bloqueado);
 }
 
 /// Despacha un mensaje de un cliente; devuelve si la conexión continúa.
@@ -1968,6 +1972,8 @@ async fn abrir_sesion(
             tmux: None,
             tmux_servidor: crate::protocolo::ServidorTmux::Habitual,
             tmux_version: None,
+            tmux_identidad: None,
+            tmux_creada: false,
             tmux_compartir: false,
             soltada: None,
             reconexion: None,
@@ -2077,6 +2083,10 @@ async fn adjuntar(
         };
         sesion.adjuntos.insert(cliente_id, tamano);
         sesion.actividad_no_vista = false;
+        // Una ventana que se adjunta la va a enseñar: el aviso (campana, OSC 9…)
+        // que hubiera ya está atendido. Los que lleguen después, con la ventana
+        // sin el foco, se guardan. La lista se difunde al final.
+        sesion.aviso = None;
         // El primer adjunto que manda los colores del tema los fija: el
         // emulador los usa para responder a OSC 10, 11 y 12.
         if sesion.colores.is_none() {
@@ -3453,6 +3463,299 @@ pub async fn estado_cli(rutas: &Rutas) -> Result<i32> {
             println!("Respuesta inesperada del servidor.");
             Ok(1)
         }
+    }
+}
+
+// --------------------------------------------- consulta de `magi sincronizar`
+
+/// Plazo con el que `magi sincronizar` pregunta al servidor de sesiones antes de
+/// aplicar borrados de hosts y túneles (R83): cubre conectar, saludar y leer la
+/// respuesta.
+pub const PLAZO_CONSULTA_SERVIDOR: Duration = Duration::from_secs(5);
+
+/// Lo que el servidor de sesiones tiene en marcha en un host: lo que impide
+/// borrarlo desde la sincronización.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrabajoDeHost {
+    /// Pestañas abiertas o abriéndose.
+    pub sesiones: u32,
+    /// Transferencias en cola o en curso.
+    pub transferencias: u32,
+    /// Túneles levantados (o a punto) y túneles temporales.
+    pub tuneles: u32,
+    pub ejecuciones: u32,
+    pub acciones_servicio: u32,
+    pub escritorios: u32,
+}
+
+impl TrabajoDeHost {
+    /// ¿Hay algo en marcha?
+    pub fn hay(&self) -> bool {
+        *self != TrabajoDeHost::default()
+    }
+
+    /// Lo que hay, en una línea («1 sesión(es), 2 transferencia(s)»).
+    pub fn describir(&self) -> String {
+        let partes: Vec<String> = [
+            (self.sesiones, "sesión(es)"),
+            (self.escritorios, "escritorio(s)"),
+            (self.transferencias, "transferencia(s)"),
+            (self.tuneles, "túnel(es)"),
+            (self.ejecuciones, "ejecución(es)"),
+            (self.acciones_servicio, "acción(es) de servicio"),
+        ]
+        .into_iter()
+        .filter(|(cuantas, _)| *cuantas > 0)
+        .map(|(cuantas, nombre)| format!("{cuantas} {nombre}"))
+        .collect();
+        partes.join(", ")
+    }
+}
+
+/// Respuesta de `consultar_trabajo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsultaServidor {
+    /// No hay servidor de sesiones (el socket no existe o nadie lo atiende):
+    /// sin servidor no hay trabajo vivo.
+    Sin,
+    /// Hay algo al otro lado, pero no se sabe qué custodia: es de otra
+    /// versión, no respondió en el plazo o habló mal. Con esto, la
+    /// sincronización aplaza todos los borrados de hosts y túneles: «sin
+    /// respuesta» no es «sin trabajo».
+    Fallo(String),
+    /// El servidor de esta versión respondió: el trabajo vivo de cada host
+    /// (los hosts sin trabajo no aparecen).
+    Trabajo(std::collections::BTreeMap<i64, TrabajoDeHost>),
+}
+
+/// Agrupa por host lo que el servidor custodia, con el mismo criterio que la
+/// TUI para decidir si un host tiene trabajo vivo: sesiones abiertas o
+/// abriéndose, transferencias sin terminar, túneles en marcha (también
+/// parándose: siguen escuchando), ejecuciones en curso, acciones de servicio,
+/// túneles temporales y escritorios.
+#[allow(clippy::too_many_arguments)] // una lista por cada tipo de trabajo que custodia el servidor
+pub fn trabajo_por_host(
+    sesiones: &[crate::protocolo::InfoSesion],
+    transferencias: &[crate::protocolo::InfoTransferencia],
+    tuneles: &[crate::protocolo::InfoTunel],
+    ejecuciones: &[crate::protocolo::InfoEjecucion],
+    acciones_servicio: &[magi_nucleo::servicios::InfoAccion],
+    tuneles_temporales: &[crate::protocolo::InfoTunelTemporal],
+    escritorios: &[crate::protocolo::InfoEscritorio],
+) -> std::collections::BTreeMap<i64, TrabajoDeHost> {
+    use crate::protocolo::{EstadoEjecucion, EstadoSesionRemota, EstadoTunelRemoto};
+    let mut hosts: std::collections::BTreeMap<i64, TrabajoDeHost> =
+        std::collections::BTreeMap::new();
+    for sesion in sesiones {
+        if matches!(
+            sesion.estado,
+            EstadoSesionRemota::Abierta | EstadoSesionRemota::Abriendo
+        ) {
+            hosts.entry(sesion.host_id).or_default().sesiones += 1;
+        }
+    }
+    for transferencia in transferencias {
+        if !transferencia.estado.terminada() {
+            hosts
+                .entry(transferencia.host_id)
+                .or_default()
+                .transferencias += 1;
+        }
+    }
+    for tunel in tuneles {
+        if tunel.estado.en_marcha() || tunel.estado == EstadoTunelRemoto::Parando {
+            hosts.entry(tunel.host_id).or_default().tuneles += 1;
+        }
+    }
+    for ejecucion in ejecuciones {
+        if ejecucion.estado != EstadoEjecucion::EnCurso {
+            continue;
+        }
+        let mut vistos: Vec<i64> = Vec::new();
+        for host in &ejecucion.hosts {
+            if !vistos.contains(&host.host_id) {
+                vistos.push(host.host_id);
+                hosts.entry(host.host_id).or_default().ejecuciones += 1;
+            }
+        }
+    }
+    for accion in acciones_servicio {
+        hosts.entry(accion.host_id).or_default().acciones_servicio += 1;
+    }
+    for temporal in tuneles_temporales {
+        hosts.entry(temporal.host_id).or_default().tuneles += 1;
+    }
+    for escritorio in escritorios {
+        hosts.entry(escritorio.host_id).or_default().escritorios += 1;
+    }
+    hosts
+}
+
+/// Texto de un plazo para los mensajes («5 s», «300 ms»).
+fn texto_plazo(plazo: Duration) -> String {
+    if plazo.as_millis() >= 1000 && plazo.subsec_millis() == 0 {
+        format!("{} s", plazo.as_secs())
+    } else {
+        format!("{} ms", plazo.as_millis())
+    }
+}
+
+/// Pregunta al servidor de sesiones qué tiene en marcha, para decidir si un
+/// borrado de host o de túnel que llega por la sincronización puede aplicarse
+/// (R83). Usa el mismo saludo que `magi servidor estado`, con un plazo para todo
+/// (conectar, saludar y leer) y **nunca arranca el servidor**.
+///
+/// - Socket ausente o conexión rechazada: `Sin` (no hay quien tenga trabajo).
+/// - Servidor de otra versión, error, respuesta que no se entiende o plazo
+///   agotado: `Fallo` (no se sabe, y no se confunde con «sin trabajo»).
+/// - Servidor de esta versión: `Trabajo`, por host.
+///
+/// Tras la `Bienvenida` pide `Listar` y lee hasta su respuesta: la lista de
+/// escritorios, que el servidor solo manda si hay alguno, llega siempre antes,
+/// así que se sabe cuándo ya no puede llegar sin esperar un tiempo fijo.
+pub async fn consultar_trabajo(rutas: &Rutas, plazo: Duration) -> ConsultaServidor {
+    match tokio::time::timeout(plazo, consultar_trabajo_sin_plazo(rutas)).await {
+        Ok(consulta) => consulta,
+        Err(_) => ConsultaServidor::Fallo(format!(
+            "el servidor no respondió en {}",
+            texto_plazo(plazo)
+        )),
+    }
+}
+
+async fn consultar_trabajo_sin_plazo(rutas: &Rutas) -> ConsultaServidor {
+    use std::io::ErrorKind;
+    let mut stream = match UnixStream::connect(ruta_socket(rutas)).await {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return ConsultaServidor::Sin;
+        }
+        Err(error) => {
+            return ConsultaServidor::Fallo(format!(
+                "no se pudo conectar con el servidor de sesiones: {error}"
+            ));
+        }
+    };
+    if let Err(error) = saludo_y_envio(&mut stream).await {
+        return ConsultaServidor::Fallo(format!("no se pudo saludar al servidor: {error:#}"));
+    }
+    let (lectura, mut escritura) = stream.into_split();
+    let mut lector = FramedRead::new(
+        lectura,
+        LinesCodec::new_with_max_length(crate::protocolo::LINEA_MAXIMA),
+    );
+    let Some(primera) = siguiente_mensaje(&mut lector).await else {
+        return ConsultaServidor::Fallo("el servidor cerró la conexión sin responder".to_string());
+    };
+    let (transferencias, tuneles, ejecuciones, acciones, temporales) = match primera {
+        Ok(MensajeServidor::Bienvenida {
+            version,
+            version_app,
+            transferencias,
+            tuneles,
+            ejecuciones,
+            acciones_servicio,
+            tuneles_temporales,
+            ..
+        }) => {
+            let propia = env!("CARGO_PKG_VERSION");
+            if version != VERSION_PROTOCOLO || version_app != propia {
+                return ConsultaServidor::Fallo(format!(
+                    "el servidor es de otra versión ({}) que este magi ({propia})",
+                    if version_app.is_empty() {
+                        "desconocida"
+                    } else {
+                        &version_app
+                    }
+                ));
+            }
+            (
+                transferencias,
+                tuneles,
+                ejecuciones,
+                acciones_servicio,
+                tuneles_temporales,
+            )
+        }
+        Ok(MensajeServidor::VersionIncompatible {
+            version,
+            version_app,
+            ..
+        }) => {
+            return ConsultaServidor::Fallo(format!(
+                "el servidor es de otra versión ({}, protocolo {version}) que este magi ({}, protocolo {VERSION_PROTOCOLO})",
+                version_app.as_deref().unwrap_or("desconocida"),
+                env!("CARGO_PKG_VERSION"),
+            ));
+        }
+        Ok(MensajeServidor::Error { mensaje, .. }) => {
+            return ConsultaServidor::Fallo(format!("error del servidor: {mensaje}"));
+        }
+        Ok(_) => {
+            return ConsultaServidor::Fallo("respuesta inesperada del servidor".to_string());
+        }
+        Err(motivo) => return ConsultaServidor::Fallo(motivo),
+    };
+    // La lista de escritorios solo se manda si hay alguno y va justo detrás de
+    // la Bienvenida: se pide la lista de sesiones y se lee hasta su respuesta,
+    // que llega después de todo lo que ya estaba en cola.
+    let listar = match codificar(&MensajeCliente::Listar) {
+        Ok(linea) => linea,
+        Err(error) => {
+            return ConsultaServidor::Fallo(format!("no se pudo preguntar al servidor: {error}"))
+        }
+    };
+    if let Err(error) = escritura.write_all(format!("{listar}\n").as_bytes()).await {
+        return ConsultaServidor::Fallo(format!("no se pudo preguntar al servidor: {error}"));
+    }
+    let mut escritorios = Vec::new();
+    // Las sesiones de la respuesta a `Listar` son las más recientes: sustituyen
+    // a las de la Bienvenida.
+    let sesiones = loop {
+        let Some(mensaje) = siguiente_mensaje(&mut lector).await else {
+            return ConsultaServidor::Fallo(
+                "el servidor cerró la conexión sin responder".to_string(),
+            );
+        };
+        match mensaje {
+            Ok(MensajeServidor::Escritorios { lista }) => escritorios = lista,
+            Ok(MensajeServidor::Sesiones { lista }) => break lista,
+            Ok(MensajeServidor::Error { mensaje, .. }) => {
+                return ConsultaServidor::Fallo(format!("error del servidor: {mensaje}"));
+            }
+            // El resto de difusiones (túneles, transferencias, avisos...) no
+            // cambian lo que ya se sabe: la Bienvenida lo traía todo.
+            Ok(_) => {}
+            Err(motivo) => return ConsultaServidor::Fallo(motivo),
+        }
+    };
+    ConsultaServidor::Trabajo(trabajo_por_host(
+        &sesiones,
+        &transferencias,
+        &tuneles,
+        &ejecuciones,
+        &acciones,
+        &temporales,
+        &escritorios,
+    ))
+}
+
+/// Siguiente mensaje del servidor: `None` si cerró la conexión; `Err` con el
+/// motivo si habló mal (línea demasiado larga, JSON que no se entiende).
+async fn siguiente_mensaje(
+    lector: &mut FramedRead<tokio::net::unix::OwnedReadHalf, LinesCodec>,
+) -> Option<std::result::Result<MensajeServidor, String>> {
+    match lector.next().await? {
+        Ok(linea) => Some(
+            decodificar::<MensajeServidor>(&linea)
+                .map_err(|error| format!("respuesta del servidor no válida: {error}")),
+        ),
+        Err(error) => Some(Err(format!("respuesta del servidor no válida: {error}"))),
     }
 }
 

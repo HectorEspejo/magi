@@ -3,10 +3,12 @@
 //! estado, historial, terminar…), la lista de sesiones del host y terminar una.
 //! La pestaña se engancha en `sesiones.rs`, con el canal con PTY.
 //!
-//! Todo pasa por el script embebido del núcleo: el nombre, la carpeta y el
+//! Todo pasa por los scripts embebidos del núcleo: el nombre, la carpeta y el
 //! comando se validan en Rust y en el script y van siempre como argumentos,
-//! nunca interpolados en una orden de tmux. Lo que devuelve el script es
-//! entrada no fiable y lo lee `magi_nucleo::sesiones_persistentes::lectura`.
+//! nunca interpolados en una orden de tmux. El script grande viaja por la
+//! entrada estándar del `exec` (D357): en la línea de órdenes solo van el
+//! arranque mínimo y los argumentos. Lo que devuelve el script es entrada no
+//! fiable y lo lee `magi_nucleo::sesiones_persistentes::lectura`.
 //!
 //! Ni la salida del script, ni los títulos, ni los comandos van al log o a
 //! REGISTRO: solo los nombres de las sesiones y los códigos de salida.
@@ -19,7 +21,7 @@ use russh::client::Handle;
 use tracing::warn;
 
 use magi_nucleo::sesiones_persistentes::lectura::{
-    self, LecturaComprobar, LecturaCrear, LecturaEstado, ResultadoCrear,
+    self, LecturaComprobar, LecturaCrear, LecturaEstado, LecturaPreparar, ResultadoCrear,
 };
 use magi_nucleo::terminal::tmux::{self, OrdenTmux, ResultadoTerminar};
 
@@ -54,6 +56,34 @@ enum Recorte {
     Cola(usize),
 }
 
+/// Lanza el `exec` de un canal con la orden ya armada (`OrdenTmux::argumentos`):
+/// la línea de órdenes y, si la orden lleva script, el script ENTERO por la
+/// entrada estándar, cerrándola después. El arranque lee hasta el fin de la
+/// entrada antes de ejecutar nada, así que el `eof` va siempre tras el último
+/// byte. Sin plazo propio: lo pone quien llama alrededor (la apertura del canal
+/// y el envío cuentan para el de la orden). Lo comparten el vigilante y las
+/// órdenes de este módulo.
+pub(super) async fn lanzar_exec(
+    canal: &mut russh::Channel<russh::client::Msg>,
+    argumentos: &[String],
+) -> Result<(), String> {
+    canal
+        .exec(true, tmux::linea_de_exec(argumentos).into_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(entrada) = tmux::entrada_del_exec(argumentos) {
+        // Un host que rechaza el `exec` (una shell restringida…) cierra el canal
+        // y el envío falla antes de que llegue su `Failure`: el motivo que ve el
+        // usuario es el mismo que con un `exec` rechazado.
+        canal
+            .data_bytes(entrada.as_bytes().to_vec())
+            .await
+            .map_err(|error| format!("el host no admitió ejecutar el comando de tmux ({error})"))?;
+    }
+    let _ = canal.eof().await;
+    Ok(())
+}
+
 /// Ejecuta el script por un canal `exec` de la conexión y devuelve su salida
 /// (stdout y stderr juntos) y el código. El canal se cierra siempre.
 async fn ejecutar_en_handle(
@@ -63,11 +93,6 @@ async fn ejecutar_en_handle(
     recorte: Recorte,
 ) -> Result<(Vec<u8>, i32), String> {
     let limite = tokio::time::Instant::now() + plazo;
-    let comando = argumentos
-        .iter()
-        .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
     let apertura = handle.clone();
     let mut canal =
         conexiones::abrir_con_plazo(
@@ -78,11 +103,7 @@ async fn ejecutar_en_handle(
     let mut salida = Vec::new();
     let mut codigo = None;
     let trabajo = async {
-        canal
-            .exec(true, comando.into_bytes())
-            .await
-            .map_err(|error| error.to_string())?;
-        let _ = canal.eof().await;
+        lanzar_exec(&mut canal, argumentos).await?;
         loop {
             match canal.wait().await {
                 Some(russh::ChannelMsg::Data { data })
@@ -174,6 +195,25 @@ pub async fn comprobar(
         ));
     }
     Ok(lectura::leer_comprobar(&String::from_utf8_lossy(&salida)))
+}
+
+/// `preparar <servidor> <nombre>`: la primera mitad de engancharse. `Err` solo
+/// si no se pudo hablar con el host; lo que el script dice (la sesión ya no
+/// existe, sin tmux, tmux antiguo) va en el resultado, con el código de salida,
+/// y una salida sin código de salida (un canal cortado) es `Error`, nunca «no
+/// existe».
+pub async fn preparar(
+    handle: &Arc<Handle<Cliente>>,
+    servidor: ServidorTmux,
+    nombre: &str,
+) -> Result<LecturaPreparar, String> {
+    let (salida, codigo) =
+        ejecutar_orden(handle, &OrdenTmux::Preparar { servidor, nombre }).await?;
+    let codigo = (codigo >= 0).then_some(codigo);
+    Ok(lectura::leer_preparar(
+        &String::from_utf8_lossy(&salida),
+        codigo,
+    ))
 }
 
 /// `estado`: las sesiones de los dos servidores. `Err` si el host no contesta,

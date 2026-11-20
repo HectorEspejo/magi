@@ -16,7 +16,12 @@
 //! La lectura valida cada fila (la pudo escribir otro proceso o llegar por la
 //! sincronización) y salta, con un aviso en el log, las que no se pueden
 //! interpretar: una fila corrupta no puede dejar sin listar las demás. El
-//! aviso nunca lleva el comando ni la nota.
+//! aviso nunca lleva el comando ni la nota, y sale una sola vez por fila
+//! mientras siga ilegible (Fase 9b: la lista se lee a menudo y una fila
+//! corrupta llenaría el log).
+
+use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
 
 use anyhow::{anyhow, Error, Result};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -35,14 +40,34 @@ const SELECCION: &str = "SELECT s.id, s.uuid, s.host_id, s.nombre, s.carpeta, s.
                            FROM SESIONES_PERSISTENTES s \
                            JOIN HOSTS h ON h.id = s.host_id";
 
+/// Una fila que no se puede interpretar: su id y por qué.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ilegible {
+    id: i64,
+    motivo: String,
+}
+
 /// Una fila de la consulta: la ficha, o por qué no se puede interpretar.
-type FilaLeida = std::result::Result<Ficha, String>;
+type FilaLeida = std::result::Result<Ficha, Ilegible>;
 
 /// Columnas de una fila, en el orden de SELECCION. Una fila que no pasa la
-/// validación no es un error de la consulta: se devuelve el motivo para
-/// saltarla.
+/// validación (o cuyas columnas no tienen el tipo esperado) no es un error de
+/// la consulta: se devuelve el motivo para saltarla.
 fn mapear(fila: &Row<'_>) -> rusqlite::Result<FilaLeida> {
     let id: i64 = fila.get(0)?;
+    match leer_columnas(fila, id) {
+        Err(
+            error @ (rusqlite::Error::FromSqlConversionFailure(..)
+            | rusqlite::Error::InvalidColumnType(..)),
+        ) => Ok(Err(Ilegible {
+            id,
+            motivo: format!("la ficha {id} no se puede leer: {error}"),
+        })),
+        otro => otro,
+    }
+}
+
+fn leer_columnas(fila: &Row<'_>, id: i64) -> rusqlite::Result<FilaLeida> {
     let uuid: Option<String> = fila.get(1)?;
     let host_id: i64 = fila.get(2)?;
     let origen: String = fila.get(8)?;
@@ -59,23 +84,22 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<FilaLeida> {
     let creada_en: String = fila.get(10)?;
     let actualizado_en: String = fila.get(11)?;
 
+    let ilegible = |motivo: String| Ok(Err(Ilegible { id, motivo }));
     let Some(uuid) = uuid.filter(|uuid| !uuid.trim().is_empty()) else {
-        return Ok(Err(format!("la ficha {id} no tiene uuid")));
+        return ilegible(format!("la ficha {id} no tiene uuid"));
     };
     if TipoHost::desde_texto(&tipo_host) != Some(TipoHost::Ssh) {
-        return Ok(Err(format!(
-            "la ficha {id} cuelga de un host que no es ssh"
-        )));
+        return ilegible(format!("la ficha {id} cuelga de un host que no es ssh"));
     }
     if OrigenFicha::desde_texto(&origen).is_none() {
-        return Ok(Err(format!("la ficha {id} tiene un origen desconocido")));
+        return ilegible(format!("la ficha {id} tiene un origen desconocido"));
     }
     // La misma validación que al escribir, con los campos recortados: una
     // ficha que llegó de otro equipo con una carpeta, un comando o una nota
     // fuera de los límites no se usa.
     let datos = match validar_datos(&datos) {
         Ok(datos) => datos,
-        Err(error) => return Ok(Err(format!("la ficha {id} no es válida: {error}"))),
+        Err(error) => return ilegible(format!("la ficha {id} no es válida: {error}")),
     };
     Ok(Ok(Ficha {
         id,
@@ -93,8 +117,102 @@ fn mapear(fila: &Row<'_>) -> rusqlite::Result<FilaLeida> {
     }))
 }
 
-/// Lee las fichas de una consulta, saltando (con un aviso) las ilegibles. Un
-/// error real de SQLite sí se propaga.
+/// Un aviso ya dado de una fila ilegible.
+struct Avisada {
+    /// Ruta de la base de datos, para no mezclar las de dos `magi.db`.
+    base: String,
+    id: i64,
+    motivo: String,
+}
+
+/// El recuerdo de los avisos dados, con un tope de filas.
+struct Avisadas {
+    filas: Vec<Avisada>,
+    maximo: usize,
+}
+
+impl Avisadas {
+    const fn nuevo(maximo: usize) -> Self {
+        Self {
+            filas: Vec::new(),
+            maximo,
+        }
+    }
+
+    /// Anota las filas ilegibles de una lectura y devuelve las que todavía no
+    /// se habían avisado (o cuyo motivo ha cambiado). Una fila que se vuelve a
+    /// leer bien sale del recuerdo: si se rompe otra vez, se avisa otra vez.
+    ///
+    /// Pasado el tope no se recuerda nada más: las filas de sobra avisan en
+    /// cada lectura (son pocas, y un recuerdo que expulsara a las más viejas
+    /// haría avisar a todas en cada lectura), pero la memoria no crece sin
+    /// límite.
+    fn nuevas(
+        &mut self,
+        base: &str,
+        legibles: impl Iterator<Item = i64>,
+        ilegibles: Vec<Ilegible>,
+    ) -> Vec<Ilegible> {
+        if self.filas.iter().any(|avisada| avisada.base == base) {
+            let ids: HashSet<i64> = legibles.collect();
+            self.filas
+                .retain(|avisada| avisada.base != base || !ids.contains(&avisada.id));
+        }
+        let mut nuevas = Vec::new();
+        for ilegible in ilegibles {
+            let ya = self
+                .filas
+                .iter_mut()
+                .find(|avisada| avisada.base == base && avisada.id == ilegible.id);
+            match ya {
+                Some(avisada) if avisada.motivo == ilegible.motivo => {}
+                Some(avisada) => {
+                    avisada.motivo.clone_from(&ilegible.motivo);
+                    nuevas.push(ilegible);
+                }
+                None => {
+                    if self.filas.len() < self.maximo {
+                        self.filas.push(Avisada {
+                            base: base.to_string(),
+                            id: ilegible.id,
+                            motivo: ilegible.motivo.clone(),
+                        });
+                    }
+                    nuevas.push(ilegible);
+                }
+            }
+        }
+        nuevas
+    }
+}
+
+/// Tope de filas avisadas que se recuerdan en este proceso.
+const MAXIMO_AVISADAS: usize = 256;
+
+/// Las filas ilegibles de las que ya se avisó en este proceso. La lectura vive
+/// en el núcleo y la usan procesos distintos (el cliente, la CLI), así que el
+/// recuerdo es del propio módulo.
+static AVISADAS: Mutex<Avisadas> = Mutex::new(Avisadas::nuevo(MAXIMO_AVISADAS));
+
+/// Las filas ilegibles de una lectura de las que todavía no se ha avisado. Una
+/// base en memoria no tiene ruta con la que distinguirla de otra, y no se
+/// recuerda nada de ella: avisa siempre.
+fn nuevas_ilegibles(
+    conexion: &Connection,
+    legibles: &[Ficha],
+    ilegibles: Vec<Ilegible>,
+) -> Vec<Ilegible> {
+    let Some(base) = conexion.path().filter(|ruta| !ruta.is_empty()) else {
+        return ilegibles;
+    };
+    AVISADAS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .nuevas(base, legibles.iter().map(|ficha| ficha.id), ilegibles)
+}
+
+/// Lee las fichas de una consulta, saltando (con un aviso, una sola vez por
+/// fila) las ilegibles. Un error real de SQLite sí se propaga.
 fn consultar(
     conexion: &Connection,
     resto: &str,
@@ -103,18 +221,18 @@ fn consultar(
     let mut sentencia = conexion.prepare(&format!("{SELECCION} {resto}"))?;
     let filas = sentencia.query_map(parametros, mapear)?;
     let mut fichas = Vec::new();
+    let mut ilegibles = Vec::new();
     for fila in filas {
-        match fila {
-            Ok(Ok(ficha)) => fichas.push(ficha),
-            Ok(Err(motivo)) => {
-                tracing::warn!("ficha de sesión persistente ilegible, se salta: {motivo}")
-            }
-            Err(
-                error @ (rusqlite::Error::FromSqlConversionFailure(..)
-                | rusqlite::Error::InvalidColumnType(..)),
-            ) => tracing::warn!("ficha de sesión persistente ilegible, se salta: {error}"),
-            Err(error) => return Err(error.into()),
+        match fila? {
+            Ok(ficha) => fichas.push(ficha),
+            Err(ilegible) => ilegibles.push(ilegible),
         }
+    }
+    for ilegible in nuevas_ilegibles(conexion, &fichas, ilegibles) {
+        tracing::warn!(
+            "ficha de sesión persistente ilegible, se salta: {}",
+            ilegible.motivo
+        );
     }
     Ok(fichas)
 }
@@ -372,14 +490,9 @@ fn consultar_con_motivos(conexion: &Connection) -> Result<(Vec<Ficha>, Vec<Strin
     let mut fichas = Vec::new();
     let mut motivos = Vec::new();
     for fila in filas {
-        match fila {
-            Ok(Ok(ficha)) => fichas.push(ficha),
-            Ok(Err(motivo)) => motivos.push(motivo),
-            Err(
-                error @ (rusqlite::Error::FromSqlConversionFailure(..)
-                | rusqlite::Error::InvalidColumnType(..)),
-            ) => motivos.push(format!("una ficha no se puede leer: {error}")),
-            Err(error) => return Err(error.into()),
+        match fila? {
+            Ok(ficha) => fichas.push(ficha),
+            Err(ilegible) => motivos.push(ilegible.motivo),
         }
     }
     Ok((fichas, motivos))
@@ -522,5 +635,73 @@ mod pruebas_vigilante {
             "un motivo lleva el comando: {:?}",
             lectura.ilegibles
         );
+    }
+}
+
+#[cfg(test)]
+mod pruebas_avisos {
+    use super::*;
+
+    fn ilegible(id: i64, motivo: &str) -> Ilegible {
+        Ilegible {
+            id,
+            motivo: motivo.to_string(),
+        }
+    }
+
+    #[test]
+    fn avisa_una_vez_por_fila_y_olvida_las_que_se_arreglan() {
+        let mut avisadas = Avisadas::nuevo(8);
+        let rotas = || vec![ilegible(1, "sin uuid"), ilegible(2, "sin uuid")];
+        assert_eq!(avisadas.nuevas("a.db", [].into_iter(), rotas()).len(), 2);
+        assert!(avisadas.nuevas("a.db", [].into_iter(), rotas()).is_empty());
+        // La 1 se lee bien: se olvida. La 2 sigue avisada.
+        assert!(avisadas
+            .nuevas("a.db", [1].into_iter(), vec![ilegible(2, "sin uuid")])
+            .is_empty());
+        let otra_vez = avisadas.nuevas("a.db", [].into_iter(), rotas());
+        assert_eq!(otra_vez, vec![ilegible(1, "sin uuid")]);
+    }
+
+    #[test]
+    fn un_motivo_nuevo_o_otra_base_avisan_de_nuevo() {
+        let mut avisadas = Avisadas::nuevo(8);
+        avisadas.nuevas("a.db", [].into_iter(), vec![ilegible(1, "sin uuid")]);
+        assert_eq!(
+            avisadas
+                .nuevas("a.db", [].into_iter(), vec![ilegible(1, "origen raro")])
+                .len(),
+            1
+        );
+        assert_eq!(
+            avisadas
+                .nuevas("b.db", [].into_iter(), vec![ilegible(1, "origen raro")])
+                .len(),
+            1,
+            "la misma fila de otra base no está avisada"
+        );
+    }
+
+    #[test]
+    fn pasado_el_tope_no_recuerda_mas_ni_crece() {
+        let mut avisadas = Avisadas::nuevo(3);
+        let rotas: Vec<Ilegible> = (1..=5).map(|id| ilegible(id, "sin uuid")).collect();
+        assert_eq!(
+            avisadas.nuevas("a.db", [].into_iter(), rotas.clone()).len(),
+            5
+        );
+        assert_eq!(avisadas.filas.len(), 3, "recuerda hasta el tope");
+        // Las tres recordadas callan; las dos que no cupieron avisan siempre.
+        let repetidas = avisadas.nuevas("a.db", [].into_iter(), rotas);
+        assert_eq!(
+            repetidas.iter().map(|fila| fila.id).collect::<Vec<_>>(),
+            vec![4, 5]
+        );
+        assert_eq!(avisadas.filas.len(), 3);
+        // Arreglar una deja sitio a la siguiente que se rompa.
+        avisadas.nuevas("a.db", [1].into_iter(), Vec::new());
+        assert_eq!(avisadas.filas.len(), 2);
+        avisadas.nuevas("a.db", [].into_iter(), vec![ilegible(4, "sin uuid")]);
+        assert_eq!(avisadas.filas.len(), 3);
     }
 }

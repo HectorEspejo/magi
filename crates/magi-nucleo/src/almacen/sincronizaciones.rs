@@ -139,35 +139,36 @@ pub fn crear(conexion: &Connection, datos: &DatosSincronizacion) -> Result<i64> 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosSincronizacion) -> Result<()> {
     validar_sincronizacion(datos).map_err(|motivo| anyhow!(motivo))?;
     let nombre = datos.nombre.trim().to_string();
-    let antes = versiones::datos_de(conexion, versiones::Tabla::SincronizacionesDir, id)?;
-    let cambiadas = conexion
-        .execute(
-            "UPDATE SINCRONIZACIONES_DIR SET host_id = ?1, nombre = ?2, ruta_local = ?3, \
-             ruta_remota = ?4, direccion = ?5, borrar = ?6, exclusiones = ?7, \
-             actualizado_en = ?8 WHERE id = ?9",
-            params![
-                datos.host_id,
-                nombre,
-                datos.ruta_local.trim(),
-                datos.ruta_remota.trim(),
-                datos.direccion.texto(),
-                datos.borrar as i64,
-                juntar_exclusiones(&datos.exclusiones),
-                fecha_ahora(),
-                id
-            ],
-        )
-        .map_err(|error| conflicto(error, &nombre))?;
-    if cambiadas == 0 {
-        return Err(anyhow!("esa sincronización ya no existe"));
-    }
-    versiones::subir_si_cambio(
+    // El cambio y la versión nueva en una sola transacción (R84).
+    versiones::cambiar_con_version(
         conexion,
         versiones::Tabla::SincronizacionesDir,
         id,
-        antes.as_deref(),
-    )?;
-    Ok(())
+        |conexion| {
+            let cambiadas = conexion
+                .execute(
+                    "UPDATE SINCRONIZACIONES_DIR SET host_id = ?1, nombre = ?2, ruta_local = ?3, \
+                     ruta_remota = ?4, direccion = ?5, borrar = ?6, exclusiones = ?7, \
+                     actualizado_en = ?8 WHERE id = ?9",
+                    params![
+                        datos.host_id,
+                        nombre,
+                        datos.ruta_local.trim(),
+                        datos.ruta_remota.trim(),
+                        datos.direccion.texto(),
+                        datos.borrar as i64,
+                        juntar_exclusiones(&datos.exclusiones),
+                        fecha_ahora(),
+                        id
+                    ],
+                )
+                .map_err(|error| conflicto(error, &nombre))?;
+            if cambiadas == 0 {
+                return Err(anyhow!("esa sincronización ya no existe"));
+            }
+            Ok(())
+        },
+    )
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {

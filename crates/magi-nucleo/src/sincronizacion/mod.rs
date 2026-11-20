@@ -118,6 +118,17 @@ pub struct ResumenImportacion {
     pub huellas: usize,
 }
 
+/// Un borrado de host o de túnel que llegó por la sincronización y se dejó
+/// para más tarde porque su host tiene trabajo vivo (R83). Queda como conflicto
+/// `borrado` hasta que el usuario lo acepta o lo descarta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BorradoAplazado {
+    /// `host` o `tunel`.
+    pub tipo: String,
+    pub uuid: String,
+    pub nombre: String,
+}
+
 /// Resultado completo de una pasada.
 #[derive(Debug, Clone)]
 pub struct ResultadoPasada {
@@ -130,6 +141,19 @@ pub struct ResultadoPasada {
     pub conflictos_pendientes: i64,
     /// Avisos legibles para la barra o la vista.
     pub avisos: Vec<String>,
+    /// Nombres de los equipos cuyo fichero se leyó en esta pasada.
+    pub equipos_importados: Vec<String>,
+    /// Nombres de los equipos cuyo fichero no había cambiado desde la pasada
+    /// anterior.
+    pub equipos_al_dia: Vec<String>,
+    /// Borrados de hosts y túneles que esta pasada dejó aplazados por trabajo
+    /// vivo (R83).
+    pub aplazados: Vec<BorradoAplazado>,
+    /// Ficheros (por su nombre) de un equipo desconocido que llegan cifrados
+    /// con una clave que este equipo no usa y que la pasada no abrió con la
+    /// clave anterior (R97). Ya constan en `avisos`; aquí van para que quien
+    /// llama los deje una vez en el log.
+    pub rechazados: Vec<String>,
 }
 
 impl ResultadoPasada {
@@ -140,6 +164,10 @@ impl ResultadoPasada {
             exportado: false,
             conflictos_pendientes: 0,
             avisos: Vec::new(),
+            equipos_importados: Vec::new(),
+            equipos_al_dia: Vec::new(),
+            aplazados: Vec::new(),
+            rechazados: Vec::new(),
         }
     }
 }
@@ -208,16 +236,63 @@ pub(crate) struct FicheroLeido {
     pub(crate) documento: Documento,
 }
 
+/// Motivo del aviso de un fichero que age no abre por una causa que no es la
+/// clave: truncado, vacío, a medio copiar, cabecera o MAC alterados (R85).
+pub const MOTIVO_A_MEDIO_COPIAR: &str = "a medio copiar o dañado";
+
+/// Motivo del aviso de un fichero rechazado con la clave anterior (R97).
+pub const MOTIVO_RECHAZADO: &str =
+    "de un equipo que este no conocía, cifrado con la clave anterior";
+
 /// Motivo por el que no se puede leer un fichero de otro equipo.
 pub(crate) enum FalloLectura {
-    /// Ninguna clave lo descifra.
+    /// Ninguna clave lo descifra: «ninguna identidad coincide». Es el único
+    /// fallo que pide la clave nueva (R85).
     SinClave,
-    /// Se descifra pero la cabecera o la firma no son válidas.
+    /// Es de un equipo que este no conocía y la única clave que quedaba por
+    /// probar es la anterior, que solo abre ficheros de equipos conocidos
+    /// (R97). No se intenta abrir.
+    Rechazado,
+    /// No se puede leer ahora (a medio copiar, truncado, firma o cabecera no
+    /// válidas...): se reintenta en la siguiente pasada. Lleva el motivo tal
+    /// como va en el aviso.
     Danado(String),
     /// Usa un formato más nuevo.
     FormatoNuevo(u32),
     /// El equipo del documento no coincide con el nombre del fichero.
     EquipoInvalido(String),
+}
+
+impl FalloLectura {
+    /// Dañado por una causa concreta, que se cita entre paréntesis.
+    fn danado(detalle: impl std::fmt::Display) -> Self {
+        FalloLectura::Danado(format!("dañado ({detalle})"))
+    }
+}
+
+/// Aviso de un fichero que no se pudo leer ahora y se reintenta: dice de qué
+/// fichero (y por él, de qué equipo) se trata y cuándo se reintenta, y nunca
+/// cita su contenido.
+pub(crate) fn aviso_danado(uuid: &str, motivo: &str) -> String {
+    format!(
+        "{}: {motivo}; se reintenta en la siguiente pasada",
+        carpeta::nombre_fichero(uuid)
+    )
+}
+
+/// Aviso de un fichero de un equipo desconocido cifrado con la clave anterior
+/// (R97).
+pub(crate) fn aviso_rechazado(uuid: &str) -> String {
+    format!(
+        "{}: rechazado: {MOTIVO_RECHAZADO}",
+        carpeta::nombre_fichero(uuid)
+    )
+}
+
+/// ¿Puede la clave anterior abrir el fichero de este equipo? Solo si el equipo
+/// es conocido y no está quitado (R97).
+pub(crate) fn anterior_permitida(equipo: Option<&equipos_bd::Equipo>) -> bool {
+    equipo.is_some_and(|equipo| equipo.estado != equipos_bd::ESTADO_QUITADO)
 }
 
 /// Lee, descifra y verifica el fichero de un equipo desde el disco. Prueba
@@ -226,6 +301,7 @@ fn leer_fichero(
     ruta: &Path,
     claves: &[ClaveSincronizacion],
     uuid_esperado: &str,
+    anterior_permitida: bool,
 ) -> Result<std::result::Result<FicheroLeido, FalloLectura>> {
     // Un fichero de sincronización no debería pasar de unos pocos MB: uno
     // enorme (o corrupto) se rechaza como dañado en vez de cargarlo en memoria.
@@ -233,13 +309,18 @@ fn leer_fichero(
         .map(|metadatos| metadatos.len())
         .unwrap_or(0);
     if tamano > carpeta::TAMANO_MAXIMO {
-        return Ok(Err(FalloLectura::Danado(format!(
+        return Ok(Err(FalloLectura::danado(format!(
             "el fichero ocupa {tamano} bytes, más del máximo de {}",
             carpeta::TAMANO_MAXIMO
         ))));
     }
     let bytes = carpeta::leer(ruta)?;
-    Ok(interpretar_fichero(&bytes, claves, uuid_esperado))
+    Ok(interpretar_fichero(
+        &bytes,
+        claves,
+        uuid_esperado,
+        anterior_permitida,
+    ))
 }
 
 /// Interpreta los bytes de un fichero de equipo: descifra, comprueba la firma,
@@ -247,30 +328,44 @@ fn leer_fichero(
 /// modo escritor lo llama tras leer del disco y la pasada en modo lector con
 /// los bytes que le da `CarpetaSincronizacion`: el orden de validación es
 /// exactamente el mismo en los dos casos.
+///
+/// `claves` es «la actual y, si la hay, la anterior»: la primera abre cualquier
+/// fichero; la segunda solo si `anterior_permitida` (el equipo del fichero es
+/// conocido y no está quitado, R97). Solo «ninguna identidad coincide» pasa a
+/// la siguiente clave; cualquier otro fallo de age es un fichero dañado o a
+/// medio copiar, que no pide nada y se reintenta (R85).
 pub(crate) fn interpretar_fichero(
     bytes: &[u8],
     claves: &[ClaveSincronizacion],
     uuid_esperado: &str,
+    anterior_permitida: bool,
 ) -> std::result::Result<FicheroLeido, FalloLectura> {
     let hash = cifrado::sha256_hex(bytes);
-    for clave in claves {
-        let Ok(plano) = clave.descifrar(bytes) else {
-            continue;
+    for (posicion, clave) in claves.iter().enumerate() {
+        // La clave anterior es la segunda de la lista y solo abre ficheros de
+        // equipos conocidos: el de un desconocido se rechaza sin probarla.
+        if posicion > 0 && !anterior_permitida {
+            return Err(FalloLectura::Rechazado);
+        }
+        let plano = match clave.descifrar(bytes) {
+            Ok(plano) => plano,
+            Err(cifrado::ErrorDescifrado::NingunaIdentidad) => continue,
+            Err(cifrado::ErrorDescifrado::Danado(_)) => {
+                return Err(FalloLectura::Danado(MOTIVO_A_MEDIO_COPIAR.to_string()));
+            }
         };
         let Ok(en_claro) = formato::separar(&plano) else {
-            return Err(FalloLectura::Danado(
-                "cabecera de sincronización no válida".to_string(),
-            ));
+            return Err(FalloLectura::danado("cabecera de sincronización no válida"));
         };
         if !clave.verificar(en_claro.json.as_bytes(), &en_claro.firma) {
-            return Err(FalloLectura::Danado("firma no válida".to_string()));
+            return Err(FalloLectura::danado("firma no válida"));
         }
         if en_claro.formato > formato::FORMATO_MAXIMO {
             return Err(FalloLectura::FormatoNuevo(en_claro.formato));
         }
         let documento = match formato::parsear(&en_claro.json) {
             Ok(documento) => documento,
-            Err(error) => return Err(FalloLectura::Danado(error.to_string())),
+            Err(error) => return Err(FalloLectura::danado(error)),
         };
         if documento.equipo.uuid != uuid_esperado {
             return Err(FalloLectura::EquipoInvalido(format!(
@@ -608,10 +703,21 @@ fn pasada_interna(
                 continue;
             }
             if equipo.hash_ultimo_fichero.as_deref() == Some(fichero.hash.as_str()) {
+                // El fichero es el que ya se importó: si estaba a medio copiar y
+                // ha vuelto a ser el mismo, el equipo vuelve a estar al día.
+                if equipo.estado == equipos_bd::ESTADO_DANADO {
+                    equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_AL_DIA)?;
+                }
+                resultado.equipos_al_dia.push(equipo.nombre.clone());
                 continue;
             }
         }
-        match leer_fichero(&fichero.ruta, claves, &fichero.uuid) {
+        match leer_fichero(
+            &fichero.ruta,
+            claves,
+            &fichero.uuid,
+            anterior_permitida(equipo.as_ref()),
+        ) {
             Err(error) => {
                 let mensaje = format!("leyendo {}: {error}", fichero.ruta.display());
                 resultado.avisos.push(mensaje.clone());
@@ -645,16 +751,18 @@ fn pasada_interna(
                     fichero.ruta.display()
                 ));
             }
+            Ok(Err(FalloLectura::Rechazado)) => {
+                // Sin fila en EQUIPOS, sin importar nada y sin parar la pasada.
+                resultado.avisos.push(aviso_rechazado(&fichero.uuid));
+                resultado
+                    .rechazados
+                    .push(carpeta::nombre_fichero(&fichero.uuid));
+            }
             Ok(Err(FalloLectura::Danado(motivo))) => {
                 if let Some(equipo) = &equipo {
                     equipos_bd::fijar_estado(conexion, equipo.id, equipos_bd::ESTADO_DANADO)?;
                 }
-                resultado.avisos.push(format!(
-                    "el fichero de {} está dañado ({motivo}); se reintentará",
-                    equipo
-                        .map(|equipo| equipo.nombre)
-                        .unwrap_or_else(|| fichero.uuid.clone())
-                ));
+                resultado.avisos.push(aviso_danado(&fichero.uuid, &motivo));
             }
             Ok(Err(FalloLectura::FormatoNuevo(numero))) => {
                 if let Some(equipo) = &equipo {
@@ -703,6 +811,10 @@ fn pasada_interna(
         )?;
         return Ok(ResultadoPasada::nuevo(EstadoPasada::Quitado));
     }
+    resultado.equipos_importados = leidos
+        .iter()
+        .map(|leido| leido.documento.equipo.nombre.clone())
+        .collect();
 
     // 3. Fusionar.
     let documentos_owned: Vec<Documento> = leidos.iter().map(|l| l.documento.clone()).collect();
@@ -725,12 +837,16 @@ fn pasada_interna(
             )));
         };
         let copia = copia_previa(conexion)?;
+        // Los avisos de lo que no se pudo leer (ficheros dañados o rechazados)
+        // salen también con la decisión pendiente.
         return Ok(ResultadoPasada {
             estado: EstadoPasada::DecisionPendiente(BorradosPendientes {
                 copia,
                 hosts: std::mem::take(&mut hosts_borrados),
                 total_hosts,
             }),
+            avisos: std::mem::take(&mut resultado.avisos),
+            rechazados: std::mem::take(&mut resultado.rechazados),
             ..ResultadoPasada::nuevo(EstadoPasada::AlDia)
         });
     }
@@ -741,18 +857,24 @@ fn pasada_interna(
         && opciones.politica_borrados == PoliticaBorrados::Mantener
         && !hosts_borrados.is_empty()
     {
-        versiones::al_importar(conexion, plan.reloj_ms)?;
-        for nombre in &hosts_borrados {
-            let id: Option<i64> = conexion
-                .query_row(
-                    "SELECT id FROM HOSTS WHERE nombre = ?1",
-                    rusqlite::params![nombre],
-                    |fila| fila.get(0),
-                )
-                .ok();
-            if let Some(id) = id {
-                versiones::subir(conexion, versiones::Tabla::Hosts, id)?;
+        // El reloj y la versión nueva de cada host van en una sola
+        // transacción (R84): o resucitan todos o ninguno.
+        {
+            let transaccion = crate::almacen::transaccion(conexion)?;
+            versiones::al_importar(&transaccion, plan.reloj_ms)?;
+            for nombre in &hosts_borrados {
+                let id: Option<i64> = transaccion
+                    .query_row(
+                        "SELECT id FROM HOSTS WHERE nombre = ?1",
+                        rusqlite::params![nombre],
+                        |fila| fila.get(0),
+                    )
+                    .ok();
+                if let Some(id) = id {
+                    versiones::subir(&transaccion, versiones::Tabla::Hosts, id)?;
+                }
             }
+            transaccion.commit()?;
         }
         let local = elementos::estado_local(conexion, &rutas.hogar)?;
         plan = fusion::fusionar(&local, &documentos_owned)?;
@@ -787,6 +909,11 @@ fn pasada_interna(
             }
             if (opciones.trabajo_vivo)(&candidato.tipo, &candidato.uuid) {
                 aplazados.insert(candidato.uuid.clone());
+                resultado.aplazados.push(BorradoAplazado {
+                    tipo: candidato.tipo.clone(),
+                    uuid: candidato.uuid.clone(),
+                    nombre: candidato.nombre.clone(),
+                });
                 conflictos_borrado.push(fusion::ConflictoFusion {
                     tipo: conflictos::TIPO_BORRADO.to_string(),
                     elemento_tipo: candidato.tipo.clone(),
@@ -981,12 +1108,18 @@ fn pasada_interna(
     Ok(resultado)
 }
 
-/// Texto de estado para la CLI y la vista: una línea por equipo. No descifra
-/// nada ni lee la clave del llavero.
+/// Texto de estado para la CLI y la vista: una línea por equipo, los conflictos
+/// pendientes y los borrados aplazados con su motivo. No descifra nada ni lee la
+/// clave del llavero.
+///
+/// `explicar_aplazo` da el motivo de un borrado aplazado (el trabajo vivo es del
+/// servidor de sesiones, que el núcleo no conoce): se calcula al listar, no se
+/// guarda.
 pub fn estado_texto(
     conexion: &Connection,
     ajustes: &SeccionSincronizacion,
     hogar: &Path,
+    explicar_aplazo: &dyn Fn(&conflictos::Conflicto) -> String,
 ) -> Result<String> {
     let mut texto = String::new();
     match ajustes.ruta_carpeta(hogar) {
@@ -1015,7 +1148,9 @@ pub fn estado_texto(
             equipo.estado
         ));
     }
-    let pendientes = conflictos::listar_pendientes(conexion)?;
+    let (aplazados, pendientes): (Vec<_>, Vec<_>) = conflictos::listar_pendientes(conexion)?
+        .into_iter()
+        .partition(|conflicto| conflicto.tipo == conflictos::TIPO_BORRADO);
     texto.push_str(&format!("conflictos pendientes: {}\n", pendientes.len()));
     for conflicto in pendientes.iter().take(20) {
         texto.push_str(&format!(
@@ -1027,6 +1162,15 @@ pub fn estado_texto(
                 .equipo_ganador
                 .clone()
                 .unwrap_or_else(|| "—".to_string())
+        ));
+    }
+    texto.push_str(&format!("borrados aplazados: {}\n", aplazados.len()));
+    for conflicto in aplazados.iter().take(20) {
+        texto.push_str(&format!(
+            "  {} «{}»: {}\n",
+            conflicto.elemento_tipo,
+            conflicto.nombre,
+            explicar_aplazo(conflicto)
         ));
     }
     Ok(texto)
