@@ -3,7 +3,7 @@
 ## Contexto
 
 MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con una app Android compañera (desde la Fase 11). Cliente: 4d3 (producto propio).
-Desde la Fase 9 es software libre (MIT OR Apache-2.0) en `4d3-org/magi` y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `4d3-org/homebrew-tap` y tarballs de GitHub Releases.
+Desde la Fase 9 es software libre (MIT OR Apache-2.0) y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `HectorEspejo/homebrew-tap` y tarballs de GitHub Releases. El repositorio, `HectorEspejo/magi`, es público; la primera versión publicada es la 1.6.1, con la app 0.2.0 en beta (Fase 9b).
 Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode, ironrdp (fijado con `=`), axum 0.8, des, flate2, regex; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
@@ -31,11 +31,17 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/publicar-termux.md` — cómo se publica el `.deb` de Termux y cómo se propone la receta a TUR (lo creas en la Fase 17; lo sigue el desarrollador)
 - `android/CHANGELOG.md` — cambios de la app Android (Keep a Changelog; desde la Fase 11)
 - `visor/README.md` — origen (voxl), cambios y cómo se genera el visor (lo creas en la Fase 12)
+- `docs/manual/` — el manual de usuario, por capítulos: índice en `docs/manual/README.md` y, en `estado.md`, qué se ha probado a mano (desde la Fase 9b)
+- `docs/README.md` — qué hay en `docs/` y cómo se lee el archivo de diseño, `docs/faseN/` (desde la Fase 9b)
+- `README.md` y `README.en.md` — presentación corta, instalación y enlaces, en castellano e inglés (desde la Fase 9b)
+- `CONTRIBUTING.md` y `CONTRIBUTING.en.md` — cómo contribuir (desde la Fase 9b)
 
 El `CLAUDE.md` que vale es el de la raíz. El que llega con cada entrega del
 analista (y queda tal cual en `docs/faseN/`) trae cambios, no lo sustituye:
 aplícalos sin borrar las reglas de la raíz que no estén en él, y deja
-`AGENTS.md` igual que la raíz.
+`AGENTS.md` igual que la raíz. Si dos fases van en paralelo, el que llega trae
+los cambios de las dos: aplica solo los de tu fase; los de la otra llegan con su
+rama.
 
 El informe de fase manda sobre tu criterio: si algo te parece incorrecto o
 incompleto, no lo cambies por tu cuenta — impleméntalo como está o párate y
@@ -45,7 +51,11 @@ coméntalo con el desarrollador.
 
 - Escribe siempre en castellano: respuestas, comentarios de código, mensajes de
   commit, documentación y textos de interfaz. Solo se mantienen en inglés los
-  términos técnicos estándar (API, CRUD, endpoint, commit...).
+  términos técnicos estándar (API, CRUD, endpoint, commit...). Desde la Fase 9b,
+  la puerta de entrada del repositorio va también en inglés, y nada más:
+  `README.en.md`, `CONTRIBUTING.en.md`, el resumen en inglés de cada versión de
+  los CHANGELOG, el párrafo en inglés de `SECURITY.md` y el inglés de las
+  plantillas de `.github/`.
 - Tu effort por defecto es `ultracode`: una vez aprobado el plan que presentes,
   utiliza los workflows y todo lo disponible en ese effort.
 - No añadas funcionalidades que no estén en el checklist de la fase. Si detectas
@@ -259,11 +269,25 @@ coméntalo con el desarrollador.
   visible añade su línea en la sección «Sin publicar» de `CHANGELOG.md` en el
   mismo PR. Si cambias la CLI, regenera `assets/` con
   `scripts/generar-recursos.sh` (un test lo exige).
+- CHANGELOG (desde la Fase 9b): cada versión de `CHANGELOG.md` y de
+  `android/CHANGELOG.md` empieza con un resumen de una o dos líneas en
+  castellano e inglés (`**Resumen.**` y `**Summary.**`) y sigue con el detalle
+  en castellano. El encabezado sigue siendo `## [X.Y.Z] - AAAA-MM-DD`: de ahí
+  saca `dist` las notas de la release. Una versión que se numeró y no llegó a
+  publicarse se junta con la siguiente que salga.
+- La documentación de usuario vive en `docs/manual/` (desde la Fase 9b): el
+  README solo presenta, instala y enlaza, en 200 líneas como mucho. Lo que
+  cambie para el usuario va, en el mismo PR, al capítulo que toque (o a uno
+  nuevo, enlazado desde `docs/manual/README.md`). `README.md` y `README.en.md`
+  dicen lo mismo, y `CONTRIBUTING.md` y `CONTRIBUTING.en.md` también: si cambias
+  uno, cambia el otro. Cuando cambie lo que se ha probado a mano, actualiza
+  `docs/manual/estado.md` con la fecha.
 - Una `magi.db` con `user_version` mayor que la que conoce el binario no se abre
   ni se toca: las migraciones solo van hacia delante.
 - Los binarios publicados salen solo de CI a partir de un tag. Tú no etiquetas
-  versiones, no cambias la visibilidad del repositorio, no creas secretos ni
-  cuentas y no subes binarios: tú lo preparas y lo hace el desarrollador.
+  versiones, no cambias la visibilidad ni los ajustes del repositorio (regla de
+  `main`, Dependabot, avisos privados, descripción y temas), no creas secretos
+  ni cuentas y no subes binarios: tú lo preparas y lo hace el desarrollador.
 - `release.yml` está retocado a mano (`allow-dirty = ["ci"]`): no lo regeneres
   con `dist init` sin reaplicar los ajustes que explica `docs/publicar.md`, ni
   quites `allow-dirty`. Cada workflow recibe solo su secreto (nunca
@@ -284,7 +308,7 @@ coméntalo con el desarrollador.
   `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
   `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`. Al
   cambiar `version`, actualiza también la DA2 que espera
-  `tests/fijos/terminal/tui_prueba.rs` (`10600` en la 1.6.0) y las instantáneas
+  `tests/fijos/terminal/tui_prueba.rs` (`10601` en la 1.6.1) y las instantáneas
   `servidor_anterior_*`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
   mensaje, siempre validado (1 < pid ≤ i32::MAX y distinto del propio). Nunca
@@ -348,6 +372,17 @@ coméntalo con el desarrollador.
 - Ejemplos, tests, instantáneas y mockups usan direcciones de documentación
   (`192.0.2.x`), dominios `ejemplo.org`, el usuario `usuario` y
   `/home/usuario`; nunca datos reales.
+- El repositorio es público (desde la Fase 9b): ningún fichero lleva datos
+  reales (IP, rutas `/home/<nombre>`, correos, nombres de hosts o de usuarios).
+  La prueba `repositorio_publico`
+  (`cargo test -p magi-ssh --test repositorio_publico`) lo comprueba en cada PR,
+  con los enlaces relativos y las anclas de la documentación, sin red; si hace
+  falta una excepción, va en su lista, en la propia prueba, con su motivo, y
+  nunca se salta. La organización anterior de GitHub solo se nombra en el
+  archivo de diseño (`docs/faseN/`, cuyos documentos no se reescriben), en el
+  maestro y en `docs/README.md`, que lo explica. Si encuentras un secreto real,
+  en el árbol o en el historial, para y avisa para revocarlo: el historial no se
+  reescribe.
 - Workspace (desde la Fase 11): lo que deban hacer igual el escritorio y el
   móvil vive en `magi-nucleo`. No dupliques en Kotlin la fusión, el formato, el
   cifrado, SSH, los túneles, el parser ni la codificación de teclas. Buena parte
@@ -778,9 +813,9 @@ coméntalo con el desarrollador.
   ficha descubierta, borrar las terminadas) exige una comprobación de menos de
   120 s. La interfaz no afirma lo que no sabe: sin comprobación fresca, «puede
   que exista»; con el servidor caído, las filas no se accionan.
-- El JSON de `magi sesiones` (9 campos en orden fijo, documentado en el README y
-  en `src/sesiones_cli.rs`) es un formato exportado: no quites ni reordenes
-  campos sin subir MAJOR.
+- El JSON de `magi sesiones` (9 campos en orden fijo, documentado en el manual,
+  `docs/manual/sesiones-persistentes.md`, y en `src/sesiones_cli.rs`) es un
+  formato exportado: no quites ni reordenes campos sin subir MAJOR.
 - La `Bienvenida` sale dentro del mismo bloqueo que registra al cliente: ninguna
   difusión puede adelantarla.
 - Una tecla nueva de Hosts o Flota que choque con los atajos configurables va a
@@ -878,6 +913,27 @@ coméntalo con el desarrollador.
   dobles: `shellcheck scripts/paquete-termux.sh packaging/termux/build.sh
   tests/fijos/termux/falsos/*`. Lo que solo se ve en el móvil va al guion del
   informe de implementación.
+- Dependabot (desde la Fase 9b) solo abre PR de seguridad: no hay
+  `dependabot.yml`. Una que toque una versión fijada (el conjunto de russh,
+  ratatui, crossterm, tui-term y vt100, rusqlite, IronRDP, `age` o UniFFI) no se
+  fusiona tal cual: se sube el conjunto con sus pruebas, como dicen las reglas
+  de arriba.
+- Contribuciones de fuera (desde la Fase 9b): entran por PR con la CI en verde y
+  la revisión del desarrollador; las que cambian el comportamiento empiezan por
+  una propuesta (plantilla `propuesta.yml`) y, si son grandes, por una fase
+  especificada. Se aceptan en inglés, pero el código, los comentarios y los
+  textos de interfaz quedan en castellano. Si te piden revisar una, aplícale
+  estas mismas reglas. Tus PR siguen la plantilla
+  `.github/pull_request_template.md`.
+- La regla de `main` exige los siete jobs de `ci.yml` por su nombre (`formato`,
+  `clippy`, `tests-linux`, `macos`, `visor`, `deny` y `aur-plantilla`; los de
+  `android.yml` no, por sus filtros de rutas): si renombras, quitas o añades
+  uno, dilo en el informe de implementación para que el desarrollador cambie la
+  regla.
+- La animación del README (`assets/demo/magi.gif`, 2 MiB como mucho) se regenera
+  a mano con `scripts/grabar-demo.sh` (necesita `vhs`), que arranca el servidor
+  de pruebas en un entorno aislado con `assets/demo/inventario`; nunca se graba
+  contra hosts reales ni en CI.
 
 ## Al terminar una fase (o al pausar la sesión)
 
