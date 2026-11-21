@@ -9,6 +9,23 @@ en [`docs/publicar.md`](../docs/publicar.md).
 
 ## [Sin publicar]
 
+## [0.2.0] - 2026-11-20
+
+**Resumen.** Primera versión publicada de la app Android de MAGI (beta): lectora de la sincronización, con terminal, túneles y, como móvil de guardia, Flota, Servicios, snippets con deliberación y Registro.
+
+**Summary.** First published release of MAGI's Android app (beta): a reader of the inventory sync, with a terminal, tunnels and, as an on-call phone, Fleet, Services, snippets with deliberation and the Log.
+
+Primera versión publicada: reúne la 0.1.0 y la 0.2.0, que se numeraron durante el desarrollo y no llegaron a salir. Es **lectora** de la sincronización cifrada del inventario: nunca escribe en la carpeta compartida ni exporta. Requiere Android 11 o superior y APK `arm64-v8a`. Sin Google Play Services, sin cuenta y sin telemetría; se instala y actualiza con Obtainium desde las releases del repositorio.
+
+Limitaciones conocidas: un elemento inválido hace fallar la pasada entera (R86); aceptar la huella de otro equipo sustituye todas las del host (R87); el contenido del terminal no se lee con TalkBack.
+
+### Qué trae
+
+- **Inventario:** lee la sincronización cifrada del escritorio (`formato` 1 a 4), sin escribir en ella.
+- **Terminal y túneles:** sesiones SSH con un terminal y túneles locales y dinámicos en `127.0.0.1`.
+- **Móvil de guardia:** Flota con sondeo, Servicios (systemd, Docker, Podman y sus logs), snippets con deliberación y Registro.
+- **Seguridad:** secretos solo en el Keystore, bloqueo con huella o PIN y sin servicios de Google ni analítica.
+
 ### Añadido
 
 - La app lee el `formato` 3 de la sincronización (Fase 13): guarda en su copia
@@ -45,40 +62,6 @@ en [`docs/publicar.md`](../docs/publicar.md).
   ejecuciones en curso, y al volver avisa si Android cerró MAGI con trabajo
   pendiente.
 
-### Cambiado
-
-- La barra inferior pasa a FLOTA · SESIONES · TÚNELES · SERVICIOS · MÁS, con
-  riel en plegable o pantalla ancha; MÁS agrupa Snippets, Resultados, Registro
-  y Ajustes. En plegable abierto, Flota, Servicios, Snippets y Registro van en
-  dos paneles (lista y detalle); el terminal sigue a pantalla completa.
-- La contraseña de sudo se pide y se guarda solo en memoria 5 min sin uso
-  (nunca en disco ni en el llavero) y se olvida al bloquear MAGI.
-
-### Corregido
-
-- **Sincronizar fallaba con `LanguageNotAvailable` en la APK debug.** La
-  biblioteca de cifrado (age) buscaba sus textos de error en la ruta del
-  ordenador donde se compiló la app, que en el móvil no existe. En cuanto un
-  fichero de la carpeta no se abría con la clave del móvil (de otra clave, a
-  medio descargar o que no es age), la unión o la pasada se interrumpían y el
-  motivo real quedaba tapado. Ahora esos textos van dentro de la app también en
-  debug, y los errores de cifrado se explican en castellano sin pasar por ellos:
-  un fichero que no se abre vuelve a ser un aviso. Con prueba de regresión en
-  el emulador.
-- **Flota se quedaba vacía después de sincronizar por primera vez.** Si Flota
-  se abría antes de tener inventario, la sincronización traía los hosts pero
-  no se lo decía. Sin hosts no se sondeaba nada que la refrescara, así que
-  seguía vacía hasta reiniciar la app. Ahora cada sincronización, dejar de
-  sincronizar y borrar datos actualizan Flota, y al volver a la pantalla se
-  vuelve a leer la lista. Con pruebas de regresión.
-- Al pegar una clave de sincronización que no vale, el aviso dice por qué en
-  castellano (vacía, clave pública, prefijo equivocado o incompleta), igual que
-  en el escritorio, en vez del texto en inglés de age.
-
-## [0.2.0] - 2026-11-05
-
-### Añadido
-
 - La app lee el `formato` 2 de la sincronización (Fase 12) y enseña los hosts
   de escritorio (RDP, VNC y voxl) en Hosts con su tipo y «se abre en el
   ordenador». No se conecta a ellos ni les crea túneles: esos hosts se abren en
@@ -88,49 +71,6 @@ en [`docs/publicar.md`](../docs/publicar.md).
   sincronizar con escritorios que ya escriben el formato 2: la 0.1.0 mostraba
   «el equipo … usa una versión más nueva de MAGI; actualiza» y no importaba
   sus hosts.
-
-### Cambiado
-
-- En plegable o tableta, al abrir una sesión el terminal ocupa toda la
-  pantalla, y cuando no hay nada seleccionado la lista de Hosts, Sesiones,
-  Túneles o Ajustes ocupa todo el ancho: desaparece el panel vacío con «Elige
-  un host…».
-- La cabecera de Túneles dice «1 activo» en singular; «auto» va en una línea y
-  los nombres largos no se parten.
-- Al abrir una sesión, el terminal ocupa toda la pantalla: se ocultan la barra
-  inferior, el riel y la lista del plegable, y las barras del sistema se
-  esconden mientras está abierto (un deslizamiento las muestra). Al volver se
-  restaura la navegación.
-
-### Corregido
-
-- El túnel local ya no se queda «activo» si cae la conexión del host: pasa a
-  caído con el motivo y se puede relanzar. La fila muestra el último error con
-  su hora y los contadores de conexiones abiertas y aceptadas, que se
-  actualizan cada segundo.
-- La nota de puerto libre solo aparece al abrir en un puerto libre; la fila
-  muestra siempre la escucha real.
-- Fallo de desbloqueo en algunos teléfonos (p. ej. Honor MagicOS): las claves
-  del Keystore ya no llevan el requisito de «dispositivo desbloqueado» que
-  Android no reconoce al desbloquear con la cara. Las claves antiguas se migran
-  una sola vez; la clave del móvil cambia de identidad, así que hay que
-  reinstalarla en los hosts.
-
-## [0.1.0] - 2026-10-31
-
-Primera versión de la app Android de MAGI (Fase 11). Es **lectora** de la
-sincronización cifrada del inventario: nunca escribe en la carpeta compartida
-ni exporta. Requiere Android 11 o superior y APK `arm64-v8a`. Sin Google Play
-Services, sin cuenta y sin telemetría; se instala y actualiza con Obtainium
-desde las releases del repositorio.
-
-Limitaciones conocidas: un fichero a medio copiar puede dejar la sincronización
-en «esperando clave» hasta la pasada siguiente (R85); un elemento inválido hace
-fallar la pasada entera (R86); aceptar la huella de otro equipo sustituye todas
-las del host (R87); el contenido del terminal no se lee con TalkBack en esta
-fase.
-
-### Añadido
 
 - **Inventario de solo lectura.** Hosts por grupos plegables (el plegado es
   propio del móvil y no viaja), búsqueda por subcadena, fila con estado,
@@ -183,6 +123,70 @@ fase.
   crea una GitHub Release que nunca se marca como «Latest»; con `-rc.N` es una
   prerelease. `docs/publicar-android.md` es la guía para el desarrollador.
 
+### Cambiado
+
+- La barra inferior pasa a FLOTA · SESIONES · TÚNELES · SERVICIOS · MÁS, con
+  riel en plegable o pantalla ancha; MÁS agrupa Snippets, Resultados, Registro
+  y Ajustes. En plegable abierto, Flota, Servicios, Snippets y Registro van en
+  dos paneles (lista y detalle); el terminal sigue a pantalla completa.
+- La contraseña de sudo se pide y se guarda solo en memoria 5 min sin uso
+  (nunca en disco ni en el llavero) y se olvida al bloquear MAGI.
+
+- En plegable o tableta, al abrir una sesión el terminal ocupa toda la
+  pantalla, y cuando no hay nada seleccionado la lista de Hosts, Sesiones,
+  Túneles o Ajustes ocupa todo el ancho: desaparece el panel vacío con «Elige
+  un host…».
+- La cabecera de Túneles dice «1 activo» en singular; «auto» va en una línea y
+  los nombres largos no se parten.
+- Al abrir una sesión, el terminal ocupa toda la pantalla: se ocultan la barra
+  inferior, el riel y la lista del plegable, y las barras del sistema se
+  esconden mientras está abierto (un deslizamiento las muestra). Al volver se
+  restaura la navegación.
+
+### Corregido
+
+- **Un fichero de sincronización a medio copiar ya no deja la app «esperando
+  clave» (corrección 10b).** Solo un fichero cifrado para otra clave pide la
+  clave nueva; uno cortado, vacío o que no es de MAGI sale como «a medio copiar
+  o dañado», con el nombre del fichero, no para la pasada y se reintenta en la
+  siguiente.
+
+- **La clave anterior solo lee equipos que la app ya conocía (corrección 10b).**
+  Durante los 30 días siguientes a rotar la clave, los ficheros de un equipo
+  desconocido o quitado se rechazan con un aviso y no se abren con la clave
+  anterior.
+
+- **Sincronizar fallaba con `LanguageNotAvailable` en la APK debug.** La
+  biblioteca de cifrado (age) buscaba sus textos de error en la ruta del
+  ordenador donde se compiló la app, que en el móvil no existe. En cuanto un
+  fichero de la carpeta no se abría con la clave del móvil (de otra clave, a
+  medio descargar o que no es age), la unión o la pasada se interrumpían y el
+  motivo real quedaba tapado. Ahora esos textos van dentro de la app también en
+  debug, y los errores de cifrado se explican en castellano sin pasar por ellos:
+  un fichero que no se abre vuelve a ser un aviso. Con prueba de regresión en
+  el emulador.
+- **Flota se quedaba vacía después de sincronizar por primera vez.** Si Flota
+  se abría antes de tener inventario, la sincronización traía los hosts pero
+  no se lo decía. Sin hosts no se sondeaba nada que la refrescara, así que
+  seguía vacía hasta reiniciar la app. Ahora cada sincronización, dejar de
+  sincronizar y borrar datos actualizan Flota, y al volver a la pantalla se
+  vuelve a leer la lista. Con pruebas de regresión.
+- Al pegar una clave de sincronización que no vale, el aviso dice por qué en
+  castellano (vacía, clave pública, prefijo equivocado o incompleta), igual que
+  en el escritorio, en vez del texto en inglés de age.
+
+- El túnel local ya no se queda «activo» si cae la conexión del host: pasa a
+  caído con el motivo y se puede relanzar. La fila muestra el último error con
+  su hora y los contadores de conexiones abiertas y aceptadas, que se
+  actualizan cada segundo.
+- La nota de puerto libre solo aparece al abrir en un puerto libre; la fila
+  muestra siempre la escucha real.
+- Fallo de desbloqueo en algunos teléfonos (p. ej. Honor MagicOS): las claves
+  del Keystore ya no llevan el requisito de «dispositivo desbloqueado» que
+  Android no reconoce al desbloquear con la cara. Las claves antiguas se migran
+  una sola vez; la clave del móvil cambia de identidad, así que hay que
+  reinstalarla en los hosts.
+
 ### Seguridad
 
 - La clave del móvil nunca sale del Keystore: el núcleo firma a través de
@@ -200,5 +204,5 @@ fase.
   (`allowBackup="false"`); las únicas conexiones salientes son a los hosts del
   usuario.
 
-[Sin publicar]: https://github.com/4d3-org/magi/compare/android-v0.1.0...HEAD
-[0.1.0]: https://github.com/4d3-org/magi/releases/tag/android-v0.1.0
+[Sin publicar]: https://github.com/HectorEspejo/magi/compare/android-v0.2.0...HEAD
+[0.2.0]: https://github.com/HectorEspejo/magi/releases/tag/android-v0.2.0

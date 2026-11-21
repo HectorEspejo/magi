@@ -7,13 +7,13 @@ source: tests/sesiones_persistentes_ui/lista.rs
  ◆   ● portatil      docs             dev-01     hace NN m   Claude Code
  ◆   ✕ terminada     informes         dev-01     —          ↵ reabrir
  ◆     libre         pruebas          dev-01     hace 9 d   usuario@dev… antigua
- ◆   ● ┌ BORRAR FICHA ──────────────────────────────────────────────────┐
-▸◆ !   │                                                                │permiso
+ ◆   ● aquí          refactor         dev-01     hace NN s  Claude Code
+▸◆ !   ┌ BORRAR FICHA ──────────────────────────────────────────────────┐permiso
+       │                                                                │
        │  ¿Borrar la ficha de «agente-api» en web-01?                   │
-       │  La sesión seguirá viva en web-01, sin ficha: la verás como    │
- PESTAÑ│  «sin ficha».                                                  │───────
-  Sin s│  Borrar la ficha no toca el host; se borra también en tus      │
-       │  otros equipos.                                                │
+ PESTAÑ│  La sesión seguirá viva en web-01, sin ficha: la verás como    │───────
+  Sin s│  «sin ficha».                                                  │
+       │  Borrar la ficha no toca el host.                              │
        │                                                                │
        │  s confirmar   n / esc cancelar                                │
        │                                                                │

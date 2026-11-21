@@ -282,6 +282,7 @@ fn sesion_tmux(nombre: &str, clientes: u32, ventanas: u32, creada: i64) -> Sesio
     SesionVista {
         servidor: ServidorTmux::Habitual,
         nombre: nombre.to_string(),
+        id: None,
         clientes,
         equipo: None,
         actividad: creada,
@@ -296,6 +297,7 @@ fn sesion_tmux(nombre: &str, clientes: u32, ventanas: u32, creada: i64) -> Sesio
 /// soltada).
 fn tmux_habitual(nombre: &str) -> TmuxPestana {
     TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Habitual,
         nombre: nombre.to_string(),
         version: None,
@@ -1029,6 +1031,7 @@ fn la_segunda_difusion_actualiza_titulo_aviso_reconexion_y_tmux() {
         causa: "conexión perdida".to_string(),
     };
     let tmux = TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Magi,
         nombre: "refactor".to_string(),
         version: Some(VersionTmux::nueva(3, 5)),
@@ -1054,6 +1057,7 @@ fn la_segunda_difusion_actualiza_titulo_aviso_reconexion_y_tmux() {
 
     // La pestaña soltada llega por la misma vía: el tmux lleva `soltada`.
     let soltada = TmuxPestana {
+        creada: None,
         soltada: Some(Soltada {
             por_equipo: Some("portatil".to_string()),
             desde: 1_700_000_200,
@@ -1192,6 +1196,7 @@ fn cerrar_una_pestana_con_tmux_propio_termina_en_el_servidor_de_la_pestana() {
     let host = prueba.host_id("web-01");
     let mut info = sesion_de(1, host, "web-01");
     info.tmux = Some(TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Magi,
         nombre: "refactor".to_string(),
         version: None,
@@ -1952,6 +1957,7 @@ fn la_terminacion_al_cerrar_una_pestana_se_resuelve_y_se_dice() {
         let host = prueba.host_id("web-01");
         let mut info = sesion_de(1, host, "web-01");
         info.tmux = Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: "refactor".to_string(),
             version: None,

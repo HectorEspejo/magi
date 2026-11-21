@@ -11,5 +11,5 @@ source: tests/sesiones_persistentes_ui/nueva.rs
 ││ ✕ el nombre no puede llevar        ││
 ││ espacios                           ││
 ││ ↵ crear   ⇥ sig.   esc cancelar    ││
-└└─────────────────────────────── 1/7 ┘┘
+└└─────────────────────────────── 1/5 ┘┘
  ↵ ssh  r sondear  ⇥ detalle  ? más

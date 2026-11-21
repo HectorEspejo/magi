@@ -1,0 +1,22 @@
+# Inventario de ejemplo para la animación del README. Sin datos reales: los tres
+# hosts tienen nombres inventados y apuntan al servidor de pruebas del
+# repositorio, que escucha solo en 127.0.0.1 (crates/magi-movil, ejemplo
+# servidor_pruebas). Lo importa scripts/grabar-demo.sh en un entorno aislado.
+
+Host demo-web
+    HostName 127.0.0.1
+    Port 12222
+    User usuario
+    IdentityFile ~/.ssh/id_demo
+
+Host demo-datos
+    HostName 127.0.0.1
+    Port 12222
+    User usuario
+    IdentityFile ~/.ssh/id_demo
+
+Host demo-copias
+    HostName 127.0.0.1
+    Port 12222
+    User usuario
+    IdentityFile ~/.ssh/id_demo

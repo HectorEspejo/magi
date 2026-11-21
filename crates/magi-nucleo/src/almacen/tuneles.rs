@@ -186,37 +186,39 @@ pub fn crear(conexion: &Connection, datos: &DatosTunel) -> Result<i64> {
 
 pub fn actualizar(conexion: &Connection, id: i64, datos: &DatosTunel) -> Result<()> {
     let (nombre, tipo, escucha, destino) = normalizar(datos)?;
-    if let Some(choque) = duplicado(conexion, tipo, &escucha, datos.host_id, Some(id))? {
-        return Err(anyhow!(
-            "ya hay un túnel {} escuchando en {escucha} ({choque})",
-            tipo.etiqueta()
-        ));
-    }
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Tuneles, id)?;
-    conexion
-        .execute(
-            "UPDATE TUNELES SET host_id = ?1, nombre = ?2, tipo = ?3, escucha = ?4, destino = ?5, \
-             automatico = ?6, actualizado_en = ?7 WHERE id = ?8",
-            params![
-                datos.host_id,
-                nombre,
-                tipo.como_texto(),
-                escucha,
-                destino,
-                datos.automatico as i64,
-                fecha_ahora(),
-                id
-            ],
-        )
-        .map_err(|error| {
-            if crate::almacen::es_conflicto_unico(&error) {
-                anyhow!("ya existe un túnel con el nombre «{nombre}» en ese host")
-            } else {
-                anyhow::Error::new(error)
-            }
-        })?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Tuneles, id, antes.as_deref())?;
-    Ok(())
+    // El cambio y la versión nueva en una sola transacción (R84); la escucha
+    // libre se comprueba dentro, con el bloqueo de escritura ya tomado.
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Tuneles, id, |conexion| {
+        if let Some(choque) = duplicado(conexion, tipo, &escucha, datos.host_id, Some(id))? {
+            return Err(anyhow!(
+                "ya hay un túnel {} escuchando en {escucha} ({choque})",
+                tipo.etiqueta()
+            ));
+        }
+        conexion
+            .execute(
+                "UPDATE TUNELES SET host_id = ?1, nombre = ?2, tipo = ?3, escucha = ?4, destino = ?5, \
+                 automatico = ?6, actualizado_en = ?7 WHERE id = ?8",
+                params![
+                    datos.host_id,
+                    nombre,
+                    tipo.como_texto(),
+                    escucha,
+                    destino,
+                    datos.automatico as i64,
+                    fecha_ahora(),
+                    id
+                ],
+            )
+            .map_err(|error| {
+                if crate::almacen::es_conflicto_unico(&error) {
+                    anyhow!("ya existe un túnel con el nombre «{nombre}» en ese host")
+                } else {
+                    anyhow::Error::new(error)
+                }
+            })?;
+        Ok(())
+    })
 }
 
 pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
@@ -239,13 +241,13 @@ pub fn borrar(conexion: &Connection, id: i64) -> Result<()> {
 }
 
 pub fn alternar_automatico(conexion: &Connection, id: i64, automatico: bool) -> Result<()> {
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Tuneles, id)?;
-    conexion.execute(
-        "UPDATE TUNELES SET automatico = ?1, actualizado_en = ?2 WHERE id = ?3",
-        params![automatico as i64, fecha_ahora(), id],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Tuneles, id, antes.as_deref())?;
-    Ok(())
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Tuneles, id, |conexion| {
+        conexion.execute(
+            "UPDATE TUNELES SET automatico = ?1, actualizado_en = ?2 WHERE id = ?3",
+            params![automatico as i64, fecha_ahora(), id],
+        )?;
+        Ok(())
+    })
 }
 
 /// Valida y deja los campos en su forma canónica: nombre recortado, escucha

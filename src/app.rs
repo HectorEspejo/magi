@@ -1049,6 +1049,10 @@ pub struct Ficha {
     /// Etiqueta de este equipo, para enseñar cómo se llamarán las sesiones
     /// automáticas (`<etiqueta>-1`, `<etiqueta>-2`…). Vacía: «equipo».
     pub etiqueta_equipo: String,
+    /// La sincronización del inventario está configurada en este equipo: solo
+    /// entonces la cabecera del bloque SESIONES dice que viaja a los demás
+    /// equipos (D370).
+    pub sincronizacion_activa: bool,
     // ------------------------------------------------ terminal (Fase 15)
     /// Reconectar solo si se cae la red (propio del equipo).
     pub reconectar: bool,
@@ -2209,6 +2213,11 @@ pub enum AccionDialogo {
     },
     CerrarSesion,
     CerrarPestana(u32),
+    /// Volver a una pestaña soltada (`r` y «reconectar»), ya confirmado: se
+    /// engancha de nuevo soltando al otro equipo (D370, R164).
+    VolverASesion {
+        sesion_id: u32,
+    },
     ApagarServidor,
     CerrarSesionYAbrir(i64),
     Salir,
@@ -4772,8 +4781,41 @@ impl App {
         }
     }
 
-    /// Reconecta una sesión caída (pestaña o lista).
+    /// Reconecta una sesión caída (pestaña o lista). `r` de Sesiones, la
+    /// entrada «reconectar» de la paleta y `prefijo r` pasan por aquí.
+    ///
+    /// Una pestaña **soltada** no está caída: otro equipo tiene su sesión y
+    /// volver se la quita. Con `↵` en la propia pestaña el usuario lo ve en el
+    /// recuadro SOLTADA antes de pulsar; aquí no, así que se pregunta con lo
+    /// mismo que dice ese recuadro (D370, R164) y solo `↵` o `s` vuelven.
     fn reconectar_sesion(&mut self, sesion_id: u32) {
+        let soltada = self
+            .pestanas
+            .iter()
+            .find(|pestana| pestana.escritorio_id.is_none() && pestana.sesion_id == sesion_id)
+            .and_then(|pestana| {
+                let soltada = pestana.soltada()?;
+                let nombre = pestana.tmux.as_ref().map(|tmux| tmux.nombre.clone())?;
+                Some((
+                    nombre,
+                    pestana.host_nombre.clone(),
+                    soltada.por_equipo.clone(),
+                ))
+            });
+        if let Some((nombre, host, por_equipo)) = soltada {
+            let quien = por_equipo.as_deref().unwrap_or("otro equipo");
+            self.dialogo = Some(Dialogo::Confirmar {
+                titulo: "VOLVER A LA SESIÓN".to_string(),
+                lineas: vec![
+                    format!("La sesión «{nombre}» de {host} la usa ahora {quien}."),
+                    "Volver se la quita: allí se suelta y esta pestaña la recupera.".to_string(),
+                ],
+                peligro: false,
+                accion: AccionDialogo::VolverASesion { sesion_id },
+            });
+            self.sucio = true;
+            return;
+        }
         self.servidor.enviar(protocolo::MensajeCliente::Reconectar {
             sesion_id,
             compartir: false,
@@ -4895,6 +4937,18 @@ impl App {
                 // servidor aparecen como pestañas; pero ninguna debe robar la
                 // activación de una apertura en curso.
                 let pendientes = std::mem::take(&mut self.aperturas_pendientes);
+                // Lo que ya había al conectar no lo creó esta ventana ante sus
+                // ojos: sin `creada` no se guarda ninguna ficha de host marcado
+                // (la guarda la ventana que vio abrirse la pestaña, D369).
+                let sesiones = sesiones
+                    .into_iter()
+                    .map(|mut info| {
+                        if let Some(tmux) = info.tmux.as_mut() {
+                            tmux.creada = None;
+                        }
+                        info
+                    })
+                    .collect();
                 self.reconciliar_sesiones(sesiones);
                 self.aperturas_pendientes = pendientes;
                 self.actualizar_tuneles(tuneles);
@@ -5195,7 +5249,7 @@ impl App {
         }
         // Pestañas que acaban de enseñar una sesión persistente (Fase 16): la
         // ficha de un host marcado y la creación pendiente se resuelven al verla.
-        let mut persistentes_nuevas: Vec<(i64, String)> = Vec::new();
+        let mut persistentes_nuevas: Vec<(i64, String, Option<bool>)> = Vec::new();
         for info in lista {
             // La pestaña que se está mirando ya ve sus avisos (como con los
             // datos, `Evento::Pantallas`).
@@ -5204,7 +5258,7 @@ impl App {
                 .tmux
                 .as_ref()
                 .filter(|tmux| tmux.servidor == protocolo::ServidorTmux::Magi)
-                .map(|tmux| (info.host_id, tmux.nombre.clone()));
+                .map(|tmux| (info.host_id, tmux.nombre.clone(), tmux.creada));
             let mut aviso_del_servidor: Option<String> = None;
             if let Some(pestaña) = self
                 .pestanas
@@ -5307,8 +5361,8 @@ impl App {
                 self.mensaje(texto, true);
             }
         }
-        for (host_id, nombre) in persistentes_nuevas {
-            self.pestana_persistente_abierta(host_id, &nombre);
+        for (host_id, nombre, creada) in persistentes_nuevas {
+            self.pestana_persistente_abierta(host_id, &nombre, creada);
         }
         if self.pestanas.is_empty() {
             self.pestana_activa = None;
@@ -5777,6 +5831,7 @@ impl App {
                 .unwrap_or_default();
         }
         ficha.etiqueta_equipo = self.etiqueta_equipo_para_ficha();
+        ficha.sincronizacion_activa = self.config.sincronizacion.activa();
         ficha
     }
 
@@ -5947,6 +6002,7 @@ impl App {
             sesiones_original: host.is_some_and(|host| host.sesiones_persistentes),
             // `construir_ficha` la pone con la de este equipo.
             etiqueta_equipo: String::new(),
+            sincronizacion_activa: false,
             reconectar: host.is_none_or(|host| host.reconectar),
             portapapeles_remoto: host.is_some_and(|host| host.portapapeles_remoto),
             terminal_original: (
@@ -11114,7 +11170,8 @@ impl App {
             lineas: vec![
                 format!(
                     "Se volverá a escribir {} «{}» con tu versión perdedora,",
-                    conflicto.elemento_tipo, conflicto.nombre
+                    crate::ui::sincronizacion::etiqueta_de_elemento(&conflicto.elemento_tipo),
+                    conflicto.nombre
                 ),
                 "con una edición nueva que ganará en todos los equipos.".to_string(),
             ],
@@ -11153,7 +11210,10 @@ impl App {
                     vec![
                         format!(
                             "Se borrará {} «{}» de este equipo (la copia ya existe).",
-                            conflicto.elemento_tipo, conflicto.nombre
+                            crate::ui::sincronizacion::etiqueta_de_elemento(
+                                &conflicto.elemento_tipo
+                            ),
+                            conflicto.nombre
                         ),
                         "El borrado ya se aplicó en el otro equipo.".to_string(),
                     ],
@@ -11184,8 +11244,9 @@ impl App {
             titulo: "DESCARTAR CONFLICTO".to_string(),
             lineas: vec![
                 format!(
-                    "Se descartará el conflicto del {} «{}».",
-                    conflicto.elemento_tipo, conflicto.nombre
+                    "Se descartará el conflicto de {} «{}».",
+                    crate::ui::sincronizacion::etiqueta_de_elemento(&conflicto.elemento_tipo),
+                    conflicto.nombre
                 ),
                 "Se conservará 90 días en el registro de conflictos.".to_string(),
             ],
@@ -11257,7 +11318,8 @@ impl App {
             conflictos_bd::TIPO_BORRADO => {
                 lineas.push(format!(
                     "borrado aplazado de {} «{}» · {cuando}",
-                    conflicto.elemento_tipo, conflicto.nombre
+                    crate::ui::sincronizacion::etiqueta_de_elemento(&conflicto.elemento_tipo),
+                    conflicto.nombre
                 ));
                 if self.hay_trabajo_vivo(&conflicto.elemento_tipo, &conflicto.uuid) {
                     lineas.push(
@@ -11271,14 +11333,16 @@ impl App {
             conflictos_bd::TIPO_HUERFANO => {
                 lineas.push(format!(
                     "huérfano: {} «{}» perdió su host · {cuando}",
-                    conflicto.elemento_tipo, conflicto.nombre
+                    crate::ui::sincronizacion::etiqueta_de_elemento(&conflicto.elemento_tipo),
+                    conflicto.nombre
                 ));
                 lineas.push("d lo descarta; no se puede recuperar sin su host".to_string());
             }
             _ => {
                 lineas.push(format!(
                     "{} «{}» · ganó {equipo} · {cuando}",
-                    conflicto.elemento_tipo, conflicto.nombre
+                    crate::ui::sincronizacion::etiqueta_de_elemento(&conflicto.elemento_tipo),
+                    conflicto.nombre
                 ));
                 if let Some(perdedora) = &conflicto.version_perdedora_json {
                     if let Ok(valor) = serde_json::from_str::<serde_json::Value>(perdedora) {
@@ -11719,6 +11783,18 @@ impl App {
             AccionDialogo::CerrarPestana(sesion_id) => {
                 self.servidor
                     .enviar(protocolo::MensajeCliente::Cerrar { sesion_id });
+            }
+            AccionDialogo::VolverASesion { sesion_id } => {
+                // La pestaña pudo cerrarse o volver mientras se preguntaba.
+                let sigue_soltada = self
+                    .pestanas
+                    .iter()
+                    .any(|pestana| pestana.sesion_id == sesion_id && pestana.soltada().is_some());
+                if sigue_soltada {
+                    self.volver_a_la_sesion(sesion_id, false);
+                } else {
+                    self.mensaje("la pestaña ya no está soltada", true);
+                }
             }
             AccionDialogo::ApagarServidor => {
                 // El servidor cierra las sesiones (anotándolas) y se apaga.

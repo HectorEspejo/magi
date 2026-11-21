@@ -11,7 +11,7 @@ source: tests/sesiones_persistentes_ui/ficha.rs
 │      comando                                                                 │
 │      [  ]                                                                    │
 │                                                                              │
-│ SESIONES (viaja a tus equipos)                                               │
+│ SESIONES                                                                     │
 │  [x] Todas las sesiones persistentes (tmux en el host)                       │
 │      aviso: el snippet «arranque» arranca tmux; quedaría tmux dentro de tmux │
 │      nombres automáticos: sobremesa-1, sobremesa-2…                          │

@@ -537,7 +537,12 @@ async fn una_pestana_caida_no_mantiene_el_wake_lock_y_al_reconectarla_vuelve_a_c
         esc.hasta(PLAZO, |_| banco.llamadas("termux-wake-unlock") == 2)
             .await
     );
-    assert!(!hay_marca(&rutas, Marca::WakeLock));
+    // La marca se quita después de la orden de soltar: se espera, no se supone.
+    assert!(
+        esc.hasta(PLAZO, |_| !hay_marca(&rutas, Marca::WakeLock))
+            .await,
+        "la marca sigue puesta tras soltar el wake lock"
+    );
 }
 
 /// A1: una pestaña que está reconectando (`Abriendo` con `reconectando`) sigue

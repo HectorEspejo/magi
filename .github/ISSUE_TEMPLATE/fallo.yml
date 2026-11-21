@@ -1,0 +1,56 @@
+name: "Fallo / Bug report"
+description: "Algo no funciona como debería. / Something does not work as it should."
+title: "[FALLO] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **No pegues IP, nombres de host reales, claves ni contraseñas.** Cambia lo que haga falta por `192.0.2.10`, `ejemplo.org` o `usuario`.
+        Si es una vulnerabilidad, no abras una issue: usa el aviso privado (Security → Report a vulnerability).
+
+        **Do not paste real IPs, hostnames, keys or passwords.** Replace them with `192.0.2.10`, `ejemplo.org` or `usuario`.
+        If it is a vulnerability, do not open an issue: use the private advisory (Security → Report a vulnerability).
+  - type: input
+    id: version
+    attributes:
+      label: "Versión (`magi --version`) / Version"
+      placeholder: "MAGI 1.6.1 · protocolo 10"
+    validations:
+      required: true
+  - type: input
+    id: sistema
+    attributes:
+      label: "Sistema y terminal / System and terminal"
+      placeholder: "Omarchy · Alacritty"
+    validations:
+      required: true
+  - type: textarea
+    id: que-paso
+    attributes:
+      label: "Qué pasó / What happened"
+    validations:
+      required: true
+  - type: textarea
+    id: pasos
+    attributes:
+      label: "Pasos para reproducirlo / Steps to reproduce"
+      placeholder: "1. …"
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: "Qué esperabas / What you expected"
+  - type: textarea
+    id: diagnostico
+    attributes:
+      label: "Salida de `magi diagnostico`, sin datos reales / Output of `magi diagnostico`, without real data"
+      render: text
+  - type: checkboxes
+    id: privados
+    attributes:
+      label: "Datos privados / Private data"
+      options:
+        - label: "He quitado los datos privados (IP, hosts, usuarios, claves). / I removed private data (IPs, hosts, users, keys)."
+          required: true

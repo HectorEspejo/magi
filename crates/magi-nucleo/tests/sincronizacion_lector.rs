@@ -663,6 +663,66 @@ fn un_borrado_con_trabajo_vivo_se_aplaza_y_se_aplica_solo_cuando_termina() {
     assert_eq!(movil.lapidas(), 2);
 }
 
+/// Revisión adversarial de la 9b (NUC-2): un fichero dañado no es una lectura
+/// completa. Con él en la carpeta, la fusión es parcial y no puede dar por
+/// «recuperado» un host cuyo borrado está aplazado solo porque la lápida estaba
+/// en el fichero que no se leyó.
+#[test]
+fn un_fichero_danado_no_resuelve_un_borrado_aplazado() {
+    let (_temporal, carpeta) = carpeta_compartida();
+    let clave = ClaveSincronizacion::generar().texto().to_string();
+    let escritorio = Entorno::nuevo(&carpeta, "omarchy", "linux", &clave);
+    let movil = Entorno::nuevo(&carpeta, "pixel", "android", &clave);
+    let uuid_host = escritorio.crear_host("web", "192.0.2.5");
+    escritorio.exportar();
+    movil.pasada(&SinTrabajo);
+    assert_eq!(movil.hosts().len(), 1);
+
+    // El escritorio borra el host y reexporta; el móvil tiene una sesión abierta
+    // y aplaza el borrado.
+    escritorio.borrar_host("web");
+    escritorio.exportar();
+    let trabajo = TrabajoDePrueba::de(&[("host", &uuid_host)]);
+    let aplazada = movil.pasada(&trabajo);
+    assert_eq!(aplazada.conflictos_pendientes, 1);
+
+    // El fichero del escritorio se queda a medias (Syncthing copiando): la
+    // lápida no se lee, pero el borrado aplazado sigue pendiente.
+    let fichero = std::fs::read_dir(&carpeta)
+        .unwrap()
+        .flatten()
+        .map(|entrada| entrada.path())
+        .find(|ruta| {
+            ruta.file_name()
+                .and_then(|nombre| nombre.to_str())
+                .is_some_and(|nombre| nombre.starts_with("magi-") && nombre.ends_with(".age"))
+        })
+        .expect("el fichero del escritorio");
+    let completo = std::fs::read(&fichero).unwrap();
+    std::fs::write(&fichero, &completo[..completo.len() / 2]).unwrap();
+    let a_medias = movil.pasada(&trabajo);
+    assert!(
+        a_medias
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("a medio copiar o dañado")),
+        "{:?}",
+        a_medias.avisos
+    );
+    assert_eq!(
+        a_medias.conflictos_pendientes, 1,
+        "un fichero dañado no resuelve un borrado aplazado"
+    );
+    assert_eq!(movil.hosts().len(), 1, "el host con trabajo vivo sigue");
+
+    // Cuando la copia termina, la siguiente pasada relee, y sin trabajo vivo
+    // aplica el borrado aplazado.
+    std::fs::write(&fichero, &completo).unwrap();
+    let aplicada = movil.pasada(&SinTrabajo);
+    assert_eq!(aplicada.conflictos_pendientes, 0);
+    assert_eq!(movil.hosts().len(), 0, "el borrado se aplica al terminar");
+}
+
 #[test]
 fn las_huellas_se_importan_como_en_el_escritorio_y_solo_dejan_conflicto_de_huella() {
     let (_temporal, carpeta) = carpeta_compartida();

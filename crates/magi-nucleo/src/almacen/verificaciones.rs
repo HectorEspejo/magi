@@ -57,26 +57,26 @@ pub fn guardar(conexion: &Connection, host_id: i64, datos: &DatosVerificaciones)
         return Ok(());
     }
     // Las verificaciones viajan dentro del host: cambiarlas sube su versión
-    // (Fase 10).
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Hosts, host_id)?;
-    conexion.execute(
-        "INSERT INTO VERIFICACIONES_HOST (host_id, salud, backup, backup_ruta, backup_patron, \
-         tests, tests_comando, actualizado_en) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-         ON CONFLICT(host_id) DO UPDATE SET salud = excluded.salud, backup = excluded.backup, \
-         backup_ruta = excluded.backup_ruta, backup_patron = excluded.backup_patron, \
-         tests = excluded.tests, tests_comando = excluded.tests_comando, \
-         actualizado_en = excluded.actualizado_en",
-        params![
-            host_id,
-            datos.salud as i64,
-            datos.backup as i64,
-            datos.backup_ruta,
-            datos.backup_patron,
-            datos.tests as i64,
-            datos.tests_comando,
-            fecha_ahora()
-        ],
-    )?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Hosts, host_id, antes.as_deref())?;
-    Ok(())
+    // (Fase 10), en la misma transacción que el cambio (R84).
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Hosts, host_id, |conexion| {
+        conexion.execute(
+            "INSERT INTO VERIFICACIONES_HOST (host_id, salud, backup, backup_ruta, backup_patron, \
+             tests, tests_comando, actualizado_en) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(host_id) DO UPDATE SET salud = excluded.salud, backup = excluded.backup, \
+             backup_ruta = excluded.backup_ruta, backup_patron = excluded.backup_patron, \
+             tests = excluded.tests, tests_comando = excluded.tests_comando, \
+             actualizado_en = excluded.actualizado_en",
+            params![
+                host_id,
+                datos.salud as i64,
+                datos.backup as i64,
+                datos.backup_ruta,
+                datos.backup_patron,
+                datos.tests as i64,
+                datos.tests_comando,
+                fecha_ahora()
+            ],
+        )?;
+        Ok(())
+    })
 }

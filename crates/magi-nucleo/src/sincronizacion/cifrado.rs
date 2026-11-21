@@ -17,6 +17,29 @@ use crate::sincronizacion::formato::{INFO_FIRMA, SAL_HKDF};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Por qué no se pudo descifrar un fichero (R85).
+///
+/// La pasada solo pide una clave nueva cuando ninguna identidad coincide: un
+/// fichero cortado, vacío o que no es age se va a reintentar solo en la
+/// siguiente pasada, y no tiene nada que ver con la clave. El `Display` de los
+/// dos casos es el de siempre y nunca pasa por el de age (ver
+/// `texto_error_descifrado`).
+///
+/// Limitación conocida de age 0.11.5: una entrada X25519 de la cabecera
+/// corrupta cuenta como «otra clave» (`NoMatchingKeys`), igual que un fichero
+/// cifrado para otra identidad.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ErrorDescifrado {
+    /// Ninguna identidad coincide: el fichero está cifrado para otra clave. Es
+    /// el único caso que pide la clave nueva.
+    #[error("descifrando con age: la clave no abre este fichero (está cifrado para otra)")]
+    NingunaIdentidad,
+    /// Cualquier otra causa: truncado, vacío, cabecera o MAC alterados, formato
+    /// desconocido o contenido dañado. Lleva la explicación en castellano.
+    #[error("descifrando con age: {0}")]
+    Danado(String),
+}
+
 /// Comienzo del texto canónico de una identidad de age.
 const PREFIJO_CLAVE: &str = "AGE-SECRET-KEY-1";
 
@@ -134,11 +157,15 @@ impl ClaveSincronizacion {
     }
 
     /// Descifra un fichero age. El contenido en claro se devuelve en Zeroizing.
-    pub fn descifrar(&self, cifrado: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        let plano = age::decrypt(&self.identidad, cifrado).map_err(|error| {
-            anyhow::anyhow!("descifrando con age: {}", texto_error_descifrado(&error))
-        })?;
-        Ok(Zeroizing::new(plano))
+    ///
+    /// Solo «ninguna identidad coincide» es `NingunaIdentidad`: todo lo demás
+    /// (R85) es `Danado`, con su explicación en castellano.
+    pub fn descifrar(&self, cifrado: &[u8]) -> Result<Zeroizing<Vec<u8>>, ErrorDescifrado> {
+        match age::decrypt(&self.identidad, cifrado) {
+            Ok(plano) => Ok(Zeroizing::new(plano)),
+            Err(age::DecryptError::NoMatchingKeys) => Err(ErrorDescifrado::NingunaIdentidad),
+            Err(error) => Err(ErrorDescifrado::Danado(texto_error_descifrado(&error))),
+        }
     }
 }
 
@@ -310,6 +337,43 @@ mod pruebas {
         assert_eq!(
             clave.descifrar(cortado).unwrap_err().to_string(),
             "descifrando con age: el contenido cifrado está dañado o incompleto"
+        );
+    }
+
+    #[test]
+    fn solo_ninguna_identidad_coincide_pide_otra_clave_y_lo_demas_es_un_fichero_danado() {
+        // R85: otra clave, y nada más que otra clave, es `NingunaIdentidad`.
+        let clave = ClaveSincronizacion::generar();
+        let ajena = ClaveSincronizacion::generar();
+        let de_otra = ajena.cifrar(b"de otra clave").unwrap();
+        assert_eq!(
+            clave.descifrar(&de_otra).unwrap_err(),
+            ErrorDescifrado::NingunaIdentidad
+        );
+        // Vacío, que no es age, cortado en la cabecera o en el contenido, o con
+        // un byte del contenido cambiado: ficheros dañados o a medio copiar.
+        let propio = clave.cifrar(b"contenido de un fichero de equipo").unwrap();
+        let mut alterado = propio.clone();
+        let ultimo = alterado.len() - 1;
+        alterado[ultimo] ^= 0xff;
+        for (nombre, bytes) in [
+            ("vacío", Vec::new()),
+            ("que no es age", b"esto no es un fichero age".to_vec()),
+            ("cortado en la cabecera", propio[..30].to_vec()),
+            ("cortado por la mitad", propio[..propio.len() / 2].to_vec()),
+            ("con el final alterado", alterado),
+        ] {
+            match clave.descifrar(&bytes) {
+                Err(ErrorDescifrado::Danado(motivo)) => {
+                    assert!(!motivo.is_empty(), "{nombre}");
+                }
+                otro => panic!("{nombre}: se esperaba un fichero dañado y salió {otro:?}"),
+            }
+        }
+        // El texto de siempre, sin el de age.
+        assert_eq!(
+            ErrorDescifrado::NingunaIdentidad.to_string(),
+            "descifrando con age: la clave no abre este fichero (está cifrado para otra)"
         );
     }
 

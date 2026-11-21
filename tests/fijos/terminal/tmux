@@ -1,8 +1,9 @@
 #!/bin/sh
 # tmux falso de las pruebas de MAGI (Fase 15, ampliado en la Fase 16).
 #
-# Responde a las órdenes que usan magi_nucleo::terminal::tmux y
-# crates/magi-nucleo/scripts/terminal_tmux.sh: -V, has-session, list-sessions,
+# Responde a las órdenes que usan magi_nucleo::terminal::tmux y los scripts
+# crates/magi-nucleo/scripts/terminal_tmux.sh y terminal_enganche.sh: -V,
+# has-session, list-sessions,
 # list-windows -a, new-session, attach-session, kill-session, rename-session,
 # set-option, capture-pane, start-server y kill-server, con las opciones
 # globales -L y -f y las secuencias separadas por «;» (la configuración de MAGI
@@ -225,6 +226,11 @@ orden_new_session() {
         exit 1
     fi
     crear_sesion "$V_s"
+    # Gancho de las pruebas: la orden tarda en devolver el control, con la
+    # sesión ya creada (por ejemplo, para cerrar la pestaña mientras tanto).
+    if [ -n "${MAGI_TMUX_NEW_SESSION_TARDA:-}" ]; then
+        sleep "$MAGI_TMUX_NEW_SESSION_TARDA"
+    fi
     if ! tiene_bandera d; then
         enganchar "$V_s"
     fi
@@ -337,6 +343,25 @@ orden_list_windows() {
         exit 1
     fi
     formatear ventanas "$V_F"
+    otro_equipo_tras_estado
+}
+
+# Gancho de las pruebas de la carrera de la reconexión (R157): tras el primer
+# «list-windows» del servidor propio (que solo hace «estado», justo después de
+# leer las sesiones), otro equipo se engancha a todas sus sesiones: pasan a
+# tener un cliente de ese equipo. Lo que ya leyó «estado» es de antes; lo que
+# lean después (la guarda del enganche) ya lo ve. Una sola vez por fichero de
+# estado.
+otro_equipo_tras_estado() {
+    [ -n "${MAGI_TMUX_OTRO_EQUIPO_TRAS_ESTADO:-}" ] || return 0
+    [ "$SOCKET" = magi ] || return 0
+    hecho="${FICHERO}.otro_equipo.hecho"
+    [ -e "$hecho" ] && return 0
+    : > "$hecho"
+    temporal="${FICHERO}.tmp.$$"
+    awk -F '\t' -v OFS='\t' -v equipo="$MAGI_TMUX_OTRO_EQUIPO_TRAS_ESTADO" '
+        { while (NF < 5) $(NF + 1) = ""; $2 = 1; $5 = equipo; print }' "$FICHERO" > "$temporal"
+    mv "$temporal" "$FICHERO"
 }
 
 orden_capture_pane() {

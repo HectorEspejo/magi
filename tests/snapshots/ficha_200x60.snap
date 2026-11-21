@@ -25,7 +25,7 @@ source: tests/redimensionado/arnes.rs
 │                                                               patrón [  ]  (< 24 h)                                                                                                                  │
 │                                         [ ] tests en verde    [  ]                                                                                                                                   │
 │                                                                                                                                                                                                      │
-│                                        SESIONES (viaja a tus equipos)                                                                                                                                │
+│                                        SESIONES                                                                                                                                                      │
 │                                         [ ] Todas las sesiones persistentes (tmux en el host)                                                                                                        │
 │                                             nombres automáticos: omarchy-portatil-1, omarchy-portatil-2…                                                                                             │
 │                                         Espacio marca · Tab siguiente · Ctrl+S guardar                                                                                                               │

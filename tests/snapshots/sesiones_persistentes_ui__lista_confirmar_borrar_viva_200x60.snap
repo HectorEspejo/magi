@@ -25,13 +25,13 @@ source: tests/sesiones_persistentes_ui/lista.rs
 
 
 
+
                                                                    ┌ BORRAR FICHA ──────────────────────────────────────────────────┐
                                                                    │                                                                │
                                                                    │  ¿Borrar la ficha de «agente-api» en web-01?                   │
                                                                    │  La sesión seguirá viva en web-01, sin ficha: la verás como    │
                                                                    │  «sin ficha».                                                  │
-                                                                   │  Borrar la ficha no toca el host; se borra también en tus      │
-                                                                   │  otros equipos.                                                │
+                                                                   │  Borrar la ficha no toca el host.                              │
                                                                    │                                                                │
                                                                    │  s confirmar   n / esc cancelar                                │
                                                                    │                                                                │

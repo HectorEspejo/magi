@@ -18,13 +18,13 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 use magi::app::sesion::DestinoPersistente;
-use magi::app::{App, Dialogo, Evento};
+use magi::app::{AccionDialogo, App, Dialogo, Evento};
 use magi::config::{Config, Rutas};
 use magi::modelo::{DatosHost, Origen};
 use magi::protocolo::{
     CausaAperturaTmux, EstadoFicha, EstadoSesionRemota, FichaVista, HostVisto, InfoAviso,
-    InfoReconexion, InfoSesion, ListaPersistentes, MensajeCliente, MensajeServidor, ServidorTmux,
-    SesionVista, Soltada, TmuxPestana, VersionTmux,
+    InfoReconexion, InfoSesion, ListaPersistentes, MensajeCliente, MensajeServidor, ResultadoTmux,
+    ServidorTmux, SesionVista, Soltada, TmuxPestana, VersionTmux,
 };
 use magi::registro::FiltroRegistro;
 use magi::tema::Tema;
@@ -155,7 +155,15 @@ impl Prueba {
     }
 
     fn servidor(&mut self, mensaje: MensajeServidor) {
+        let es_bienvenida = matches!(mensaje, MensajeServidor::Bienvenida { .. });
         self.app.procesar(Evento::Servidor(mensaje));
+        if es_bienvenida {
+            // La ventana lleva conectada un buen rato: lo que la lista de
+            // pruebas dice haber comprobado hace segundos es posterior a su
+            // conexión (D368). Las pruebas de la conexión reciente envían la
+            // `Bienvenida` por `Evento::Servidor` directamente.
+            self.app.persistentes.conectada_en = Some(chrono::Utc::now().timestamp() - 3600);
+        }
         self.paso();
     }
 
@@ -307,6 +315,7 @@ fn sesion_de(id: u32, host_id: i64, host: &str) -> InfoSesion {
 
 fn tmux_propio(nombre: &str) -> TmuxPestana {
     TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Magi,
         nombre: nombre.to_string(),
         version: Some(VersionTmux::nueva(3, 5)),
@@ -316,6 +325,7 @@ fn tmux_propio(nombre: &str) -> TmuxPestana {
 
 fn tmux_habitual(nombre: &str) -> TmuxPestana {
     TmuxPestana {
+        creada: None,
         servidor: ServidorTmux::Habitual,
         nombre: nombre.to_string(),
         version: None,
@@ -330,6 +340,15 @@ fn persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesion {
         tmux: Some(tmux_propio(nombre)),
         ..sesion_de(id, host_id, host)
     }
+}
+
+/// Una pestaña persistente que acaba de crear su sesión en el host (`creada`).
+fn persistente_creada(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesion {
+    let mut info = persistente(id, host_id, host, nombre);
+    if let Some(tmux) = info.tmux.as_mut() {
+        tmux.creada = Some(true);
+    }
+    info
 }
 
 /// La misma pestaña, soltada por otro equipo (así la difunde el servidor: caída
@@ -364,6 +383,7 @@ fn sesion_vista(nombre: &str, campana: bool) -> SesionVista {
     SesionVista {
         servidor: ServidorTmux::Magi,
         nombre: nombre.to_string(),
+        id: None,
         clientes: 0,
         equipo: None,
         actividad: 1_700_000_000,
@@ -382,7 +402,7 @@ fn ficha_vista(host_id: i64, nombre: &str, campana: bool) -> FichaVista {
         nombre: nombre.to_string(),
         estado: EstadoFicha::VivaLibre,
         sesion: Some(sesion_vista(nombre, campana)),
-        comprobada_en: 1_700_000_000,
+        comprobada_en: chrono::Utc::now().timestamp(),
     }
 }
 
@@ -397,7 +417,7 @@ fn lista_con(fichas: Vec<FichaVista>) -> ListaPersistentes {
 fn host_visto(host_id: i64, sin_ficha: Vec<SesionVista>, habitual: Vec<SesionVista>) -> HostVisto {
     HostVisto {
         host_id,
-        comprobada_en: 1_700_000_000,
+        comprobada_en: chrono::Utc::now().timestamp(),
         ahora: 1_700_000_000,
         tmux: Some(VersionTmux::nueva(3, 5)),
         error: None,
@@ -694,10 +714,9 @@ fn en_la_soltada_las_teclas_con_modificadores_no_vuelven_ni_cierran() {
     );
 }
 
-#[test]
-fn el_prefijo_r_en_la_soltada_tambien_vuelve() {
-    let mut prueba = Prueba::nueva(&["dev-01"]);
-    let dev = prueba.host_id("dev-01");
+/// Una pestaña persistente que otro equipo se llevó, con la lista de pestañas
+/// ya difundida.
+fn con_una_soltada(prueba: &mut Prueba, dev: i64) {
     prueba.entrar(vec![persistente(1, dev, "dev-01", "refactor")]);
     prueba.difundir(vec![soltada_por(
         persistente(1, dev, "dev-01", "refactor"),
@@ -705,7 +724,137 @@ fn el_prefijo_r_en_la_soltada_tambien_vuelve() {
         DESDE_FIJO,
     )]);
     prueba.drenar();
+}
+
+/// El diálogo que pregunta antes de quitarle la sesión al otro equipo: lo que
+/// dice y que con `n` no manda nada.
+fn confirma_volver_y_cancela_o_acepta(prueba: &mut Prueba, aceptar: bool) -> Vec<MensajeCliente> {
+    let Some(Dialogo::Confirmar {
+        titulo,
+        lineas,
+        accion,
+        ..
+    }) = &prueba.app.dialogo
+    else {
+        panic!("sin la confirmación de volver: {:?}", prueba.app.mensaje);
+    };
+    assert_eq!(titulo, "VOLVER A LA SESIÓN");
+    let texto = lineas.join(" ");
+    assert!(texto.contains("«refactor»"), "{texto}");
+    assert!(texto.contains("dev-01"), "{texto}");
+    assert!(texto.contains("la usa ahora portátil"), "{texto}");
+    assert!(texto.contains("se la quita"), "{texto}");
+    assert!(
+        matches!(accion, AccionDialogo::VolverASesion { sesion_id: 1 }),
+        "la acción no es volver a la sesión 1"
+    );
+    assert!(prueba.drenar().is_empty(), "preguntar no manda nada");
+    prueba.tecla(if aceptar {
+        KeyCode::Enter
+    } else {
+        KeyCode::Char('n')
+    });
+    assert!(prueba.app.dialogo.is_none());
+    prueba.drenar()
+}
+
+#[test]
+fn el_prefijo_r_en_la_soltada_pide_la_confirmacion_antes_de_volver() {
+    // R164: el prefijo r también le quita la sesión al otro equipo.
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    con_una_soltada(&mut prueba, dev);
     prueba.prefijo(KeyCode::Char('r'));
+    assert!(
+        confirma_volver_y_cancela_o_acepta(&mut prueba, false).is_empty(),
+        "con n no se manda nada"
+    );
+    prueba.prefijo(KeyCode::Char('r'));
+    assert_eq!(
+        confirma_volver_y_cancela_o_acepta(&mut prueba, true),
+        vec![MensajeCliente::Reconectar {
+            sesion_id: 1,
+            compartir: false
+        }]
+    );
+}
+
+#[test]
+fn r_en_la_lista_de_pestanas_sobre_una_soltada_pide_la_confirmacion_antes_de_volver() {
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    con_una_soltada(&mut prueba, dev);
+    prueba.prefijo(KeyCode::Char('l'));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+    // Entrar en la vista consulta al servidor: eso no es lo que se prueba.
+    prueba.drenar();
+    // El foco está en «Pestañas» (la lista de «Persistentes» está vacía).
+    prueba.tecla(KeyCode::Char('r'));
+    assert!(
+        confirma_volver_y_cancela_o_acepta(&mut prueba, false).is_empty(),
+        "con n no se manda nada"
+    );
+    prueba.tecla(KeyCode::Char('r'));
+    assert_eq!(
+        confirma_volver_y_cancela_o_acepta(&mut prueba, true),
+        vec![MensajeCliente::Reconectar {
+            sesion_id: 1,
+            compartir: false
+        }]
+    );
+}
+
+#[test]
+fn reconectar_de_la_paleta_sobre_una_soltada_pide_la_confirmacion_antes_de_volver() {
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    con_una_soltada(&mut prueba, dev);
+    // La paleta no se abre desde la vista Sesión (allí las teclas van al
+    // remoto): se sale a la lista de sesiones.
+    prueba.prefijo(KeyCode::Char('l'));
+    prueba.drenar();
+    prueba.tecla_con(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(prueba.app.paleta.is_some(), "la paleta no se abrió");
+    for letra in "reconectar".chars() {
+        prueba.tecla(KeyCode::Char(letra));
+    }
+    prueba.tecla(KeyCode::Enter);
+    assert!(prueba.app.paleta.is_none());
+    assert_eq!(
+        confirma_volver_y_cancela_o_acepta(&mut prueba, true),
+        vec![MensajeCliente::Reconectar {
+            sesion_id: 1,
+            compartir: false
+        }]
+    );
+}
+
+#[test]
+fn instantaneas_de_la_confirmacion_de_volver_a_la_soltada() {
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    con_una_soltada(&mut prueba, dev);
+    prueba.prefijo(KeyCode::Char('r'));
+    assert!(matches!(
+        prueba.app.dialogo,
+        Some(Dialogo::Confirmar { .. })
+    ));
+    prueba.instantaneas("volver_a_la_soltada");
+}
+
+#[test]
+fn una_pestana_caida_sin_soltar_se_reconecta_sin_preguntar() {
+    // Lo que ya funcionaba no cambia: la confirmación es solo para la soltada.
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    prueba.entrar(vec![persistente(1, dev, "dev-01", "refactor")]);
+    prueba.difundir(vec![InfoSesion {
+        estado: EstadoSesionRemota::Caida,
+        ..persistente(1, dev, "dev-01", "refactor")
+    }]);
+    prueba.drenar();
+    prueba.prefijo(KeyCode::Char('r'));
+    assert!(prueba.app.dialogo.is_none());
     assert_eq!(
         prueba.drenar(),
         vec![MensajeCliente::Reconectar {
@@ -713,6 +862,27 @@ fn el_prefijo_r_en_la_soltada_tambien_vuelve() {
             compartir: false
         }]
     );
+}
+
+#[test]
+fn si_la_soltada_vuelve_mientras_se_pregunta_confirmar_no_manda_nada() {
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    con_una_soltada(&mut prueba, dev);
+    prueba.prefijo(KeyCode::Char('r'));
+    assert!(matches!(
+        prueba.app.dialogo,
+        Some(Dialogo::Confirmar { .. })
+    ));
+    // Mientras se pregunta, el servidor la vuelve a enganchar (otra ventana).
+    prueba.difundir(vec![persistente(1, dev, "dev-01", "refactor")]);
+    prueba.tecla(KeyCode::Enter);
+    assert!(prueba.drenar().is_empty());
+    assert!(prueba
+        .app
+        .mensaje
+        .as_ref()
+        .is_some_and(|mensaje| mensaje.texto.contains("ya no está soltada")));
 }
 
 #[test]
@@ -939,6 +1109,182 @@ fn el_aviso_de_atencion_sale_en_la_barra_de_cualquier_vista_y_se_quita() {
         "{}",
         prueba.barra_global()
     );
+}
+
+/// `Bienvenida` de una ventana que se acaba de conectar: lo comprobado antes
+/// de este momento no vale para avisar de atención (D368).
+fn conectar_ahora(prueba: &mut Prueba) {
+    prueba
+        .app
+        .procesar(Evento::Servidor(bienvenida(Vec::new())));
+    prueba.paso();
+}
+
+#[test]
+fn la_barra_no_avisa_con_lo_comprobado_antes_de_conectar_la_ventana() {
+    // D368: la lista que llega detrás de la `Bienvenida` es la que el servidor
+    // guardó al irse la última ventana, y puede traer una campana de hace
+    // horas. No se avisa de ella; la pasada inmediata del servidor trae la
+    // lista fresca y entonces sí.
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let web = prueba.host_id("web-01");
+    conectar_ahora(&mut prueba);
+    let hace_horas = chrono::Utc::now().timestamp() - 3 * 3600;
+    let guardada = ListaPersistentes {
+        fichas: vec![FichaVista {
+            comprobada_en: hace_horas,
+            ..ficha_vista(web, "agente-api", true)
+        }],
+        hosts: vec![HostVisto {
+            comprobada_en: hace_horas,
+            ..host_visto(web, vec![sesion_vista("portatil-3", true)], Vec::new())
+        }],
+    };
+    prueba.persistentes(guardada);
+    assert!(prueba.app.persistentes_con_atencion().is_empty());
+    assert!(
+        !prueba.barra_global().contains("pide atención"),
+        "{}",
+        prueba.barra_global()
+    );
+
+    // La lista fresca (comprobada ahora) sí avisa, también de la sin ficha.
+    prueba.persistentes(ListaPersistentes {
+        fichas: vec![ficha_vista(web, "agente-api", true)],
+        hosts: vec![host_visto(
+            web,
+            vec![sesion_vista("portatil-3", true)],
+            Vec::new(),
+        )],
+    });
+    assert_eq!(prueba.app.persistentes_con_atencion().len(), 2);
+    assert!(
+        prueba.barra_global().contains("2 sesiones piden atención"),
+        "{}",
+        prueba.barra_global()
+    );
+}
+
+#[test]
+fn lo_comprobado_hasta_siete_segundos_antes_de_conectar_cuenta_como_fresco() {
+    // Como en `magi sesiones`: el servidor no repite un host comprobado hace
+    // menos de 5 s, así que esa comprobación es la de ahora; y 2 s más de
+    // margen por los segundos enteros y lo que tarda en llegar la `Bienvenida`.
+    let mut prueba = Prueba::nueva(&["web-01"]);
+    let web = prueba.host_id("web-01");
+    conectar_ahora(&mut prueba);
+    prueba.app.persistentes.conectada_en = Some(10_000);
+    for (comprobada, avisa) in [
+        (10_000, true),
+        (9_993, true),
+        (9_992, false),
+        (9_000, false),
+        (0, false),
+    ] {
+        prueba.persistentes(ListaPersistentes {
+            fichas: vec![FichaVista {
+                comprobada_en: comprobada,
+                ..ficha_vista(web, "agente-api", true)
+            }],
+            hosts: Vec::new(),
+        });
+        assert_eq!(
+            !prueba.app.persistentes_con_atencion().is_empty(),
+            avisa,
+            "comprobada en {comprobada}"
+        );
+    }
+}
+
+#[test]
+fn un_titulo_igual_al_nombre_del_host_no_se_enseña_en_la_lista_de_pestanas() {
+    // tmux pone por defecto el nombre de la máquina como título (D370): no
+    // cuenta nada del programa de dentro, y la columna dice «—». Uno de verdad
+    // sí se ve.
+    let mut prueba = Prueba::nueva(&["dev-01", "web-01"]);
+    let (dev, web) = (prueba.host_id("dev-01"), prueba.host_id("web-01"));
+    prueba.entrar(vec![
+        InfoSesion {
+            titulo: Some("dev-01".to_string()),
+            ..sesion_de(1, dev, "dev-01")
+        },
+        InfoSesion {
+            titulo: Some("Claude Code".to_string()),
+            ..sesion_de(2, web, "web-01")
+        },
+    ]);
+    prueba.redimensionar(140, 30);
+    prueba.prefijo(KeyCode::Char('l'));
+    assert_eq!(prueba.app.vista, Vista::Sesiones);
+    let texto = prueba.texto();
+    let fila = |nombre: &str| {
+        texto
+            .lines()
+            .find(|linea| linea.contains(nombre) && linea.contains("SSH"))
+            .unwrap_or_else(|| panic!("sin la fila de {nombre}: {texto}"))
+            .to_string()
+    };
+    let de_dev = fila("dev-01");
+    // El nombre de la pestaña es «dev-01» y es lo único con ese texto: el
+    // título repetido no sale otra vez.
+    assert_eq!(de_dev.matches("dev-01").count(), 2, "{de_dev}");
+    assert!(de_dev.contains('—'), "{de_dev}");
+    assert!(fila("web-01").contains("Claude Code"), "{}", fila("web-01"));
+}
+
+#[test]
+fn el_registro_enseña_los_tipos_de_sesiones_persistentes_enteros_con_su_etiqueta_corta() {
+    // Los cuatro tipos de la Fase 16 miden de 25 a 29 caracteres y la columna
+    // TIPO del REGISTRO corta a 22: llevan una etiqueta corta (D370). El filtro
+    // y el detalle siguen con el tipo real.
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    let dev = prueba.host_id("dev-01");
+    for tipo in [
+        magi::registro::SESION_PERSISTENTE_CREADA,
+        magi::registro::SESION_PERSISTENTE_BORRADA,
+        magi::registro::SESION_PERSISTENTE_REABIERTA,
+        magi::registro::SESION_PERSISTENTE_ENGANCHADA,
+    ] {
+        magi::registro::anotar(
+            prueba.app.almacen.conexion(),
+            tipo,
+            Some(dev),
+            None,
+            "«dev-01» · refactor",
+            magi::modelo::ResultadoRegistro::Ok,
+        )
+        .expect("anotar");
+    }
+    prueba.redimensionar(120, 30);
+    ir_a(&mut prueba, Vista::Registro);
+    let texto = prueba.texto();
+    for etiqueta in [
+        "persistente_creada",
+        "persistente_borrada",
+        "persistente_reabierta",
+        "persistente_enganchada",
+    ] {
+        assert!(
+            texto
+                .lines()
+                .any(|linea| linea.contains(etiqueta) && !linea.contains("sesion_persistente")),
+            "falta la fila con «{etiqueta}»:\n{texto}"
+        );
+    }
+    // Nada cortado a medias (`sesion_persistente_creada` en 22 caracteres
+    // salía `sesion_persistente_cr…`).
+    assert!(!texto.contains("sesion_persistente_c"), "{texto}");
+    // El detalle de la fila elegida (la última anotada) dice el tipo real.
+    assert!(texto.contains("sesion_persistente_enganchada"), "{texto}");
+    // Y el filtro de texto sigue buscando por el tipo real.
+    prueba.tecla(KeyCode::Char('/'));
+    for caracter in "sesion_persistente_borrada".chars() {
+        prueba.tecla(KeyCode::Char(caracter));
+    }
+    prueba.tecla(KeyCode::Enter);
+    let filtrado = prueba.texto();
+    assert!(filtrado.contains("persistente_borrada"), "{filtrado}");
+    assert!(!filtrado.contains("persistente_creada"), "{filtrado}");
 }
 
 #[test]
@@ -1373,12 +1719,9 @@ fn host_marcado_toda_pestaña_nueva_es_persistente_con_ficha_y_el_cliente_solo_a
     assert_eq!(prueba.app.vista, Vista::Sesion);
     assert!(prueba.app.almacen.fichas_de_host(dev).unwrap().is_empty());
     // El servidor la abre con nombre automático: llega con su tmux propio y
-    // recién abierta (`abierta_en` es el momento en que la conexión quedó
-    // abierta; una pestaña de hace horas no crea ficha, revisión de A2).
-    prueba.difundir(vec![InfoSesion {
-        abierta_en: chrono::Utc::now().timestamp(),
-        ..persistente(1, dev, "dev-01", "sobremesa-1")
-    }]);
+    // marcada `creada` (la sesión no existía y la creó esta pestaña, D369);
+    // una pestaña que se engancha a una que ya existía no crea ficha.
+    prueba.difundir(vec![persistente_creada(1, dev, "dev-01", "sobremesa-1")]);
     let fichas = prueba.app.almacen.fichas_de_host(dev).unwrap();
     assert_eq!(fichas.len(), 1, "{fichas:?}");
     assert_eq!(fichas[0].nombre, "sobremesa-1");
@@ -1426,6 +1769,51 @@ fn host_marcado_toda_pestaña_nueva_es_persistente_con_ficha_y_el_cliente_solo_a
         )),
         "{enviados:?}"
     );
+}
+
+#[test]
+fn cerrar_terminando_la_sesion_refresca_la_lista_de_persistentes_al_acabar() {
+    // D370: la fila de «Persistentes» no se quedaba viva hasta el siguiente
+    // refresco del vigilante tras cerrar la pestaña terminando su tmux.
+    for resultado in [ResultadoTmux::Ok, ResultadoTmux::NoExiste] {
+        let mut prueba = Prueba::nueva(&["dev-01"]);
+        let dev = prueba.host_id("dev-01");
+        prueba.entrar(vec![persistente(1, dev, "dev-01", "refactor")]);
+        prueba.drenar();
+        prueba.prefijo(KeyCode::Char('x'));
+        prueba.tecla(KeyCode::Char('T'));
+        let enviados = prueba.drenar();
+        let peticion_id = enviados
+            .iter()
+            .find_map(|mensaje| match mensaje {
+                MensajeCliente::TerminarTmux { peticion_id, .. } => Some(*peticion_id),
+                _ => None,
+            })
+            .expect("TerminarTmux");
+        let consultas = |mensajes: &[MensajeCliente]| {
+            mensajes
+                .iter()
+                .filter(|mensaje| {
+                    matches!(
+                        mensaje,
+                        MensajeCliente::ConsultarSesionesPersistentes { .. }
+                    )
+                })
+                .count()
+        };
+        assert_eq!(consultas(&enviados), 0, "aún no hay nada que refrescar");
+        prueba.servidor(MensajeServidor::TmuxTerminada {
+            peticion_id,
+            servidor: ServidorTmux::Magi,
+            resultado,
+        });
+        let enviados = prueba.drenar();
+        assert_eq!(
+            consultas(&enviados),
+            1,
+            "{resultado:?}: tras terminar se vuelve a mirar el host: {enviados:?}"
+        );
+    }
 }
 
 #[test]
@@ -1560,13 +1948,26 @@ fn los_errores_de_apertura_dicen_que_hacer_segun_la_causa() {
     assert!(texto.contains("comprueba la conexión"), "{texto}");
     assert!(texto.contains("conéctate a mano"), "{texto}");
 
+    // D349: la sesión ya no estaba. El texto del servidor se conserva y se
+    // dice qué hacer.
+    let texto = fallo_de_apertura(
+        &mut prueba,
+        dev,
+        CausaAperturaTmux::NoExiste,
+        "la sesión «refactor» ya no existe en «dev-01»",
+    );
+    assert_eq!(
+        texto,
+        "la sesión «refactor» ya no existe en «dev-01» · si tiene ficha, reábrela desde Sesiones"
+    );
+
     let texto = fallo_de_apertura(
         &mut prueba,
         dev,
         CausaAperturaTmux::Otra,
-        "la sesión «refactor» ya no existe en «dev-01»",
+        "tmux no pudo abrir la sesión «refactor» en «dev-01»",
     );
-    assert_eq!(texto, "la sesión «refactor» ya no existe en «dev-01»");
+    assert_eq!(texto, "tmux no pudo abrir la sesión «refactor» en «dev-01»");
 }
 
 #[test]
@@ -1581,6 +1982,10 @@ fn sin_texto_del_servidor_cada_causa_tiene_el_suyo() {
         (CausaAperturaTmux::TmuxAntiguo, "3.0 o posterior"),
         (CausaAperturaTmux::SinCarpeta, "no existe en «dev-01»"),
         (CausaAperturaTmux::Conexion, "comprueba la conexión"),
+        (
+            CausaAperturaTmux::NoExiste,
+            "la sesión «refactor» ya no existe en «dev-01»",
+        ),
         (
             CausaAperturaTmux::Otra,
             "no se pudo abrir la sesión de tmux «refactor»",
@@ -1700,12 +2105,33 @@ fn la_ayuda_de_sesion_y_sesiones_recoge_las_teclas_y_la_recomendacion_de_la_camp
         "preferredNotifChannel",
         "campana del terminal",
         "no pongas secretos",
+        // D367: el shell del host que arranca tmux por su cuenta.
+        "tmux en tmux",
+        "$TMUX",
     ] {
         assert!(
             texto.contains(esperado),
             "falta «{esperado}» en la ayuda:\n{texto}"
         );
     }
+}
+
+#[test]
+fn la_ayuda_de_sesiones_solo_dice_que_la_ficha_viaja_con_la_sincronizacion_configurada() {
+    // D370: «viaja, cifrada, a tus equipos» solo es cierto con la
+    // sincronización del inventario configurada.
+    let mut prueba = Prueba::nueva(&["dev-01"]);
+    prueba.redimensionar(200, 60);
+    ir_a(&mut prueba, Vista::Sesiones);
+    prueba.tecla_con(KeyCode::Char('?'), KeyModifiers::SHIFT);
+    let sin = prueba.texto();
+    assert!(sin.contains("no pongas secretos"), "{sin}");
+    assert!(!sin.contains("viaja"), "{sin}");
+    prueba.tecla(KeyCode::Esc);
+    prueba.app.config.sincronizacion.carpeta = Some("~/Sync/magi".to_string());
+    prueba.tecla_con(KeyCode::Char('?'), KeyModifiers::SHIFT);
+    let con = prueba.texto();
+    assert!(con.contains("viaja, cifrada"), "{con}");
 }
 
 /// Revisión adversarial: Hosts y Flota abren el diálogo con `N`, así que su

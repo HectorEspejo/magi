@@ -6,6 +6,7 @@
 pub use magi_nucleo::sincronizacion::*;
 
 pub mod almacenamiento;
+pub mod cli;
 pub mod equipos;
 pub mod qr;
 
@@ -44,6 +45,33 @@ impl AvisoUnico {
 
 /// El aviso de los permisos de esta sesión de MAGI.
 static PERMISOS_DICHOS: AvisoUnico = AvisoUnico::nuevo();
+
+/// Cuántos ficheros rechazados se recuerdan para no repetirlos en el log: la
+/// carpeta es entrada no fiable y no puede hacer crecer la memoria sin tope.
+const MAX_RECHAZADOS_DICHOS: usize = 64;
+
+/// Los ficheros rechazados con la clave anterior (R97) que ya constan en el log
+/// de este proceso: una línea por fichero y proceso, no una en cada pasada.
+static RECHAZADOS_DICHOS: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Deja en el log una línea por cada fichero rechazado que aún no conste: solo
+/// su nombre y el motivo, nunca su contenido (R97). Pasado el tope, ya no
+/// anota más: el aviso de la pasada lo sigue diciendo.
+pub fn registrar_rechazados(rechazados: &[String]) {
+    let Ok(mut dichos) = RECHAZADOS_DICHOS.lock() else {
+        return;
+    };
+    for nombre in rechazados {
+        if dichos.len() >= MAX_RECHAZADOS_DICHOS || !dichos.insert(nombre.clone()) {
+            continue;
+        }
+        tracing::warn!(
+            fichero = %nombre,
+            "fichero de sincronización rechazado: {MOTIVO_RECHAZADO}"
+        );
+    }
+}
 
 /// Cómo escribe esta plataforma en la carpeta compartida: en Termux es el
 /// almacenamiento compartido de Android, que no admite `chmod`; en el resto,
@@ -164,10 +192,22 @@ pub fn pasada_con_aviso_y_ajuste(
     if salida.permisos_ignorados && aviso.primera_vez() {
         tracing::info!("{AVISO_PERMISOS_IGNORADOS}");
     }
+    registrar_rechazados(&salida.resultado.rechazados);
     Ok(salida.resultado)
 }
 
-/// Texto de estado de la sincronización para la CLI y la vista.
-pub fn estado_texto(conexion: &Connection, config: &Config, hogar: &Path) -> Result<String> {
-    magi_nucleo::sincronizacion::estado_texto(conexion, &config.sincronizacion, hogar)
+/// Texto de estado de la sincronización para la CLI y la vista, con el motivo de
+/// cada borrado aplazado que da `explicar_aplazo`.
+pub fn estado_texto(
+    conexion: &Connection,
+    config: &Config,
+    hogar: &Path,
+    explicar_aplazo: &dyn Fn(&magi_nucleo::almacen::conflictos::Conflicto) -> String,
+) -> Result<String> {
+    magi_nucleo::sincronizacion::estado_texto(
+        conexion,
+        &config.sincronizacion,
+        hogar,
+        explicar_aplazo,
+    )
 }

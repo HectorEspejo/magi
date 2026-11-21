@@ -4,13 +4,13 @@ resolver = "2"
 
 [package]
 name = "magi-ssh"
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 rust-version = "1.86"
 description = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/4d3-org/magi"
-homepage = "https://github.com/4d3-org/magi"
+repository = "https://github.com/HectorEspejo/magi"
+homepage = "https://github.com/HectorEspejo/magi"
 readme = "README.md"
 keywords = ["ssh", "tui", "terminal", "sessions", "sftp"]
 categories = ["command-line-utilities"]

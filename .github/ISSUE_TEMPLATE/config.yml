@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Vulnerabilidad / Security vulnerability"
+    url: https://github.com/HectorEspejo/magi/security/advisories/new
+    about: "Aviso privado de GitHub; no abras una issue pública. / Private GitHub advisory; do not open a public issue."

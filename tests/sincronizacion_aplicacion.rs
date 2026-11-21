@@ -821,6 +821,297 @@ fn un_huerfano_que_llegara_al_plan_no_se_aplica() {
     assert_eq!(contar(&almacen, Tabla::SincronizacionesDir), 0);
 }
 
+// ------------------------------------------- el nombre no se pierde al omitir (R160)
+
+/// Nombre y versión de una fila por uuid.
+fn nombre_y_version(almacen: &Almacen, tabla: Tabla, uuid: &str) -> (String, String) {
+    almacen
+        .conexion()
+        .query_row(
+            &format!(
+                "SELECT nombre, version FROM {} WHERE uuid = ?1",
+                tabla.nombre()
+            ),
+            params![uuid],
+            |fila| Ok((fila.get(0)?, fila.get(1)?)),
+        )
+        .expect("la fila sigue")
+}
+
+/// Un host del plan cuyos datos no se pueden leer (un puerto que no es un
+/// número): no se aplica, su fila local se conserva y deja un conflicto.
+fn host_que_no_se_puede_leer(uuid: &str, nombre: &str, ms: i64) -> Candidato {
+    let mut host = vivo(
+        "host",
+        uuid,
+        ms,
+        EQUIPO_REMOTO,
+        &host_datos(nombre, "192.0.2.1"),
+    );
+    host.contenido.as_mut().expect("contenido")["puerto"] = serde_json::json!("no-es-un-numero");
+    host
+}
+
+/// La importación aparta con un nombre temporal toda fila que va a reescribir.
+/// Si su host llega ilegible, el túnel no se reescribe, pero tampoco puede
+/// quedarse con el nombre temporal: el usuario lo vería y, peor, se exportaría.
+#[test]
+fn un_tunel_de_un_host_que_no_se_puede_leer_no_pierde_su_nombre() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_tunel_local(&almacen, host_id, "db-local", "uuid-tunel", 100);
+    let plan = plan(
+        vec![
+            host_que_no_se_puede_leer("uuid-host", "web", 300),
+            vivo(
+                "tunel",
+                "uuid-tunel",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host", "db-nuevo"),
+            ),
+        ],
+        Vec::new(),
+    );
+    aplicar(
+        almacen.conexion(),
+        &plan,
+        &OpcionesAplicacion::default(),
+        &hogar(),
+    )
+    .expect("aplicando el plan");
+
+    assert_eq!(contar(&almacen, Tabla::Hosts), 1, "el host se conserva");
+    assert_eq!(contar(&almacen, Tabla::Tuneles), 1);
+    let (nombre, version) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-tunel");
+    assert_eq!(nombre, "db-local", "no se queda con el nombre temporal");
+    assert_eq!(version, msde(100, EQUIPO_LOCAL), "y la fila no se toca");
+}
+
+#[test]
+fn una_sincronizacion_de_un_host_que_no_se_puede_leer_no_pierde_su_nombre() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_sinc_local(&almacen, host_id, "proyecto", "uuid-sinc", 100);
+    let plan = plan(
+        vec![
+            host_que_no_se_puede_leer("uuid-host", "web", 300),
+            vivo(
+                "sincronizacion_dir",
+                "uuid-sinc",
+                300,
+                EQUIPO_REMOTO,
+                &sinc_datos("uuid-host", "proyecto-nuevo"),
+            ),
+        ],
+        Vec::new(),
+    );
+    aplicar(
+        almacen.conexion(),
+        &plan,
+        &OpcionesAplicacion::default(),
+        &hogar(),
+    )
+    .expect("aplicando el plan");
+
+    assert_eq!(contar(&almacen, Tabla::SincronizacionesDir), 1);
+    let (nombre, version) = nombre_y_version(&almacen, Tabla::SincronizacionesDir, "uuid-sinc");
+    assert_eq!(nombre, "proyecto", "no se queda con el nombre temporal");
+    assert_eq!(version, msde(100, EQUIPO_LOCAL), "y la fila no se toca");
+}
+
+/// Lo mismo cuando el host del plan no existe en ningún sitio (un plan hecho
+/// a mano: la fusión descarta a estos huérfanos antes): la fila local que el
+/// plan quería reescribir conserva su nombre.
+#[test]
+fn un_tunel_y_una_sincronizacion_de_un_host_que_no_existe_conservan_su_nombre() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_tunel_local(&almacen, host_id, "db-local", "uuid-tunel", 100);
+    crear_sinc_local(&almacen, host_id, "proyecto", "uuid-sinc", 100);
+    let plan = plan(
+        vec![
+            vivo(
+                "host",
+                "uuid-host",
+                100,
+                EQUIPO_LOCAL,
+                &host_datos("web", "192.0.2.1"),
+            ),
+            vivo(
+                "tunel",
+                "uuid-tunel",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host-inexistente", "db-nuevo"),
+            ),
+            vivo(
+                "sincronizacion_dir",
+                "uuid-sinc",
+                300,
+                EQUIPO_REMOTO,
+                &sinc_datos("uuid-host-inexistente", "proyecto-nuevo"),
+            ),
+        ],
+        Vec::new(),
+    );
+    aplicar(
+        almacen.conexion(),
+        &plan,
+        &OpcionesAplicacion::default(),
+        &hogar(),
+    )
+    .expect("aplicando el plan");
+
+    let (tunel, _) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-tunel");
+    let (sinc, _) = nombre_y_version(&almacen, Tabla::SincronizacionesDir, "uuid-sinc");
+    assert_eq!(tunel, "db-local");
+    assert_eq!(sinc, "proyecto");
+}
+
+/// Dos túneles que se permutan el nombre en el plan y uno de ellos se omite:
+/// el otro toma el nombre del omitido, y devolverle el suyo chocaría con el
+/// UNIQUE. La restauración no aborta la importación (sería quedarse atascado
+/// reintentando el mismo fichero): el que se escribe se queda con su nombre del
+/// plan y el omitido, que no tiene nombre que devolver sin inventarlo, se deja
+/// como estaba, con un aviso.
+#[test]
+fn restaurar_el_nombre_de_un_omitido_no_aborta_si_otro_lo_ha_tomado() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    // Cada túnel escucha en su puerto: el primero, en uno distinto.
+    crear_tunel_local(&almacen, host_id, "a", "uuid-uno", 100);
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE TUNELES SET escucha = '127.0.0.1:8081' WHERE uuid = 'uuid-uno'",
+            [],
+        )
+        .unwrap();
+    crear_tunel_local(&almacen, host_id, "b", "uuid-dos", 100);
+    let plan = plan(
+        vec![
+            vivo(
+                "host",
+                "uuid-host",
+                100,
+                EQUIPO_LOCAL,
+                &host_datos("web", "192.0.2.1"),
+            ),
+            // El primero se omite (host inexistente) y el segundo toma su
+            // nombre «a».
+            vivo(
+                "tunel",
+                "uuid-uno",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host-inexistente", "b"),
+            ),
+            vivo(
+                "tunel",
+                "uuid-dos",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host", "a"),
+            ),
+        ],
+        Vec::new(),
+    );
+    aplicar(
+        almacen.conexion(),
+        &plan,
+        &OpcionesAplicacion::default(),
+        &hogar(),
+    )
+    .expect("la restauración no debe abortar la importación");
+
+    let (dos, _) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-dos");
+    assert_eq!(dos, "a", "el escrito toma su nombre del plan");
+    assert_eq!(contar(&almacen, Tabla::Tuneles), 2, "no se pierde ninguno");
+}
+
+/// Si el nombre original está libre, el omitido lo recupera aunque el plan
+/// toque a otros túneles del mismo host.
+#[test]
+fn el_omitido_recupera_su_nombre_aunque_se_escriban_otros_del_mismo_host() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_tunel_local(&almacen, host_id, "a", "uuid-uno", 100);
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE TUNELES SET escucha = '127.0.0.1:8081' WHERE uuid = 'uuid-uno'",
+            [],
+        )
+        .unwrap();
+    crear_tunel_local(&almacen, host_id, "b", "uuid-dos", 100);
+    let plan = plan(
+        vec![
+            vivo(
+                "host",
+                "uuid-host",
+                100,
+                EQUIPO_LOCAL,
+                &host_datos("web", "192.0.2.1"),
+            ),
+            vivo(
+                "tunel",
+                "uuid-uno",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host-inexistente", "a-nuevo"),
+            ),
+            vivo(
+                "tunel",
+                "uuid-dos",
+                300,
+                EQUIPO_REMOTO,
+                &tunel_datos("uuid-host", "b-nuevo"),
+            ),
+        ],
+        Vec::new(),
+    );
+    aplicar(
+        almacen.conexion(),
+        &plan,
+        &OpcionesAplicacion::default(),
+        &hogar(),
+    )
+    .expect("aplicando el plan");
+
+    let (uno, version) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-uno");
+    let (dos, _) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-dos");
+    assert_eq!(uno, "a");
+    assert_eq!(version, msde(100, EQUIPO_LOCAL), "el omitido no se toca");
+    assert_eq!(dos, "b-nuevo");
+}
+
+/// El host cuyo borrado se aplaza porque su túnel tiene trabajo vivo sigue
+/// vivo: tampoco puede quedarse con el nombre temporal con el que se apartó
+/// para borrarlo.
+#[test]
+fn el_host_cuyo_borrado_se_aplaza_por_su_tunel_conserva_su_nombre() {
+    let almacen = almacen();
+    let host_id = crear_host_local(&almacen, "web", "192.0.2.1", "uuid-host", 100);
+    crear_tunel_local(&almacen, host_id, "t", "uuid-tunel", 100);
+    let plan = plan(
+        Vec::new(),
+        vec![
+            lapida_plan("host", "uuid-host", "web", 400, EQUIPO_REMOTO),
+            lapida_plan("tunel", "uuid-tunel", "t", 400, EQUIPO_REMOTO),
+        ],
+    );
+    let mut opciones = OpcionesAplicacion::default();
+    opciones.borrados_aplazados.insert("uuid-tunel".to_string());
+    aplicar(almacen.conexion(), &plan, &opciones, &hogar()).expect("aplicando el plan");
+
+    let (host, version) = nombre_y_version(&almacen, Tabla::Hosts, "uuid-host");
+    assert_eq!(host, "web", "el host aplazado conserva su nombre");
+    assert_eq!(version, msde(100, EQUIPO_LOCAL));
+    let (tunel, _) = nombre_y_version(&almacen, Tabla::Tuneles, "uuid-tunel");
+    assert_eq!(tunel, "t");
+}
+
 #[test]
 fn recuperar_version_reinserta_el_contenido_y_cierra_el_conflicto() {
     let almacen = almacen();

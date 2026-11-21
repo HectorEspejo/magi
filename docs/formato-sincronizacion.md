@@ -182,6 +182,10 @@ Reglas:
 2. **Solo viajan los campos que viajan.** Conectarse a un host (cambia
    `ultima_conexion_en`), navegar por SFTP o plegar un grupo **no** cambian la
    versión ni se exportan.
+   El cambio de un elemento que viaja y su versión nueva (con la actualización
+   de `reloj_ms`) se escriben en **la misma transacción** del almacén, en todas
+   las tablas que viajan (R84): si algo falla entre los dos pasos, no queda
+   ningún cambio sin su versión.
 3. **Vector de una edición:** se conserva el vector heredado y se sube (o añade)
    la entrada del equipo que edita con el `ms` de la edición.
 4. **Dominancia.** El vector A domina a B si para todo equipo, `A[e] >= B[e]`
@@ -254,7 +258,7 @@ No viaja `plegado` (es propio de cada equipo).
 | `etiquetas` | array de texto | Nombres de etiquetas. |
 | `verificaciones` | objeto o null | Comprobaciones previas de la deliberación (§7.2.2). |
 | `snippet_al_conectar` | uuid o null | Snippet que se escribe en cada pestaña. |
-| `sesiones_persistentes` | booleano | **Desde el formato 4.** Toda pestaña nueva del host es una sesión persistente, con nombre automático y ficha. Solo se escribe cuando es `true`: un host sin la marca no trae el campo, y un fichero anterior al formato 4 tampoco, y en los dos casos cuenta como `false`. |
+| `sesiones_persistentes` | booleano | **Desde el formato 4.** Toda pestaña nueva del host es una sesión persistente, con nombre automático y ficha. Solo se escribe cuando es `true`: un host sin la marca no trae el campo, y un fichero anterior al formato 4 tampoco, y en los dos casos cuenta como `false`. Solo un host `ssh` puede llevar la marca: si un fichero la trae en un host de otro tipo (`rdp`, `vnc`, `voxl`), la importación aplica el host y la ignora (cuenta como `false`) y deja un aviso en el log. |
 
 No viajan: `ultimo_estado`, `ultima_conexion_en`, `sftp_dir_local`,
 `sftp_dir_remoto`, `actualizado_en`, `reconectar`, `portapapeles_remoto` ni
@@ -436,7 +440,7 @@ verdad de si la sesión existe.
 | `comando_reanudar` | texto o null | Comando al reabrir una sesión terminada (por ejemplo `claude --continue`). `null`: el `comando`. |
 | `nota` | texto o null | Hasta 500 caracteres. |
 | `origen` | texto | `manual` (marcada al abrir), `host` (de un host marcado) o `descubierta` (añadida desde la lista). |
-| `creada_por` | texto | Etiqueta del equipo que la creó. No cambia después de crearla. |
+| `creada_por` | texto | Etiqueta del equipo que la creó. No cambia después de crearla. La importación la guarda recortada de espacios y rechaza la ficha, como conflicto de elemento, si queda vacía. |
 
 Un texto vacío es lo mismo que `null`: al exportar, MAGI escribe `null`.
 
@@ -542,9 +546,15 @@ suya.
 
 Un equipo que aparece aquí deja de sincronizar con ese inventario. Quitar un
 equipo rota la clave de sincronización: el fichero del equipo quitado se borra de
-la carpeta y su clave anterior solo sirve para leer durante un máximo de 30 días.
-Un fichero de un equipo conocido que deja de abrirse con la clave de este equipo
-detiene la sincronización hasta que el usuario introduzca la clave nueva.
+la carpeta y la clave anterior solo sirve para leer durante un máximo de 30 días,
+y solo los ficheros de equipos **conocidos** (con fila en EQUIPOS) y **no
+quitados**: el fichero de un equipo que este no conocía no se abre con la clave
+anterior, se rechaza con un aviso y no crea ninguna fila (R97).
+
+Un fichero de un equipo conocido que **ninguna identidad abre** (está cifrado
+para otra clave) detiene la sincronización hasta que el usuario introduzca la
+clave nueva. Un fichero que no se puede leer por otra causa (cortado, a medio
+copiar o dañado) no pide ninguna clave: ver §12 y §13 (R85).
 
 ---
 
@@ -626,6 +636,10 @@ seguir cualquier implementación (MAGI de escritorio y Android):
 10. **Aplicación.** Las versiones y los vectores se escriben **tal cual** vienen
     del fichero (nunca se regeneran al importar); el `reloj_ms` local sube a la
     mayor versión vista. Las ediciones locales posteriores ya serán más recientes.
+    Las filas que la importación aparta con un nombre temporal para evitar choques
+    de `UNIQUE` y que al final no se reescriben ni se borran (por omitirse o por
+    un borrado aplazado) recuperan su nombre original antes de terminar: el nombre
+    temporal nunca queda en la base de datos.
 
 ---
 
@@ -639,10 +653,25 @@ seguir cualquier implementación (MAGI de escritorio y Android):
 - Cada equipo escribe **solo su fichero**, de forma atómica (temporal en el mismo
   directorio + rename) y con permisos 600. La escritura se hace únicamente cuando
   cambia el contenido, para no provocar sincronizaciones en vacío.
-- Un fichero que no se descifra o no tiene firma válida **no se aplica**; el
-  equipo queda marcado como ilegible o dañado y se reintenta en la siguiente
-  pasada. Un fichero con `formato` mayor que el conocido se ignora con el aviso
-  «el equipo X usa una versión más nueva de MAGI; actualiza».
+- Un fichero que no se puede leer **no se aplica** y no detiene la pasada: se
+  importan los demás. Hay tres casos, que no se confunden (R85 y R97):
+  - **Ninguna identidad coincide** (está cifrado para otra clave): si el equipo
+    es conocido, queda `ilegible` y la sincronización espera la clave nueva
+    (`esperando_clave`); si es de un equipo desconocido, solo se avisa.
+  - **A medio copiar o dañado** (truncado, vacío, que no es age, cabecera o MAC
+    alterados, firma no válida): el equipo conocido queda `danado`. El aviso dice
+    el nombre del fichero y que se reintenta: «magi-<uuid>.age: a medio copiar o
+    dañado; se reintenta en la siguiente pasada». No pide ninguna clave. Un
+    fichero que no se lee no guarda su hash, así que la siguiente pasada vuelve a
+    intentarlo (con Syncthing es lo normal mientras se copia).
+  - **Rechazado** (R97): cifrado con una clave que este equipo no usa, de un
+    equipo desconocido, mientras hay una clave anterior vigente. No se intenta
+    abrir con ella, no crea fila en EQUIPOS ni importa nada, y el aviso dice
+    «rechazado: de un equipo que este no conocía, cifrado con la clave anterior».
+    El escritorio deja además una línea en el log, sin el contenido (solo el
+    nombre del fichero y el motivo), una vez por proceso.
+- Un fichero con `formato` mayor que el conocido se ignora con el aviso «el
+  equipo X usa una versión más nueva de MAGI; actualiza».
 - Un cerrojo (`flock`) garantiza que solo un proceso sincroniza a la vez en el
   mismo equipo.
 
@@ -652,9 +681,16 @@ seguir cualquier implementación (MAGI de escritorio y Android):
 
 Orden obligatorio al leer un fichero ajeno:
 
-1. Descifrar con la identidad actual (o con la anterior durante una rotación). Si
-   falla y el equipo es conocido: `ilegible` y la sincronización se detiene
-   (`esperando_clave`).
+1. Descifrar con la identidad actual. Solo el error «ninguna identidad
+   coincide» pasa a la siguiente clave, y la siguiente (la anterior, durante los
+   30 días de una rotación) solo se prueba si el equipo del nombre del fichero es
+   conocido y no está quitado (R97); si no, el fichero se rechaza sin abrirlo. Si
+   ninguna clave coincide y el equipo es conocido: `ilegible` y la sincronización
+   se detiene (`esperando_clave`). Cualquier otro error de age (truncado, vacío,
+   cabecera o MAC alterados, que no es age) es `danado` («a medio copiar o
+   dañado»): no pide clave, no detiene la pasada y se reintenta en la siguiente
+   (R85). Limitación de age 0.11.5: una entrada X25519 corrupta de la cabecera
+   cuenta como «otra clave».
 2. Comprobar la cabecera y la firma. Si falla: `danado`, se ignora y se reintenta
    en la siguiente pasada.
 3. Comprobar que `equipo.uuid` coincide con el uuid del nombre del fichero y que

@@ -56,7 +56,13 @@ pub fn dibujar(
             let (cuerpo, pie) = ocupado(formulario, estado, estrecho, tema);
             (cuerpo, pie, 0)
         }
-        None => formulario_completo(formulario, estrecho, ancho_texto, tema),
+        None => formulario_completo(
+            formulario,
+            estrecho,
+            ancho_texto,
+            app.config.sincronizacion.activa(),
+            tema,
+        ),
     };
     Hoja::nueva("NUEVA SESIÓN PERSISTENTE", cuerpo, pie)
         .foco(foco)
@@ -72,10 +78,13 @@ fn estilo_error(tema: &Tema) -> Style {
 
 /// El formulario: los seis campos, la ayuda y, en el pie fijo, el error (si lo
 /// hay) y las teclas. Devuelve también la línea del campo con el foco.
+/// `sincroniza` es la sincronización del inventario configurada en este equipo:
+/// solo entonces se dice que la ficha viaja a los demás (D370).
 fn formulario_completo(
     formulario: &FormularioNueva,
     estrecho: bool,
     ancho_texto: usize,
+    sincroniza: bool,
     tema: &Tema,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>, usize) {
     let activo = |campo: CampoNueva| formulario.foco() == campo;
@@ -137,19 +146,26 @@ fn formulario_completo(
 
     cuerpo.push(Line::from(""));
     let host = formulario.host_nombre();
-    let (vive, secretos) = if estrecho {
-        (
+    let (vive, secretos) = match (sincroniza, estrecho) {
+        (true, true) => (
             format!("Vive en {host} y la ves en todos tus equipos."),
             "Sin secretos en el comando: la ficha viaja.".to_string(),
-        )
-    } else {
-        (
+        ),
+        (true, false) => (
             format!(
                 "Vive en {host} aunque cierres MAGI o apagues el equipo, y la ves en todos tus equipos."
             ),
             "La ficha viaja cifrada a tus otros equipos: no pongas secretos en el comando."
                 .to_string(),
-        )
+        ),
+        (false, true) => (
+            format!("Vive en {host}."),
+            "Sin secretos en el comando.".to_string(),
+        ),
+        (false, false) => (
+            format!("Vive en {host} aunque cierres MAGI o apagues el equipo."),
+            "No pongas secretos en el comando: queda guardado en la ficha.".to_string(),
+        ),
     };
     cuerpo.push(Line::from(Span::styled(
         vive,

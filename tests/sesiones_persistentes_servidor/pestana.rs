@@ -51,6 +51,9 @@ struct OpcionesBanco {
     binarios: Option<PathBuf>,
     /// Programa real que hace de shell de las pestañas normales.
     programa_shell: Option<Vec<String>>,
+    /// Variables de entorno extra del host de pruebas (los ganchos del tmux
+    /// falso, que dependen de la prueba).
+    entorno: Vec<(&'static str, String)>,
 }
 
 impl Default for OpcionesBanco {
@@ -60,6 +63,7 @@ impl Default for OpcionesBanco {
             host_marcado: false,
             binarios: None,
             programa_shell: None,
+            entorno: Vec::new(),
         }
     }
 }
@@ -77,28 +81,35 @@ async fn banco_con(opciones: OpcionesBanco) -> Banco {
     let habitual = temporal.path().join("habitual");
     let magi = temporal.path().join("magi");
     let llamadas = temporal.path().join("llamadas");
+    let mut entorno_extra = vec![
+        (
+            "MAGI_TMUX_ESTADO".to_string(),
+            habitual.display().to_string(),
+        ),
+        (
+            "MAGI_TMUX_ESTADO_MAGI".to_string(),
+            magi.display().to_string(),
+        ),
+        (
+            "MAGI_TMUX_LLAMADAS".to_string(),
+            llamadas.display().to_string(),
+        ),
+        (
+            "MAGI_TMUX_VERSION".to_string(),
+            opciones.version.to_string(),
+        ),
+    ];
+    entorno_extra.extend(
+        opciones
+            .entorno
+            .into_iter()
+            .map(|(clave, valor)| (clave.to_string(), valor)),
+    );
     let escenario = escenario(OpcionesEscenario {
         hosts: 1,
         binarios: Some(opciones.binarios.unwrap_or_else(fijos)),
         programa_shell: opciones.programa_shell,
-        entorno_extra: vec![
-            (
-                "MAGI_TMUX_ESTADO".to_string(),
-                habitual.display().to_string(),
-            ),
-            (
-                "MAGI_TMUX_ESTADO_MAGI".to_string(),
-                magi.display().to_string(),
-            ),
-            (
-                "MAGI_TMUX_LLAMADAS".to_string(),
-                llamadas.display().to_string(),
-            ),
-            (
-                "MAGI_TMUX_VERSION".to_string(),
-                opciones.version.to_string(),
-            ),
-        ],
+        entorno_extra,
         ..Default::default()
     })
     .await;
@@ -155,7 +166,7 @@ impl Banco {
             if let Some(comando) = comandos
                 .iter()
                 .rev()
-                .find(|comando| comando.contains("magi-tmux enganchar"))
+                .find(|comando| comando.contains("magi-enganche"))
             {
                 return comando.clone();
             }
@@ -452,6 +463,8 @@ async fn crear_y_enganchar_abre_la_pestana_con_pty_y_exec() {
     assert_eq!(
         sesion.tmux,
         Some(TmuxPestana {
+            // La creó esta apertura (D369).
+            creada: Some(true),
             servidor: ServidorTmux::Magi,
             nombre: "agente-api".to_string(),
             version: Some(VersionTmux::nueva(3, 4)),
@@ -473,21 +486,34 @@ async fn crear_y_enganchar_abre_la_pestana_con_pty_y_exec() {
     assert_eq!(banco.fichas(), 0, "el servidor no escribe fichas");
 
     // El enganche va por `exec` en el canal con PTY, no escrito en la shell:
-    // el script de 24 KB no pasa por la pantalla de la pestaña.
+    // con el enganche mínimo (de pocos KB), no con el script grande, que fue
+    // por la entrada estándar de otros `exec` (D357).
     let enganche = banco.exec_de_enganche().await;
     assert!(
-        enganche.ends_with(&format!(
-            " magi-tmux enganchar magi agente-api 1 {}",
-            equipo()
-        )),
+        enganche.ends_with(&format!(" magi-enganche magi agente-api 1 {} 0", equipo())),
         "{}",
         &enganche[enganche.len().saturating_sub(120)..]
     );
     assert!(
-        enganche.len() > 20_000 && enganche.len() < 100_000,
-        "el exec lleva el script entero y cabe en un argumento: {} bytes",
+        enganche.len() < 9_000,
+        "el exec del enganche cabe en la línea de órdenes de Dropbear: {} bytes",
         enganche.len()
     );
+    assert!(!enganche.contains("preparar_configuracion"));
+    // AC de D357: al comprobar, crear o preparar, la línea de órdenes que llega
+    // al host no contiene el script, solo el arranque y los datos.
+    let comandos = banco.escenario.observado.comandos.lock().unwrap().clone();
+    for suborden in ["comprobar", "crear", "preparar"] {
+        let comando = comandos
+            .iter()
+            .find(|comando| comando.contains(&format!(" magi-tmux {suborden} ")))
+            .unwrap_or_else(|| panic!("no hubo exec de {suborden}: {comandos:?}"));
+        assert!(
+            comando.len() < 1_500 && !comando.contains("preparar_configuracion"),
+            "el exec de {suborden} lleva el script: {} bytes",
+            comando.len()
+        );
+    }
     assert_eq!(banco.escenario.observado.ptys(), vec![(80, 24)]);
     assert!(
         banco.escenario.observado.shell().is_empty(),
@@ -499,7 +525,11 @@ async fn crear_y_enganchar_abre_la_pestana_con_pty_y_exec() {
         "MAGI_TMUX_ADJUNTO=agente-api soltar=1",
     )
     .await;
-    assert!(!volcado.contains("set -u") && !volcado.contains("terminal_tmux"));
+    assert!(
+        !volcado.contains("set -u")
+            && !volcado.contains("terminal_tmux")
+            && !volcado.contains("terminal_enganche")
+    );
     banco.esperar_enganches(1).await;
     assert_eq!(banco.enganches(), 1);
 }
@@ -1449,12 +1479,12 @@ async fn si_la_sesion_ya_no_existe_al_reconectar_la_pestana_se_cierra() {
     banco.esperar_enganches(1).await;
     assert_eq!(banco.enganches(), 1, "no se enganchó a nada");
     assert!(
-        banco
-            .escenario
-            .vistos
-            .iter()
-            .any(|mensaje| matches!(mensaje, MensajeServidor::AperturaTmuxFallida { nombre, .. } if nombre == "efimera")),
-        "el solicitante debía saber por qué se cerró"
+        banco.escenario.vistos.iter().any(|mensaje| matches!(
+            mensaje,
+            MensajeServidor::AperturaTmuxFallida { nombre, causa, .. }
+                if nombre == "efimera" && *causa == CausaAperturaTmux::NoExiste
+        )),
+        "el solicitante debía saber por qué se cerró: la sesión ya no existe (D349)"
     );
 }
 
@@ -2234,4 +2264,517 @@ async fn ni_el_log_ni_registro_reciben_contenido_titulos_ni_comandos() {
         );
     }
     let _ = std::io::stdout().flush();
+}
+
+// ===========================================================================
+// Cierre de la Fase 16 (Fase 9b): la carrera de la reconexión (R157), la causa
+// `no_existe` (D349), `creada` (D369) y la sesión creada que no llega a abrirse
+// ===========================================================================
+
+/// Cuántos `exec` de enganche mínimo vio el host de pruebas.
+fn execs_de_enganche(banco: &Banco) -> Vec<String> {
+    banco
+        .escenario
+        .observado
+        .comandos
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|comando| comando.contains("magi-enganche"))
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn si_otro_equipo_se_engancha_entre_la_comprobacion_y_el_enganche_la_pestana_queda_soltada() {
+    // R157. La reconexión automática lee `estado` (la sesión está libre) y,
+    // antes de que el enganche llegue, otro equipo se engancha: el tmux falso
+    // lo simula justo después del `list-windows` de `estado`. La guarda del
+    // enganche mínimo lo ve, sale con 101 sin tocar nada y la pestaña queda
+    // soltada; el otro equipo conserva la sesión.
+    let mut banco = banco_con(OpcionesBanco {
+        entorno: vec![("MAGI_TMUX_OTRO_EQUIPO_TRAS_ESTADO", "sobremesa".to_string())],
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco.esperar_enganches(1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Sin conexión, la sesión queda libre (el cliente de la pestaña se fue con
+    // ella) y la reconexión automática empieza.
+    banco.escenario.observado.tirar_conexiones().await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, Duration::from_secs(40), |pestana| pestana
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.soltada.as_ref())
+                .is_some_and(
+                    |soltada| soltada.por_equipo.as_deref() == Some("sobremesa")
+                ))
+            .await,
+        "la pestaña no quedó soltada: {:?}",
+        banco.pestana(sesion.id)
+    );
+    assert_eq!(
+        banco.pestana(sesion.id).unwrap().estado,
+        EstadoSesionRemota::Caida
+    );
+    // El enganche mínimo llegó a lanzarse (con la guarda) y salió sin
+    // engancharse: ningún `attach-session` más.
+    let enganches = execs_de_enganche(&banco);
+    assert_eq!(enganches.len(), 2, "{enganches:?}");
+    assert!(
+        enganches[1].ends_with(&format!(" magi-enganche magi refactor 1 {} 1", equipo())),
+        "la reconexión automática lleva la guarda: {}",
+        enganches[1]
+    );
+    assert_eq!(banco.enganches(), 1, "{}", banco.llamadas());
+    // El otro equipo conserva la sesión, con su cliente y su marca.
+    let campos = campos_de(&banco.magi, "refactor").unwrap();
+    assert_eq!(campos[1], "1", "{campos:?}");
+    assert_eq!(campos[4], "sobremesa", "{campos:?}");
+    // La marca solo la puso el primer enganche: la reconexión no la puso sin
+    // mirar antes (en modo reconexión va después de la guarda).
+    let marcas = banco
+        .llamadas()
+        .lines()
+        .filter(|linea| linea.contains("set-option -q -t =refactor: @magi_equipo"))
+        .count();
+    assert_eq!(marcas, 1, "{}", banco.llamadas());
+}
+
+#[tokio::test]
+async fn una_soltada_cuyo_otro_equipo_la_renombra_sabe_su_equipo_y_su_nombre_y_vuelve() {
+    // R157: tras un renombrado de otro equipo, la pestaña soltada sigue a su
+    // sesión por el identificador, no por el nombre que ya no existe.
+    let mut banco = banco_con(OpcionesBanco {
+        entorno: vec![("MAGI_TMUX_AL_SOLTAR_RENOMBRA", "refactor-2".to_string())],
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco
+        .otro_equipo_se_engancha("refactor", "portatil", 1)
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| pestana
+                .tmux
+                .as_ref()
+                .is_some_and(|tmux| tmux.nombre == "refactor-2"
+                    && tmux
+                        .soltada
+                        .as_ref()
+                        .is_some_and(
+                            |soltada| soltada.por_equipo.as_deref() == Some("portatil")
+                        )))
+            .await,
+        "la soltada no sabe quién la tiene con su nombre nuevo: {:?}",
+        banco.pestana(sesion.id)
+    );
+    assert_eq!(
+        banco.pestana(sesion.id).unwrap().estado,
+        EstadoSesionRemota::Caida
+    );
+    assert_eq!(nombres_de(&banco.magi), vec!["refactor-2".to_string()]);
+
+    // Volver funciona: se engancha a la sesión con su nombre nuevo.
+    banco
+        .escenario
+        .enviar(&MensajeCliente::Reconectar {
+            sesion_id: sesion.id,
+            compartir: false,
+        })
+        .await;
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, PLAZO, |pestana| {
+                pestana.estado == EstadoSesionRemota::Abierta
+                    && pestana
+                        .tmux
+                        .as_ref()
+                        .is_some_and(|tmux| tmux.soltada.is_none() && tmux.nombre == "refactor-2")
+            })
+            .await,
+        "no volvió: {:?}",
+        banco.pestana(sesion.id)
+    );
+    banco.esperar_enganches(2).await;
+    let ultima = banco
+        .llamadas()
+        .lines()
+        .rfind(|linea| linea.contains("attach-session"))
+        .unwrap()
+        .to_string();
+    assert!(
+        ultima.ends_with("attach-session -d -t =refactor-2"),
+        "{ultima}"
+    );
+    assert_eq!(nombres_de(&banco.magi), vec!["refactor-2".to_string()]);
+}
+
+#[tokio::test]
+async fn la_reconexion_automatica_sigue_a_una_sesion_que_otro_equipo_renombro() {
+    // Antes, el nombre viejo no se encontraba y la pestaña se cerraba como si
+    // la sesión hubiera terminado, con la sesión viva en el host.
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sesion.tmux.as_ref().unwrap().creada, Some(true));
+    banco.esperar_enganches(1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    banco.escenario.observado.tirar_conexiones().await;
+    // Con la pestaña caída, otro equipo la renombra.
+    cambiar_sesion(&banco.magi, "refactor", |campos| {
+        campos[0] = "refactor-2".to_string();
+    });
+    assert!(
+        banco
+            .hasta_pestana(sesion.id, Duration::from_secs(40), |pestana| {
+                pestana.estado == EstadoSesionRemota::Abierta
+                    && pestana
+                        .tmux
+                        .as_ref()
+                        .is_some_and(|tmux| tmux.nombre == "refactor-2")
+            })
+            .await,
+        "la pestaña no siguió a su sesión: {:?}",
+        banco.escenario.sesiones
+    );
+    banco.esperar_enganches(2).await;
+    let ultima = banco
+        .llamadas()
+        .lines()
+        .rfind(|linea| linea.contains("attach-session"))
+        .unwrap()
+        .to_string();
+    assert!(
+        ultima.ends_with("attach-session -d -t =refactor-2"),
+        "{ultima}"
+    );
+    // No se creó otra ni se perdió la suya.
+    assert_eq!(nombres_de(&banco.magi), vec!["refactor-2".to_string()]);
+    // Y la reconexión no repite el «creada» de la apertura (D369).
+    assert_eq!(
+        banco
+            .pestana(sesion.id)
+            .unwrap()
+            .tmux
+            .as_ref()
+            .unwrap()
+            .creada,
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn un_nombre_reutilizado_por_otra_sesion_no_engancha_a_la_pestana_a_la_ajena() {
+    // La sesión de la pestaña desaparece y otra distinta recibe su nombre (otro
+    // identificador y otra hora de creación): no es «la misma», así que la
+    // pestaña ni se engancha a ella ni la toma por suya... salvo que el
+    // identificador no se conozca. Aquí sí se conoce: el nombre ya no vale.
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    let sesion = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("refactor", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    banco.esperar_enganches(1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    banco.escenario.observado.tirar_conexiones().await;
+    // La de la pestaña desapareció y alguien creó otra con el mismo nombre, con
+    // otro identificador (la segunda del fichero: `$1`) y otra hora. La primera
+    // lleva el `$0` que tenía la de la pestaña, pero con otra hora de creación:
+    // un tmux reiniciado reutiliza los números y esa tampoco es la suya.
+    sembrar(
+        &banco.magi,
+        &[
+            "otra\t0\t1\t2026-11-09 19:00:00\t\t5\t0\t\t7".to_string(),
+            "refactor\t0\t1\t2026-11-09 19:00:00\t\t5\t0\t\t5".to_string(),
+        ],
+    );
+    assert!(
+        banco
+            .escenario
+            .hasta(Duration::from_secs(40), |escenario| {
+                !escenario
+                    .sesiones
+                    .iter()
+                    .any(|pestana| pestana.id == sesion.id)
+            })
+            .await,
+        "la pestaña de una sesión que ya no es la suya debía cerrarse: {:?}",
+        banco.escenario.sesiones
+    );
+    assert_eq!(banco.enganches(), 1, "no se enganchó a la ajena");
+    assert!(banco.escenario.vistos.iter().any(|mensaje| matches!(
+        mensaje,
+        MensajeServidor::AperturaTmuxFallida { causa, .. }
+            if *causa == CausaAperturaTmux::NoExiste
+    )));
+}
+
+#[tokio::test]
+async fn creada_vale_solo_en_la_apertura_que_crea_la_sesion_y_no_se_pega_al_reconectar() {
+    // D369: solo la pestaña que creó la sesión dice `creada`; al engancharse a
+    // una que ya existía, es falso; y una reconexión no lo repite.
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    sembrar(&banco.magi, &[linea_de_estado("existente", 0, "", "")]);
+    let nueva = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("nueva", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(nueva.tmux.as_ref().unwrap().creada, Some(true));
+    let existente = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("existente", None, false)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        existente.tmux.as_ref().unwrap().creada,
+        Some(false),
+        "engancharse a una que ya existía no la crea"
+    );
+    banco.esperar_enganches(2).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    banco.escenario.observado.tirar_conexiones().await;
+    assert!(
+        banco
+            .hasta_pestana(nueva.id, Duration::from_secs(40), |pestana| {
+                pestana.estado == EstadoSesionRemota::Abierta
+                    && pestana
+                        .tmux
+                        .as_ref()
+                        .is_some_and(|tmux| tmux.creada == Some(false))
+            })
+            .await,
+        "tras reconectar, `creada` no debía seguir en verdadero: {:?}",
+        banco.pestana(nueva.id)
+    );
+    assert_eq!(
+        banco
+            .pestana(existente.id)
+            .unwrap()
+            .tmux
+            .as_ref()
+            .unwrap()
+            .creada,
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn un_host_marcado_dice_creada_en_la_pestana_que_crea_la_sesion_automatica() {
+    let mut banco = banco_con(OpcionesBanco {
+        host_marcado: true,
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let sesion = abrir(&mut banco.escenario, host_id, None, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(sesion.tmux.as_ref().unwrap().creada, Some(true));
+    assert_eq!(nombres_de(&banco.magi).len(), 1);
+}
+
+#[tokio::test]
+async fn engancharse_a_una_sesion_que_ya_no_existe_da_la_causa_no_existe() {
+    // D349: el solicitante sabe que la sesión ya no estaba, sin tener que
+    // adivinarlo del texto.
+    let mut banco = banco().await;
+    let host_id = banco.host_id;
+    let (causa, mensaje) = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("fantasma", None, false)),
+        Vec::new(),
+    )
+    .await
+    .expect_err("la sesión no existe");
+    assert_eq!(causa, CausaAperturaTmux::NoExiste);
+    assert!(mensaje.contains("ya no existe"), "{mensaje}");
+    // La pestaña a medio abrir se retira de la lista (llega después del aviso).
+    assert!(
+        banco
+            .escenario
+            .hasta(PLAZO, |escenario| escenario.sesiones.is_empty())
+            .await
+    );
+    assert_eq!(banco.enganches(), 0);
+}
+
+#[tokio::test]
+async fn una_sesion_creada_cuya_pestana_se_cierra_antes_de_abrir_avisa_de_que_sigue_en_el_host() {
+    // La sesión se crea en el host y, mientras tanto, el usuario cierra la
+    // pestaña (o la ventana se va): no hay pestaña, pero la sesión queda ahí y
+    // el solicitante tiene que saberlo.
+    let mut banco = banco_con(OpcionesBanco {
+        entorno: vec![("MAGI_TMUX_NEW_SESSION_TARDA", "1.5".to_string())],
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let conocidas: HashSet<u32> = banco
+        .escenario
+        .sesiones
+        .iter()
+        .map(|sesion| sesion.id)
+        .collect();
+    banco
+        .escenario
+        .enviar(&MensajeCliente::AbrirSesion {
+            host_id,
+            cols: 80,
+            filas: 24,
+            comandos_iniciales: Vec::new(),
+            orden: None,
+            tmux: Some(peticion("huerfana", crear(None, None), false)),
+        })
+        .await;
+    assert!(
+        banco
+            .escenario
+            .hasta(PLAZO, |escenario| escenario
+                .sesiones
+                .iter()
+                .any(|sesion| !conocidas.contains(&sesion.id)))
+            .await
+    );
+    let id = banco
+        .escenario
+        .sesiones
+        .iter()
+        .find(|sesion| !conocidas.contains(&sesion.id))
+        .unwrap()
+        .id;
+    // La sesión ya está en el host (el tmux falso tarda un poco después de
+    // crearla): se cierra la pestaña antes de que llegue a abrirse.
+    let fin = tokio::time::Instant::now() + PLAZO;
+    while !nombres_de(&banco.magi).contains(&"huerfana".to_string()) {
+        assert!(tokio::time::Instant::now() < fin, "la sesión no se creó");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    banco
+        .escenario
+        .enviar(&MensajeCliente::Cerrar { sesion_id: id })
+        .await;
+    let mensaje = banco
+        .escenario
+        .esperar(|mensaje| {
+            matches!(
+                mensaje,
+                MensajeServidor::AperturaTmuxFallida { nombre, .. } if nombre == "huerfana"
+            )
+        })
+        .await;
+    let MensajeServidor::AperturaTmuxFallida {
+        host_id: aviso_host,
+        causa,
+        mensaje,
+        ..
+    } = mensaje
+    else {
+        unreachable!()
+    };
+    assert_eq!(aviso_host, host_id);
+    assert_eq!(causa, CausaAperturaTmux::Otra);
+    assert!(
+        mensaje.contains("huerfana") && mensaje.contains("se creó"),
+        "{mensaje}"
+    );
+    assert!(mensaje.contains("engánchate desde Sesiones"), "{mensaje}");
+    // La sesión sigue en el host y no hay pestaña ni enganche.
+    assert_eq!(nombres_de(&banco.magi), vec!["huerfana".to_string()]);
+    assert!(
+        banco.escenario.sesiones.is_empty(),
+        "{:?}",
+        banco.escenario.sesiones
+    );
+    assert_eq!(banco.enganches(), 0);
+}
+
+#[tokio::test]
+async fn si_la_sesion_creada_desaparece_antes_de_engancharse_la_causa_es_no_existe() {
+    // La sesión se crea y, antes de engancharse, otro equipo la termina: ya no
+    // hay nada que decir de «se creó y no llegó a abrirse», porque la sesión no
+    // está. La causa es `no_existe`.
+    let mut banco = banco_con(OpcionesBanco {
+        entorno: vec![("MAGI_TMUX_NEW_SESSION_TARDA", "1".to_string())],
+        ..Default::default()
+    })
+    .await;
+    let host_id = banco.host_id;
+    let magi = banco.magi.clone();
+    // Mientras `new-session` espera, otro equipo termina la sesión.
+    let borrar = tokio::spawn(async move {
+        let fin = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < fin {
+            if std::fs::read_to_string(&magi)
+                .unwrap_or_default()
+                .contains("efimera")
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                std::fs::write(&magi, "").unwrap();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    let (causa, mensaje) = abrir(
+        &mut banco.escenario,
+        host_id,
+        Some(peticion("efimera", crear(None, None), false)),
+        Vec::new(),
+    )
+    .await
+    .expect_err("la sesión desapareció antes de engancharse");
+    borrar.await.unwrap();
+    assert_eq!(causa, CausaAperturaTmux::NoExiste);
+    assert!(mensaje.contains("ya no existe"), "{mensaje}");
+    assert!(!mensaje.contains("se creó"), "{mensaje}");
+    // La pestaña a medio abrir se retira de la lista (llega después del aviso).
+    assert!(
+        banco
+            .escenario
+            .hasta(PLAZO, |escenario| escenario.sesiones.is_empty())
+            .await
+    );
+    assert_eq!(banco.enganches(), 0);
 }

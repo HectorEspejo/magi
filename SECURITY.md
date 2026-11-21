@@ -6,22 +6,26 @@ qué versiones se mantienen y qué queda dentro del alcance.
 
 ## Versiones soportadas
 
-Se mantiene la última versión MINOR de la serie 1.x (hoy, la 1.0.x). Las
-versiones MINOR anteriores dejan de recibir correcciones de seguridad cuando se
+Se mantiene la última versión MINOR de la serie 1.x del escritorio (hoy, la
+1.6.x) y la última de la app Android, que está en beta (hoy, la 0.2.x). Las
+versiones anteriores dejan de recibir correcciones de seguridad cuando se
 publica una nueva: las actualizaciones llegan por el gestor de paquetes (AUR o
-Homebrew) o por el tarball de la release.
+Homebrew), por el tarball de la release o, en Android, por Obtainium.
 
 | Versión | Soportada |
 |---|---|
-| 1.0.x (última MINOR de 1.x) | Sí |
-| 0.x y MINOR anteriores de 1.x | No |
+| Escritorio 1.6.x (última MINOR de 1.x) | Sí |
+| App Android 0.2.x (beta, la última) | Sí |
+| MINOR anteriores de 1.x y de la app | No |
+
+El paquete de Termux sigue la versión del escritorio.
 
 La política de versiones completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ## Cómo reportar una vulnerabilidad
 
 **No abras un issue público con detalles del fallo.** Usa el
-[aviso privado de seguridad de GitHub](https://github.com/4d3-org/magi/security/advisories/new):
+[aviso privado de seguridad de GitHub](https://github.com/HectorEspejo/magi/security/advisories/new):
 es privado entre quien reporta y los mantenedores y permite coordinar la
 corrección y la divulgación.
 
@@ -67,6 +71,8 @@ Dentro del alcance:
   `magi_config`, `config.toml`);
 - SFTP, transferencias, sincronización de directorios, túneles, snippets y
   deliberación;
+- la app Android: su APK firmado, el Keystore, la sincronización y los túneles;
+- el paquete de Termux (`.deb`) y su receta;
 - la cadena de suministro: workflows de integración continua, `dist`, las
   atestaciones de GitHub, el PKGBUILD de AUR y la fórmula de Homebrew.
 
@@ -90,7 +96,22 @@ Fuera del alcance:
 - Los binarios publicados salen solo de CI a partir de un tag, con SHA-256 y
   atestaciones de procedencia de GitHub, y `cargo deny` revisa licencias y
   avisos de RustSec en cada PR.
-- Antes de publicar se pasa `gitleaks` sobre todo el historial y se revisan
-  datos reales en documentación, tests y ejemplos.
+- Antes de la primera publicación se pasó `gitleaks` sobre todo el historial, y
+  desde entonces la prueba `repositorio_publico` impide en cada PR que entren
+  datos reales (IP, rutas personales, correos) en documentación, tests y
+  ejemplos. El historial anterior no se ha reescrito.
 - No se aceptan cambios que añadan telemetría ni conexiones salientes fuera de
   los hosts del usuario.
+
+## Reporting a vulnerability (English)
+
+Please **do not open a public issue** for a vulnerability. Use GitHub's private
+advisory: go to the repository's *Security* tab and choose *Report a
+vulnerability* ([direct link](https://github.com/HectorEspejo/magi/security/advisories/new)).
+Include the MAGI version (`magi --version`), your operating system, the steps to
+reproduce it and the impact you think it has, without real keys or passwords.
+You will get an acknowledgement within 72 hours. We maintain the latest 1.x
+minor release of the desktop client and the latest release of the Android app
+(beta); fixes ship as patch releases. Issues in third-party dependencies, an
+attacker who already controls the user's account, and compromised remote hosts
+are out of scope.

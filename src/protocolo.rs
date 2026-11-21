@@ -305,6 +305,12 @@ pub struct TmuxPestana {
     pub version: Option<VersionTmux>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soltada: Option<Soltada>,
+    /// `Some(true)` solo en la apertura de la pestaña que creó la sesión en el
+    /// host; `None` (o `Some(false)`) en reconexiones y al engancharse a una
+    /// que ya existía. Solo la ventana cuya pestaña la creó guarda la ficha
+    /// `origen = host` (D369, R163). Opcional dentro de v10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creada: Option<bool>,
 }
 
 /// Una ficha vista desde el host (`SesionesPersistentes{lista}`). El estado
@@ -378,8 +384,11 @@ pub enum CausaAperturaTmux {
     SinCarpeta,
     /// No hubo conexión con el host (o se perdió al abrir).
     Conexion,
-    /// Cualquier otra cosa (la sesión ya no existe, tmux no pudo, datos no
-    /// válidos…); el `mensaje` dice cuál.
+    /// La sesión ya no existe en el host (al reconectar o al engancharse a una
+    /// ficha): D349. Opcional dentro de v10.
+    NoExiste,
+    /// Cualquier otra cosa (tmux no pudo, datos no válidos…); el `mensaje`
+    /// dice cuál.
     Otra,
 }
 
@@ -2929,6 +2938,7 @@ mod pruebas {
             SesionVista {
                 servidor: ServidorTmux::Magi,
                 nombre: "agente-api".to_string(),
+                id: None,
                 clientes: 1,
                 equipo: Some("portatil".to_string()),
                 actividad: 1_700_000_100,
@@ -2940,6 +2950,7 @@ mod pruebas {
             SesionVista {
                 servidor: ServidorTmux::Habitual,
                 nombre: "trabajo".to_string(),
+                id: None,
                 clientes: 0,
                 equipo: None,
                 actividad: 1_699_990_000,
@@ -3023,6 +3034,7 @@ mod pruebas {
         let sesion = SesionVista {
             servidor: ServidorTmux::Magi,
             nombre: "agente-api".to_string(),
+            id: None,
             clientes: 0,
             equipo: Some("sobremesa".to_string()),
             actividad: 1_700_000_100,
@@ -3195,6 +3207,7 @@ mod pruebas {
                 hora: 1_700_000_005,
             }),
             tmux: Some(TmuxPestana {
+                creada: None,
                 servidor: ServidorTmux::Magi,
                 nombre: "agente-api".to_string(),
                 version: Some(VersionTmux::nueva(3, 5)),

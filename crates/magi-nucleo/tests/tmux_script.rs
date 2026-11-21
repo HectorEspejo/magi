@@ -18,8 +18,8 @@ use magi_nucleo::sesiones_persistentes::lectura::{
 use magi_nucleo::sesiones_persistentes::{ServidorTmux, VersionTmux};
 use magi_nucleo::terminal::tmux::{
     carpeta_valida, comando_valido, equipo_valido, etiqueta_equipo, fin_de_enganchar,
-    leer_terminar, nombre_valido, version_de_texto, FinEnganchar, OrdenTmux, ResultadoTerminar,
-    SCRIPT,
+    leer_terminar, linea_de_exec, nombre_valido, version_de_texto, FinEnganchar, OrdenTmux,
+    ResultadoTerminar, ARRANQUE, SCRIPT, SCRIPT_ENGANCHE,
 };
 
 /// Salida cruda de una ejecución del script.
@@ -77,6 +77,14 @@ impl Entorno {
             fs::create_dir_all(&bin).expect("directorio de binarios falsos");
             if let Some(guion) = tmux {
                 instalar(&bin.join("tmux"), guion);
+            }
+            // Sin tmux, el PATH del hijo es solo este directorio, y el arranque
+            // del script necesita `cat` (todo host lo tiene): se le enlaza.
+            for cat in ["/usr/bin/cat", "/bin/cat"] {
+                if Path::new(cat).exists() {
+                    std::os::unix::fs::symlink(cat, bin.join("cat")).expect("enlace a cat");
+                    break;
+                }
             }
             instalar(&bin.join("shell"), FAKE_SHELL);
             instalar(&bin.join("infocmp"), FAKE_INFOCMP);
@@ -205,13 +213,37 @@ impl Entorno {
         self.ejecutar_con(argumentos, &[])
     }
 
-    /// Ejecuta el script con variables de entorno adicionales (versión del
-    /// tmux falso, fallos, `HOME`…).
+    /// Ejecuta una suborden de `terminal_tmux.sh` como lo hace MAGI en el host:
+    /// con el arranque mínimo en la línea de órdenes y el script ENTERO por la
+    /// entrada estándar (D357), con variables de entorno adicionales (versión
+    /// del tmux falso, fallos, `HOME`…).
     fn ejecutar_con(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Salida {
-        let salida = self
+        self.ejecutar_con_entrada(argumentos, entorno, SCRIPT)
+    }
+
+    /// Como [`Self::ejecutar_con`], con el texto que llega por la entrada
+    /// estándar (para las pruebas del arranque con un script cortado o vacío).
+    fn ejecutar_con_entrada(
+        &self,
+        argumentos: &[&str],
+        entorno: &[(&str, &str)],
+        entrada: &'static str,
+    ) -> Salida {
+        let mut hijo = self
             .preparar(argumentos, entorno)
-            .output()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .expect("ejecutar terminal_tmux.sh");
+        let mut pipe = hijo.stdin.take().expect("entrada del script");
+        // Se escribe en otro hilo: el hijo no lee más que cuando `cat` llega al
+        // final, y no hay que depender del tamaño del tubo.
+        let escritor = std::thread::spawn(move || {
+            let _ = pipe.write_all(entrada.as_bytes());
+        });
+        let salida = hijo.wait_with_output().expect("esperar al script");
+        let _ = escritor.join();
         Salida {
             stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
             stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
@@ -219,18 +251,61 @@ impl Entorno {
         }
     }
 
-    /// El comando que ejecuta el script con el entorno de la prueba, sin
-    /// lanzarlo (para las que necesitan la entrada abierta o el hijo vivo).
+    /// El comando de una suborden de `terminal_tmux.sh` con el entorno de la
+    /// prueba, sin lanzarlo (la línea de órdenes es el arranque mínimo: el
+    /// script va por la entrada estándar).
     fn preparar(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Command {
         // /bin/sh absoluto: el PATH del hijo es solo el de los falsos, para
         // que el script no vea el tmux real de la máquina.
         let mut comando = Command::new("/bin/sh");
-        comando.arg("-c").arg(SCRIPT).arg("magi-tmux");
+        comando.arg("-c").arg(ARRANQUE).arg("magi-tmux");
         for argumento in argumentos {
             comando.arg(argumento);
         }
         self.entorno_de(&mut comando, entorno);
         comando
+    }
+
+    /// Ejecuta el enganche mínimo (`terminal_enganche.sh`) con la entrada
+    /// cerrada, como un `exec` de ssh sin nadie que escriba: `<servidor>
+    /// <nombre> <soltar> <equipo> <guardar>`.
+    fn enganche(&self, argumentos: &[&str]) -> Salida {
+        self.enganche_con(argumentos, &[])
+    }
+
+    fn enganche_con(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Salida {
+        let salida = self
+            .preparar_enganche(argumentos, entorno)
+            .output()
+            .expect("ejecutar terminal_enganche.sh");
+        Salida {
+            stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
+            codigo: salida.status.code().unwrap_or(-1),
+        }
+    }
+
+    /// El comando del enganche mínimo con el entorno de la prueba, sin
+    /// lanzarlo (para las que necesitan la entrada abierta o el hijo vivo).
+    fn preparar_enganche(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Command {
+        let mut comando = Command::new("/bin/sh");
+        comando.arg("-c").arg(SCRIPT_ENGANCHE).arg("magi-enganche");
+        for argumento in argumentos {
+            comando.arg(argumento);
+        }
+        self.entorno_de(&mut comando, entorno);
+        comando
+    }
+
+    /// Engancharse como lo hace el servidor: primero `preparar` por la entrada
+    /// estándar y, si sale bien, el enganche mínimo. Devuelve la salida de la
+    /// primera mitad si falla y la del enganche si no.
+    fn enganchar(&self, servidor: &str, nombre: &str, soltar: &str, equipo: &str) -> Salida {
+        let preparada = self.ejecutar(&["preparar", servidor, nombre]);
+        if preparada.codigo != 0 {
+            return preparada;
+        }
+        self.enganche(&[servidor, nombre, soltar, equipo, "0"])
     }
 
     /// Pone al comando el entorno de la prueba.
@@ -261,12 +336,27 @@ impl Entorno {
     }
 
     /// Ejecuta la línea de comando que recibiría el shell de acceso del host
-    /// en un `exec` de ssh (`sh -c '<script>' magi-tmux …`, ya escapada).
-    fn ejecutar_linea(&self, linea: &str) -> Salida {
+    /// en un `exec` de ssh (`sh -c '<script o arranque>' magi-tmux …`, ya
+    /// escapada), con el script por la entrada estándar si la orden lo lleva.
+    fn ejecutar_linea(&self, linea: &str, entrada: Option<&'static str>) -> Salida {
         let mut comando = Command::new("/bin/sh");
         comando.arg("-c").arg(linea);
         self.entorno_de(&mut comando, &[]);
-        let salida = comando.output().expect("ejecutar la línea de exec");
+        let mut hijo = comando
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("ejecutar la línea de exec");
+        let mut pipe = hijo.stdin.take().expect("entrada del exec");
+        let escritor = std::thread::spawn(move || {
+            if let Some(entrada) = entrada {
+                let _ = pipe.write_all(entrada.as_bytes());
+            }
+            // Al soltar la tubería, el hijo ve el fin de la entrada.
+        });
+        let salida = hijo.wait_with_output().expect("esperar a la línea de exec");
+        let _ = escritor.join();
         Salida {
             stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
             stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
@@ -277,16 +367,32 @@ impl Entorno {
 
 /// Binarios falsos compartidos por todas las pruebas: se escriben una sola
 /// vez, al principio, y nunca se vuelven a abrir para escritura.
+///
+/// Viven en el directorio de temporales de cargo (`target/tmp`), con un nombre
+/// fijo, y no en `/tmp` con el pid: allí nadie los borraría y cada ejecución
+/// dejaría una carpeta más. Si ya están y son iguales, no se tocan; si no, se
+/// escriben con otro nombre y se renombran encima (el rename es atómico y un
+/// proceso de otra ejecución nunca ve un binario a medio escribir ni abierto
+/// para escritura: ETXTBSY).
 fn binarios_compartidos() -> &'static PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("magi-falsos-tmux-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("magi-falsos-tmux");
         fs::create_dir_all(&dir).expect("directorio de binarios falsos compartidos");
-        instalar(&dir.join("tmux"), FAKE_TMUX);
-        instalar(&dir.join("shell"), FAKE_SHELL);
-        instalar(&dir.join("infocmp"), FAKE_INFOCMP);
+        instalar_si_cambia(&dir.join("tmux"), FAKE_TMUX);
+        instalar_si_cambia(&dir.join("shell"), FAKE_SHELL);
+        instalar_si_cambia(&dir.join("infocmp"), FAKE_INFOCMP);
         dir
     })
+}
+
+fn instalar_si_cambia(destino: &Path, contenido: &str) {
+    if fs::read_to_string(destino).is_ok_and(|actual| actual == contenido) {
+        return;
+    }
+    let temporal = destino.with_extension(format!("{}.tmp", std::process::id()));
+    instalar(&temporal, contenido);
+    fs::rename(&temporal, destino).expect("colocar el binario falso");
 }
 
 fn instalar(destino: &Path, contenido: &str) {
@@ -313,8 +419,9 @@ fn un_tmux_anterior_a_1_8_se_trata_como_sin_tmux() {
     let entorno = Entorno::nuevo(Some(viejo));
     let salida = entorno.ejecutar(&["estado"]);
     assert_eq!(salida.stdout, "MAGI_TMUX=no\n");
-    // Engancharse con un tmux viejo no engancha a nada (ni abre un shell).
-    let enganchar = entorno.ejecutar(&["enganchar", "habitual", "portatil-1", "0", "portatil"]);
+    // Prepararse con un tmux viejo no engancha a nada (ni abre un shell): el
+    // enganche ni se lanza.
+    let enganchar = entorno.enganchar("habitual", "portatil-1", "0", "portatil");
     assert_eq!(enganchar.codigo, 76, "{}", enganchar.stderr);
     assert!(!entorno.llamadas().contains("attach-session"));
     assert!(entorno.shell_recibido().is_none());
@@ -986,8 +1093,8 @@ fn todo_tmux_va_en_modo_utf8() {
         &["comprobar", "magi", "agente"],
         &["comprobar", "habitual", "web"],
         &["crear", "nueva", "", "", "5000", "80", "24"],
-        &["enganchar", "magi", "agente", "1", "portatil"],
-        &["enganchar", "habitual", "web", "0", "portatil"],
+        &["preparar", "magi", "agente"],
+        &["preparar", "habitual", "web"],
         &["estado"],
         &["vista", "magi", "agente", "10"],
         &["historial", "habitual", "web", "10"],
@@ -996,6 +1103,10 @@ fn todo_tmux_va_en_modo_utf8() {
         &["terminar", "habitual", "web"],
         &["listar"],
     ];
+    // El enganche mínimo, con tmux también siempre en modo UTF-8 (antes de que
+    // las demás órdenes terminen las sesiones).
+    entorno.enganche(&["magi", "agente", "1", "portatil", "0"]);
+    entorno.enganche(&["habitual", "web", "0", "portatil", "1"]);
     for argumentos in llamadas {
         entorno.ejecutar(argumentos);
     }
@@ -1166,34 +1277,147 @@ fn crear_acepta_los_limites_justos() {
     assert_eq!(palabras.last().map(String::len), Some(4096));
 }
 
-// -------------------------------------------------------------- enganchar
+// ------------------------------------------------- preparar y enganchar
+//
+// Engancharse son dos pasos (D357): `preparar`, por la entrada estándar
+// (comprobar que la sesión existe, la configuración de MAGI y la identidad de
+// la sesión), y el enganche mínimo con PTY (`terminal_enganche.sh`: la marca
+// `@magi_equipo`, el `attach-session` y cómo acabó).
+
+/// La sesión de siempre de estas pruebas con su identidad completa: sin
+/// clientes, sin equipo y creada a las 1794845000.
+const SESION_CON_IDENTIDAD: &str =
+    "agente\t0\t1\t2026-11-09 19:00:00\t\t1794845343\t0\t\t1794845000";
 
 #[test]
-fn enganchar_suelta_pone_el_equipo_aplica_la_configuracion_y_engancha() {
+fn preparar_aplica_la_configuracion_y_da_la_identidad_sin_engancharse() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(&entorno.estado_magi, &[SESION_CON_IDENTIDAD.to_string()]);
+    let salida = entorno.ejecutar(&["preparar", "magi", "agente"]);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    // El identificador interno y la hora de creación, con los que MAGI sigue la
+    // sesión aunque otro equipo la renombre.
+    assert_eq!(salida.stdout, "MAGI_ID=$0\nMAGI_CREADA=1794845000\n");
+    // La lista exacta (existe), la identidad y la configuración. Ni la marca del
+    // equipo ni el enganche: eso es del enganche mínimo.
+    let propias = lineas_del_propio(&entorno);
+    assert_eq!(propias.len(), 3, "{propias:?}");
+    assert!(propias[0].ends_with("list-sessions -F #{session_name}"));
+    assert!(
+        propias[1].ends_with("list-sessions -F #{session_name}\t#{session_id}\t#{session_created}")
+    );
+    assert!(propias[2].contains("set -gq status off"));
+    assert!(propias[2].contains("set -sgq extended-keys on"));
+    // Idempotente y sin start-server ni history-limit.
+    assert!(!propias[2].contains("start-server"));
+    assert!(!propias[2].contains("history-limit"));
+    assert!(!propias[2].contains("terminal-overrides"));
+    let llamadas = entorno.llamadas();
+    assert!(!llamadas.contains("attach-session"), "{llamadas}");
+    assert!(!llamadas.contains("@magi_equipo"), "{llamadas}");
+    // La sesión quedó como estaba: sin equipo.
+    let linea = entorno
+        .estado_de_magi()
+        .lines()
+        .find(|linea| linea.starts_with("agente\t"))
+        .unwrap()
+        .to_string();
+    assert_eq!(linea.split('\t').nth(4), Some(""));
+}
+
+#[test]
+fn preparar_sale_con_75_si_la_sesion_no_existia_y_no_toca_nada() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["magi-a-10"]);
+    // Ni siquiera «magi-a-1» casa por prefijo con «magi-a-10» (R146).
+    let salida = entorno.ejecutar(&["preparar", "magi", "magi-a-1"]);
+    assert_eq!(salida.codigo, 75, "{}", salida.stderr);
+    assert!(salida.stderr.contains("magi-a-1"));
+    assert!(salida.stdout.is_empty());
+    // Solo la versión y la lista exacta: ni configuración ni enganche.
+    assert_eq!(
+        entorno.llamadas().lines().collect::<Vec<&str>>(),
+        vec![
+            "-V",
+            "-L magi -f /dev/null list-sessions -F #{session_name}"
+        ]
+    );
+}
+
+#[test]
+fn preparar_exige_tmux_y_3_0_para_el_propio_y_no_toca_la_configuracion_del_habitual() {
+    let sin = Entorno::nuevo(None);
+    let salida = sin.ejecutar(&["preparar", "magi", "agente"]);
+    assert_eq!(salida.codigo, 76);
+    assert!(salida.stderr.contains("instala tmux en el host"));
+
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["agente"]);
-    let salida = entorno.ejecutar(&["enganchar", "magi", "agente", "1", "portatil"]);
+    entorno.sembrar_sesiones(&[("web", 0, 1, "2026-11-09 19:00:00")]);
+    let viejo = [("MAGI_TMUX_VERSION", "tmux 2.9a")];
+    let salida = entorno.ejecutar_con(&["preparar", "magi", "agente"], &viejo);
+    assert_eq!(salida.codigo, 74);
+    assert!(salida
+        .stderr
+        .contains("tmux demasiado antiguo (3.0 o posterior)"));
+    // El habitual solo pide 1.8, y a él no se le toca ni la configuración ni
+    // las opciones.
+    let antes = entorno.llamadas().lines().count();
+    let salida = entorno.ejecutar_con(&["preparar", "habitual", "web"], &viejo);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    assert!(salida.stdout.starts_with("MAGI_ID=$0\n"));
+    let llamadas = entorno.llamadas();
+    let nuevas: Vec<&str> = llamadas.lines().skip(antes).collect();
+    assert!(nuevas.iter().all(|linea| !linea.contains("-L magi")));
+    assert!(nuevas.iter().all(|linea| !linea.contains("set")));
+    assert!(entorno.estado_de_magi().contains("agente"));
+}
+
+#[test]
+fn preparar_valida_sus_argumentos() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    for caso in [
+        &["preparar", "otro", "agente"][..],
+        &["preparar", "magi", "mal nombre"],
+        &["preparar", "magi", ""],
+        &["preparar", "magi"],
+        &["preparar", "magi", "agente", "de-mas"],
+    ] {
+        let salida = entorno.ejecutar(caso);
+        assert_eq!(salida.codigo, 64, "caso rechazado: {caso:?}");
+    }
+    // Las subórdenes antiguas de la Fase 16 ya no existen en el script grande.
+    assert_eq!(
+        entorno
+            .ejecutar(&["enganchar", "magi", "agente", "1", "portatil"])
+            .codigo,
+        64
+    );
+    assert!(entorno.llamadas().is_empty());
+}
+
+#[test]
+fn el_enganche_suelta_pone_el_equipo_y_engancha() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["agente"]);
+    let salida = entorno.enganche(&["magi", "agente", "1", "portatil", "0"]);
     // Con la entrada cerrada, el tmux falso vuelve y la sesión sigue viva:
     // a este cliente lo soltaron.
     assert_eq!(salida.codigo, 100, "{}", salida.stderr);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::Soltada);
     assert!(salida.stdout.contains("MAGI_TMUX_ADJUNTO=agente soltar=1"));
-    // La lista exacta (existe), su identificador interno, el equipo, la
-    // configuración, el enganche y, al volver, si el identificador sigue vivo
-    // (no el nombre: un renombrado no la hace «terminada»).
+    // La lista exacta (existe), su identificador interno, el equipo, el
+    // enganche y, al volver, si el identificador sigue vivo (no el nombre: un
+    // renombrado no la hace «terminada»). Sin configuración: eso fue de
+    // `preparar`.
     let propias = lineas_del_propio(&entorno);
-    assert_eq!(propias.len(), 6, "{propias:?}");
+    assert_eq!(propias.len(), 5, "{propias:?}");
     assert!(propias[0].ends_with("list-sessions -F #{session_name}"));
     assert!(propias[1].ends_with("list-sessions -F #{session_id}\t#{session_name}"));
     assert!(propias[2].ends_with("set-option -q -t =agente: @magi_equipo portatil"));
-    assert!(propias[3].contains("set -gq status off"));
-    assert!(propias[3].contains("set -sgq extended-keys on"));
-    // Idempotente y sin start-server ni history-limit.
-    assert!(!propias[3].contains("start-server"));
-    assert!(!propias[3].contains("history-limit"));
-    assert!(!propias[3].contains("terminal-overrides"));
-    assert!(propias[4].ends_with("attach-session -d -t =agente"));
-    assert!(propias[5].ends_with("list-sessions -F #{session_id}"));
+    assert!(propias[3].ends_with("attach-session -d -t =agente"));
+    assert!(propias[4].ends_with("list-sessions -F #{session_id}"));
+    assert!(!entorno.llamadas().contains("set -gq"));
     // @magi_equipo quedó en la sesión.
     let linea = entorno
         .estado_de_magi()
@@ -1205,10 +1429,10 @@ fn enganchar_suelta_pone_el_equipo_aplica_la_configuracion_y_engancha() {
 }
 
 #[test]
-fn enganchar_al_compartir_no_suelta_a_los_demas() {
+fn el_enganche_al_compartir_no_suelta_a_los_demas() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["agente"]);
-    let salida = entorno.ejecutar(&["enganchar", "magi", "agente", "0", "web-01"]);
+    let salida = entorno.enganche(&["magi", "agente", "0", "web-01", "0"]);
     assert_eq!(salida.codigo, 100);
     assert!(salida.stdout.contains("soltar=0"));
     let propias = lineas_del_propio(&entorno);
@@ -1221,26 +1445,26 @@ fn enganchar_al_compartir_no_suelta_a_los_demas() {
 }
 
 #[test]
-fn enganchar_sale_con_0_si_la_sesion_termino_y_con_75_si_no_existia() {
+fn el_enganche_sale_con_0_si_la_sesion_termino_y_con_75_si_no_existia() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["agente"]);
     // El programa de la sesión termina mientras se está enganchado.
-    let salida = entorno.ejecutar_con(
-        &["enganchar", "magi", "agente", "1", "portatil"],
+    let salida = entorno.enganche_con(
+        &["magi", "agente", "1", "portatil", "0"],
         &[("MAGI_TMUX_ATTACH_MATA", "1")],
     );
     assert_eq!(salida.codigo, 0, "{}", salida.stderr);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::Terminada);
     assert!(!entorno.magi_tiene("agente"));
 
-    // No existía: ni se aplica la configuración ni se engancha.
+    // No existía: ni se pone la marca ni se engancha.
     let antes = entorno.llamadas().lines().count();
-    let salida = entorno.ejecutar(&["enganchar", "magi", "fantasma", "1", "portatil"]);
+    let salida = entorno.enganche(&["magi", "fantasma", "1", "portatil", "0"]);
     assert_eq!(salida.codigo, 75);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::NoExiste);
     assert!(salida.stderr.contains("fantasma"));
     assert!(salida.stdout.is_empty());
-    // Solo la versión y la lista exacta: ni configuración ni enganche.
+    // Solo la versión y la lista exacta.
     let llamadas = entorno.llamadas();
     let nuevas: Vec<&str> = llamadas.lines().skip(antes).collect();
     assert_eq!(
@@ -1253,23 +1477,23 @@ fn enganchar_sale_con_0_si_la_sesion_termino_y_con_75_si_no_existia() {
 }
 
 #[test]
-fn enganchar_a_magi_a_1_no_se_engancha_a_magi_a_10() {
+fn el_enganche_a_magi_a_1_no_se_engancha_a_magi_a_10() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["magi-a-10"]);
-    let salida = entorno.ejecutar(&["enganchar", "magi", "magi-a-1", "1", "portatil"]);
+    let salida = entorno.enganche(&["magi", "magi-a-1", "1", "portatil", "0"]);
     assert_eq!(salida.codigo, 75);
     assert!(!entorno.llamadas().contains("attach-session"));
     assert!(!entorno.llamadas().contains("@magi_equipo"));
 }
 
 #[test]
-fn enganchar_que_no_puede_engancharse_devuelve_el_codigo_de_tmux() {
+fn el_enganche_que_no_puede_engancharse_devuelve_el_codigo_de_tmux() {
     // Sin terminal, el cliente de tmux sale con error y la sesión sigue viva:
     // no es «soltada».
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["agente"]);
-    let salida = entorno.ejecutar_con(
-        &["enganchar", "magi", "agente", "1", "portatil"],
+    let salida = entorno.enganche_con(
+        &["magi", "agente", "1", "portatil", "0"],
         &[("MAGI_TMUX_ATTACH_ESTADO", "1")],
     );
     assert_eq!(salida.codigo, 1);
@@ -1277,10 +1501,10 @@ fn enganchar_que_no_puede_engancharse_devuelve_el_codigo_de_tmux() {
 }
 
 #[test]
-fn enganchar_al_habitual_no_toca_su_configuracion_ni_sus_opciones() {
+fn el_enganche_al_habitual_no_toca_su_configuracion_ni_sus_opciones() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_sesiones(&[("web", 0, 1, "2026-11-09 19:00:00")]);
-    let salida = entorno.ejecutar(&["enganchar", "habitual", "web", "1", "portatil"]);
+    let salida = entorno.enganchar("habitual", "web", "1", "portatil");
     assert_eq!(salida.codigo, 100, "{}", salida.stderr);
     let llamadas = entorno.llamadas();
     assert!(!llamadas.contains("-L magi"));
@@ -1292,9 +1516,9 @@ fn enganchar_al_habitual_no_toca_su_configuracion_ni_sus_opciones() {
 }
 
 #[test]
-fn enganchar_exige_tmux_y_3_0_para_el_propio() {
+fn el_enganche_exige_tmux_y_3_0_para_el_propio() {
     let sin = Entorno::nuevo(None);
-    let salida = sin.ejecutar(&["enganchar", "magi", "agente", "1", "portatil"]);
+    let salida = sin.enganche(&["magi", "agente", "1", "portatil", "0"]);
     assert_eq!(salida.codigo, 76);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::SinTmux);
     assert!(salida.stderr.contains("instala tmux en el host"));
@@ -1303,38 +1527,47 @@ fn enganchar_exige_tmux_y_3_0_para_el_propio() {
     entorno.sembrar_magi(&["agente"]);
     entorno.sembrar_sesiones(&[("web", 0, 1, "2026-11-09 19:00:00")]);
     let viejo = [("MAGI_TMUX_VERSION", "tmux 2.9a")];
-    let salida = entorno.ejecutar_con(&["enganchar", "magi", "agente", "1", "portatil"], &viejo);
+    let salida = entorno.enganche_con(&["magi", "agente", "1", "portatil", "0"], &viejo);
     assert_eq!(salida.codigo, 74);
     assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::Antiguo);
     assert!(salida
         .stderr
         .contains("tmux demasiado antiguo (3.0 o posterior)"));
+    assert!(!entorno.llamadas().contains("attach-session"));
     // El habitual solo pide 1.8.
-    let salida = entorno.ejecutar_con(&["enganchar", "habitual", "web", "1", "portatil"], &viejo);
+    let salida = entorno.enganche_con(&["habitual", "web", "1", "portatil", "0"], &viejo);
     assert_eq!(salida.codigo, 100);
 }
 
 #[test]
-fn enganchar_valida_sus_argumentos() {
+fn el_enganche_valida_sus_argumentos() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
-    let casos: [[&str; 4]; 7] = [
-        ["otro", "agente", "1", "portatil"],
-        ["magi", "mal nombre", "1", "portatil"],
-        ["magi", "agente", "2", "portatil"],
-        ["magi", "agente", "", "portatil"],
-        ["magi", "agente", "1", "Portatil"],
-        ["magi", "agente", "1", ""],
-        ["magi", "agente", "1", "equipo-demasiado-largo-x"],
+    let casos: [[&str; 5]; 9] = [
+        ["otro", "agente", "1", "portatil", "0"],
+        ["magi", "mal nombre", "1", "portatil", "0"],
+        ["magi", "agente", "2", "portatil", "0"],
+        ["magi", "agente", "", "portatil", "0"],
+        ["magi", "agente", "1", "Portatil", "0"],
+        ["magi", "agente", "1", "", "0"],
+        ["magi", "agente", "1", "equipo-demasiado-largo-x", "0"],
+        ["magi", "agente", "1", "portatil", "2"],
+        ["magi", "agente", "1", "portatil", ""],
     ];
     for caso in casos {
-        let mut argumentos = vec!["enganchar"];
-        argumentos.extend(caso);
-        let salida = entorno.ejecutar(&argumentos);
+        let salida = entorno.enganche(&caso);
         assert_eq!(salida.codigo, 64, "caso rechazado: {caso:?}");
+        assert!(salida.stderr.contains("uso:"), "{caso:?}");
     }
+    // De menos y de más.
     assert_eq!(
         entorno
-            .ejecutar(&["enganchar", "magi", "agente", "1"])
+            .enganche(&["magi", "agente", "1", "portatil"])
+            .codigo,
+        64
+    );
+    assert_eq!(
+        entorno
+            .enganche(&["magi", "agente", "1", "portatil", "0", "de-mas"])
             .codigo,
         64
     );
@@ -1342,17 +1575,113 @@ fn enganchar_valida_sus_argumentos() {
 }
 
 #[test]
-fn el_script_quita_la_variable_tmux_para_no_anidar() {
+fn los_scripts_quitan_la_variable_tmux_para_no_anidar() {
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["agente"]);
-    let salida = entorno.ejecutar_con(
-        &["enganchar", "magi", "agente", "1", "portatil"],
-        &[("TMUX", "/tmp/otro-tmux,123,0")],
-    );
+    let ajena = [("TMUX", "/tmp/otro-tmux,123,0")];
+    let salida = entorno.ejecutar_con(&["preparar", "magi", "agente"], &ajena);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    let salida = entorno.enganche_con(&["magi", "agente", "1", "portatil", "0"], &ajena);
     assert_eq!(salida.codigo, 100);
     let visto = fs::read_to_string(&entorno.entorno_tmux).unwrap();
-    assert!(visto.lines().count() >= 3);
+    assert!(visto.lines().count() >= 6);
     assert!(visto.lines().all(|linea| linea == "TMUX="), "{visto}");
+}
+
+// La guarda de la reconexión automática (R157): solo se engancha si la sesión
+// está libre o es de este equipo.
+
+#[test]
+fn con_guarda_una_sesion_de_otro_equipo_no_se_toca_y_sale_con_101() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    // Un cliente de otro equipo la tiene enganchada ahora.
+    entorno.sembrar_lineas(
+        &entorno.estado_magi,
+        &["agente\t1\t1\t2026-11-09 19:00:00\tsobremesa".to_string()],
+    );
+    let salida = entorno.enganche(&["magi", "agente", "1", "portatil", "1"]);
+    assert_eq!(salida.codigo, 101, "{}", salida.stderr);
+    assert_eq!(fin_de_enganchar(salida.codigo), FinEnganchar::OtroEquipo);
+    assert!(salida.stderr.contains("otro equipo"));
+    // Ni la marca ni el enganche: el otro equipo conserva la sesión, con su
+    // cliente y su marca.
+    let llamadas = entorno.llamadas();
+    assert!(!llamadas.contains("attach-session"), "{llamadas}");
+    // (La guarda lee `#{@magi_equipo}` de la lista, pero no escribe la marca.)
+    assert!(!llamadas.contains("set-option"), "{llamadas}");
+    let linea = entorno.estado_de_magi();
+    assert_eq!(linea.lines().next().unwrap().split('\t').nth(1), Some("1"));
+    assert_eq!(
+        linea.lines().next().unwrap().split('\t').nth(4),
+        Some("sobremesa")
+    );
+}
+
+#[test]
+fn con_guarda_una_sesion_con_clientes_sin_marca_tambien_es_de_otro() {
+    // Un cliente que no es de MAGI (o de una versión sin marca): no se sabe de
+    // quién es, así que no se le quita.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(
+        &entorno.estado_magi,
+        &["agente\t2\t1\t2026-11-09 19:00:00".to_string()],
+    );
+    let salida = entorno.enganche(&["magi", "agente", "1", "portatil", "1"]);
+    assert_eq!(salida.codigo, 101, "{}", salida.stderr);
+    assert!(!entorno.llamadas().contains("attach-session"));
+}
+
+#[test]
+fn con_guarda_una_sesion_libre_o_de_este_equipo_se_engancha() {
+    // Libre: sin clientes (aunque otro equipo la tuviera antes).
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(
+        &entorno.estado_magi,
+        &["agente\t0\t1\t2026-11-09 19:00:00\tsobremesa".to_string()],
+    );
+    let salida = entorno.enganche(&["magi", "agente", "1", "portatil", "1"]);
+    assert_eq!(salida.codigo, 100, "{}", salida.stderr);
+    assert!(entorno.llamadas().contains("attach-session -d -t =agente"));
+    // La marca se puso después de la guarda.
+    assert!(entorno
+        .llamadas()
+        .contains("set-option -q -t =agente: @magi_equipo portatil"));
+
+    // De este equipo: los clientes son los de la conexión que se cayó.
+    let propio = Entorno::nuevo(Some(FAKE_TMUX));
+    propio.sembrar_lineas(
+        &propio.estado_magi,
+        &["agente\t1\t1\t2026-11-09 19:00:00\tportatil".to_string()],
+    );
+    let salida = propio.enganche(&["magi", "agente", "1", "portatil", "1"]);
+    assert_eq!(salida.codigo, 100, "{}", salida.stderr);
+    assert!(propio.llamadas().contains("attach-session -d -t =agente"));
+}
+
+#[test]
+fn sin_guarda_el_enganche_se_lleva_la_sesion_aunque_la_tenga_otro() {
+    // Es lo que hace el usuario a mano (prefijo r): manda él.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(
+        &entorno.estado_magi,
+        &["agente\t1\t1\t2026-11-09 19:00:00\tsobremesa".to_string()],
+    );
+    let salida = entorno.enganche(&["magi", "agente", "1", "portatil", "0"]);
+    assert_eq!(salida.codigo, 100, "{}", salida.stderr);
+    assert!(entorno.llamadas().contains("attach-session -d -t =agente"));
+}
+
+#[test]
+fn la_guarda_no_aplica_al_tmux_habitual() {
+    // Al habitual no se le pone marca ni se le mira el equipo.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_lineas(
+        &entorno.estado,
+        &["web\t1\t1\t2026-11-09 19:00:00\tsobremesa".to_string()],
+    );
+    let salida = entorno.enganche(&["habitual", "web", "0", "portatil", "1"]);
+    assert_eq!(salida.codigo, 100, "{}", salida.stderr);
+    assert!(entorno.llamadas().contains("attach-session -t =web"));
 }
 
 // ----------------------------------------------------------------- estado
@@ -1393,6 +1722,7 @@ fn estado_lista_las_sesiones_de_los_dos_servidores() {
         linea_de_estado(&[
             "magi",
             "agente-api",
+            "$0",
             "1",
             "portatil",
             "1794845343",
@@ -1407,6 +1737,7 @@ fn estado_lista_las_sesiones_de_los_dos_servidores() {
         linea_de_estado(&[
             "magi",
             "reposo",
+            "$1",
             "0",
             "",
             "1794800000",
@@ -1421,6 +1752,7 @@ fn estado_lista_las_sesiones_de_los_dos_servidores() {
         linea_de_estado(&[
             "habitual",
             "web",
+            "$0",
             "2",
             "",
             "1794845300",
@@ -1440,6 +1772,8 @@ fn estado_lista_las_sesiones_de_los_dos_servidores() {
     let agente = &lectura.sesiones[0];
     assert_eq!(agente.servidor, ServidorTmux::Magi);
     assert_eq!(agente.nombre, "agente-api");
+    // El identificador interno de tmux, con el que MAGI la sigue si la renombran.
+    assert_eq!(agente.id.as_deref(), Some("$0"));
     assert_eq!(agente.clientes, 1);
     assert_eq!(agente.equipo.as_deref(), Some("portatil"));
     // La actividad y la campana son las de la ventana más reciente.
@@ -1527,10 +1861,10 @@ fn estado_sanea_lo_que_viene_del_tmux_ajeno() {
         .collect();
     assert_eq!(nombres, vec!["controles", "largo", "ok"]);
     let controles: Vec<&str> = lineas[0].split(US).collect();
-    assert_eq!(controles[4], "equipo");
-    assert_eq!(controles[9], "[31mrojo");
+    assert_eq!(controles[5], "equipo");
+    assert_eq!(controles[10], "[31mrojo");
     let largo: Vec<&str> = lineas[1].split(US).collect();
-    assert_eq!(largo[9].len(), 400);
+    assert_eq!(largo[10].len(), 400);
     assert!(salida
         .stdout
         .bytes()
@@ -1766,7 +2100,7 @@ fn las_ordenes_nuevas_llevan_sus_datos_como_argumentos_sueltos() {
         vec![
             "sh",
             "-c",
-            SCRIPT,
+            ARRANQUE,
             "magi-tmux",
             "crear",
             "agente",
@@ -1800,15 +2134,36 @@ fn las_ordenes_nuevas_llevan_sus_datos_como_argumentos_sueltos() {
         ["comprobar", "habitual", "web"]
     );
     assert_eq!(&OrdenTmux::Estado.argumentos().unwrap()[4..], ["estado"]);
+    let preparar = OrdenTmux::Preparar {
+        servidor: ServidorTmux::Magi,
+        nombre: "agente",
+    };
+    assert_eq!(
+        &preparar.argumentos().unwrap()[4..],
+        ["preparar", "magi", "agente"]
+    );
+    // El enganche con PTY lleva su script mínimo en la línea de órdenes y sus
+    // datos detrás, sin suborden: es otro script.
     let enganchar = OrdenTmux::Enganchar {
         servidor: ServidorTmux::Magi,
         nombre: "agente",
         soltar: true,
         equipo: "portatil",
+        guardar: true,
     };
     assert_eq!(
-        &enganchar.argumentos().unwrap()[4..],
-        ["enganchar", "magi", "agente", "1", "portatil"]
+        enganchar.argumentos().unwrap(),
+        vec![
+            "sh",
+            "-c",
+            SCRIPT_ENGANCHE,
+            "magi-enganche",
+            "magi",
+            "agente",
+            "1",
+            "portatil",
+            "1",
+        ]
     );
     let vista = OrdenTmux::Vista {
         servidor: ServidorTmux::Magi,
@@ -1878,6 +2233,7 @@ fn enganchar_con(equipo: &str) -> Option<Vec<String>> {
         nombre: "a",
         soltar: false,
         equipo,
+        guardar: false,
     }
     .argumentos()
 }
@@ -1904,6 +2260,12 @@ fn las_ordenes_nuevas_rechazan_datos_que_el_script_rechazaria() {
     // Un comando con saltos de línea sí es válido: es texto libre.
     assert!(crear_con(None, Some("a\nb"), 5000, 80, 24).is_some());
 
+    assert!(OrdenTmux::Preparar {
+        servidor: ServidorTmux::Magi,
+        nombre: "mal nombre"
+    }
+    .argumentos()
+    .is_none());
     assert!(enganchar_con("web-01").is_some());
     assert!(enganchar_con("").is_none());
     assert!(enganchar_con("Web").is_none());
@@ -1964,28 +2326,34 @@ fn la_version_de_tmux_se_lee_con_letra_y_prefijos() {
 }
 
 #[test]
-fn la_linea_del_pty_hace_exec_y_escapa_cada_argumento() {
+fn la_linea_del_exec_escapa_cada_argumento_y_es_una_sola_linea_para_el_shell() {
     let enganchar = OrdenTmux::Enganchar {
         servidor: ServidorTmux::Magi,
         nombre: "agente",
         soltar: true,
         equipo: "portatil",
+        guardar: false,
     };
-    let linea = enganchar.linea_para_pty().expect("línea");
-    assert!(linea.starts_with("exec sh -c "));
-    assert!(linea.ends_with(" magi-tmux enganchar magi agente 1 portatil\n"));
+    let linea = enganchar.comando_exec().expect("línea");
+    assert!(linea.starts_with("sh -c '"));
+    assert!(linea.ends_with(" magi-enganche magi agente 1 portatil 0"));
     // Es una sola línea de órdenes para el shell: el script va entre comillas
-    // simples, con sus saltos de línea dentro, y termina en un único salto.
-    assert!(linea.ends_with('\n'));
+    // simples, con sus saltos de línea dentro, y no acaba en salto.
+    assert!(!linea.ends_with('\n'));
     assert!(linea.matches("'\\''").count() > 0);
     assert!(OrdenTmux::Enganchar {
         servidor: ServidorTmux::Magi,
         nombre: "mal nombre",
         soltar: true,
         equipo: "x",
+        guardar: false,
     }
-    .linea_para_pty()
+    .comando_exec()
     .is_none());
+    // Las demás llevan solo el arranque y los datos.
+    let estado = OrdenTmux::Estado.comando_exec().unwrap();
+    assert!(estado.starts_with("sh -c 'S=$(cat)"), "{estado}");
+    assert!(estado.ends_with(" magi-tmux estado"), "{estado}");
 }
 
 #[test]
@@ -2003,11 +2371,18 @@ fn los_plazos_son_los_de_t32() {
             servidor: ServidorTmux::Magi,
             nombre: "a",
             soltar: false,
-            equipo: "x"
+            equipo: "x",
+            guardar: false,
         }
         .plazo(),
         None
     );
+    // `preparar` va por la entrada estándar con el plazo de siempre.
+    let preparar = OrdenTmux::Preparar {
+        servidor: ServidorTmux::Magi,
+        nombre: "a",
+    };
+    assert_eq!(preparar.plazo(), Some(Duration::from_secs(10)));
 }
 
 #[test]
@@ -2060,37 +2435,355 @@ fn los_limites_del_script_coinciden_con_los_validadores_de_la_ficha() {
 }
 
 // ======================================================================
-// Fase 16, Sprint 2: el enganche por `exec` y el renombrado en caliente
+// Cierre de la Fase 16 (Fase 9b): el script por la entrada estándar, el
+// enganche mínimo y el renombrado en caliente
 // ======================================================================
 
+/// Un tope prudente de la línea de órdenes de un `exec` en un host con
+/// Dropbear: su límite es de unos 9000 bytes (cifra de memoria del revisor de
+/// la Fase 16, sin comprobar). Es lo que la línea de órdenes de una orden de
+/// MAGI no debe pasar cuando lo único que lleva son los datos validados.
+const TOPE_DROPBEAR: usize = 9000;
+
+fn todas_las_ordenes<'a>(nombre: &'a str, equipo: &'a str) -> Vec<OrdenTmux<'a>> {
+    vec![
+        OrdenTmux::Comprobar {
+            servidor: ServidorTmux::Magi,
+            nombre,
+        },
+        OrdenTmux::Crear {
+            nombre,
+            carpeta: Some("~/proyectos/api"),
+            comando: Some("claude --continue"),
+            lineas_historial: 10_000,
+            columnas: 120,
+            filas: 40,
+        },
+        OrdenTmux::Preparar {
+            servidor: ServidorTmux::Habitual,
+            nombre,
+        },
+        OrdenTmux::Enganchar {
+            servidor: ServidorTmux::Magi,
+            nombre,
+            soltar: true,
+            equipo,
+            guardar: true,
+        },
+        OrdenTmux::Estado,
+        OrdenTmux::Vista {
+            servidor: ServidorTmux::Magi,
+            nombre,
+            lineas: 100_000,
+        },
+        OrdenTmux::Historial {
+            servidor: ServidorTmux::Habitual,
+            nombre,
+            lineas: 100_000,
+        },
+        OrdenTmux::Renombrar {
+            nombre,
+            nuevo: nombre,
+        },
+        OrdenTmux::Terminar {
+            servidor: ServidorTmux::Magi,
+            nombre,
+        },
+    ]
+}
+
 #[test]
-fn el_comando_exec_del_enganche_lleva_el_script_entero_y_cabe_en_un_argumento() {
-    // El peor caso: nombre de 64 caracteres y equipo de 20.
+fn la_linea_del_exec_nunca_lleva_el_script_grande() {
+    // AC: dado el tmux falso, al crear, comprobar o consultar una sesión, la
+    // línea de órdenes que llega al host no contiene el script. El script va
+    // aparte, por la entrada estándar.
     let nombre = "n".repeat(64);
     let equipo = "e".repeat(20);
-    let orden = OrdenTmux::Enganchar {
-        servidor: ServidorTmux::Magi,
-        nombre: &nombre,
-        soltar: true,
-        equipo: &equipo,
+    for orden in todas_las_ordenes(&nombre, &equipo) {
+        let comando = orden.comando_exec().expect("orden válida");
+        match orden.suborden() {
+            "enganchar" => {
+                // El enganche con PTY lleva su script mínimo, no el grande, y
+                // no tiene entrada estándar que lo lleve.
+                assert!(orden.entrada().is_none());
+                assert!(comando.contains("terminal_enganche.sh"));
+                assert!(!comando.contains("preparar_configuracion"));
+                assert!(!comando.contains("listar_servidor"));
+            }
+            suborden => {
+                for rastro in [
+                    "set -u",
+                    "sesion_existe",
+                    "preparar_configuracion",
+                    "hacer_",
+                ] {
+                    assert!(
+                        !comando.contains(rastro),
+                        "{suborden}: la línea lleva el script ({rastro})"
+                    );
+                }
+                assert_eq!(orden.entrada(), Some(SCRIPT), "{suborden}");
+                assert!(comando.contains(" magi-tmux "), "{suborden}");
+                assert!(comando.contains("eval "), "{suborden}");
+            }
+        }
+    }
+}
+
+#[test]
+fn las_lineas_del_exec_son_de_pocos_cientos_de_bytes_y_la_del_enganche_cabe_en_dropbear() {
+    // El peor caso de cada orden: nombre de 64 caracteres, equipo de 20 y
+    // todos los números en su máximo. `crear` queda aparte: lleva la carpeta
+    // (hasta 1024 bytes) y el comando (hasta 4096) como argumentos, y la
+    // especificación manda que en la línea solo vayan argumentos validados
+    // (ver `una_creacion_con_carpeta_y_comando_enormes_puede_pasar_de_dropbear`).
+    let nombre = "n".repeat(64);
+    let equipo = "e".repeat(20);
+    for orden in todas_las_ordenes(&nombre, &equipo) {
+        let comando = orden.comando_exec().expect("orden válida");
+        // Se ve con `--nocapture`: lo que llega al host de cada orden.
+        eprintln!(
+            "exec de {}: {} B de línea de órdenes",
+            orden.suborden(),
+            comando.len()
+        );
+        match orden.suborden() {
+            "crear" => continue,
+            "enganchar" => {
+                // El único script que sigue en la línea. Con el nombre y el
+                // equipo máximos, una vez escapado, cabe en el límite que se
+                // le supone a Dropbear con holgura.
+                assert!(
+                    comando.len() < TOPE_DROPBEAR,
+                    "el exec del enganche pesa {} bytes",
+                    comando.len()
+                );
+                assert!(
+                    SCRIPT_ENGANCHE.len() < 6 * 1024,
+                    "terminal_enganche.sh pesa {} bytes: de pocos KB",
+                    SCRIPT_ENGANCHE.len()
+                );
+            }
+            suborden => assert!(
+                comando.len() < 512,
+                "el exec de {suborden} pesa {} bytes",
+                comando.len()
+            ),
+        }
+    }
+    // El arranque mínimo, en bytes, escapado como va en la línea.
+    let arranque = linea_de_exec(&["sh".to_string(), "-c".to_string(), ARRANQUE.to_string()]);
+    assert!(arranque.len() < 160, "{} bytes: {arranque}", arranque.len());
+}
+
+#[test]
+fn una_creacion_con_carpeta_y_comando_enormes_puede_pasar_de_dropbear() {
+    // Hueco conocido y anotado en el informe: `crear` mete la carpeta (hasta
+    // 1024 bytes) y el comando (hasta 4096) como argumentos en la línea de
+    // órdenes, sin script, y con sus caracteres escapados puede pasar de los
+    // ~9000 bytes de Dropbear. La especificación dice «solo argumentos
+    // validados en la línea», así que se deja así: este test fija la cifra.
+    let carpeta = format!("/{}", "'".repeat(1023));
+    let comando = "'".repeat(4096);
+    let orden = OrdenTmux::Crear {
+        nombre: "a",
+        carpeta: Some(&carpeta),
+        comando: Some(&comando),
+        lineas_historial: 1_000_000,
+        columnas: 1000,
+        filas: 2000,
     };
-    let comando = orden.comando_exec().expect("orden válida");
-    assert!(comando.starts_with("sh -c '"), "{}", &comando[..40]);
-    assert!(comando.ends_with(&format!(" magi-tmux enganchar magi {nombre} 1 {equipo}")));
-    // El script va entero y escapado (cada comilla simple, como `'\''`).
-    let comillas = SCRIPT.matches('\'').count();
-    assert!(comando.len() > SCRIPT.len() + 3 * comillas);
-    // Los límites: un argumento de `execve` (el `-c` de la shell de acceso)
-    // admite 128 KiB (`MAX_ARG_STRLEN`) y el paquete de un `exec` de ssh, 256
-    // KiB en OpenSSH. Con el script de ~24 KB queda un margen holgado; si el
-    // script crece hasta aquí, hay que volver a pensar cómo se entrega.
+    let linea = orden.comando_exec().expect("orden válida");
+    assert!(linea.len() > TOPE_DROPBEAR, "{} bytes", linea.len());
+    // Con datos normales, ni se acerca.
+    let normal = OrdenTmux::Crear {
+        nombre: "agente-api",
+        carpeta: Some("~/proyectos/api"),
+        comando: Some("claude --continue"),
+        lineas_historial: 10_000,
+        columnas: 120,
+        filas: 40,
+    };
+    assert!(normal.comando_exec().unwrap().len() < 512);
+}
+
+#[test]
+fn los_scripts_embebidos_medidos_frente_al_limite_de_dropbear() {
+    // Medida de TODOS los scripts embebidos con `include_str!` (R154): lo que
+    // pesan y lo que pesaría su línea de órdenes escapada, frente a los ~9000
+    // bytes de Dropbear. No cambia ninguno: solo se anota (informe de la 9b).
+    let scripts: [(&str, &str); 7] = [
+        ("terminal_tmux.sh", SCRIPT),
+        ("terminal_enganche.sh", SCRIPT_ENGANCHE),
+        ("servicios.sh", magi_nucleo::servicios::orden::SCRIPT),
+        ("sondeo.sh", magi_nucleo::flota::SCRIPT),
+        (
+            "escritorio_voxl.sh",
+            magi_nucleo::escritorio::voxl::SCRIPT_VOXL,
+        ),
+        (
+            "instalar_clave.sh",
+            magi_nucleo::instalar_clave::SCRIPT_INSTALAR_CLAVE,
+        ),
+        ("arranque", ARRANQUE),
+    ];
+    for (nombre, script) in scripts {
+        let escapado = linea_de_exec(&[
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+            "magi".to_string(),
+        ]);
+        // Se ve con `--nocapture`.
+        eprintln!(
+            "{nombre}: {} B, {} B escapado en la línea de órdenes (límite supuesto de Dropbear: {TOPE_DROPBEAR})",
+            script.len(),
+            escapado.len()
+        );
+    }
+    // Los dos de tmux: el grande ya no viaja en la línea y el mínimo cabe.
     assert!(
-        comando.len() < 64 * 1024,
-        "el exec del enganche pesa {} bytes: cerca del tope de un argumento",
-        comando.len()
+        SCRIPT.len() > TOPE_DROPBEAR,
+        "el grande es el que iba por la línea y no cabía"
     );
-    // Y se ejecuta de verdad tal cual lo recibiría el shell del host: el
-    // script llega íntegro con sus argumentos y engancha a la sesión.
+    let enganche = linea_de_exec(&[
+        "sh".to_string(),
+        "-c".to_string(),
+        SCRIPT_ENGANCHE.to_string(),
+        "magi-enganche".to_string(),
+    ]);
+    assert!(enganche.len() < TOPE_DROPBEAR, "{} bytes", enganche.len());
+}
+
+#[test]
+fn los_scripts_de_tmux_no_usan_rangos_de_caracteres() {
+    // R159: un rango como «a-z» o «0-9» depende del idioma del host (un bash
+    // antiguo con un idioma que no es C puede casar letras acentuadas o
+    // mayúsculas) y un canal exec no lo fija. Las listas van escritas carácter
+    // a carácter, en los dos scripts y también en los patrones de awk.
+    for (nombre, script) in [
+        ("terminal_tmux.sh", SCRIPT),
+        ("terminal_enganche.sh", SCRIPT_ENGANCHE),
+    ] {
+        for (numero, linea) in script.lines().enumerate() {
+            if linea.trim_start().starts_with('#') {
+                continue;
+            }
+            let mut dentro = false;
+            let mut anterior = None;
+            let caracteres: Vec<char> = linea.chars().collect();
+            for (i, caracter) in caracteres.iter().enumerate() {
+                match caracter {
+                    '[' => dentro = true,
+                    ']' => dentro = false,
+                    '-' if dentro => {
+                        // Un guion entre dos caracteres de una lista es un
+                        // rango; al principio o al final de la lista, no.
+                        let siguiente = caracteres.get(i + 1);
+                        let es_rango = anterior.is_some_and(|a: char| a.is_ascii_alphanumeric())
+                            && siguiente.is_some_and(|s| s.is_ascii_alphanumeric());
+                        assert!(
+                            !es_rango,
+                            "{nombre}:{}: rango de caracteres: {linea}",
+                            numero + 1
+                        );
+                    }
+                    _ => {}
+                }
+                anterior = Some(*caracter);
+            }
+        }
+    }
+}
+
+#[test]
+fn los_validadores_de_los_scripts_rechazan_las_letras_de_otros_idiomas() {
+    // Con una lista explícita, una letra acentuada, una mayúscula donde solo
+    // valen minúsculas o un dígito que no es ASCII nunca pasan, sea cual sea el
+    // idioma del host: se ejecuta el script con idiomas distintos.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["agente"]);
+    for idioma in ["C", "es_ES.UTF-8", "en_US.UTF-8", "tr_TR.UTF-8"] {
+        let entorno_idioma = [("LC_ALL", idioma), ("LANG", idioma)];
+        for nombre in ["agéntica", "agente\u{661}", "ñandú", "agente."] {
+            let salida = entorno.ejecutar_con(&["comprobar", "magi", nombre], &entorno_idioma);
+            assert_eq!(salida.codigo, 64, "{idioma} {nombre:?}");
+            let salida =
+                entorno.enganche_con(&["magi", nombre, "1", "portatil", "0"], &entorno_idioma);
+            assert_eq!(salida.codigo, 64, "{idioma} {nombre:?}");
+        }
+        // El equipo solo admite minúsculas ASCII, dígitos y guion.
+        for equipo in ["Portatil", "portátil", "port_atil", "portatil\u{661}"] {
+            let salida =
+                entorno.enganche_con(&["magi", "agente", "1", equipo, "0"], &entorno_idioma);
+            assert_eq!(salida.codigo, 64, "{idioma} {equipo:?}");
+        }
+        let salida = entorno.ejecutar_con(&["comprobar", "magi", "agente"], &entorno_idioma);
+        assert_eq!(salida.codigo, 0, "{idioma}: {}", salida.stderr);
+    }
+}
+
+#[test]
+fn el_arranque_no_ejecuta_nada_si_el_script_no_llega_entero() {
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["agente"]);
+    // Sin script (la entrada se cierra vacía): sale con 70 y no toca tmux.
+    let salida = entorno.ejecutar_con_entrada(&["terminar", "magi", "agente"], &[], "");
+    assert_eq!(salida.codigo, 70, "{}", salida.stderr);
+    // Un script cortado a mitad, aunque sea un trozo que se podría ejecutar.
+    let mut corte = SCRIPT.len() / 2;
+    while !SCRIPT.is_char_boundary(corte) {
+        corte += 1;
+    }
+    let mitad: &'static str = &SCRIPT[..corte];
+    let salida = entorno.ejecutar_con_entrada(&["terminar", "magi", "agente"], &[], mitad);
+    assert_eq!(salida.codigo, 70, "{}", salida.stderr);
+    // Ni siquiera el script entero menos su marca final.
+    let sin_marca: &'static str =
+        &SCRIPT[..SCRIPT.len() - magi_nucleo::terminal::tmux::MARCA_FIN.len() - 1];
+    let salida = entorno.ejecutar_con_entrada(&["terminar", "magi", "agente"], &[], sin_marca);
+    assert_eq!(salida.codigo, 70, "{}", salida.stderr);
+    assert!(salida.stdout.is_empty());
+    assert!(entorno.llamadas().is_empty(), "{}", entorno.llamadas());
+    assert!(entorno.magi_tiene("agente"));
+    // Con el script entero, sí.
+    let salida = entorno.ejecutar(&["terminar", "magi", "agente"]);
+    assert_eq!(salida.codigo, 0);
+    assert!(!entorno.magi_tiene("agente"));
+}
+
+#[test]
+fn el_script_termina_en_la_marca_que_exige_el_arranque() {
+    assert!(SCRIPT
+        .trim_end()
+        .ends_with(magi_nucleo::terminal::tmux::MARCA_FIN));
+    assert!(ARRANQUE.contains(magi_nucleo::terminal::tmux::MARCA_FIN));
+    // El arranque lee TODA la entrada antes de ejecutar nada (`cat` no acaba
+    // hasta el fin de la entrada) y no es un `exec` ni un `source`.
+    assert!(ARRANQUE.starts_with("S=$(cat)"));
+    assert!(ARRANQUE.contains("eval \"$S\""));
+}
+
+#[test]
+fn el_arranque_funciona_con_un_entorno_sin_utf8_y_con_la_variable_tmux_puesta() {
+    // Un canal exec no es una sesión de login: sin idioma, con variables
+    // heredadas. El script llega íntegro (con sus «, » y tildes) y funciona.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["agente"]);
+    let sin_idioma = [("LC_ALL", "C"), ("TMUX", "/tmp/ajeno,1,0")];
+    let salida = entorno.ejecutar_con(&["preparar", "magi", "fantasma"], &sin_idioma);
+    assert_eq!(salida.codigo, 75, "{}", salida.stderr);
+    assert!(
+        salida.stderr.contains("«fantasma»"),
+        "las tildes y las comillas llegan íntegras: {}",
+        salida.stderr
+    );
+}
+
+#[test]
+fn el_comando_exec_del_enganche_se_ejecuta_tal_cual_lo_recibiria_el_shell_del_host() {
+    // La línea completa, escapada, pasada por un shell como el de un `exec` de
+    // ssh: el script mínimo llega íntegro con sus argumentos y engancha.
     let entorno = Entorno::nuevo(Some(FAKE_TMUX));
     entorno.sembrar_magi(&["sesion-x"]);
     let orden = OrdenTmux::Enganchar {
@@ -2098,8 +2791,9 @@ fn el_comando_exec_del_enganche_lleva_el_script_entero_y_cabe_en_un_argumento() 
         nombre: "sesion-x",
         soltar: true,
         equipo: "portatil",
+        guardar: false,
     };
-    let salida = entorno.ejecutar_linea(&orden.comando_exec().unwrap());
+    let salida = entorno.ejecutar_linea(&orden.comando_exec().unwrap(), None);
     // Con la entrada cerrada el cliente falso sale con 0 y la sesión sigue
     // viva: para el script, «te soltaron».
     assert_eq!(salida.codigo, 100, "{}", salida.stderr);
@@ -2113,15 +2807,63 @@ fn el_comando_exec_del_enganche_lleva_el_script_entero_y_cabe_en_un_argumento() 
 }
 
 #[test]
+fn el_comando_exec_de_una_suborden_con_su_script_por_la_entrada_se_ejecuta_como_en_el_host() {
+    // El exec completo de `comprobar`: la línea escapada por un shell y el
+    // script por la entrada estándar, como lo manda el servidor.
+    let entorno = Entorno::nuevo(Some(FAKE_TMUX));
+    entorno.sembrar_magi(&["sesion-x"]);
+    let orden = OrdenTmux::Comprobar {
+        servidor: ServidorTmux::Magi,
+        nombre: "sesion-x",
+    };
+    let linea = orden.comando_exec().unwrap();
+    assert!(linea.len() < 512, "{}", linea.len());
+    let salida = entorno.ejecutar_linea(&linea, orden.entrada());
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    assert!(
+        salida
+            .stdout
+            .starts_with("MAGI_TMUX=tmux 3.4\nMAGI_SESION=existe\n"),
+        "{}",
+        salida.stdout
+    );
+    // La misma línea sin la entrada no hace nada (y no toca tmux).
+    let antes = entorno.llamadas().lines().count();
+    let sin_script = entorno.ejecutar_linea(&linea, None);
+    assert_eq!(sin_script.codigo, 70);
+    assert_eq!(entorno.llamadas().lines().count(), antes);
+}
+
+#[test]
+fn entrada_del_exec_solo_da_el_script_si_los_argumentos_son_los_del_arranque() {
+    use magi_nucleo::terminal::tmux::entrada_del_exec;
+    let comprobar = OrdenTmux::Comprobar {
+        servidor: ServidorTmux::Magi,
+        nombre: "a",
+    }
+    .argumentos()
+    .unwrap();
+    assert_eq!(entrada_del_exec(&comprobar), Some(SCRIPT));
+    let enganchar = enganchar_con("web-01").unwrap();
+    assert_eq!(entrada_del_exec(&enganchar), None);
+    assert_eq!(entrada_del_exec(&[]), None);
+    assert_eq!(
+        entrada_del_exec(&["sh".to_string(), "-c".to_string(), "otra cosa".to_string()]),
+        None
+    );
+}
+
+#[test]
 fn el_comando_exec_escapa_los_datos_y_no_deja_pasar_nada_invalido() {
     let orden = OrdenTmux::Enganchar {
         servidor: ServidorTmux::Habitual,
         nombre: "ok",
         soltar: false,
         equipo: "x",
+        guardar: false,
     };
     let comando = orden.comando_exec().unwrap();
-    assert!(comando.ends_with(" magi-tmux enganchar habitual ok 0 x"));
+    assert!(comando.ends_with(" magi-enganche habitual ok 0 x 0"));
     // Datos no válidos: ni línea ni comando.
     for (nombre, equipo) in [
         ("a b", "x"),
@@ -2135,13 +2877,23 @@ fn el_comando_exec_escapa_los_datos_y_no_deja_pasar_nada_invalido() {
             nombre,
             soltar: false,
             equipo,
+            guardar: false,
         };
         assert!(orden.comando_exec().is_none(), "{nombre:?} {equipo:?}");
-        assert!(orden.linea_para_pty().is_none());
     }
-    // La forma de la Fase 15 (escribir `exec …` en una shell) sigue entera.
-    let linea = OrdenTmux::Estado.linea_para_pty().unwrap();
-    assert!(linea.starts_with("exec sh -c '") && linea.ends_with("magi-tmux estado\n"));
+    // Los datos con caracteres raros que sí son válidos para el script (la
+    // carpeta y el comando de `crear`) van escapados como un solo argumento.
+    let crear = OrdenTmux::Crear {
+        nombre: "a",
+        carpeta: Some("/tmp/con espacio's"),
+        comando: Some("echo $HOME; rm -rf *"),
+        lineas_historial: 1,
+        columnas: 80,
+        filas: 24,
+    };
+    let linea = crear.comando_exec().unwrap();
+    assert!(linea.contains("'/tmp/con espacio'\\''s'"), "{linea}");
+    assert!(linea.contains("'echo $HOME; rm -rf *'"), "{linea}");
 }
 
 #[test]
@@ -2159,8 +2911,8 @@ fn un_renombrado_mientras_se_esta_enganchado_no_cuenta_como_terminada() {
         ],
     );
     let mut hijo = entorno
-        .preparar(
-            &["enganchar", "magi", "refactor", "1", "sobremesa"],
+        .preparar_enganche(
+            &["magi", "refactor", "1", "sobremesa", "0"],
             &[("MAGI_TMUX_AL_SOLTAR_RENOMBRA", "refactor-2")],
         )
         .stdin(Stdio::piped())

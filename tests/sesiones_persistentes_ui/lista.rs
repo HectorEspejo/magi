@@ -146,7 +146,15 @@ impl Prueba {
     }
 
     fn servidor(&mut self, mensaje: MensajeServidor) {
+        let es_bienvenida = matches!(mensaje, MensajeServidor::Bienvenida { .. });
         self.app.procesar(Evento::Servidor(mensaje));
+        if es_bienvenida {
+            // La ventana lleva conectada un buen rato: lo que la lista de
+            // pruebas dice haber comprobado hace segundos es posterior a su
+            // conexión (D368). Las pruebas de la conexión reciente envían la
+            // `Bienvenida` por `Evento::Servidor` directamente.
+            self.app.persistentes.conectada_en = Some(chrono::Utc::now().timestamp() - 3600);
+        }
         self.paso();
     }
 
@@ -455,6 +463,7 @@ fn sesion(
     SesionVista {
         servidor: ServidorTmux::Magi,
         nombre: nombre.to_string(),
+        id: None,
         clientes,
         equipo: equipo.map(str::to_string),
         actividad,
@@ -491,6 +500,7 @@ fn pestana_persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoS
     InfoSesion {
         nombre: nombre.to_string(),
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: nombre.to_string(),
             version: Some(VersionTmux::nueva(3, 5)),
@@ -498,6 +508,15 @@ fn pestana_persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoS
         }),
         ..pestana_de(id, host_id, host)
     }
+}
+
+/// Una pestaña que acaba de crear su sesión en el host (`creada`, D369).
+fn pestana_creada(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesion {
+    let mut info = pestana_persistente(id, host_id, host, nombre);
+    if let Some(tmux) = info.tmux.as_mut() {
+        tmux.creada = Some(true);
+    }
+    info
 }
 
 /// La pestaña tal como la difunde el servidor al empezar a abrirla: sin tmux
@@ -515,6 +534,7 @@ fn pestana_habitual(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesi
     InfoSesion {
         nombre: nombre.to_string(),
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Habitual,
             nombre: nombre.to_string(),
             version: Some(VersionTmux::nueva(3, 5)),
@@ -1256,8 +1276,8 @@ fn engancharse_a_una_sesion_sin_ficha_de_un_host_marcado_no_le_crea_ficha() {
     prueba.servidor(MensajeServidor::Sesiones {
         lista: vec![pestana_abriendo(1, web, "web-01", "portatil-3")],
     });
-    // El servidor pone `abierta_en` al abrirla: es una pestaña recién abierta,
-    // de las que sí guardarían ficha si el enganche no la excluyera.
+    // Una pestaña recién abierta, pero sobre una sesión que ya existía: el
+    // servidor no la marca `creada`, así que no guarda ficha.
     let abierta_ahora = InfoSesion {
         abierta_en: chrono::Utc::now().timestamp(),
         ..pestana_persistente(1, web, "web-01", "portatil-3")
@@ -1283,12 +1303,9 @@ fn engancharse_a_una_sesion_sin_ficha_de_un_host_marcado_no_le_crea_ficha() {
     prueba.servidor(MensajeServidor::Sesiones {
         lista: vec![
             pestana_persistente(1, web, "web-01", "portatil-3"),
-            InfoSesion {
-                // Recién abierta por el servidor: de otro modo no cuenta como
-                // «creada ahora» (ver `pestana_persistente_reciente`).
-                abierta_en: chrono::Utc::now().timestamp(),
-                ..pestana_persistente(2, web, "web-01", "sobremesa-1")
-            },
+            // La que creó su sesión en el host: el servidor lo dice con
+            // `creada` (D369), no se adivina por su edad.
+            pestana_creada(2, web, "web-01", "sobremesa-1"),
         ],
     });
     let nueva = prueba
@@ -2127,6 +2144,43 @@ fn un_fallo_al_terminar_se_dice_y_no_cambia_la_fila() {
 // ------------------------------------------------------------ borrar
 
 #[test]
+fn borrar_una_ficha_solo_dice_que_se_borra_en_otros_equipos_con_la_sincronizacion_configurada() {
+    // D370: sin sincronización, la ficha no está en ningún otro equipo.
+    let mut prueba = Prueba::nueva(&["web-01", "dev-01"]);
+    prueba.con_el_mundo();
+    prueba.ir_a("agente-api");
+    prueba.letra('x');
+    let sin = prueba.texto();
+    assert!(sin.contains("no toca el host."), "{sin}");
+    assert!(!sin.contains("otros equipos"), "{sin}");
+    prueba.tecla(KeyCode::Esc);
+    prueba.app.config.sincronizacion.carpeta = Some("~/Sync/magi".to_string());
+    prueba.letra('x');
+    let con = prueba.texto();
+    assert!(con.contains("se borra también en tus"), "{con}");
+}
+
+#[test]
+fn la_ficha_de_la_sesion_solo_dice_que_viaja_con_la_sincronizacion_configurada() {
+    let mut prueba = Prueba::nueva(&["web-01", "dev-01"]);
+    prueba.con_el_mundo();
+    prueba.redimensionar(200, 60);
+    prueba.ir_a("agente-api");
+    prueba.letra('e');
+    let sin = prueba.texto();
+    assert!(
+        sin.contains("No pongas secretos en el comando: queda guardado"),
+        "{sin}"
+    );
+    assert!(!sin.contains("viaja"), "{sin}");
+    prueba.tecla(KeyCode::Esc);
+    prueba.app.config.sincronizacion.carpeta = Some("~/Sync/magi".to_string());
+    prueba.letra('e');
+    let con = prueba.texto();
+    assert!(con.contains("la ficha viaja cifrada"), "{con}");
+}
+
+#[test]
 fn x_borra_la_ficha_con_confirmacion_y_avisa_si_la_sesion_vive() {
     let mut prueba = Prueba::nueva(&["web-01", "dev-01"]);
     prueba.con_el_mundo();
@@ -2421,6 +2475,60 @@ fn las_sesiones_con_atencion_salen_de_la_lista_del_servidor() {
             atencion[0].nombre.as_str()
         ),
         ("web-01", "agente-api")
+    );
+}
+
+#[test]
+fn la_lista_comprobada_antes_de_conectar_no_avisa_de_atencion_hasta_que_llega_la_fresca() {
+    // D368: la lista que llega detrás de la `Bienvenida` puede ser la que el
+    // servidor guardó al irse la última ventana. La campana que trae (comprobada
+    // hace 12 s, antes de esta conexión; en la vida real, hace horas) no es una
+    // atención de ahora: ni `persistentes_con_atencion` ni la barra la cuentan.
+    let mut prueba = Prueba::nueva(&["web-01", "dev-01"]);
+    // Una ventana que se acaba de conectar (sin el arreglo del arnés).
+    prueba
+        .app
+        .procesar(Evento::Servidor(bienvenida(Vec::new())));
+    prueba.tecla(KeyCode::F(3));
+    let barra = |prueba: &Prueba| {
+        prueba
+            .texto()
+            .lines()
+            .rev()
+            .find(|linea| !linea.trim().is_empty())
+            .unwrap_or("")
+            .to_string()
+    };
+    let vieja = prueba.mundo();
+    assert!(vieja
+        .fichas
+        .iter()
+        .any(|ficha| ficha.sesion.as_ref().is_some_and(|sesion| sesion.campana)));
+    prueba.servidor(MensajeServidor::SesionesPersistentes { lista: vieja });
+    assert!(prueba.app.persistentes_con_atencion().is_empty());
+    assert!(
+        !barra(&prueba).contains("pide atención"),
+        "{}",
+        barra(&prueba)
+    );
+    // La fila sigue en la lista, con su «comprobadas hace…»: no se esconde.
+    assert!(prueba.texto().contains("agente-api"), "{}", prueba.texto());
+
+    // La pasada inmediata del servidor trae la lista comprobada ahora.
+    let ahora = chrono::Utc::now().timestamp();
+    let mut fresca = prueba.mundo();
+    for ficha in &mut fresca.fichas {
+        ficha.comprobada_en = ahora;
+    }
+    for host in &mut fresca.hosts {
+        host.comprobada_en = ahora;
+    }
+    prueba.servidor(MensajeServidor::SesionesPersistentes { lista: fresca });
+    assert_eq!(prueba.app.persistentes_con_atencion().len(), 1);
+    assert!(
+        barra(&prueba).contains("agente-api pide atención"),
+        "{}",
+        barra(&prueba)
     );
 }
 

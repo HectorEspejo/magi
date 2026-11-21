@@ -202,7 +202,7 @@ fn la_vista_de_conflictos_ensena_el_detalle_del_seleccionado() {
     abrir_conflictos(&mut prueba);
     let texto = prueba.texto();
     assert!(texto.contains("CONFLICTOS DE SINCRONIZACIÓN"), "{texto}");
-    assert!(texto.contains("huérfano: tunel «socks»"), "{texto}");
+    assert!(texto.contains("huérfano: túnel «socks»"), "{texto}");
     assert!(texto.contains("d lo descarta"), "{texto}");
     // Bajando al conflicto de elemento se ve el campo que difiere.
     prueba.tecla(KeyCode::Down);
@@ -226,11 +226,8 @@ fn el_indicador_de_la_barra_cambia_con_el_estado() {
     assert!(texto.contains("⇅"), "{texto}");
     // Con conflictos pendientes el indicador los cuenta.
     prueba.app.probar_resultado_pasada(ResultadoPasada {
-        estado: EstadoPasada::AlDia,
-        resumen: None,
-        exportado: false,
         conflictos_pendientes: 3,
-        avisos: Vec::new(),
+        ..ResultadoPasada::nuevo(EstadoPasada::AlDia)
     });
     prueba.paso_en(Instant::now());
     assert!(
@@ -352,17 +349,15 @@ fn un_borrado_masivo_abre_el_dialogo_y_lo_deja_en_pausa() {
     let (mut prueba, _) = AppPrueba::con_semilla(80, 24);
     preparar(&mut prueba, EstadoPasada::AlDia);
     abrir_por_paleta(&mut prueba, "sincronización");
-    prueba.app.probar_resultado_pasada(ResultadoPasada {
-        estado: EstadoPasada::DecisionPendiente(BorradosPendientes {
-            copia: PathBuf::from("/var/datos/magi/copias/magi-20261105-101200.db"),
-            hosts: vec!["web-1".to_string(), "web-2".to_string()],
-            total_hosts: 23,
-        }),
-        resumen: None,
-        exportado: false,
-        conflictos_pendientes: 0,
-        avisos: Vec::new(),
-    });
+    prueba
+        .app
+        .probar_resultado_pasada(ResultadoPasada::nuevo(EstadoPasada::DecisionPendiente(
+            BorradosPendientes {
+                copia: PathBuf::from("/var/datos/magi/copias/magi-20261105-101200.db"),
+                hosts: vec!["web-1".to_string(), "web-2".to_string()],
+                total_hosts: 23,
+            },
+        )));
     prueba.paso_en(Instant::now());
     assert!(matches!(
         prueba.app.dialogo,

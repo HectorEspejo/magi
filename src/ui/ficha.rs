@@ -776,16 +776,23 @@ impl Constructor<'_> {
     }
 
     /// Bloque SESIONES (Fase 16): la marca «todas las sesiones persistentes»
-    /// del host. Viaja a los demás equipos (por eso lo dice la cabecera) y
-    /// solo tiene sentido en hosts SSH. Con el snippet al conectar
-    /// arrancando tmux, avisa de tmux dentro de tmux (R143).
+    /// del host. Viaja a los demás equipos (por eso lo dice la cabecera, con
+    /// la sincronización configurada) y solo tiene sentido en hosts SSH. Con
+    /// el snippet al conectar arrancando tmux, avisa de tmux dentro de tmux
+    /// (R143).
     fn sesiones(&mut self) {
         let ficha = self.ficha;
         let tema = self.tema;
         let ascii = tema.ascii;
         let campo = CampoFicha::SesionesPersistentes;
         self.vacia();
-        self.cabecera("SESIONES (viaja a tus equipos)");
+        // «Viaja a tus equipos» solo es cierto con la sincronización
+        // configurada (D370).
+        self.cabecera(if ficha.sincronizacion_activa {
+            "SESIONES (viaja a tus equipos)"
+        } else {
+            "SESIONES"
+        });
         let titulo = "Todas las sesiones persistentes";
         let aclaracion = "(tmux en el host)";
         // Con sitio, la aclaración va en la línea de la casilla; en el mínimo
@@ -2603,6 +2610,14 @@ mod pruebas {
         let mut ficha = ficha_de_prueba();
         ficha.etiqueta_equipo = "sobremesa".to_string();
         ficha.sesiones_persistentes = true;
+        // Sin la sincronización configurada, la cabecera no dice que viaje.
+        let filas = pintar_con(&ficha, 140, false, &Tema::respaldo());
+        assert!(!filas
+            .iter()
+            .any(|fila| fila.contains("viaja a tus equipos")));
+        posicion_de(&filas, " SESIONES");
+        // Con ella, sí.
+        ficha.sincronizacion_activa = true;
         let filas = pintar_con(&ficha, 140, false, &Tema::respaldo());
         let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");
         assert_eq!(
@@ -2643,6 +2658,8 @@ mod pruebas {
     fn el_bloque_sesiones_cabe_en_el_minimo_de_la_ficha_y_en_estrecho() {
         let mut ficha = ficha_de_prueba();
         ficha.etiqueta_equipo = "abcdefghijklmnopqrst".to_string();
+        // La cabecera más larga: con la sincronización configurada.
+        ficha.sincronizacion_activa = true;
         let tema = Tema::respaldo();
         // 47 es el formulario de una ficha en su mínimo (50 columnas).
         for ancho in [47u16, 52, 58, 79] {
@@ -2683,7 +2700,8 @@ mod pruebas {
         let filas = pintar_con(&ficha_de_prueba(), 140, false, &tema);
         assert!(!filas.iter().any(|fila| fila.contains("aviso:")));
         // Con el snippet de tmux, el aviso va dentro del bloque SESIONES.
-        let ficha = ficha_con_snippet_de_tmux();
+        let mut ficha = ficha_con_snippet_de_tmux();
+        ficha.sincronizacion_activa = true;
         assert_eq!(ficha.snippet.arranca_tmux(), Some("tmux"));
         let filas = pintar_con(&ficha, 140, false, &tema);
         let cabecera = posicion_de(&filas, " SESIONES (viaja a tus equipos)");

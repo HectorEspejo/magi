@@ -34,7 +34,7 @@ struct Entorno {
     config: Config,
 }
 
-fn entorno() -> Entorno {
+fn entorno(sincroniza: bool) -> Entorno {
     let temporal = tempfile::Builder::new()
         .prefix("magisp")
         .tempdir()
@@ -51,6 +51,12 @@ fn entorno() -> Entorno {
         // Sin exportar a `~/.ssh/config`: la prueba no tiene `.ssh`.
         config: Config {
             exportar_al_guardar: false,
+            // La sincronización del inventario solo está configurada si se
+            // pide: de eso depende lo que dice la cabecera de SESIONES.
+            sincronizacion: magi::config::SeccionSincronizacion {
+                carpeta: sincroniza.then(|| "~/Sync/magi".to_string()),
+                ..Default::default()
+            },
             ..Config::default()
         },
         _temporal: temporal,
@@ -89,7 +95,17 @@ impl Prueba {
         tema: Tema,
         tocar: impl FnOnce(&magi::almacen::Almacen),
     ) -> Self {
-        let entorno = entorno();
+        Self::con_inventario_y_sincronizacion(cols, filas, tema, false, tocar)
+    }
+
+    fn con_inventario_y_sincronizacion(
+        cols: u16,
+        filas: u16,
+        tema: Tema,
+        sincroniza: bool,
+        tocar: impl FnOnce(&magi::almacen::Almacen),
+    ) -> Self {
+        let entorno = entorno(sincroniza);
         {
             let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
             let este = magi::almacen::equipos::este(almacen.conexion()).expect("este equipo");
@@ -277,7 +293,9 @@ fn la_casilla_sale_al_editar_un_host_ssh_con_su_bloque() {
     prueba.editar("base-01");
     prueba.ir_a(CampoFicha::SesionesPersistentes);
     let texto = prueba.texto();
-    assert!(texto.contains("SESIONES (viaja a tus equipos)"), "{texto}");
+    // Sin la sincronización configurada, la cabecera no dice que viaje (D370).
+    assert!(texto.contains(" SESIONES"), "{texto}");
+    assert!(!texto.contains("viaja a tus equipos"), "{texto}");
     assert!(
         texto.contains("[ ] Todas las sesiones persistentes (tmux en el host)"),
         "{texto}"
@@ -298,6 +316,37 @@ fn la_casilla_sale_al_editar_un_host_ssh_con_su_bloque() {
 }
 
 #[test]
+fn la_cabecera_de_sesiones_dice_que_viaja_solo_con_la_sincronizacion_configurada() {
+    // D370: «viaja a tus equipos» solo es cierto si hay con qué viajar.
+    let con = |sincroniza: bool| {
+        let mut prueba = Prueba::con_inventario_y_sincronizacion(
+            80,
+            24,
+            Tema::respaldo(),
+            sincroniza,
+            |almacen| {
+                almacen
+                    .crear_host(&host_ssh("base-01", "192.0.2.10"), Origen::Manual)
+                    .expect("host de prueba");
+            },
+        );
+        prueba.editar("base-01");
+        prueba.ir_a(CampoFicha::SesionesPersistentes);
+        prueba.texto()
+    };
+    let con_sincronizacion = con(true);
+    assert!(
+        con_sincronizacion.contains("SESIONES (viaja a tus equipos)"),
+        "{con_sincronizacion}"
+    );
+    let sin_sincronizacion = con(false);
+    assert!(
+        sin_sincronizacion.contains(" SESIONES") && !sin_sincronizacion.contains("viaja"),
+        "{sin_sincronizacion}"
+    );
+}
+
+#[test]
 fn la_casilla_sale_al_crear_un_host_y_se_guarda_con_el() {
     let mut prueba = Prueba::nueva();
     prueba.nuevo();
@@ -312,7 +361,7 @@ fn la_casilla_sale_al_crear_un_host_y_se_guarda_con_el() {
     prueba.ir_a(CampoFicha::Direccion);
     prueba.escribir("192.0.2.20");
     prueba.ir_a(CampoFicha::SesionesPersistentes);
-    assert!(prueba.texto().contains("SESIONES (viaja a tus equipos)"));
+    assert!(prueba.texto().contains(" SESIONES"));
     prueba.tecla(KeyCode::Char(' '));
     prueba.guardar();
     assert_eq!(prueba.app.vista, Vista::Hosts, "{:?}", prueba.app.mensaje);
@@ -665,10 +714,7 @@ fn el_aviso_sale_cuando_el_snippet_al_conectar_arranca_tmux() {
     assert!(texto.contains("tmux dentro de tmux"), "{texto}");
     // El aviso es del bloque SESIONES: va entre su cabecera y su pie.
     let lineas: Vec<&str> = texto.lines().collect();
-    let cabecera = lineas
-        .iter()
-        .position(|l| l.contains("SESIONES (viaja a tus equipos)"))
-        .unwrap();
+    let cabecera = lineas.iter().position(|l| l.contains(" SESIONES")).unwrap();
     let aviso = lineas.iter().position(|l| l.contains("aviso:")).unwrap();
     let terminal = lineas
         .iter()

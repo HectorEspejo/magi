@@ -386,7 +386,9 @@ fn estado_equipo_texto(equipo: &equipos::Equipo) -> String {
         equipos::ESTADO_ESTE => "este equipo".to_string(),
         equipos::ESTADO_AL_DIA => "al día".to_string(),
         equipos::ESTADO_ILEGIBLE => "no abre con la clave".to_string(),
-        equipos::ESTADO_DANADO => "dañado".to_string(),
+        // Lo normal con una carpeta que se sincroniza a ratos (R85): no pide nada
+        // y se reintenta solo en la siguiente pasada.
+        equipos::ESTADO_DANADO => "a medio copiar o dañado: se reintenta".to_string(),
         equipos::ESTADO_FORMATO_NUEVO => "versión más nueva".to_string(),
         equipos::ESTADO_QUITADO => "quitado".to_string(),
         otro => otro.to_string(),
@@ -588,9 +590,34 @@ fn dibujar_detalle_conflicto(marco: &mut Frame, area: Rect, app: &App) {
     marco.render_widget(Paragraph::new(lineas), interior);
 }
 
-/// Tipo de conflicto legible.
+/// Tipo de conflicto legible (columna TIPO). Los que no se conocen salen tal
+/// cual: la base puede traer un tipo de una versión posterior.
 fn tipo_conflicto_texto(conflicto: &crate::almacen::conflictos::Conflicto) -> String {
-    conflicto.tipo.clone()
+    use crate::almacen::conflictos as bd;
+    match conflicto.tipo.as_str() {
+        bd::TIPO_HUERFANO => "huérfano".to_string(),
+        otro => otro.to_string(),
+    }
+}
+
+/// Cómo se llama un tipo de elemento que viaja (`elemento_tipo` de
+/// `CONFLICTOS` y de las lápidas) en lo que se dice al usuario: sin guiones
+/// bajos ni la forma interna. Un tipo desconocido (de una versión posterior)
+/// sale tal cual. Solo es lo que se ve: la lógica sigue usando el tipo real.
+#[must_use]
+pub fn etiqueta_de_elemento(tipo: &str) -> String {
+    match tipo {
+        "grupo" => "grupo",
+        "host" => "host",
+        "identidad" => "identidad",
+        "tunel" => "túnel",
+        "snippet" => "snippet",
+        "sincronizacion_dir" => "sincronización de directorio",
+        "comprobacion_servicio" => "comprobación de servicio",
+        "sesion_persistente" => "sesión persistente",
+        otro => otro,
+    }
+    .to_string()
 }
 
 /// Quién ganó, para la columna GANÓ: equipo, «aplazado» o «aceptó otra».

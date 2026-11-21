@@ -405,6 +405,7 @@ fn magi_sesion_anota_el_enganche_cuando_aparece_la_pestana_y_nunca_antes() {
             titulo: None,
             aviso: None,
             tmux: Some(TmuxPestana {
+                creada: None,
                 servidor: ServidorTmux::Magi,
                 nombre: "agente".to_string(),
                 version: Some(VersionTmux::nueva(3, 5)),

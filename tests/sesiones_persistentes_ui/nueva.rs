@@ -65,7 +65,8 @@ struct Prueba {
     app: App,
     terminal: Terminal<TestBackend>,
     enviados: tokio::sync::mpsc::UnboundedReceiver<MensajeCliente>,
-    _entorno: Entorno,
+    /// El entorno lo guarda la ventana que lo creó; las demás lo comparten.
+    _entorno: Option<Entorno>,
 }
 
 impl Prueba {
@@ -121,7 +122,37 @@ impl Prueba {
             app,
             terminal,
             enviados,
-            _entorno: entorno,
+            _entorno: Some(entorno),
+        };
+        prueba
+            .app
+            .iniciar_pintado(&mut prueba.terminal)
+            .expect("pintado");
+        prueba
+    }
+
+    /// Otra ventana de este mismo equipo: otra `App` sobre la misma base de
+    /// datos (R163). Debe soltarse antes que la que la creó, que es la dueña
+    /// del directorio temporal.
+    fn otra_ventana(&self) -> Self {
+        let entorno = self
+            ._entorno
+            .as_ref()
+            .expect("solo la primera ventana crea otras");
+        let almacen = magi::almacen::abrir(&entorno.rutas.base_datos()).expect("almacén");
+        let (app, enviados) = App::de_prueba(
+            entorno.rutas.clone(),
+            entorno.config.clone(),
+            Tema::respaldo(),
+            almacen,
+        )
+        .expect("app de prueba");
+        let terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut prueba = Self {
+            app,
+            terminal,
+            enviados,
+            _entorno: None,
         };
         prueba
             .app
@@ -782,11 +813,15 @@ fn la_ficha_y_la_anotacion_llegan_solo_cuando_la_pestana_existe() {
     assert!(prueba.fichas().is_empty());
 
     // Otra sesión del mismo host no es la pendiente.
-    prueba.app.pestana_persistente_abierta(dev, "otra");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "otra", Some(true));
     assert!(prueba.fichas().is_empty());
     assert_eq!(prueba.app.persistentes.creaciones.len(), 1);
 
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     let fichas = prueba.fichas();
     assert_eq!(fichas.len(), 1, "la ficha se guarda al existir la sesión");
     let ficha = &fichas[0];
@@ -835,18 +870,18 @@ fn la_ficha_y_la_anotacion_llegan_solo_cuando_la_pestana_existe() {
     assert_eq!(consultas, 1);
 
     // Una pestaña repetida no duplica nada.
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     assert_eq!(prueba.fichas().len(), 1);
     assert_eq!(prueba.registro("sesion_persistente_creada").len(), 1);
 }
 
 #[test]
 fn un_fallo_de_apertura_deja_la_pendiente_limpia_y_sin_ficha() {
+    // Las causas que devuelven el diálogo con lo escrito (la carpeta y el
+    // nombre) tienen su propia prueba más abajo.
     let causas = [
-        (
-            CausaAperturaTmux::SinCarpeta,
-            "la carpeta ~/x no existe en dev-01",
-        ),
         (CausaAperturaTmux::SinTmux, "instala tmux en dev-01"),
         (
             CausaAperturaTmux::TmuxAntiguo,
@@ -893,7 +928,9 @@ fn un_fallo_de_apertura_deja_la_pendiente_limpia_y_sin_ficha() {
         );
 
         // Una pestaña que aparezca después (otro camino) no crea la ficha.
-        prueba.app.pestana_persistente_abierta(dev, "agente-api");
+        prueba
+            .app
+            .pestana_persistente_abierta(dev, "agente-api", Some(true));
         assert!(prueba.fichas().is_empty(), "{causa:?}");
     }
 }
@@ -908,6 +945,128 @@ fn un_fallo_de_otro_nombre_no_toca_la_pendiente() {
     prueba.drenar();
     prueba.servidor(fallida(dev, "otra", CausaAperturaTmux::Otra, "no"));
     assert_eq!(prueba.app.persistentes.creaciones.len(), 1);
+}
+
+#[test]
+fn el_dialogo_solo_dice_que_la_ficha_viaja_con_la_sincronizacion_configurada() {
+    // D370: «la ves en todos tus equipos» y «la ficha viaja» solo valen con la
+    // sincronización del inventario configurada.
+    let mut prueba = Prueba::con_hosts(&["dev-01"], false);
+    prueba.redimensionar(200, 60);
+    abrir_desde_flota(&mut prueba);
+    let sin = prueba.texto();
+    assert!(sin.contains("Vive en dev-01 aunque cierres MAGI"), "{sin}");
+    assert!(!sin.contains("todos tus equipos"), "{sin}");
+    assert!(!sin.contains("viaja"), "{sin}");
+    assert!(sin.contains("No pongas secretos en el comando"), "{sin}");
+    prueba.tecla(KeyCode::Esc);
+
+    prueba.app.config.sincronizacion.carpeta = Some("~/Sync/magi".to_string());
+    abrir_desde_flota(&mut prueba);
+    let con = prueba.texto();
+    assert!(con.contains("la ves en todos tus equipos"), "{con}");
+    assert!(
+        con.contains("La ficha viaja cifrada a tus otros equipos"),
+        "{con}"
+    );
+}
+
+#[test]
+fn un_fallo_por_la_carpeta_devuelve_el_dialogo_con_todo_lo_escrito_y_el_motivo() {
+    // D370: «la carpeta no existe» no tira lo escrito (el comando, el de
+    // reanudación y la nota): el diálogo vuelve con el foco en la carpeta y el
+    // motivo, con su instrucción, en el pie.
+    let mut prueba = Prueba::con_hosts(&["dev-01", "web-01"], false);
+    let dev = prueba.host_id("dev-01");
+    abrir_desde_flota(&mut prueba);
+    rellenar_como_la_maqueta(&mut prueba);
+    prueba.tecla(KeyCode::Enter);
+    prueba.drenar();
+    assert!(!prueba.hay_dialogo());
+
+    prueba.servidor(fallida(
+        dev,
+        "agente-api",
+        CausaAperturaTmux::SinCarpeta,
+        "la carpeta ~/proyectos/api no existe en «dev-01»",
+    ));
+
+    assert!(prueba.hay_dialogo(), "el diálogo vuelve");
+    {
+        let formulario = prueba.formulario();
+        assert_eq!(formulario.host_id(), Some(dev));
+        assert_eq!(formulario.foco(), CampoNueva::Carpeta);
+        assert_eq!(formulario.texto(CampoNueva::Nombre), "agente-api");
+        assert_eq!(formulario.texto(CampoNueva::Carpeta), "~/proyectos/api");
+        assert_eq!(formulario.texto(CampoNueva::Comando), "claude");
+        assert_eq!(formulario.texto(CampoNueva::Reanudar), "claude --continue");
+        assert_eq!(
+            formulario.texto(CampoNueva::Nota),
+            "refactor del módulo de pagos"
+        );
+        assert_eq!(formulario.ocupado(), None, "no es un nombre ocupado");
+        let error = formulario.error().expect("el motivo en el pie");
+        assert!(
+            error.contains("la carpeta ~/proyectos/api no existe en «dev-01»"),
+            "{error}"
+        );
+        assert!(error.contains("créala o elige otra carpeta"), "{error}");
+    }
+    // Lo de siempre: nada pendiente, el host libre y ninguna ficha.
+    assert!(prueba.app.persistentes.creaciones.is_empty());
+    assert!(!prueba.app.aperturas_pendientes.contains(&dev));
+    assert!(prueba.fichas().is_empty());
+    assert!(prueba.registro("sesion_persistente_creada").is_empty());
+    // El error está a la vista y no hay otro aviso en la barra.
+    assert!(prueba.texto().contains("no existe en «dev-01»"));
+
+    // Se corrige la carpeta y se vuelve a intentar con el mismo comando.
+    for _ in 0..prueba
+        .formulario()
+        .texto(CampoNueva::Carpeta)
+        .chars()
+        .count()
+    {
+        prueba.tecla(KeyCode::Backspace);
+    }
+    prueba.escribir("~/proyectos");
+    assert_eq!(prueba.formulario().error(), None, "el error se retira");
+    prueba.tecla(KeyCode::Enter);
+    let aperturas = prueba.aperturas_tmux();
+    assert_eq!(aperturas.len(), 1, "{aperturas:?}");
+    assert_eq!(
+        aperturas[0].1.crear,
+        Some(CrearTmux {
+            carpeta: Some("~/proyectos".to_string()),
+            comando: Some("claude".to_string()),
+        })
+    );
+}
+
+#[test]
+fn un_fallo_por_la_carpeta_de_una_ficha_que_se_reabre_no_abre_el_dialogo_de_nueva() {
+    // Reabrir usa la carpeta de la ficha: no hay un diálogo con lo escrito al
+    // que volver, y el aviso de la barra dice cómo arreglarlo.
+    let mut prueba = Prueba::con_hosts(&["dev-01"], false);
+    prueba.sembrar_ficha("dev-01", datos_de_ficha("agente-api"));
+    let dev = prueba.host_id("dev-01");
+    prueba.app.reabrir_ficha(dev, "agente-api");
+    prueba.drenar();
+    prueba.servidor(fallida(
+        dev,
+        "agente-api",
+        CausaAperturaTmux::SinCarpeta,
+        "la carpeta ~/proyectos/api no existe en «dev-01»",
+    ));
+    assert!(!prueba.hay_dialogo());
+    assert!(prueba.app.dialogo.is_none());
+    let mensaje = prueba.app.mensaje.as_ref().expect("aviso");
+    assert!(mensaje.error);
+    assert!(
+        mensaje.texto.contains("créala o elige otra"),
+        "{}",
+        mensaje.texto
+    );
 }
 
 /// Una pestaña persistente tal como la difunde el servidor en `Sesiones`.
@@ -927,6 +1086,7 @@ fn info_persistente(id: u32, host_id: i64, host: &str, nombre: &str) -> InfoSesi
         titulo: None,
         aviso: None,
         tmux: Some(TmuxPestana {
+            creada: None,
             servidor: ServidorTmux::Magi,
             nombre: nombre.to_string(),
             version: None,
@@ -1038,8 +1198,9 @@ fn la_lista_de_sesiones_con_una_pestana_de_un_host_marcado_crea_su_ficha() {
         .fijar_sesiones_persistentes(dev, true)
         .expect("marcar el host");
     prueba.app.recargar_inventario().expect("recargar");
+    // La pestaña que creó su sesión (`creada`): la ficha del host marcado.
     prueba.servidor(MensajeServidor::Sesiones {
-        lista: vec![info_persistente(3, dev, "dev-01", "sobremesa-1")],
+        lista: vec![info_con_creada(3, dev, "dev-01", "sobremesa-1", Some(true))],
     });
     let fichas = prueba.fichas();
     assert_eq!(fichas.len(), 1);
@@ -1157,7 +1318,9 @@ fn con_el_nombre_ocupado_intro_se_engancha_sin_crear_y_anota_al_existir_la_pesta
     // Todavía no se ha anotado: el efecto no se ha producido.
     assert!(prueba.registro("sesion_persistente_enganchada").is_empty());
 
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     let anotadas = prueba.registro("sesion_persistente_enganchada");
     assert_eq!(anotadas.len(), 1);
     assert!(anotadas[0].detalle.contains("agente-api"));
@@ -1240,7 +1403,9 @@ fn si_el_host_dice_que_existe_intro_se_engancha_sin_crear() {
 
     // La sesión existía y no era nuestra: sin ficha (el host no está marcado);
     // solo queda el hecho de haberse enganchado.
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     assert!(prueba.fichas().is_empty());
     assert_eq!(prueba.registro("sesion_persistente_enganchada").len(), 1);
     assert!(prueba.registro("sesion_persistente_creada").is_empty());
@@ -1511,7 +1676,9 @@ fn reabrir_usa_el_comando_de_reanudacion_y_solo_anota_al_existir_la_pestana() {
         "no se anota al pedirlo"
     );
 
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     // La lista se vuelve a pedir: la fila no puede seguir «terminada» con la
     // sesión ya viva.
     let consultas = prueba
@@ -1629,7 +1796,9 @@ fn en_un_host_marcado_la_pestana_sin_ficha_crea_la_ficha_con_origen_host() {
     prueba.app.recargar_inventario().expect("recargar");
 
     // El servidor eligió el nombre automático: no hay creación pendiente.
-    prueba.app.pestana_persistente_abierta(dev, "sobremesa-1");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "sobremesa-1", Some(true));
     let fichas = prueba.fichas();
     assert_eq!(fichas.len(), 1);
     assert_eq!(fichas[0].nombre, "sobremesa-1");
@@ -1642,50 +1811,149 @@ fn en_un_host_marcado_la_pestana_sin_ficha_crea_la_ficha_con_origen_host() {
     assert!(creadas[0].detalle.contains("host"));
 
     // Sin duplicar si ya existe.
-    prueba.app.pestana_persistente_abierta(dev, "sobremesa-1");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "sobremesa-1", Some(true));
     assert_eq!(prueba.fichas().len(), 1);
     assert_eq!(prueba.registro("sesion_persistente_creada").len(), 1);
 
     // Otro nombre del mismo host marcado: otra ficha.
-    prueba.app.pestana_persistente_abierta(dev, "sobremesa-2");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "sobremesa-2", Some(true));
     assert_eq!(prueba.fichas().len(), 2);
 }
 
-#[test]
-fn una_pestana_vieja_de_un_host_marcado_no_resucita_una_ficha_borrada() {
-    // Revisión adversarial: al abrir una ventana (o al ver una pestaña que otra
-    // ventana abrió hace rato), el servidor difunde las pestañas que ya tenía.
-    // Si el usuario había borrado la ficha de una de ellas (la sesión sigue en
-    // el host), no debe reaparecer con otra anotación «creada».
-    let mut prueba = Prueba::con_hosts(&["dev-01"], false);
-    let dev = prueba.host_id("dev-01");
+/// La pestaña tal como la difunde el servidor, con su `creada`.
+fn info_con_creada(
+    id: u32,
+    host_id: i64,
+    host: &str,
+    nombre: &str,
+    creada: Option<bool>,
+) -> InfoSesion {
+    let mut info = info_persistente(id, host_id, host, nombre);
+    if let Some(tmux) = info.tmux.as_mut() {
+        tmux.creada = creada;
+    }
+    info
+}
+
+/// Marca un host para las sesiones persistentes y recarga el inventario.
+fn marcar_host(prueba: &mut Prueba, host: &str) -> i64 {
+    let id = prueba.host_id(host);
     prueba
         .app
         .almacen
-        .fijar_sesiones_persistentes(dev, true)
+        .fijar_sesiones_persistentes(id, true)
         .expect("marcar el host");
     prueba.app.recargar_inventario().expect("recargar");
+    id
+}
 
-    let mut vieja = info_persistente(3, dev, "dev-01", "sobremesa-1");
-    vieja.abierta_en = chrono::Utc::now().timestamp() - 3600;
-    prueba.servidor(MensajeServidor::Sesiones { lista: vec![vieja] });
-    assert!(
-        prueba.fichas().is_empty(),
-        "una pestaña abierta hace una hora no es una sesión recién creada"
-    );
-    assert!(prueba.registro("sesion_persistente_creada").is_empty());
+#[test]
+fn una_pestana_que_no_creo_la_sesion_de_un_host_marcado_no_resucita_una_ficha_borrada() {
+    // Al abrir una ventana (o al ver una pestaña que otra ventana abrió hace
+    // rato), el servidor difunde las pestañas que ya tenía; y una pestaña que
+    // se engancha a una sesión que ya existía tampoco la creó. Si el usuario
+    // había borrado la ficha de una de ellas (la sesión sigue en el host), no
+    // debe reaparecer con otra anotación «creada» (D369, R163).
+    let mut prueba = Prueba::con_hosts(&["dev-01"], false);
+    let dev = marcar_host(&mut prueba, "dev-01");
 
-    // La que el servidor acaba de abrir sí crea su ficha.
-    prueba.servidor(MensajeServidor::Sesiones {
-        lista: vec![
-            info_persistente(3, dev, "dev-01", "sobremesa-1"),
-            info_persistente(4, dev, "dev-01", "sobremesa-2"),
-        ],
-    });
+    for creada in [None, Some(false)] {
+        prueba.servidor(MensajeServidor::Sesiones {
+            lista: vec![info_con_creada(3, dev, "dev-01", "sobremesa-1", creada)],
+        });
+        assert!(
+            prueba.fichas().is_empty(),
+            "creada = {creada:?}: la pestaña no creó la sesión, no hay ficha"
+        );
+        assert!(prueba.registro("sesion_persistente_creada").is_empty());
+        prueba.servidor(MensajeServidor::Sesiones { lista: Vec::new() });
+    }
+
+    // La que creó la sesión sí guarda su ficha, aunque la pestaña ya lleve rato
+    // abierta para el servidor (un diálogo de huella tarda lo que tarda el
+    // usuario): ya no se decide por la edad.
+    let mut lenta = info_con_creada(4, dev, "dev-01", "sobremesa-2", Some(true));
+    lenta.abierta_en = chrono::Utc::now().timestamp() - 3600;
+    prueba.servidor(MensajeServidor::Sesiones { lista: vec![lenta] });
     let fichas = prueba.fichas();
     assert_eq!(fichas.len(), 1, "{fichas:?}");
     assert_eq!(fichas[0].nombre, "sobremesa-2");
+    assert_eq!(fichas[0].origen, OrigenFicha::Host);
     assert_eq!(prueba.registro("sesion_persistente_creada").len(), 1);
+}
+
+#[test]
+fn dos_ventanas_del_mismo_equipo_no_guardan_ficha_de_una_sesion_que_ya_existia() {
+    // R163: en un host marcado, una ventana abre una pestaña sobre una sesión
+    // que ya existía en el host. Las dos ventanas ven la pestaña (con
+    // `creada` a `None`/`false`: no la creó) y ninguna guarda una ficha
+    // `origen = host` ni anota «creada». Con la sesión que sí se creó, las dos
+    // la ven con `creada` y se guarda una sola ficha, con una sola anotación.
+    let mut una = Prueba::con_hosts(&["dev-01"], false);
+    let mut otra = una.otra_ventana();
+    let dev = marcar_host(&mut una, "dev-01");
+    otra.app.recargar_inventario().expect("recargar");
+
+    for creada in [None, Some(false)] {
+        let existente = info_con_creada(3, dev, "dev-01", "ya-existia", creada);
+        una.servidor(MensajeServidor::Sesiones {
+            lista: vec![existente.clone()],
+        });
+        otra.servidor(MensajeServidor::Sesiones {
+            lista: vec![existente],
+        });
+        assert!(una.fichas().is_empty(), "creada = {creada:?}");
+        assert!(otra.fichas().is_empty(), "creada = {creada:?}");
+        assert!(una.registro("sesion_persistente_creada").is_empty());
+        una.servidor(MensajeServidor::Sesiones { lista: Vec::new() });
+        otra.servidor(MensajeServidor::Sesiones { lista: Vec::new() });
+    }
+
+    // Una sesión que sí se creó: la ven las dos ventanas y queda una ficha.
+    let creada = info_con_creada(4, dev, "dev-01", "sobremesa-1", Some(true));
+    una.servidor(MensajeServidor::Sesiones {
+        lista: vec![creada.clone()],
+    });
+    otra.servidor(MensajeServidor::Sesiones {
+        lista: vec![creada],
+    });
+    let fichas = una.fichas();
+    assert_eq!(fichas.len(), 1, "{fichas:?}");
+    assert_eq!(fichas[0].nombre, "sobremesa-1");
+    assert_eq!(fichas[0].origen, OrigenFicha::Host);
+    assert_eq!(otra.fichas().len(), 1);
+    assert_eq!(
+        una.registro("sesion_persistente_creada").len(),
+        1,
+        "una sola anotación, la de quien guardó la ficha"
+    );
+}
+
+#[test]
+fn la_lista_de_la_bienvenida_nunca_crea_fichas_de_host_marcado() {
+    // Lo que ya había al conectar no lo creó esta ventana ante sus ojos: la
+    // ficha la guarda la ventana que vio abrirse la pestaña (D369).
+    let mut prueba = Prueba::con_hosts(&["dev-01"], false);
+    let dev = marcar_host(&mut prueba, "dev-01");
+    prueba.servidor(MensajeServidor::Bienvenida {
+        version: magi::protocolo::VERSION_PROTOCOLO,
+        version_app: "1.6.1".to_string(),
+        pid: 4242,
+        cliente_id: 1,
+        clientes: 2,
+        sesiones: vec![info_con_creada(3, dev, "dev-01", "sobremesa-1", Some(true))],
+        transferencias: Vec::new(),
+        tuneles: Vec::new(),
+        ejecuciones: Vec::new(),
+        acciones_servicio: Vec::new(),
+        tuneles_temporales: Vec::new(),
+    });
+    assert!(prueba.fichas().is_empty(), "{:?}", prueba.fichas());
+    assert!(prueba.registro("sesion_persistente_creada").is_empty());
 }
 
 #[test]
@@ -1703,7 +1971,9 @@ fn si_otra_ventana_guarda_antes_la_ficha_automatica_lo_escrito_en_el_dialogo_no_
         .expect("marcar el host");
     prueba.app.recargar_inventario().expect("recargar");
     // La etiqueta de este equipo, tal como la guarda el cliente.
-    prueba.app.pestana_persistente_abierta(dev, "sonda");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "sonda", Some(true));
     let equipo = prueba.fichas()[0].creada_por.clone();
 
     abrir_desde_flota(&mut prueba);
@@ -1724,7 +1994,9 @@ fn si_otra_ventana_guarda_antes_la_ficha_automatica_lo_escrito_en_el_dialogo_no_
             creada_por: equipo,
         },
     );
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
 
     let ficha = prueba
         .fichas()
@@ -1751,7 +2023,9 @@ fn si_otra_ventana_guarda_antes_la_ficha_automatica_lo_escrito_en_el_dialogo_no_
             ..datos_de_ficha("agente-api")
         },
     );
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     let ficha = &prueba.fichas()[0];
     assert_eq!(ficha.creada_por, "portatil");
     assert_eq!(ficha.nota.as_deref(), Some("la de otro equipo"));
@@ -1792,7 +2066,9 @@ fn si_la_otra_ventana_gana_la_carrera_justo_al_insertar_lo_escrito_en_el_dialogo
         .expect("marcar el host");
     prueba.app.recargar_inventario().expect("recargar");
     // La etiqueta de este equipo, tal como la guarda el cliente.
-    prueba.app.pestana_persistente_abierta(dev, "sonda");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "sonda", Some(true));
     let equipo = prueba.fichas()[0].creada_por.clone();
     assert_eq!(prueba.registro("sesion_persistente_creada").len(), 1);
 
@@ -1904,7 +2180,9 @@ fn una_pestana_de_un_host_marcado_con_su_ficha_ya_guardada_ni_la_duplica_ni_preg
 fn en_un_host_sin_marcar_una_pestana_sin_pendiente_no_crea_ficha() {
     let mut prueba = Prueba::con_hosts(&["dev-01"], false);
     let dev = prueba.host_id("dev-01");
-    prueba.app.pestana_persistente_abierta(dev, "descubierta");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "descubierta", Some(true));
     assert!(prueba.fichas().is_empty());
     assert!(prueba.registro("sesion_persistente_creada").is_empty());
     assert!(prueba.drenar().is_empty());
@@ -1921,7 +2199,9 @@ fn una_ficha_ya_sincronizada_con_el_mismo_nombre_no_se_duplica_al_crear() {
     // Mientras se abría, otro equipo creó una ficha con ese nombre y llegó por
     // la sincronización.
     prueba.sembrar_ficha("dev-01", datos_de_ficha("agente-api"));
-    prueba.app.pestana_persistente_abierta(dev, "agente-api");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "agente-api", Some(true));
     assert_eq!(prueba.fichas().len(), 1);
     assert!(prueba.registro("sesion_persistente_creada").is_empty());
     assert!(prueba.app.persistentes.creaciones.is_empty());
@@ -2091,7 +2371,9 @@ fn una_pestana_tardia_sigue_guardando_la_ficha_aunque_la_espera_haya_pasado() {
         .persistentes
         .creaciones
         .push(pendiente(dev, "tardia", hace_dos_minutos));
-    prueba.app.pestana_persistente_abierta(dev, "tardia");
+    prueba
+        .app
+        .pestana_persistente_abierta(dev, "tardia", Some(true));
     let fichas = prueba.fichas();
     assert_eq!(fichas.len(), 1);
     assert_eq!(fichas[0].nombre, "tardia");
@@ -2141,6 +2423,30 @@ fn instantaneas_del_dialogo_relleno_como_la_maqueta() {
         rellenar_como_la_maqueta(&mut prueba);
         prueba.instantanea(&format!(
             "sesiones_persistentes_ui__nueva__nueva_rellena_{cols}x{filas}"
+        ));
+    }
+}
+
+#[test]
+fn instantaneas_del_dialogo_que_vuelve_con_la_carpeta_que_no_existe() {
+    for (cols, filas) in TAMANOS {
+        let mut prueba = Prueba::con_hosts(&["dev-01", "web-01"], false);
+        let dev = prueba.host_id("dev-01");
+        prueba.redimensionar(cols, filas);
+        prueba.app.abrir_dialogo_nueva_sesion(Some(dev));
+        prueba.paso();
+        rellenar_como_la_maqueta(&mut prueba);
+        prueba.tecla(KeyCode::Enter);
+        prueba.drenar();
+        prueba.servidor(fallida(
+            dev,
+            "agente-api",
+            CausaAperturaTmux::SinCarpeta,
+            "la carpeta ~/proyectos/api no existe en «dev-01»",
+        ));
+        assert!(prueba.hay_dialogo());
+        prueba.instantanea(&format!(
+            "sesiones_persistentes_ui__nueva__nueva_carpeta_inexistente_{cols}x{filas}"
         ));
     }
 }

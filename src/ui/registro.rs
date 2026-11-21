@@ -26,6 +26,21 @@ pub const ALTO_DETALLE: u16 = 5;
 /// Ancho de la fecha corta (`15/09 15:41:02`).
 const ANCHO_FECHA: u16 = 14;
 
+/// El tipo de una entrada tal como lo enseña la columna TIPO. Casi todos van
+/// tal cual; los cuatro de las sesiones persistentes (25 a 29 caracteres,
+/// que la columna de 22 cortaba) llevan una etiqueta corta. Solo es lo que se
+/// ve: el filtro por tipo, la exportación y el detalle usan el tipo real.
+#[must_use]
+pub fn etiqueta_de_tipo(tipo: &str) -> &str {
+    match tipo {
+        crate::registro::SESION_PERSISTENTE_CREADA => "persistente_creada",
+        crate::registro::SESION_PERSISTENTE_BORRADA => "persistente_borrada",
+        crate::registro::SESION_PERSISTENTE_REABIERTA => "persistente_reabierta",
+        crate::registro::SESION_PERSISTENTE_ENGANCHADA => "persistente_enganchada",
+        otro => otro,
+    }
+}
+
 pub fn dibujar(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicion) {
     let tema = &app.tema;
     let ascii = tema.ascii;
@@ -146,7 +161,8 @@ fn dibujar_tabla(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicio
     // las filas, así que subir el tope también ahí quitaría hasta 4 columnas
     // al detalle por una sola fila con un tipo de 23 a 26 caracteres.
     let tope_tipo = if app.termux.activo { 26 } else { 22 };
-    let ancho_tipo = largo(|entrada| entrada.tipo.chars().count()).clamp(8, tope_tipo);
+    let ancho_tipo =
+        largo(|entrada| etiqueta_de_tipo(&entrada.tipo).chars().count()).clamp(8, tope_tipo);
     let ancho_host = largo(|entrada| {
         entrada
             .host_nombre
@@ -188,7 +204,10 @@ fn dibujar_tabla(marco: &mut Frame, area: Rect, app: &App, disp: &mut Disposicio
                 prefijo(seleccionada, tema),
                 vec![
                     (formatear_fecha(&entrada.fecha), color(tema.paleta.texto)),
-                    (una_linea(&entrada.tipo), color(tema.paleta.acento)),
+                    (
+                        una_linea(etiqueta_de_tipo(&entrada.tipo)),
+                        color(tema.paleta.acento),
+                    ),
                     (host_de(entrada), color(tema.paleta.texto)),
                     (
                         entrada.resultado.como_texto().to_string(),

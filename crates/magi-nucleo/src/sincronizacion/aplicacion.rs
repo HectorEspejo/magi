@@ -454,6 +454,10 @@ pub fn aplicar(
     reconstruir_etiquetas(&transaccion, &leido.vivos, &ids, &etiquetas_anteriores)?;
     actualizar_verificaciones_de_hosts(&transaccion, &leido.vivos, &ids)?;
 
+    // 5b. Las filas que se apartaron pero nadie reescribió ni borró (se
+    //     omitieron o su borrado se aplazó) recuperan su nombre (R160).
+    restaurar_nombres_apartados(&transaccion, &locales, &a_actualizar, &a_borrar)?;
+
     // 6. Lápidas del plan: se conservan siempre (también las de los elementos
     //    resucitados). La de un borrado aplazado NO se guarda: si se guardara,
     //    el elemento vivo local perdería contra ella en la siguiente fusión y
@@ -497,9 +501,14 @@ pub fn aplicar(
     }
 
     // 9. Un conflicto de borrado aplazado deja de tener sentido si el elemento
-    //    sigue vivo (p. ej. resucitó con una edición nueva antes de aceptar el
-    //    borrado). Se marca como recuperado para que «a» no borre algo que ya
-    //    está vivo.
+    //    sigue vivo **porque llegó una edición nueva** (resucitó antes de
+    //    aceptar el borrado). Se marca como recuperado para que «a» no borre
+    //    algo que ya está vivo. Que el elemento esté en el plan no basta: con un
+    //    plan parcial (la pasada salta los ficheros que no han cambiado, entre
+    //    ellos el que traía el borrado) el elemento local sigue ahí sin que
+    //    nadie lo haya resucitado, y el borrado pendiente se perdería sin avisar.
+    //    La prueba es que la versión o el vector del plan difieran de los que
+    //    había en la fila local antes de aplicarlo.
     for conflicto in conflictos::listar_pendientes(&transaccion)? {
         if conflicto.tipo != conflictos::TIPO_BORRADO {
             continue;
@@ -507,10 +516,25 @@ pub fn aplicar(
         let Some(tabla) = Tabla::desde_tipo_elemento(&conflicto.elemento_tipo) else {
             continue;
         };
-        if vivos_uuids
+        if !vivos_uuids
             .get(&tabla)
             .is_some_and(|uuids| uuids.contains(&conflicto.uuid))
         {
+            continue;
+        }
+        let llego_algo_nuevo = match (
+            locales
+                .get(&tabla)
+                .and_then(|filas| filas.get(&conflicto.uuid)),
+            leido.vivos.metadatos(tabla, &conflicto.uuid),
+        ) {
+            (Some(fila), Some((version, vector))) => {
+                necesita_actualizar(fila, version, vector, false)
+            }
+            // Sin fila local, el elemento acaba de llegar de otro equipo.
+            _ => true,
+        };
+        if llego_algo_nuevo {
             conflictos::resolver(
                 &transaccion,
                 conflicto.id,
@@ -1439,6 +1463,69 @@ fn apartar_nombres(
     Ok(())
 }
 
+/// Devuelve su nombre a las filas que `apartar_nombres` movió a un nombre
+/// temporal y que al final nadie ha reescrito ni borrado: las que el plan quería
+/// tocar y se omitieron (su host llega ilegible o no existe, su clave natural
+/// está ocupada por otra fila) y las que se quedan por un borrado aplazado. Sin
+/// esto se quedarían para siempre con el nombre `__magi_sync__<uuid>`, sin
+/// versión nueva que lo explique, y así se exportarían (R160).
+///
+/// Va al final, cuando todo lo demás ya tiene su nombre. Si otra fila ha tomado
+/// entre tanto el nombre original (dos ediciones que se permutan el nombre y una
+/// se omite), no hay nombre que devolver sin inventarlo: se deja el temporal con
+/// un aviso, que es lo que pasaba siempre antes, y la importación sigue.
+fn restaurar_nombres_apartados(
+    conexion: &Connection,
+    locales: &HashMap<Tabla, BTreeMap<String, FilaLocal>>,
+    a_actualizar: &HashMap<Tabla, BTreeSet<String>>,
+    a_borrar: &HashMap<Tabla, BTreeSet<String>>,
+) -> Result<()> {
+    for tabla in Tabla::todas() {
+        let Some(locales_tabla) = locales.get(&tabla) else {
+            continue;
+        };
+        let columna = columna_nombre(tabla);
+        let apartadas = a_actualizar
+            .get(&tabla)
+            .into_iter()
+            .chain(a_borrar.get(&tabla))
+            .flatten();
+        for uuid in apartadas {
+            let Some(fila) = locales_tabla.get(uuid) else {
+                continue;
+            };
+            let actual: Option<String> = conexion
+                .query_row(
+                    &format!("SELECT {columna} FROM {} WHERE id = ?1", tabla.nombre()),
+                    params![fila.id],
+                    |columnas| columnas.get(0),
+                )
+                .optional()?;
+            // Borrada, o reescrita con su nombre del plan: nada que devolver.
+            if actual.as_deref() != Some(format!("{PREFIJO_TEMPORAL}{uuid}").as_str()) {
+                continue;
+            }
+            let devuelto = conexion.execute(
+                &format!("UPDATE {} SET {columna} = ?1 WHERE id = ?2", tabla.nombre()),
+                params![fila.nombre, fila.id],
+            );
+            match devuelto {
+                Ok(_) => {}
+                Err(error) if crate::almacen::es_conflicto_unico(&error) => {
+                    tracing::warn!(
+                        tabla = tabla.nombre(),
+                        uuid,
+                        "otra fila ha tomado su nombre en esta importación; \
+                         se queda con el nombre temporal"
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Lápida para una fila local que el plan no trae: se queda con el nombre, la
 /// versión y el vector que tenía antes de apartarla para aplicar el plan.
 fn lapida_minima(
@@ -2025,6 +2112,10 @@ fn escribir_ficha(
         .with_context(|| format!("la ficha de sesión {uuid} del plan tiene un origen desconocido"))?
         .texto();
     let nombre = datos.nombre.as_str();
+    // La etiqueta del equipo, como la guarda el CRUD: recortada.
+    let creada_por =
+        crate::sesiones_persistentes::validadores::normalizar_equipo(&datos.creada_por)
+            .map_err(|error| anyhow!("la ficha de sesión {uuid} del plan no es válida: {error}"))?;
     // Un texto vacío es lo mismo que NULL (forma canónica de lo que viaja).
     fn sin_vacios(texto: &Option<String>) -> Option<&str> {
         texto.as_deref().filter(|texto| !texto.is_empty())
@@ -2052,7 +2143,7 @@ fn escribir_ficha(
                         comando_reanudar,
                         nota,
                         origen,
-                        datos.creada_por,
+                        creada_por,
                         ahora,
                         version,
                         vector,
@@ -2078,7 +2169,7 @@ fn escribir_ficha(
                         comando_reanudar,
                         nota,
                         origen,
-                        datos.creada_por,
+                        creada_por,
                         ahora,
                         uuid,
                         version,
@@ -2229,8 +2320,20 @@ fn escribir_host(
     let origen = Origen::desde_texto(&datos.origen).como_texto();
     let multiplexar = datos.multiplexar as i64;
     // Desde el formato 4 viaja la marca «todas las sesiones persistentes». En un
-    // fichero anterior no viene y cuenta como falsa.
-    let sesiones_persistentes = datos.sesiones_persistentes as i64;
+    // fichero anterior no viene y cuenta como falsa. Solo un host `ssh` puede
+    // llevarla (el CRUD no la deja encender en otro tipo): si el fichero la trae
+    // en uno que no lo es, el host se aplica igual y se ignora la marca, que
+    // solo podría venir de un escritor con errores.
+    let sesiones_persistentes = if datos.sesiones_persistentes && datos.tipo != TipoHost::Ssh {
+        tracing::warn!(
+            uuid,
+            tipo = datos.tipo.como_texto(),
+            "host que no es ssh con la marca de sesiones persistentes; se ignora la marca"
+        );
+        0
+    } else {
+        datos.sesiones_persistentes as i64
+    };
     let keepalive = datos.keepalive_seg.map(i64::from);
     let opciones_extra = &datos.opciones_extra;
     let servicios = &datos.servicios;

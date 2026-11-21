@@ -1,4 +1,4 @@
-# Maintainer: Cuatro de Tres S. Coop. And. <4d3-org@users.noreply.github.com>
+# Maintainer: Cuatro de Tres S. Coop. And. <hola@4d3.org>
 #
 # PLANTILLA del paquete AUR magi-ssh-bin (Fase 9).
 #
@@ -20,7 +20,7 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Gestor SSH de terminal con estética de cabina técnica"
 arch=('x86_64' 'aarch64')
-url="https://github.com/4d3-org/magi"
+url="https://github.com/HectorEspejo/magi"
 license=('MIT OR Apache-2.0')
 depends=('glibc' 'gcc-libs')
 optdepends=(

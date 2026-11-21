@@ -606,6 +606,7 @@ mod pruebas {
         SesionVista {
             servidor: ServidorTmux::Magi,
             nombre: nombre.to_string(),
+            id: None,
             clientes,
             equipo: equipo.map(str::to_string),
             actividad: 1_000_000 - 120,

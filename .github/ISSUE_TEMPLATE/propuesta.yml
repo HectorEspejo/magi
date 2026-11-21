@@ -1,0 +1,30 @@
+name: "Propuesta / Proposal"
+description: "Una idea o un cambio de comportamiento. / An idea or a behavior change."
+title: "[PROPUESTA] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Los cambios que alteran el comportamiento empiezan por una propuesta, antes de escribir código; los grandes se especifican como una fase del proyecto. Mira `CONTRIBUTING.md`.
+
+        Changes that alter behavior start with a proposal, before any code is written; big ones are specified as a project phase. See `CONTRIBUTING.en.md`.
+
+        **No pegues datos reales. / Do not paste real data.**
+  - type: textarea
+    id: problema
+    attributes:
+      label: "Problema / Problem"
+      description: "Qué necesitas hacer y qué te lo impide. / What you need to do and what stops you."
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: "Propuesta / Proposal"
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: "Alternativas que has pensado / Alternatives you considered"

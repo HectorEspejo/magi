@@ -1,4 +1,8 @@
-//! Pruebas de `terminal_tmux.sh` con tmux de verdad (Fase 16).
+//! Pruebas de `terminal_tmux.sh` y `terminal_enganche.sh` con tmux de verdad
+//! (Fase 16, ampliadas en el cierre de la Fase 16, Fase 9b).
+//!
+//! `terminal_tmux.sh` va como lo manda MAGI: por la entrada estándar de un
+//! `sh -c '<arranque>'`. El enganche, con un terminal de verdad (`script`).
 //!
 //! Cada prueba lleva su propio servidor de tmux: `TMUX_TMPDIR` apunta a un
 //! temporal corto (el socket no puede pasar de ~108 bytes), `TMUX` se quita
@@ -7,8 +11,9 @@
 //! `HOME` de las pruebas es otro.
 //!
 //! Se omiten con un aviso si no hay tmux 3.0 o posterior o si falta lo
-//! necesario para darle un terminal (el comando `script` de util-linux).
-//! `MAGI_TMUX_DIR` apunta al directorio que contiene el `tmux` que se quiere
+//! necesario para darle un terminal (el comando `script` de util-linux),
+//! salvo con la variable `CI` puesta (`ci.yml` instala tmux): allí fallan,
+//! para que no pasen vacías. `MAGI_TMUX_DIR` apunta al directorio que contiene el `tmux` que se quiere
 //! probar (para repetirlas con 3.2a, 3.4, 3.5 y 3.7c); sin ella se usa el del
 //! `PATH`.
 
@@ -20,12 +25,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use magi_nucleo::sesiones_persistentes::lectura::{
-    leer_comprobar, leer_crear, leer_estado, leer_renombrar, leer_terminar, ResultadoCrear,
-    ResultadoRenombrar,
+    buscar_sesion, leer_comprobar, leer_crear, leer_estado, leer_preparar, leer_renombrar,
+    leer_terminar, ResultadoCrear, ResultadoPreparar, ResultadoRenombrar,
 };
 use magi_nucleo::sesiones_persistentes::{ServidorTmux, SesionVista, VersionTmux};
 use magi_nucleo::terminal::tmux::{
-    fin_de_enganchar, version_de_texto, FinEnganchar, ResultadoTerminar, SCRIPT,
+    fin_de_enganchar, version_de_texto, FinEnganchar, ResultadoTerminar, ARRANQUE, SCRIPT,
+    SCRIPT_ENGANCHE,
 };
 
 const PLAZO: Duration = Duration::from_secs(15);
@@ -44,7 +50,8 @@ struct Real {
     home: PathBuf,
     tmpdir: PathBuf,
     path: String,
-    script: PathBuf,
+    /// El enganche mínimo en disco (con PTY va en la línea de órdenes).
+    enganche: PathBuf,
     version: VersionTmux,
 }
 
@@ -52,6 +59,14 @@ impl Real {
     /// `None` (con un aviso en la salida de error) si falta lo necesario.
     fn nuevo(prueba: &str) -> Option<Self> {
         let omitir = |motivo: &str| {
+            // En CI, `ci.yml` instala tmux (y util-linux ya viene en el
+            // runner): que falte es un fallo del trabajo, no un motivo para
+            // que estas pruebas pasen vacías.
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "tmux_real::{prueba}: {motivo}; en CI hacen falta tmux 3.0 o posterior y el \
+                 `script` de util-linux"
+            );
             eprintln!("tmux_real::{prueba}: se omite, {motivo}");
             None
         };
@@ -93,14 +108,14 @@ impl Real {
         let tmpdir = base.path().join("t");
         fs::create_dir_all(&home).ok()?;
         fs::create_dir_all(&tmpdir).ok()?;
-        let script = base.path().join("terminal_tmux.sh");
-        fs::write(&script, SCRIPT).ok()?;
+        let enganche = base.path().join("terminal_enganche.sh");
+        fs::write(&enganche, SCRIPT_ENGANCHE).ok()?;
         Some(Self {
             base,
             home,
             tmpdir,
             path,
-            script,
+            enganche,
             version,
         })
     }
@@ -118,14 +133,15 @@ impl Real {
             .env("LANG", "C.UTF-8")
     }
 
-    /// Ejecuta el script con `sh -c`, como el servidor por un canal `exec`.
+    /// Ejecuta el script como el servidor por un canal `exec`: `sh -c` con el
+    /// arranque mínimo y el script entero por la entrada estándar.
     fn script(&self, argumentos: &[&str]) -> Salida {
         self.script_con(argumentos, &[])
     }
 
     fn script_con(&self, argumentos: &[&str], entorno: &[(&str, &str)]) -> Salida {
         let mut comando = Command::new("/bin/sh");
-        comando.arg("-c").arg(SCRIPT).arg("magi-tmux");
+        comando.arg("-c").arg(ARRANQUE).arg("magi-tmux");
         for argumento in argumentos {
             comando.arg(argumento);
         }
@@ -133,7 +149,18 @@ impl Real {
         for (clave, valor) in entorno {
             comando.env(clave, valor);
         }
-        let salida = comando.output().expect("ejecutar terminal_tmux.sh");
+        let mut hijo = comando
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("ejecutar terminal_tmux.sh");
+        let mut entrada = hijo.stdin.take().expect("entrada del script");
+        let escritor = std::thread::spawn(move || {
+            let _ = std::io::Write::write_all(&mut entrada, SCRIPT.as_bytes());
+        });
+        let salida = hijo.wait_with_output().expect("esperar a terminal_tmux.sh");
+        let _ = escritor.join();
         Salida {
             stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
             stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
@@ -157,10 +184,25 @@ impl Real {
         }
     }
 
-    /// Lanza `enganchar` con un terminal de verdad (`script`) y la entrada
-    /// abierta: el cliente queda enganchado hasta que lo suelten.
+    /// Engancha como MAGI: `preparar` por la entrada estándar y, después, el
+    /// enganche mínimo con un terminal de verdad (`script`) y la entrada
+    /// abierta: el cliente queda enganchado hasta que lo suelten. Los
+    /// argumentos son `<servidor> <nombre> <soltar> <equipo>`.
     fn cliente(&self, argumentos: &[&str]) -> Cliente {
-        let orden = format!("sh {} {}", self.script.display(), argumentos.join(" "));
+        self.cliente_con(argumentos, false)
+    }
+
+    /// Como [`Self::cliente`], con la guarda de la reconexión automática
+    /// (`guardar`): solo se engancha si la sesión está libre o es de su equipo.
+    fn cliente_con(&self, argumentos: &[&str], guardar: bool) -> Cliente {
+        let preparada = self.script(&["preparar", argumentos[0], argumentos[1]]);
+        assert_eq!(preparada.codigo, 0, "preparar: {}", preparada.stderr);
+        let orden = format!(
+            "sh {} {} {}",
+            self.enganche.display(),
+            argumentos.join(" "),
+            u8::from(guardar)
+        );
         let mut comando = Command::new("script");
         comando.args(["-qefc", &orden, "/dev/null"]);
         self.entorno(&mut comando);
@@ -189,6 +231,25 @@ impl Real {
             hijo,
             _entrada: entrada,
             texto,
+        }
+    }
+
+    /// El enganche mínimo sin terminal, para lo que no llega a engancharse
+    /// (la sesión no existe, la guarda dice que no…): `<servidor> <nombre>
+    /// <soltar> <equipo> <guardar>`.
+    fn enganche(&self, argumentos: &[&str]) -> Salida {
+        let mut comando = Command::new("/bin/sh");
+        comando
+            .arg("-c")
+            .arg(SCRIPT_ENGANCHE)
+            .arg("magi-enganche")
+            .args(argumentos);
+        self.entorno(&mut comando);
+        let salida = comando.output().expect("ejecutar terminal_enganche.sh");
+        Salida {
+            stdout: String::from_utf8_lossy(&salida.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&salida.stderr).to_string(),
+            codigo: salida.status.code().unwrap_or(-1),
         }
     }
 
@@ -357,14 +418,14 @@ fn crear_enganchar_soltar_historial_renombrar_y_terminar() {
     assert!(uno.creada > 1_700_000_000);
 
     // El portátil se engancha soltando a los demás y se queda con la sesión.
-    let mut portatil = real.cliente(&["enganchar", "magi", "magi-a-1", "1", "portatil"]);
+    let mut portatil = real.cliente(&["magi", "magi-a-1", "1", "portatil"]);
     real.esperar_clientes("magi-a-1", 1);
     let vista = real.sesion(ServidorTmux::Magi, "magi-a-1").unwrap();
     assert_eq!(vista.equipo.as_deref(), Some("portatil"));
 
     // La sobremesa se engancha soltando: al portátil lo sueltan y su script
     // sale con 100, sin que la sesión termine.
-    let mut sobremesa = real.cliente(&["enganchar", "magi", "magi-a-1", "1", "sobremesa"]);
+    let mut sobremesa = real.cliente(&["magi", "magi-a-1", "1", "sobremesa"]);
     let codigo = portatil.esperar_codigo(PLAZO).expect("el portátil sale");
     assert_eq!(codigo, 100, "a este cliente lo soltó otro");
     assert_eq!(fin_de_enganchar(codigo), FinEnganchar::Soltada);
@@ -376,7 +437,7 @@ fn crear_enganchar_soltar_historial_renombrar_y_terminar() {
     });
 
     // Compartir: un tercer cliente entra sin soltar a nadie.
-    let mut invitado = real.cliente(&["enganchar", "magi", "magi-a-1", "0", "web-01"]);
+    let mut invitado = real.cliente(&["magi", "magi-a-1", "0", "web-01"]);
     real.esperar_clientes("magi-a-1", 2);
     assert!(sobremesa.hijo.try_wait().unwrap().is_none(), "no se soltó");
     assert!(invitado.hijo.try_wait().unwrap().is_none());
@@ -433,8 +494,11 @@ fn crear_enganchar_soltar_historial_renombrar_y_terminar() {
     assert_eq!(fin_de_enganchar(0), FinEnganchar::Terminada);
     // Y la otra, la magi-a-10, sigue viva.
     assert!(real.sesion(ServidorTmux::Magi, "magi-a-10").is_some());
-    // Engancharse a una que ya no existe: 75.
-    let salida = real.script(&["enganchar", "magi", "revision", "1", "portatil"]);
+    // Engancharse a una que ya no existe: 75, ya en `preparar` y también en el
+    // enganche mínimo.
+    let salida = real.script(&["preparar", "magi", "revision"]);
+    assert_eq!(salida.codigo, 75);
+    let salida = real.enganche(&["magi", "revision", "1", "portatil", "0"]);
     assert_eq!(salida.codigo, 75);
 }
 
@@ -446,7 +510,7 @@ fn un_renombrado_en_caliente_no_hace_terminada_a_una_sesion_soltada() {
         return;
     };
     assert_eq!(real.crear("revision", "", "").codigo, 0);
-    let mut portatil = real.cliente(&["enganchar", "magi", "revision", "1", "portatil"]);
+    let mut portatil = real.cliente(&["magi", "revision", "1", "portatil"]);
     real.esperar_clientes("revision", 1);
     // La sesión se renombra con el portátil enganchado y, después, la
     // sobremesa se la lleva con `-d`. El script del portátil mira si «la
@@ -454,7 +518,7 @@ fn un_renombrado_en_caliente_no_hace_terminada_a_una_sesion_soltada() {
     // viejo: sale con 100 («te soltaron»), no con 0 («terminó»).
     let renombrada = real.script(&["renombrar", "revision", "revision-2"]);
     assert_eq!(leer_renombrar(&renombrada.stdout), ResultadoRenombrar::Ok);
-    let _sobremesa = real.cliente(&["enganchar", "magi", "revision-2", "1", "sobremesa"]);
+    let _sobremesa = real.cliente(&["magi", "revision-2", "1", "sobremesa"]);
     let codigo = portatil.esperar_codigo(PLAZO).expect("el portátil sale");
     assert_eq!(codigo, 100, "a este cliente lo soltó otro");
     assert_eq!(fin_de_enganchar(codigo), FinEnganchar::Soltada);
@@ -476,7 +540,9 @@ fn magi_a_1_nunca_toca_a_magi_a_10() {
         assert_eq!(salida.codigo, 75, "{suborden}");
         assert!(salida.stdout.is_empty(), "{suborden}: {}", salida.stdout);
     }
-    let enganchar = real.script(&["enganchar", "magi", "magi-a-1", "1", "portatil"]);
+    let preparar = real.script(&["preparar", "magi", "magi-a-1"]);
+    assert_eq!(preparar.codigo, 75);
+    let enganchar = real.enganche(&["magi", "magi-a-1", "1", "portatil", "0"]);
     assert_eq!(enganchar.codigo, 75);
     let comprobar = leer_comprobar(&real.script(&["comprobar", "magi", "magi-a-1"]).stdout);
     assert!(!comprobar.existe);
@@ -554,8 +620,11 @@ fn el_comando_va_como_dato_y_nunca_se_interpola_en_el_envoltorio() {
     );
     let salida = real.crear("raro", "", &comando);
     assert_eq!(salida.codigo, 0, "{}", salida.stderr);
-    let vista = real.esperar_en_vista("raro", "fin-del-comando");
-    assert!(vista.contains("terminó con código 0"), "{vista}");
+    real.esperar_en_vista("raro", "fin-del-comando");
+    // El pie «terminó con código N» se escribe después de la salida del comando:
+    // se espera, no se supone (con la máquina cargada llega más tarde).
+    let vista = real.esperar_en_vista("raro", "terminó con código 0");
+    assert!(vista.contains("fin-del-comando"), "{vista}");
     assert!(!existe(real.base.path(), "inyectado"));
 }
 
@@ -596,7 +665,7 @@ fn no_carga_el_tmux_conf_del_host_ni_toca_el_tmux_habitual() {
     // MAGI crea y engancha una sesión suya: nada de eso se carga.
     let creada = real.crear("agente", "", "");
     assert_eq!(creada.codigo, 0, "{}{}", creada.stdout, creada.stderr);
-    let mut cliente = real.cliente(&["enganchar", "magi", "agente", "1", "portatil"]);
+    let mut cliente = real.cliente(&["magi", "agente", "1", "portatil"]);
     real.esperar_clientes("agente", 1);
     std::thread::sleep(Duration::from_millis(500));
     assert!(
@@ -629,7 +698,7 @@ fn no_carga_el_tmux_conf_del_host_ni_toca_el_tmux_habitual() {
     assert_eq!(sesiones.len(), 2);
 
     // Engancharse a la del usuario no le cambia nada: ni opciones ni equipo.
-    let mut suya_cliente = real.cliente(&["enganchar", "habitual", "suya", "1", "portatil"]);
+    let mut suya_cliente = real.cliente(&["habitual", "suya", "1", "portatil"]);
     real.esperar("el cliente se engancha a la sesión habitual", |real| {
         real.sesion(ServidorTmux::Habitual, "suya")
             .is_some_and(|sesion| sesion.clientes == 1)
@@ -694,7 +763,7 @@ fn la_configuracion_de_magi_se_aplica_con_cada_version_de_tmux() {
         assert_eq!(real.opcion_global("window-size", "-g"), "latest");
     }
     // Aplicarla otra vez al enganchar es idempotente y no falla.
-    let mut cliente = real.cliente(&["enganchar", "magi", "conf", "1", "portatil"]);
+    let mut cliente = real.cliente(&["magi", "conf", "1", "portatil"]);
     real.esperar_clientes("conf", 1);
     assert_eq!(real.opcion_global("status", "-g"), "off");
     assert_eq!(real.opcion_global("history-limit", "-g"), "7777");
@@ -783,9 +852,15 @@ fn con_la_variable_tmux_puesta_el_script_sigue_eligiendo_su_servidor() {
     );
     assert_eq!(creada.codigo, 0, "{}{}", creada.stdout, creada.stderr);
     assert!(real.sesion(ServidorTmux::Magi, "anidada").is_some());
+    let preparada = real.script_con(&["preparar", "magi", "anidada"], &[("TMUX", &ajena)]);
+    assert_eq!(
+        preparada.codigo, 0,
+        "{}{}",
+        preparada.stdout, preparada.stderr
+    );
     let orden = format!(
-        "env TMUX={ajena} sh {} enganchar magi anidada 1 portatil",
-        real.script.display()
+        "env TMUX={ajena} sh {} magi anidada 1 portatil 0",
+        real.enganche.display()
     );
     let mut comando = Command::new("script");
     comando.args(["-qefc", &orden, "/dev/null"]);
@@ -967,5 +1042,153 @@ fn el_tmux_habitual_se_ve_y_se_termina_con_tmux_real() {
     assert_eq!(
         real.script(&["terminar", "habitual", "magi-x-10"]).stdout,
         "MAGI_RESULTADO=ok\n"
+    );
+}
+
+// ------------------------------------- cierre de la Fase 16 (Fase 9b)
+
+#[test]
+fn preparar_da_el_identificador_y_la_hora_de_creacion_que_estado_ve_de_verdad() {
+    let Some(real) =
+        Real::nuevo("preparar_da_el_identificador_y_la_hora_de_creacion_que_estado_ve_de_verdad")
+    else {
+        return;
+    };
+    assert_eq!(real.crear("agente", "", "").codigo, 0);
+    assert_eq!(real.crear("otra", "", "").codigo, 0);
+    let salida = real.script(&["preparar", "magi", "agente"]);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    let lectura = leer_preparar(&salida.stdout, Some(salida.codigo));
+    assert_eq!(lectura.resultado, ResultadoPreparar::Lista);
+    let id = lectura.id.clone().expect("identificador");
+    let creada = lectura.creada.expect("hora de creación");
+    // Lo mismo que ve `estado` de la sesión.
+    let vista = real.sesion(ServidorTmux::Magi, "agente").expect("agente");
+    assert_eq!(vista.id.as_deref(), Some(id.as_str()));
+    assert_eq!(vista.creada, creada);
+    // Dos sesiones, dos identificadores.
+    let otra = real.sesion(ServidorTmux::Magi, "otra").expect("otra");
+    assert!(otra.id.is_some() && otra.id != vista.id);
+
+    // Un renombrado de otro equipo no la pierde: se sigue por identificador.
+    let renombrada = real.script(&["renombrar", "agente", "agente-2"]);
+    assert_eq!(leer_renombrar(&renombrada.stdout), ResultadoRenombrar::Ok);
+    let (_, sesiones) = real.estado();
+    let hallada = buscar_sesion(
+        &sesiones,
+        ServidorTmux::Magi,
+        "agente",
+        Some(&id),
+        Some(creada),
+    )
+    .expect("se encuentra por identificador");
+    assert_eq!(hallada.nombre, "agente-2");
+    // Sin la hora de creación (un tmux reiniciado reutiliza números), no.
+    assert!(buscar_sesion(&sesiones, ServidorTmux::Magi, "agente", Some(&id), None).is_none());
+
+    // Preparar una que no existe: 75.
+    let fantasma = real.script(&["preparar", "magi", "agente"]);
+    assert_eq!(fantasma.codigo, 75);
+    assert_eq!(
+        leer_preparar(&fantasma.stdout, Some(fantasma.codigo)).resultado,
+        ResultadoPreparar::NoExiste
+    );
+}
+
+#[test]
+fn la_guarda_del_enganche_no_le_quita_la_sesion_a_otro_equipo_de_verdad() {
+    let Some(real) =
+        Real::nuevo("la_guarda_del_enganche_no_le_quita_la_sesion_a_otro_equipo_de_verdad")
+    else {
+        return;
+    };
+    assert_eq!(real.crear("revision", "", "").codigo, 0);
+    // La sobremesa tiene la sesión enganchada.
+    let mut sobremesa = real.cliente(&["magi", "revision", "1", "sobremesa"]);
+    real.esperar_clientes("revision", 1);
+    real.esperar("la marca de la sobremesa", |real| {
+        real.sesion(ServidorTmux::Magi, "revision")
+            .is_some_and(|sesion| sesion.equipo.as_deref() == Some("sobremesa"))
+    });
+
+    // La reconexión automática del portátil (con guarda) no se engancha: sale
+    // con 101 y la sesión, su cliente y su marca quedan como estaban.
+    let mut portatil = real.cliente_con(&["magi", "revision", "1", "portatil"], true);
+    let codigo = portatil.esperar_codigo(PLAZO).expect("el portátil sale");
+    assert_eq!(codigo, 101, "la tiene otro equipo");
+    assert_eq!(fin_de_enganchar(codigo), FinEnganchar::OtroEquipo);
+    assert!(
+        sobremesa.hijo.try_wait().unwrap().is_none(),
+        "la sobremesa sigue enganchada"
+    );
+    let vista = real.sesion(ServidorTmux::Magi, "revision").unwrap();
+    assert_eq!(vista.clientes, 1);
+    assert_eq!(vista.equipo.as_deref(), Some("sobremesa"));
+
+    // Sin guarda (el usuario vuelve a mano con prefijo r), manda él: se la
+    // lleva, y a la sobremesa la sueltan.
+    let mut manual = real.cliente(&["magi", "revision", "1", "portatil"]);
+    assert_eq!(
+        sobremesa.esperar_codigo(PLAZO),
+        Some(100),
+        "a la sobremesa le quitaron la sesión"
+    );
+    real.esperar("el portátil tiene la sesión", |real| {
+        real.sesion(ServidorTmux::Magi, "revision")
+            .is_some_and(|sesion| {
+                sesion.clientes == 1 && sesion.equipo.as_deref() == Some("portatil")
+            })
+    });
+
+    // Con guarda y la sesión de este mismo equipo (los clientes son los de la
+    // conexión que se cayó), se engancha y suelta a los viejos.
+    let mut reconectado = real.cliente_con(&["magi", "revision", "1", "portatil"], true);
+    assert_eq!(manual.esperar_codigo(PLAZO), Some(100));
+    assert!(reconectado.hijo.try_wait().unwrap().is_none());
+    real.esperar_clientes("revision", 1);
+}
+
+/// Revisión adversarial de la 9b (R1): `awk` toma «7» y «007» por el mismo
+/// número, así que la guarda de la reconexión y la identidad de `preparar`
+/// miraban la primera de las dos. Los nombres de sesión son texto.
+#[test]
+fn sesiones_con_nombres_que_parecen_el_mismo_numero_no_se_confunden_de_verdad() {
+    let Some(real) =
+        Real::nuevo("sesiones_con_nombres_que_parecen_el_mismo_numero_no_se_confunden_de_verdad")
+    else {
+        return;
+    };
+    // tmux lista «007» antes que «7»: es la que casaba antes.
+    assert_eq!(real.crear("007", "", "").codigo, 0);
+    assert_eq!(real.crear("7", "", "").codigo, 0);
+
+    // La identidad de «7» es la suya, no la de «007».
+    let salida = real.script(&["preparar", "magi", "7"]);
+    assert_eq!(salida.codigo, 0, "{}", salida.stderr);
+    let lectura = leer_preparar(&salida.stdout, Some(salida.codigo));
+    let vista = real.sesion(ServidorTmux::Magi, "7").expect("la sesión 7");
+    assert_eq!(lectura.id.as_deref(), vista.id.as_deref());
+    let otra = real
+        .sesion(ServidorTmux::Magi, "007")
+        .expect("la sesión 007");
+    assert_ne!(vista.id, otra.id);
+
+    // La sobremesa tiene «7»; la reconexión del portátil, con guarda, no se la
+    // lleva (antes miraba «007», que está libre, y se enganchaba).
+    let mut sobremesa = real.cliente(&["magi", "7", "1", "sobremesa"]);
+    real.esperar_clientes("7", 1);
+    real.esperar("la marca de la sobremesa", |real| {
+        real.sesion(ServidorTmux::Magi, "7")
+            .is_some_and(|sesion| sesion.equipo.as_deref() == Some("sobremesa"))
+    });
+    let mut portatil = real.cliente_con(&["magi", "7", "1", "portatil"], true);
+    assert_eq!(
+        portatil.esperar_codigo(PLAZO),
+        Some(101),
+        "la tiene otro equipo"
+    );
+    assert!(
+        sobremesa.hijo.try_wait().unwrap().is_none(),
+        "la sobremesa sigue enganchada"
     );
 }

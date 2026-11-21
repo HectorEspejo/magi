@@ -1720,6 +1720,130 @@ fn los_datos_de_una_ficha_del_fichero_se_validan_antes_de_aplicarse() {
     let mut datos = buena();
     datos.creada_por = String::new();
     assert!(datos.validar().is_err());
+    // El equipo vale igual que en el CRUD: recortado y no vacío.
+    datos.creada_por = "   ".to_string();
+    assert!(datos.validar().is_err(), "solo espacios no es un equipo");
+    datos.creada_por = "  sobremesa  ".to_string();
+    assert_eq!(datos.validar(), Ok(()));
+}
+
+/// La importación guarda `creada_por` como lo guarda el CRUD (`validar_datos`):
+/// recortado. Un fichero con la etiqueta con espacios (de un escritor que no
+/// pasó por el CRUD) no deja la ficha distinta de la que habría creado este
+/// equipo.
+#[test]
+fn la_etiqueta_del_equipo_de_una_ficha_importada_se_guarda_recortada() {
+    let almacen = almacen();
+    let host = crear_host(&almacen, "web");
+    let uuid_del_host = uuid_host(&almacen, host);
+    let mut ficha = elemento_ficha(
+        UUID_MENOR,
+        &uuid_del_host,
+        "agente",
+        Campos::default(),
+        5_000,
+    );
+    ficha.datos["creada_por"] = json!("  portatil  ");
+    let documento = documento_con(EQUIPO_AJENO, 4, vec![ficha], Vec::new());
+    let (_, resumen) = fusionar_y_aplicar(&almacen, &[documento]);
+    assert_eq!(resumen.creados, 1);
+    let todas = fichas(almacen.conexion());
+    assert_eq!(todas.len(), 1);
+    assert_eq!(todas[0].creada_por, "portatil");
+    // Y la lee el almacén tal cual, sin avisos de ficha ilegible.
+    let leida = almacen.fichas_de_host(host).expect("fichas del host");
+    assert_eq!(leida.len(), 1);
+    assert_eq!(leida[0].creada_por, "portatil");
+}
+
+/// Una etiqueta de equipo en blanco no se aplica: conflicto de elemento, como
+/// el resto de datos que el CRUD rechazaría.
+#[test]
+fn una_ficha_con_la_etiqueta_del_equipo_en_blanco_no_se_aplica() {
+    let almacen = almacen();
+    let host = crear_host(&almacen, "web");
+    let uuid_del_host = uuid_host(&almacen, host);
+    let mut ficha = elemento_ficha(
+        UUID_MENOR,
+        &uuid_del_host,
+        "agente",
+        Campos::default(),
+        5_000,
+    );
+    ficha.datos["creada_por"] = json!("   ");
+    let documento = documento_con(EQUIPO_AJENO, 4, vec![ficha], Vec::new());
+    let (_, resumen) = fusionar_y_aplicar(&almacen, &[documento]);
+    assert_eq!(resumen.creados, 0);
+    assert_eq!(contar_fichas(almacen.conexion()), 0);
+    let pendientes = conflictos::listar_pendientes(almacen.conexion()).expect("conflictos");
+    assert!(
+        pendientes
+            .iter()
+            .any(|conflicto| conflicto.tipo == "elemento"
+                && conflicto.elemento_tipo == "sesion_persistente"),
+        "{pendientes:?}"
+    );
+}
+
+/// El CRUD no deja marcar un host que no es `ssh`; la importación tampoco: el
+/// host se aplica con todo lo demás y se ignora la marca, que solo podría venir
+/// de un escritor con errores. En un host `ssh` la marca viaja como siempre.
+#[test]
+fn la_importacion_ignora_la_marca_de_un_host_que_no_es_ssh() {
+    let almacen = almacen();
+    let documento = documento_con(
+        EQUIPO_AJENO,
+        4,
+        vec![
+            elemento_host(UUID_HOST_REMOTO, "win-01", TipoHost::Rdp, true, 100),
+            elemento_host(
+                "88888888-aaaa-4aaa-8aaa-888888888888",
+                "web-02",
+                TipoHost::Ssh,
+                true,
+                100,
+            ),
+        ],
+        Vec::new(),
+    );
+    let (_, resumen) = fusionar_y_aplicar(&almacen, &[documento]);
+    assert_eq!(resumen.creados, 2, "los dos hosts se aplican");
+    let tipo_rdp: String = almacen
+        .conexion()
+        .query_row(
+            "SELECT tipo FROM HOSTS WHERE uuid = ?1",
+            params![UUID_HOST_REMOTO],
+            |fila| fila.get(0),
+        )
+        .expect("el host rdp está");
+    assert_eq!(tipo_rdp, "rdp");
+    assert!(
+        !host_marcado(almacen.conexion(), UUID_HOST_REMOTO),
+        "un host rdp nunca queda marcado"
+    );
+    assert!(
+        host_marcado(almacen.conexion(), "88888888-aaaa-4aaa-8aaa-888888888888"),
+        "el ssh sí"
+    );
+}
+
+/// La misma regla al actualizar un host que ya existe aquí.
+#[test]
+fn una_actualizacion_con_la_marca_en_un_host_que_no_es_ssh_tampoco_la_enciende() {
+    let almacen = almacen();
+    let rdp = crear_host_escritorio(&almacen, "win-01");
+    let uuid = uuid_host(&almacen, rdp);
+    let (_, version_local, _) = fila_versionada(&almacen, Tabla::Hosts, rdp);
+    let ms = ms_de(&version_local) + 10_000;
+    let documento = documento_con(
+        EQUIPO_AJENO,
+        4,
+        vec![elemento_host(&uuid, "win-01", TipoHost::Rdp, true, ms)],
+        Vec::new(),
+    );
+    let (_, resumen) = fusionar_y_aplicar(&almacen, &[documento]);
+    assert_eq!(resumen.actualizados, 1);
+    assert!(!host_marcado(almacen.conexion(), &uuid));
 }
 
 #[test]
@@ -2006,6 +2130,70 @@ fn una_ficha_de_un_host_que_no_se_puede_leer_no_pierde_su_nombre() {
     assert_eq!(
         todas[0].nombre, "agente",
         "la ficha no se queda con el nombre temporal: {todas:?}"
+    );
+}
+
+/// Una ficha local que el fichero renombra a un nombre que ya ocupa otra fila
+/// local fuera de la fusión (aquí, una sin uuid, que no viaja) no se escribe:
+/// deja un conflicto de nombre y la ficha, que se había apartado con el nombre
+/// temporal, conserva el suyo.
+#[test]
+fn una_ficha_cuyo_nombre_nuevo_esta_ocupado_por_una_fila_ajena_conserva_el_suyo() {
+    let almacen = almacen();
+    let host = crear_host(&almacen, "web");
+    let uuid_del_host = uuid_host(&almacen, host);
+    let id = insertar_ficha(
+        &almacen,
+        host,
+        "agente",
+        Campos::default(),
+        Some(UUID_MENOR),
+    );
+    // Una fila sin uuid: no participa en la sincronización, pero ocupa su nombre.
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO SESIONES_PERSISTENTES (
+                host_id, nombre, origen, creada_por, creada_en, actualizado_en
+             ) VALUES (?1, 'nuevo', 'manual', 'sobremesa', ?2, ?2)",
+            params![host, magi_nucleo::modelo::fecha_ahora()],
+        )
+        .expect("fila sin uuid");
+    let (_, version_local, _) = fila_versionada(&almacen, Tabla::SesionesPersistentes, id);
+    let ms_nuevo = ms_de(&version_local) + 10_000;
+
+    let ficha_renombrada = elemento_ficha(
+        UUID_MENOR,
+        &uuid_del_host,
+        "nuevo",
+        Campos::default(),
+        ms_nuevo,
+    );
+    let documento = documento_con(EQUIPO_AJENO, 4, vec![ficha_renombrada], Vec::new());
+    fusionar_y_aplicar(&almacen, &[documento]);
+    let pendientes = conflictos::listar_pendientes(almacen.conexion()).expect("conflictos");
+    assert!(
+        pendientes.iter().any(|conflicto| conflicto.tipo == "nombre"
+            && conflicto.elemento_tipo == "sesion_persistente"
+            && conflicto.uuid == UUID_MENOR),
+        "conflicto de nombre: {pendientes:?}"
+    );
+
+    let mut nombres: Vec<String> = almacen
+        .fichas_de_host(host)
+        .expect("fichas del host")
+        .into_iter()
+        .map(|ficha| ficha.nombre)
+        .collect();
+    nombres.sort();
+    assert_eq!(nombres, ["agente"], "la sin uuid sigue sin poder leerse");
+    assert!(
+        almacen
+            .nombres_de_fichas_de_host(host)
+            .expect("nombres")
+            .iter()
+            .all(|nombre| !nombre.starts_with("__magi_sync__")),
+        "ninguna se queda con el nombre temporal"
     );
 }
 

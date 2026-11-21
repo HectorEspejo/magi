@@ -121,7 +121,7 @@ jobs:
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_GIT_USUARIO: "4d3"
-          AUR_GIT_CORREO: "4d3-org@users.noreply.github.com"
+          AUR_GIT_CORREO: "hola@4d3.org"
         run: |
           set -euo pipefail
           test -n "${AUR_SSH_PRIVATE_KEY:-}" || { echo 'falta el secreto AUR_SSH_PRIVATE_KEY' >&2; exit 1; }

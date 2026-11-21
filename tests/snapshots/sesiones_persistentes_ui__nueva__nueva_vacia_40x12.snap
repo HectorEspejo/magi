@@ -11,5 +11,5 @@ source: tests/sesiones_persistentes_ui/nueva.rs
 ││ Nota      [ (opcional) ]           ││
 ││                                    ││
 ││ ↵ crear   ⇥ sig.   esc cancelar    ││
-└└─────────────────────────────── 1/5 ┘┘
+└└─────────────────────────────── 1/3 ┘┘
  ↵ ssh  r sondear  ⇥ detalle  ? más

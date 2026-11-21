@@ -4,7 +4,10 @@
 //! de la migración 11 con su idempotencia y los tipos nuevos del registro.
 //!
 //! Todo va contra un almacén en memoria (o una base temporal para la
-//! migración); no se abre ninguna conexión.
+//! migración y para los avisos de las filas ilegibles); no se abre ninguna
+//! conexión.
+
+use std::sync::{Arc, Mutex};
 
 use magi_nucleo::almacen::versiones::{self, Tabla};
 use magi_nucleo::almacen::{aviso_marca_migrada, lapidas, Almacen};
@@ -147,6 +150,60 @@ fn insertar_cruda(
             rusqlite::params![host_id, nombre, carpeta, comando, nota, origen, uuid],
         )
         .expect("fila cruda");
+}
+
+// --------------------------------------------------------------- captura del log
+
+/// Suscriptor mínimo que guarda los mensajes de nivel `warn`: el núcleo no
+/// depende de `tracing-subscriber`, y para contar avisos basta esto.
+#[derive(Clone, Default)]
+struct AvisosCapturados(Arc<Mutex<Vec<String>>>);
+
+#[derive(Default)]
+struct MensajeDelEvento(String);
+
+impl tracing::field::Visit for MensajeDelEvento {
+    fn record_debug(&mut self, campo: &tracing::field::Field, valor: &dyn std::fmt::Debug) {
+        if campo.name() == "message" {
+            self.0 = format!("{valor:?}");
+        }
+    }
+}
+
+impl tracing::Subscriber for AvisosCapturados {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, evento: &tracing::Event<'_>) {
+        if *evento.metadata().level() != tracing::Level::WARN {
+            return;
+        }
+        let mut mensaje = MensajeDelEvento::default();
+        evento.record(&mut mensaje);
+        self.0.lock().unwrap().push(mensaje.0);
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Ejecuta `cuerpo` con un suscriptor propio (solo de este hilo) y devuelve
+/// los avisos que dejó.
+fn con_avisos<T>(cuerpo: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let captura = AvisosCapturados::default();
+    let resultado = tracing::subscriber::with_default(captura.clone(), cuerpo);
+    let avisos = captura.0.lock().unwrap().clone();
+    (resultado, avisos)
 }
 
 // ------------------------------------------------------------------ validadores
@@ -550,6 +607,7 @@ fn sesion(nombre: &str, clientes: u32) -> SesionVista {
     SesionVista {
         servidor: ServidorTmux::Magi,
         nombre: nombre.to_string(),
+        id: None,
         clientes,
         equipo: None,
         actividad: AHORA - 60,
@@ -1333,6 +1391,142 @@ fn la_lectura_salta_las_filas_ilegibles_y_sigue() {
         .nombres_de_fichas_de_host(host)
         .unwrap()
         .contains(&"sin-uuid".to_string()));
+}
+
+/// Una base en un fichero (las de memoria no se distinguen entre sí y avisan
+/// siempre) con un host ssh y tres filas ilegibles de tres clases: sin uuid,
+/// con una carpeta que no vale y con el nombre guardado como blob.
+fn base_con_tres_ilegibles() -> (tempfile::TempDir, Almacen, i64) {
+    let directorio = tempfile::tempdir().unwrap();
+    let almacen = Almacen::abrir(
+        &directorio.path().join("magi.db"),
+        &equipo_de_pruebas(),
+        "1.5.1",
+    )
+    .expect("almacén en un fichero");
+    let host = crear_host(&almacen, "dev-01");
+    almacen.crear_ficha(host, &datos_ficha("buena")).unwrap();
+    insertar_cruda(&almacen, host, "sin-uuid", None, "manual", None, None, None);
+    insertar_cruda(
+        &almacen,
+        host,
+        "carpeta-mala",
+        Some("55555555-5555-4555-8555-555555555555"),
+        "manual",
+        Some("relativa"),
+        None,
+        None,
+    );
+    almacen
+        .conexion()
+        .execute(
+            "INSERT INTO SESIONES_PERSISTENTES
+                (host_id, nombre, origen, creada_por, creada_en, actualizado_en,
+                 uuid, version, vector)
+             VALUES (?1, CAST('blob' AS BLOB), 'manual', 'portatil',
+                     '2026-11-16T10:00:00+01:00', '2026-11-16T10:00:00+01:00',
+                     '66666666-6666-4666-8666-666666666666',
+                     '0000000000001.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '{}')",
+            [host],
+        )
+        .expect("fila con el nombre como blob");
+    (directorio, almacen, host)
+}
+
+#[test]
+fn una_fila_ilegible_da_un_solo_aviso_por_mas_lecturas_que_haya() {
+    let (_directorio, almacen, host) = base_con_tres_ilegibles();
+
+    let (primera, avisos) = con_avisos(|| almacen.listar_fichas().unwrap());
+    assert_eq!(primera.len(), 1, "solo la buena se lista");
+    assert_eq!(avisos.len(), 3, "uno por fila ilegible: {avisos:?}");
+    for aviso in &avisos {
+        assert!(aviso.contains("ilegible"), "{aviso}");
+    }
+    assert!(
+        avisos.iter().all(|aviso| !aviso.contains("relativa")),
+        "el aviso no lleva los datos de la ficha: {avisos:?}"
+    );
+
+    // Las demás lecturas (todas pasan por la misma consulta) no repiten nada.
+    let (_, avisos) = con_avisos(|| {
+        almacen.listar_fichas().unwrap();
+        almacen.fichas_de_host(host).unwrap();
+        almacen.ficha_por_nombre(host, "sin-uuid").unwrap();
+        let id: i64 = almacen
+            .conexion()
+            .query_row(
+                "SELECT id FROM SESIONES_PERSISTENTES WHERE nombre = 'carpeta-mala'",
+                [],
+                |fila| fila.get(0),
+            )
+            .unwrap();
+        almacen.obtener_ficha(id).unwrap();
+    });
+    assert!(avisos.is_empty(), "ya estaban avisadas: {avisos:?}");
+}
+
+#[test]
+fn una_fila_que_se_arregla_y_se_vuelve_a_romper_avisa_otra_vez() {
+    let (_directorio, almacen, host) = base_con_tres_ilegibles();
+    let (_, avisos) = con_avisos(|| almacen.listar_fichas().unwrap());
+    assert_eq!(avisos.len(), 3);
+
+    // Se arregla la de la carpeta: se lee bien y deja de estar avisada.
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE SESIONES_PERSISTENTES SET carpeta = '~/api' WHERE nombre = 'carpeta-mala'",
+            [],
+        )
+        .unwrap();
+    let (fichas, avisos) = con_avisos(|| almacen.fichas_de_host(host).unwrap());
+    assert_eq!(fichas.len(), 2);
+    assert!(avisos.is_empty(), "las otras dos ya estaban avisadas");
+
+    // Se rompe otra vez, con el mismo motivo: es una avería nueva.
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE SESIONES_PERSISTENTES SET carpeta = 'relativa' WHERE nombre = 'carpeta-mala'",
+            [],
+        )
+        .unwrap();
+    let (fichas, avisos) = con_avisos(|| almacen.fichas_de_host(host).unwrap());
+    assert_eq!(fichas.len(), 1);
+    assert_eq!(avisos.len(), 1, "{avisos:?}");
+    let (_, avisos) = con_avisos(|| almacen.fichas_de_host(host).unwrap());
+    assert!(avisos.is_empty(), "y otra vez una sola");
+}
+
+#[test]
+fn una_fila_ilegible_con_otro_motivo_avisa_de_nuevo() {
+    let (_directorio, almacen, host) = base_con_tres_ilegibles();
+    con_avisos(|| almacen.listar_fichas().unwrap());
+
+    // La de la carpeta sigue rota, pero ahora por otra razón: el motivo es
+    // distinto y el aviso también.
+    almacen
+        .conexion()
+        .execute(
+            "UPDATE SESIONES_PERSISTENTES SET carpeta = NULL, comando = ?1
+              WHERE nombre = 'carpeta-mala'",
+            ["x".repeat(5000)],
+        )
+        .unwrap();
+    let (_, avisos) = con_avisos(|| almacen.fichas_de_host(host).unwrap());
+    assert_eq!(avisos.len(), 1, "{avisos:?}");
+}
+
+#[test]
+fn dos_bases_distintas_no_se_silencian_entre_si() {
+    let (_directorio_a, a, _) = base_con_tres_ilegibles();
+    let (_directorio_b, b, _) = base_con_tres_ilegibles();
+    // Las dos tienen las mismas filas con los mismos ids y motivos.
+    let (_, avisos_a) = con_avisos(|| a.listar_fichas().unwrap());
+    let (_, avisos_b) = con_avisos(|| b.listar_fichas().unwrap());
+    assert_eq!(avisos_a.len(), 3);
+    assert_eq!(avisos_b.len(), 3, "la otra base no hereda lo avisado");
 }
 
 #[test]

@@ -16,8 +16,6 @@
 
 mod comun;
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use magi::protocolo::{MensajeCliente, MensajeServidor};
@@ -31,36 +29,6 @@ use magi_nucleo::terminal::teclas::{
 };
 
 use comun::OpcionesEscenario;
-
-/// Compila `tui_prueba` y devuelve su ruta. Se compila una sola vez por proceso
-/// (las pruebas corren en paralelo y comparten el binario) con el `rustc` del
-/// toolchain que ejecuta los tests (el programa solo usa std).
-fn compilar_tui_prueba() -> PathBuf {
-    static COMPILADO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    COMPILADO
-        .get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!("magi-tui-prueba-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("directorio del programa de prueba");
-            let salida = dir.join(if cfg!(windows) {
-                "tui_prueba.exe"
-            } else {
-                "tui_prueba"
-            });
-            let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-            let estado = Command::new(rustc)
-                .args(["--edition=2021", "-O", "-o"])
-                .arg(&salida)
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/tests/fijos/terminal/tui_prueba.rs"
-                ))
-                .status()
-                .expect("compilando tui_prueba con rustc");
-            assert!(estado.success(), "tui_prueba no compila");
-            salida
-        })
-        .clone()
-}
 
 /// El modo de teclas que tendría una ventana cliente: reproduce en un emulador
 /// que no responde (el del cliente) lo que el servidor mandó de la pestaña, en
@@ -114,7 +82,7 @@ fn tui_prueba_recibe_respuestas_pegado_y_mayus_intro() {
         .build()
         .expect("runtime del escenario");
     runtime.block_on(async {
-        let programa = compilar_tui_prueba();
+        let programa = comun::compilar_tui_prueba();
         let mut escenario = comun::escenario(OpcionesEscenario {
             hosts: 1,
             programa_shell: Some(vec![programa.to_string_lossy().to_string()]),
@@ -252,7 +220,7 @@ fn modify_other_keys_mayus_intro_llega_como_csi_27_2_13() {
         .build()
         .expect("runtime del escenario");
     runtime.block_on(async {
-        let programa = compilar_tui_prueba();
+        let programa = comun::compilar_tui_prueba();
         let mut escenario = comun::escenario(OpcionesEscenario {
             hosts: 1,
             programa_shell: Some(vec![
@@ -441,14 +409,10 @@ fn modify_other_keys_apagado_mientras_estaba_soltada_se_apaga_al_volver_a_adjunt
     runtime.block_on(async {
         // El programa espera a que exista esta marca para apagar el modo: así
         // lo apaga cuando la ventana ya está soltada, sin depender de teclas.
-        let marca = std::env::temp_dir().join(format!(
-            "magi-mok-apagado-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
-        let _ = std::fs::remove_file(&marca);
+        // En un temporal propio: se borra al acabar aunque la prueba falle antes
+        // de crear (o de borrar) la marca.
+        let temporal = tempfile::tempdir().expect("temporal de la marca");
+        let marca = temporal.path().join("apagar-el-modo");
         let orden = format!(
             "printf '\\033[>4;2mUNO\\n'; while [ ! -e '{}' ]; do sleep 0.05; done; \
              printf '\\033[>4mDOS\\n'; exec sleep 30",

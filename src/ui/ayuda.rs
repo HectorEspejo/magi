@@ -196,7 +196,7 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ("^] l", "lista de sesiones"),
                     ("^] c", "nueva sesión (paleta de hosts)"),
                     ("^] x", "cerrar la pestaña (confirma)"),
-                    ("^] r", "reconectar la pestaña caída"),
+                    ("^] r", "reconectar la pestaña caída (una soltada pregunta antes)"),
                     ("^] w", "ventana nueva de terminal"),
                     ("^] q / esc", "volver a la vista anterior"),
                     ("^] ^]", "enviar el prefijo literal"),
@@ -245,7 +245,7 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ("↵", "adjuntar y entrar en la pestaña"),
                     ("n", "nueva sesión (paleta de hosts)"),
                     ("t", "comprobar el host de la pestaña: sus sesiones salen en «Persistentes»"),
-                    ("r", "reconectar la sesión caída"),
+                    ("r", "reconectar la sesión caída (una soltada pregunta antes)"),
                     ("x", "cerrar la sesión (confirma)"),
                     ("S", "apagar el servidor (confirma)"),
                     ("F3", "pestaña activa o lista"),
@@ -261,7 +261,17 @@ fn atajos_de(app: &App) -> (&'static str, Vec<(&'static str, &'static str)>) {
                     ),
                     (
                         "secretos",
-                        "no pongas secretos en el comando de una sesión: la ficha viaja, cifrada, a tus equipos",
+                        // Lo de los equipos solo es cierto con la sincronización
+                        // configurada (D370).
+                        if app.config.sincronizacion.activa() {
+                            "no pongas secretos en el comando de una sesión: la ficha viaja, cifrada, a tus equipos"
+                        } else {
+                            "no pongas secretos en el comando de una sesión: queda guardado en la ficha"
+                        },
+                    ),
+                    (
+                        "tmux en tmux",
+                        "si el shell del host ya arranca tmux por su cuenta (.bashrc, .zprofile…), la sesión llevaría tmux dentro de tmux: haz que solo arranque con $TMUX vacío",
                     ),
                 ],
             ),

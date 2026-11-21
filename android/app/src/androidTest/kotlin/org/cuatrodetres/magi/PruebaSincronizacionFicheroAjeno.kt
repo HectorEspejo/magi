@@ -13,6 +13,9 @@ import org.junit.runner.RunWith
 /**
  * Un fichero de la carpeta que no se abre con la clave del móvil (de otra
  * clave, a medio descargar o que no es age) no puede tumbar la sincronización.
+ * Desde la corrección 10b (R85) solo «ninguna identidad coincide» pide la clave:
+ * un fichero que no es age (o está cortado) es «a medio copiar o dañado», con su
+ * aviso y su reintento en la siguiente pasada.
  *
  * Regresión: con el núcleo compilado en debug, age leía sus textos de error de
  * la ruta donde se compiló, que en el móvil no existe, y entraba en pánico
@@ -28,9 +31,12 @@ class PruebaSincronizacionFicheroAjeno {
         /** Se lista antes que la fixture: la unión lo prueba primero. */
         private const val FICHERO_AJENO = "magi-eeeeeeee-ffff-4aaa-8bbb-cccccccccccc.age"
 
-        /** Aviso no bloqueante del lector para un fichero de un equipo desconocido. */
+        /**
+         * Aviso no bloqueante del lector para un fichero que no es age, de un
+         * equipo desconocido: dice el nombre del fichero y que se reintenta.
+         */
         private const val AVISO =
-            "un fichero de la carpeta (" + FICHERO_AJENO + ") no se abre con esta clave"
+            FICHERO_AJENO + ": a medio copiar o dañado; se reintenta en la siguiente pasada"
     }
 
     private lateinit var entorno: EntornoDePrueba

@@ -23,7 +23,8 @@
 //!   se difunde a todas las ventanas solo cuando algo cambia (las marcas de
 //!   tiempo de las comprobaciones no cuentan), o siempre al acabar una consulta
 //!   pedida por una ventana (es su respuesta); una ventana nueva recibe la
-//!   lista actual detrás de la `Bienvenida`.
+//!   lista guardada detrás de la `Bienvenida` y, tras ella, la renovada por una
+//!   pasada inmediata que se difunde aunque no cambie (D368).
 //! - **Consulta.** Las peticiones seguidas se agrupan en una sola comprobación
 //!   y un host comprobado hace menos de 5 s no se repite.
 //! - **Vista previa y renombrar.** Responden solo a la ventana que los pide.
@@ -195,6 +196,35 @@ struct Comprobado {
 pub fn lista_para_ventana_nueva(estado: &EstadoServidor) -> Option<ListaPersistentes> {
     let lista = &estado.persistentes.lista;
     (!lista.fichas.is_empty() || !lista.hosts.is_empty()).then(|| lista.clone())
+}
+
+/// Una ventana acaba de conectarse (D368). La lista que se le manda detrás de
+/// la `Bienvenida` es la que el servidor guardó, y puede ser de hace horas: el
+/// vigilante no trabaja sin ventanas, así que la última comprobación es la de
+/// cuando se fue la anterior. Con una lista guardada se pide una pasada
+/// inmediata que la renueve y que **se difunda aunque no cambie nada**: las
+/// marcas de tiempo no cuentan para detectar un cambio y, sin ellas, el
+/// cliente, que no avisa con lo comprobado antes de conectarse, no vería nunca
+/// una lista fresca. La pasada sigue la regla de siempre (un host comprobado
+/// hace menos de 5 s no se repite): lo de hace más se vuelve a mirar, y lo de
+/// hace menos ya cuenta como fresco (el cliente lo sabe: `umbral_de_frescura`).
+/// La primera ventana despierta además al vigilante aunque no haya nada
+/// guardado, para no esperar al siguiente periodo. Una ventana más, con el
+/// vigilante vivo y sin lista, no pide nada. Se llama con la ventana ya
+/// registrada, así que `debe_vigilar` es cierto; si se va antes de la pasada,
+/// esta descarta lo pendiente.
+pub fn ventana_conectada(estado: &mut EstadoServidor) {
+    if estado.apagando {
+        return;
+    }
+    let primera = estado.clientes.len() == 1;
+    let con_lista_guardada = lista_para_ventana_nueva(estado).is_some();
+    if con_lista_guardada {
+        estado.persistentes.consulta = true;
+    }
+    if primera || con_lista_guardada {
+        estado.persistentes.despertar.notify_one();
+    }
 }
 
 /// ¿Debe trabajar el vigilante? Con alguna ventana conectada o, en Termux con
@@ -430,11 +460,6 @@ async fn ejecutar_con_limite(
     argumentos: &[String],
     limite: Instant,
 ) -> Result<(Vec<u8>, Option<i32>), ErrorOrden> {
-    let comando = argumentos
-        .iter()
-        .map(|argumento| shell_escape::unix::escape(argumento.as_str().into()).to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
     let apertura = handle.clone();
     let restante = limite.saturating_duration_since(Instant::now());
     let mut canal =
@@ -453,11 +478,9 @@ async fn ejecutar_con_limite(
     let mut salida: Vec<u8> = Vec::new();
     let mut codigo = None;
     let trabajo = async {
-        canal
-            .exec(true, comando.into_bytes())
-            .await
-            .map_err(|error| error.to_string())?;
-        let _ = canal.eof().await;
+        // El script va por la entrada estándar, entero, antes del fin de la
+        // entrada (D357).
+        super::tmux::lanzar_exec(&mut canal, argumentos).await?;
         loop {
             match canal.wait().await {
                 Some(russh::ChannelMsg::Data { data })
@@ -1144,6 +1167,18 @@ async fn renombrar_en_host(
     }
 }
 
+/// Una sesión de ese host acaba de terminar (o ya no existía): adelanta la
+/// siguiente comprobación, aunque la última sea de hace menos de 5 s, para que
+/// la lista no siga enseñándola viva (revisión de la 9b, C9B-1).
+pub(super) async fn pedir_recomprobacion(estado: &EstadoCompartido, host_id: i64) {
+    estado
+        .lock()
+        .await
+        .persistentes
+        .recomprobar
+        .insert(host_id, Instant::now());
+}
+
 /// Lo que cambia en el servidor cuando el host renombró una sesión: lo que
 /// sabe de ese host en memoria (para no darla por terminada hasta la
 /// siguiente comprobación, que se adelanta) y las pestañas enganchadas, que
@@ -1223,6 +1258,7 @@ mod pruebas {
         SesionVista {
             servidor,
             nombre: nombre.to_string(),
+            id: None,
             clientes,
             equipo: None,
             actividad: 1_700_000_000,

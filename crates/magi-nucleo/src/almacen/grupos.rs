@@ -82,21 +82,22 @@ pub fn crear(conexion: &Connection, nombre: &str) -> Result<i64> {
 
 pub fn renombrar(conexion: &Connection, id: i64, nombre: &str) -> Result<()> {
     let nombre = nombre.trim();
-    let antes = versiones::datos_de(conexion, versiones::Tabla::Grupos, id)?;
-    conexion
-        .execute(
-            "UPDATE GRUPOS SET nombre = ?1 WHERE id = ?2",
-            params![nombre, id],
-        )
-        .map_err(|error| {
-            if crate::almacen::es_conflicto_unico(&error) {
-                anyhow::anyhow!("ya existe un grupo con el nombre «{nombre}»")
-            } else {
-                anyhow::Error::new(error)
-            }
-        })?;
-    versiones::subir_si_cambio(conexion, versiones::Tabla::Grupos, id, antes.as_deref())?;
-    Ok(())
+    // El cambio y la versión nueva en una sola transacción (R84).
+    versiones::cambiar_con_version(conexion, versiones::Tabla::Grupos, id, |conexion| {
+        conexion
+            .execute(
+                "UPDATE GRUPOS SET nombre = ?1 WHERE id = ?2",
+                params![nombre, id],
+            )
+            .map_err(|error| {
+                if crate::almacen::es_conflicto_unico(&error) {
+                    anyhow::anyhow!("ya existe un grupo con el nombre «{nombre}»")
+                } else {
+                    anyhow::Error::new(error)
+                }
+            })?;
+        Ok(())
+    })
 }
 
 /// Borra el grupo; sus hosts pasan a «sin grupo» (ON DELETE SET NULL).

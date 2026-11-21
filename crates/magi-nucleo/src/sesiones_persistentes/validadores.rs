@@ -324,6 +324,17 @@ pub fn normalizar_opcional(valor: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Etiqueta del equipo que crea la ficha (`creada_por`): recortada y no vacía.
+/// La usan el almacén (por `validar_datos`) y la importación de la
+/// sincronización, para que las dos acepten lo mismo y guarden lo mismo.
+pub fn normalizar_equipo(equipo: &str) -> Result<String, ErrorFicha> {
+    let equipo = equipo.trim();
+    if equipo.is_empty() {
+        return Err(ErrorFicha::EquipoVacio);
+    }
+    Ok(equipo.to_string())
+}
+
 /// Valida los datos de una ficha y los devuelve normalizados: nombre y equipo
 /// recortados, y los campos opcionales recortados y a `None` si quedan
 /// vacíos. Devuelve el primer error, en el orden del diálogo.
@@ -338,10 +349,7 @@ pub fn validar_datos(datos: &DatosFicha) -> Result<DatosFicha, ErrorFicha> {
     validar_comando_reanudar(comando_reanudar.as_deref().unwrap_or(""))?;
     let nota = normalizar_opcional(datos.nota.as_deref());
     validar_nota(nota.as_deref().unwrap_or(""))?;
-    let creada_por = datos.creada_por.trim().to_string();
-    if creada_por.is_empty() {
-        return Err(ErrorFicha::EquipoVacio);
-    }
+    let creada_por = normalizar_equipo(&datos.creada_por)?;
     Ok(DatosFicha {
         nombre,
         carpeta,

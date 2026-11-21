@@ -514,6 +514,10 @@ async fn sin_ventanas_no_se_comprueba_nada_y_con_alguna_si() {
         .await
         .expect("la ventana nueva no recibió la lista");
     assert_eq!(lista.fichas.len(), 1);
+    // Y, detrás de la guardada, la que renueva la pasada inmediata (D368).
+    esperar_lista_en(&mut ventana, Duration::from_secs(5), |_| true)
+        .await
+        .expect("la ventana nueva no recibió la lista renovada");
     let mut reanudado = false;
     for _ in 0..50 {
         if banco.comprobaciones(1) > antes {
@@ -616,6 +620,194 @@ async fn una_ventana_nueva_recibe_la_lista_actual_tras_la_bienvenida() {
         .expect("la ventana nueva no recibió la lista");
     assert_eq!(recibida.fichas, lista.fichas);
     assert_eq!(recibida.hosts, lista.hosts);
+}
+
+#[tokio::test]
+async fn la_primera_ventana_provoca_una_pasada_y_una_difusion_aunque_la_lista_no_cambie() {
+    // D368: la lista que recibe una ventana tras la `Bienvenida` es la que el
+    // servidor guardó al irse la última, y puede ser de hace horas. El
+    // vigilante hace enseguida una pasada y difunde la lista aunque no haya
+    // cambiado nada: las marcas de tiempo no cuentan para detectar un cambio
+    // y, sin esto, el cliente no vería nunca una comprobación posterior a su
+    // conexión.
+    let banco = Banco::nuevo();
+    // Sin ritmo de pruebas: nada se comprueba salvo lo que pide una ventana.
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    banco.magi(1, &[linea("api", 0, "portatil", true, "")]);
+    crear_ficha(&esc, host, "api");
+    esc.enviar(&consulta(1, None)).await;
+    let guardada = esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::VivaLibre)
+    })
+    .await
+    .expect("lista tras la consulta");
+    let comprobada = guardada.fichas[0].comprobada_en;
+    assert!(comprobada > 0);
+
+    // La única ventana se va y pasa un rato (más de los 5 s tras los que el
+    // vigilante vuelve a mirar un host) sin que nadie mire.
+    esc.escritura.shutdown().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    let antes = banco.comprobaciones(1);
+
+    let mut ventana = esc.otra_ventana().await;
+    // Primero, la guardada, tal cual estaba.
+    let primera = esperar_lista_en(&mut ventana, Duration::from_secs(3), |_| true)
+        .await
+        .expect("la ventana nueva no recibió la lista guardada");
+    assert_eq!(primera.fichas, guardada.fichas);
+    // Y la pasada inmediata la renueva, con el host sin cambios.
+    let fresca = esperar_lista_en(&mut ventana, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.comprobada_en > comprobada)
+    })
+    .await
+    .expect("no llegó la lista renovada por la pasada inmediata");
+    assert!(
+        banco.comprobaciones(1) > antes,
+        "no se volvió a mirar el host"
+    );
+    assert_eq!(fresca.fichas.len(), 1);
+    assert_eq!(fresca.fichas[0].estado, guardada.fichas[0].estado);
+    assert_eq!(fresca.fichas[0].sesion, guardada.fichas[0].sesion);
+}
+
+#[tokio::test]
+async fn la_campana_que_se_apago_mientras_no_habia_ventanas_llega_enseguida() {
+    // D368, el caso de verdad: la lista guardada trae una campana de hace
+    // horas, que ya no suena. La pasada inmediata trae la lista sin ella.
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    banco.magi(1, &[linea("api", 0, "portatil", true, "")]);
+    crear_ficha(&esc, host, "api");
+    esc.enviar(&consulta(1, None)).await;
+    esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.sesion.as_ref().is_some_and(|sesion| sesion.campana))
+    })
+    .await
+    .expect("lista con la campana");
+    esc.escritura.shutdown().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    // Mientras nadie miraba, alguien atendió la sesión.
+    banco.magi(1, &[linea("api", 0, "portatil", false, "")]);
+
+    let mut ventana = esc.otra_ventana().await;
+    let primera = esperar_lista_en(&mut ventana, Duration::from_secs(3), |_| true)
+        .await
+        .expect("la lista guardada");
+    assert!(
+        primera.fichas[0]
+            .sesion
+            .as_ref()
+            .is_some_and(|sesion| sesion.campana),
+        "la guardada trae la campana vieja"
+    );
+    let sin_campana = esperar_lista_en(&mut ventana, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .all(|ficha| ficha.sesion.as_ref().is_some_and(|sesion| !sesion.campana))
+    })
+    .await;
+    assert!(
+        sin_campana.is_some(),
+        "no llegó la lista sin la campana apagada"
+    );
+}
+
+#[tokio::test]
+async fn una_ventana_mas_con_lista_guardada_tambien_recibe_la_lista_renovada() {
+    // Con otra ventana ya conectada, la lista guardada es de hace como mucho un
+    // periodo, pero sus marcas de tiempo son anteriores a la conexión de la
+    // nueva y esta no avisaría con ellas: también se renueva y se difunde.
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    banco.magi(1, &[linea("api", 0, "portatil", false, "")]);
+    crear_ficha(&esc, host, "api");
+    esc.enviar(&consulta(1, None)).await;
+    let guardada = esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::VivaLibre)
+    })
+    .await
+    .expect("lista tras la consulta");
+    let comprobada = guardada.fichas[0].comprobada_en;
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+
+    let mut ventana = esc.otra_ventana().await;
+    esperar_lista_en(&mut ventana, Duration::from_secs(3), |_| true)
+        .await
+        .expect("la guardada");
+    let fresca = esperar_lista_en(&mut ventana, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.comprobada_en > comprobada)
+    })
+    .await;
+    assert!(fresca.is_some(), "la ventana nueva no recibió la renovada");
+    // Y la otra ventana, la de antes, también la ve (es una difusión).
+    let tambien = esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.comprobada_en > comprobada)
+    })
+    .await;
+    assert!(tambien.is_some(), "la ventana de antes no vio la renovada");
+}
+
+#[tokio::test]
+async fn la_primera_ventana_arranca_el_vigilante_sin_esperar_al_periodo() {
+    // Sin nada guardado, la primera ventana no recibe lista alguna al
+    // conectar, pero el vigilante hace su pasada ya (no a los 60 s) y la
+    // lista llega sola, sin que la ventana consulte.
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    esc.escritura.shutdown().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    banco.magi(1, &[linea("api", 0, "portatil", false, "")]);
+    crear_ficha(&esc, host, "api");
+
+    let mut ventana = esc.otra_ventana().await;
+    let lista = esperar_lista_en(&mut ventana, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::VivaLibre)
+    })
+    .await;
+    assert!(
+        lista.is_some(),
+        "la primera ventana no recibió la lista sin consultar"
+    );
+}
+
+#[tokio::test]
+async fn una_ventana_con_nada_que_contar_no_recibe_listas_de_mas() {
+    // Sin fichas ni hosts marcados y sin nada guardado, la pasada de la primera
+    // ventana no difunde una lista vacía (no hay con qué renovar).
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let llegados = esc.escuchar(Duration::from_millis(800)).await;
+    assert_eq!(son_listas(&llegados), 0, "{llegados:?}");
+    let mut otra = esc.otra_ventana().await;
+    let llegados = escuchar_ventana(&mut otra, Duration::from_millis(800)).await;
+    assert_eq!(son_listas(&llegados), 0, "{llegados:?}");
 }
 
 // ---------------------------------------------------------------- consulta
@@ -1095,6 +1287,14 @@ async fn la_vista_previa_va_solo_a_quien_la_pide_con_su_tope_y_sin_guardarse() {
         .collect();
     banco.pantalla(1, "grande", &enorme);
     let mut otra = esc.otra_ventana().await;
+    // El servidor anota su arranque desde su hilo escritor: se espera a esa
+    // fila para que no cuente como algo escrito por la vista previa.
+    for _ in 0..50 {
+        if !volcado(&esc, &["REGISTRO"]).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let registro_antes = volcado(&esc, &["REGISTRO"]);
 
     // Las últimas líneas, solo las pedidas.
@@ -1401,6 +1601,59 @@ async fn tras_renombrar_la_siguiente_comprobacion_ve_la_sesion_con_su_nombre_nue
         "el renombrado fuerza otra mirada"
     );
     assert!(lista.hosts[0].sin_ficha.is_empty());
+}
+
+/// Revisión de la 9b (C9B-1): terminar una sesión adelanta la siguiente
+/// comprobación del host aunque la última sea de hace menos de 5 s; si no, la
+/// lista seguiría enseñando viva la que acaba de terminar.
+#[tokio::test]
+async fn tras_terminar_una_sesion_la_siguiente_consulta_vuelve_a_mirar_el_host() {
+    let banco = Banco::nuevo();
+    let mut esc = escenario(opciones(&banco, 1, configuracion(0))).await;
+    let host = esc.hosts[0];
+    banco.magi(1, &[linea("api", 0, "", false, "")]);
+    crear_ficha(&esc, host, "api");
+    esc.enviar(&consulta(1, None)).await;
+    esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::VivaLibre)
+    })
+    .await
+    .expect("lista inicial con la sesión viva");
+    assert_eq!(banco.comprobaciones(1), 1);
+
+    esc.enviar(&MensajeCliente::TerminarTmux {
+        peticion_id: RANGO_TERMINAL + 2,
+        host_id: host,
+        servidor: ServidorTmux::Magi,
+        nombre: "api".to_string(),
+    })
+    .await;
+    esc.esperar(|mensaje| {
+        matches!(
+            mensaje,
+            MensajeServidor::TmuxTerminada { peticion_id, .. } if *peticion_id == RANGO_TERMINAL + 2
+        )
+    })
+    .await;
+
+    // El cliente consulta justo después, como hace al cerrar una pestaña
+    // terminando la sesión: el host se mira otra vez y la ficha ya no está viva.
+    esc.enviar(&consulta(3, None)).await;
+    let lista = esperar_lista(&mut esc, PLAZO, |lista| {
+        lista
+            .fichas
+            .iter()
+            .any(|ficha| ficha.estado == EstadoFicha::Terminada)
+    })
+    .await
+    .expect("la lista deja de enseñarla viva");
+    assert_eq!(lista.fichas[0].estado, EstadoFicha::Terminada);
+    // El `estado` inicial, el propio `terminar` (que también empieza con `tmux
+    // -V`) y la mirada que fuerza terminar.
+    assert_eq!(banco.comprobaciones(1), 3, "terminar fuerza otra mirada");
 }
 
 #[tokio::test]

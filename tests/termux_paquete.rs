@@ -435,7 +435,10 @@ fn comprobar_control(texto: &str, entradas: &[Entrada]) -> String {
     );
     assert_eq!(valor("Maintainer"), Some("4d3"));
     assert_eq!(valor("Suggests"), Some("termux-api, openssh"));
-    assert_eq!(valor("Homepage"), Some("https://github.com/4d3-org/magi"));
+    assert_eq!(
+        valor("Homepage"),
+        Some("https://github.com/HectorEspejo/magi")
+    );
     assert!(
         valor("Description").is_some_and(|d| !d.lines().next().unwrap_or("").is_empty()),
         "falta la Description"
@@ -2276,14 +2279,14 @@ fn termux_release_no_sube_el_deb_si_la_etiqueta_ya_no_apunta_al_commit_compilado
     let a = "a".repeat(40);
     let b = "b".repeat(40);
     let deb = "magi-ssh_1.6.0_aarch64.deb";
-    let consulta = "api repos/4d3-org/magi/commits/v1.6.0 --jq .sha";
+    let consulta = "api repos/HectorEspejo/magi/commits/v1.6.0 --jq .sha";
     let subida = format!("release upload v1.6.0 {deb} {deb}.sha256");
     let lanzar = |compilado: &str, extra: &[(&str, &str)]| -> (Resultado, String) {
         let _ = fs::remove_file(&registro);
         let mut entorno = vec![
             ("TAG", "v1.6.0"),
             ("NOMBRE_DEB", deb),
-            ("GH_REPO", "4d3-org/magi"),
+            ("GH_REPO", "HectorEspejo/magi"),
             ("COMMIT_COMPILADO", compilado),
             ("GH_FALSO_REGISTRO", registro.to_str().unwrap()),
             ("GH_FALSO_SHA", a.as_str()),
@@ -2620,8 +2623,8 @@ fn la_receta_de_tur_compila_el_paquete_del_tag_e_instala_lo_mismo_que_el_deb() {
         "termux_setup_rust",
         "TERMUX_PKG_EXCLUDED_ARCHES=\"arm, i686\"",
         "TERMUX_PKG_SUGGESTS=\"termux-api, openssh\"",
-        "TERMUX_PKG_HOMEPAGE=https://github.com/4d3-org/magi",
-        "https://github.com/4d3-org/magi/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz",
+        "TERMUX_PKG_HOMEPAGE=https://github.com/HectorEspejo/magi",
+        "https://github.com/HectorEspejo/magi/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz",
         "TERMUX_PKG_LICENSE_FILE=\"LICENSE-APACHE, LICENSE-MIT\"",
         "-p magi-ssh",
         "--locked",
@@ -2777,10 +2780,10 @@ fn el_detector_de_datos_personales_busca_por_patron_y_no_confunde_la_documentaci
         "${PREFIX}/home/x y ~/home/x",
         "scp usuario@192.0.2.10:fichero .",
         "usuario@ejemplo.org y soporte@ejemplo.org",
-        "4d3-org@users.noreply.github.com",
+        "12345+usuario@users.noreply.github.com",
         "posix-rename@openssh.com",
-        "wg-quick@*.service y \"${#faltan[@]}\" y TERMUX_PKG_MAINTAINER=\"@4d3-org\"",
-        "https://github.com/4d3-org/magi/archive/refs/tags/v1.6.0.tar.gz",
+        "wg-quick@*.service y \"${#faltan[@]}\" y TERMUX_PKG_MAINTAINER=\"@HectorEspejo\"",
+        "https://github.com/HectorEspejo/magi/archive/refs/tags/v1.6.0.tar.gz",
     ] {
         assert_eq!(
             datos_personales(bueno),
@@ -2970,15 +2973,16 @@ fn la_documentacion_del_paquete_cubre_lo_que_pide_el_checklist_y_no_lleva_datos_
             "docs/publicar-termux.md debe hablar de «{presente}»"
         );
     }
-    let readme = leer_texto("README.md");
+    // Desde la 9b la documentación de usuario vive en el manual (D401).
+    let readme = leer_texto("docs/manual/termux.md");
     let seccion = readme
         .split("\n## MAGI en Termux\n")
         .nth(1)
-        .expect("falta la sección «MAGI en Termux» del README")
+        .expect("falta la sección «MAGI en Termux» del manual (docs/manual/termux.md)")
         .split("\n## ")
         .next()
         .unwrap();
-    // Los párrafos del README se parten a 80 columnas: se compara sin saltos.
+    // Los párrafos del manual se parten a 80 columnas: se compara sin saltos.
     let plana = seccion.replace('\n', " ");
     for presente in [
         "apt install ./magi-ssh_",
@@ -2997,7 +3001,7 @@ fn la_documentacion_del_paquete_cubre_lo_que_pide_el_checklist_y_no_lleva_datos_
     ] {
         assert!(
             plana.contains(presente),
-            "la sección del README debe decir «{presente}»"
+            "la sección del manual debe decir «{presente}»"
         );
     }
     // Nada con el usuario del desarrollador (CLAUDE.md): rutas con $HOME o de
@@ -3006,7 +3010,7 @@ fn la_documentacion_del_paquete_cubre_lo_que_pide_el_checklist_y_no_lleva_datos_
     // repositorio ningún nombre real.
     let publicable = [
         ("docs/publicar-termux.md", guia),
-        ("README.md", seccion.to_string()),
+        ("docs/manual/termux.md", seccion.to_string()),
         (
             "packaging/termux/build.sh",
             leer_texto("packaging/termux/build.sh"),

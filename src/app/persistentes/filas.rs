@@ -157,13 +157,18 @@ impl FilaPersistente {
             .map(|sesion| self.ahora_host.saturating_sub(sesion.actividad).max(0))
     }
 
-    /// El título del programa que corre dentro, si lo hay.
+    /// El título del programa que corre dentro, si lo hay. Un título igual al
+    /// nombre del host (el que tmux pone por defecto) no cuenta nada: no se
+    /// enseña (D370).
     #[must_use]
     pub fn titulo(&self) -> Option<&str> {
         self.sesion
             .as_ref()
             .and_then(|sesion| sesion.titulo.as_deref())
-            .filter(|titulo| !titulo.trim().is_empty())
+            .filter(|titulo| {
+                !titulo.trim().is_empty()
+                    && !titulo.trim().eq_ignore_ascii_case(self.host_nombre.trim())
+            })
     }
 
     /// Por qué no se pudo mirar el host de la fila (solo en las fichas cuyo
@@ -365,6 +370,7 @@ mod pruebas {
         SesionVista {
             servidor,
             nombre: nombre.to_string(),
+            id: None,
             clientes,
             equipo: None,
             actividad,
@@ -522,6 +528,43 @@ mod pruebas {
         assert_eq!(construir_filas(&lista, &nombres, 7, &[], "web").len(), 1);
         assert_eq!(construir_filas(&lista, &nombres, 7, &[], "api").len(), 1);
         assert_eq!(construir_filas(&lista, &nombres, 7, &[], "nada").len(), 0);
+    }
+
+    #[test]
+    fn un_titulo_igual_al_nombre_del_host_no_se_enseña_ni_cuenta_para_el_filtro() {
+        // tmux pone por defecto el nombre de la máquina como título: no cuenta
+        // nada del programa de dentro (D370).
+        let titulo = |texto: &str| {
+            let mut con_titulo = sesion(ServidorTmux::Magi, "refactor", 0, 100);
+            con_titulo.titulo = Some(texto.to_string());
+            let lista = ListaPersistentes {
+                fichas: vec![FichaVista {
+                    uuid: "u2".to_string(),
+                    host_id: 2,
+                    nombre: "refactor".to_string(),
+                    estado: EstadoFicha::VivaLibre,
+                    sesion: Some(con_titulo),
+                    comprobada_en: 1,
+                }],
+                hosts: Vec::new(),
+            };
+            construir_filas(&lista, &nombres, 7, &[], "")
+                .remove(0)
+                .titulo()
+                .map(str::to_string)
+        };
+        assert_eq!(titulo("dev-01"), None);
+        assert_eq!(
+            titulo("  DEV-01 "),
+            None,
+            "sin distinguir mayúsculas ni bordes"
+        );
+        assert_eq!(titulo("Claude Code"), Some("Claude Code".to_string()));
+        assert_eq!(
+            titulo("dev-01: ~/proyectos"),
+            Some("dev-01: ~/proyectos".to_string())
+        );
+        assert_eq!(titulo("   "), None);
     }
 
     #[test]

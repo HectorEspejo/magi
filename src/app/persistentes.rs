@@ -111,6 +111,12 @@ pub struct EstadoPersistentes {
     pub lista: Option<ListaPersistentes>,
     /// Cuándo llegó esa lista (reloj del cliente).
     pub recibida_en: Option<Instant>,
+    /// Segundos Unix en que esta ventana recibió la `Bienvenida` del servidor
+    /// (la última, si reconectó). La lista que llega detrás de ella puede ser
+    /// la que el servidor guardó hace horas, al irse la última ventana: una
+    /// comprobación anterior a este momento no vale para avisar de atención
+    /// (D368). `None` mientras no ha habido `Bienvenida`.
+    pub conectada_en: Option<i64>,
     /// Aperturas pedidas que aún no tienen pestaña con su tmux: crear (la
     /// ficha se guarda solo cuando la sesión ya existe en el host), reabrir y
     /// engancharse (↵ y `c` de la lista, el diálogo de nombre ocupado y
@@ -264,6 +270,13 @@ pub struct AtencionPersistente {
     pub nombre: String,
 }
 
+/// Margen sobre el instante de conexión al decidir si una comprobación es
+/// anterior a ella: las horas se guardan en segundos enteros y la `Bienvenida`
+/// llega unos instantes después de que el servidor registre la ventana, así
+/// que una comprobación hecha justo en el límite de la repetición mínima del
+/// servidor (5 s) podría caer un segundo por debajo del umbral.
+const MARGEN_DE_CONEXION_SEG: i64 = 2;
+
 fn ahora_epoca() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -331,6 +344,7 @@ impl App {
             MensajeServidor::Bienvenida { .. } => {
                 // Lo que estaba en vuelo se perdió con la conexión anterior.
                 self.perder_lo_en_vuelo_de_persistentes();
+                self.persistentes.conectada_en = Some(ahora_epoca());
                 false
             }
             _ => false,
@@ -367,6 +381,7 @@ impl App {
         self.persistentes.creaciones.clear();
         self.persistentes.lista = None;
         self.persistentes.recibida_en = None;
+        self.persistentes.conectada_en = None;
         self.persistentes.ultima_consulta = None;
         self.persistentes.terminadas.clear();
         self.persistentes.foco = None;
@@ -1562,9 +1577,13 @@ impl App {
                 fila.host_nombre
             ),
         });
-        lineas.push(
-            "Borrar la ficha no toca el host; se borra también en tus otros equipos.".to_string(),
-        );
+        // Lo de los otros equipos solo es cierto con la sincronización
+        // configurada (D370): sin ella la ficha no viaja a ningún sitio.
+        lineas.push(if self.config.sincronizacion.activa() {
+            "Borrar la ficha no toca el host; se borra también en tus otros equipos.".to_string()
+        } else {
+            "Borrar la ficha no toca el host.".to_string()
+        });
         self.dialogo = Some(Dialogo::Confirmar {
             titulo: "BORRAR FICHA".to_string(),
             lineas,
@@ -1895,11 +1914,23 @@ impl App {
     /// el orden de la lista: las fichas vivas con la campana y las sesiones sin
     /// ficha del tmux propio de los hosts comprobados. Las del tmux habitual no
     /// cuentan (lo usa el aviso de la barra global de la pista B).
+    ///
+    /// Solo cuenta lo comprobado desde que esta ventana se conectó (menos la
+    /// repetición mínima del servidor, como en `magi sesiones`, y un pequeño
+    /// margen, `MARGEN_DE_CONEXION_SEG`): la lista que llega detrás de la
+    /// `Bienvenida` puede ser la guardada al irse la última ventana, y una
+    /// campana de hace horas no es una atención de ahora. El servidor hace una
+    /// pasada enseguida y difunde la lista fresca (D368).
     #[must_use]
     pub fn persistentes_con_atencion(&self) -> Vec<AtencionPersistente> {
         let Some(lista) = &self.persistentes.lista else {
             return Vec::new();
         };
+        let umbral = self.persistentes.conectada_en.map_or(0, |conectada| {
+            crate::sesiones_cli::umbral_de_frescura(
+                conectada.saturating_sub(MARGEN_DE_CONEXION_SEG),
+            )
+        });
         let host_nombre = |host_id: i64| {
             self.hosts
                 .iter()
@@ -1909,7 +1940,8 @@ impl App {
         };
         let mut atencion = Vec::new();
         for ficha in &lista.fichas {
-            if ficha.sesion.as_ref().is_some_and(|sesion| sesion.campana) {
+            let campana = ficha.sesion.as_ref().is_some_and(|sesion| sesion.campana);
+            if campana && ficha.comprobada_en >= umbral {
                 atencion.push(AtencionPersistente {
                     host_id: ficha.host_id,
                     host_nombre: host_nombre(ficha.host_id),
@@ -1918,6 +1950,9 @@ impl App {
             }
         }
         for host in &lista.hosts {
+            if host.comprobada_en < umbral {
+                continue;
+            }
             for sesion in &host.sin_ficha {
                 if sesion.campana && sesion.servidor == protocolo::ServidorTmux::Magi {
                     atencion.push(AtencionPersistente {

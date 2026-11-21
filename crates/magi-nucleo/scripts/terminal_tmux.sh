@@ -1,11 +1,15 @@
 #!/bin/sh
 # terminal_tmux.sh — sesiones persistentes con el tmux de MAGI (Fase 16).
 #
-# MAGI lo ejecuta con "sh -c <script> magi-tmux <suborden> <argumentos…>" por un
-# canal del pool (salvo "enganchar", que va en el PTY de la pestaña). Todo
-# argumento se valida aquí y en Rust y va siempre como argumento: nunca se
-# interpola en una orden de tmux. En el host solo se usa sh POSIX, awk y tmux
-# (el binario "tmux" del PATH, nunca una ruta absoluta).
+# MAGI lo manda por la ENTRADA ESTÁNDAR de un canal exec del pool, leído entero
+# antes de ejecutar nada, con un arranque mínimo en la línea de órdenes
+# («sh -c '<arranque>' magi-tmux <suborden> <argumentos…>»): en la línea solo
+# van ese arranque y los argumentos validados, nunca el script (Dropbear limita
+# su longitud, D357). El enganche con PTY, que no puede recibir el script por la
+# entrada estándar, es el script aparte terminal_enganche.sh. Todo argumento se
+# valida aquí y en Rust y va siempre como argumento: nunca se interpola en una
+# orden de tmux. En el host solo se usa sh POSIX, awk y tmux (el binario "tmux"
+# del PATH, nunca una ruta absoluta).
 #
 # <servidor> es "magi" (el tmux propio de MAGI: tmux -L magi -f /dev/null, que
 # nunca carga ~/.tmux.conf) o "habitual" (el tmux de siempre del usuario, solo
@@ -16,11 +20,13 @@
 #   crear <nombre> <carpeta> <comando> <líneas> <columnas> <filas>
 #       MAGI_TMUX=… y MAGI_RESULTADO=creada|existe|sin_carpeta|antiguo|sin_tmux|error
 #       (códigos de salida 0, 73, 72, 74, 76 y 1)
-#   enganchar <servidor> <nombre> <soltar 0|1> <equipo>
-#       sale con 0 si la sesión terminó, 100 si sigue (te soltaron), 75 si no
-#       existía, 76 sin tmux y 74 con un tmux demasiado antiguo. «Sigue» se
-#       mira por el identificador interno de la sesión, no por su nombre: un
-#       renombrado mientras estás enganchado no la hace «terminada»
+#   preparar <servidor> <nombre>
+#       la primera mitad de engancharse: comprueba que la sesión existe, aplica la
+#       configuración de MAGI (solo en el servidor propio) y escribe
+#       MAGI_ID=<identificador interno de tmux> y MAGI_CREADA=<segundos Unix de
+#       su creación>. Sale con 0, 75 si la sesión no existía, 76 sin tmux y 74
+#       con un tmux demasiado antiguo. La segunda mitad (la marca @magi_equipo y
+#       el attach, con PTY) es terminal_enganche.sh
 #   estado
 #       MAGI_TMUX=…, MAGI_AHORA=<segundos> y una línea MAGI_SES por sesión de
 #       los dos servidores, con los campos separados por 0x1F
@@ -38,6 +44,12 @@
 # se comprueba con la lista exacta de list-sessions, nunca con has-session -t.
 # Para las órdenes cuyo objetivo es un panel (capture-pane) o que aceptan un
 # panel (set-option), el objetivo es «=<nombre>:».
+#
+# Sin rangos de caracteres (de la «a» a la «z», del 0 al 9…): dependen del idioma
+# del host, y un canal exec no lo fija. Las listas van escritas carácter a
+# carácter (R159).
+# La última línea es la marca que el arranque exige para dar el script por
+# entero.
 
 set -u
 
@@ -66,7 +78,6 @@ SALIDA_ANTIGUO=74
 SALIDA_NO_EXISTE=75
 SALIDA_SIN_TMUX=76
 SALIDA_FALLO_TMUX=77
-SALIDA_SOLTADA=100
 
 # Comando de arranque (§7.2): corre con el shell de acceso del usuario, en modo
 # interactivo para que tenga su PATH; al acabar escribe el código y deja un
@@ -88,12 +99,12 @@ rechazar() {
 }
 
 uso() {
-    rechazar 'comprobar|crear|enganchar|estado|vista|historial|renombrar|terminar [argumentos]'
+    rechazar 'comprobar|crear|preparar|estado|vista|historial|renombrar|terminar [argumentos]'
 }
 
 nombre_valido() {
     case "$1" in
-        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+        ''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-]*) return 1 ;;
     esac
     [ "${#1}" -le 64 ]
 }
@@ -105,10 +116,10 @@ servidor_valido() {
     return 1
 }
 
-# Etiqueta del equipo: ^[a-z0-9-]{1,20}$
+# Etiqueta del equipo: minúsculas, dígitos y guion, de 1 a 20 caracteres.
 equipo_valido() {
     case "$1" in
-        ''|*[!a-z0-9-]*) return 1 ;;
+        ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
     esac
     [ "${#1}" -le 20 ]
 }
@@ -117,7 +128,7 @@ equipo_valido() {
 # izquierda y dentro del rango.
 numero_valido() {
     case "$1" in
-        ''|*[!0-9]*|0?*) return 1 ;;
+        ''|*[!0123456789]*|0?*) return 1 ;;
     esac
     [ "${#1}" -le 9 ] || return 1
     [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
@@ -165,17 +176,17 @@ detectar_tmux() {
             menor=0
             ;;
         *)
-            mayor=${version%%[!0-9]*}
+            mayor=${version%%[!0123456789]*}
             case "$mayor" in
-                ''|*[!0-9]*) return 1 ;;
+                ''|*[!0123456789]*) return 1 ;;
             esac
             [ "${#mayor}" -le 4 ] || return 1
             resto=${version#"$mayor"}
             menor=0
             case "$resto" in
-                .[0-9]*)
+                .[0123456789]*)
                     resto=${resto#.}
-                    menor=${resto%%[!0-9]*}
+                    menor=${resto%%[!0123456789]*}
                     [ "${#menor}" -le 4 ] || return 1
                     ;;
             esac
@@ -222,7 +233,7 @@ sesion_existe() {
 # el servidor, así que sirve para saber si «la misma» sesión sigue viva.
 id_de_sesion() {
     tmux_srv list-sessions -F "#{session_id}${TAB}#{session_name}" 2>/dev/null |
-        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 == nombre { print $1; exit }'
+        LC_ALL=C awk -F "$TAB" -v nombre="$1" '$2 "" == nombre "" { print $1; exit }'
 }
 
 # ¿Sigue viva la sesión? sesion_viva <nombre> <identificador, o vacío>. Con
@@ -461,38 +472,33 @@ hacer_crear() {
     resultado_crear error 1
 }
 
-hacer_enganchar() {
+# La primera mitad de engancharse (la segunda, con PTY, es
+# terminal_enganche.sh): la sesión tiene que existir, y en el servidor propio se
+# aplica la configuración de MAGI (idempotente: se repite en cada enganche, y
+# sin history-limit porque el de la sesión ya está fijado desde que se creó). La
+# marca @magi_equipo NO se pone aquí: la pone el enganche, después de mirar que
+# la sesión sigue libre cuando es una reconexión automática (R157). Escribe el
+# identificador interno de la sesión y su hora de creación, con los que MAGI la
+# sigue aunque otro equipo la renombre.
+hacer_preparar() {
     SERVIDOR=$1
     NOMBRE=$2
-    SOLTAR=$3
-    EQUIPO=$4
     exigir_tmux
     if ! sesion_existe "$NOMBRE"; then
         printf '[MAGI] la sesión «%s» ya no existe\n' "$NOMBRE" >&2
         exit "$SALIDA_NO_EXISTE"
     fi
-    ID=$(id_de_sesion "$NOMBRE")
+    # Identificador y creación de la sesión: con los dos se sabe que sigue siendo
+    # la misma aunque la renombren y aunque tmux se haya reiniciado y reutilice
+    # identificadores.
+    identidad=$(tmux_srv list-sessions -F "#{session_name}${TAB}#{session_id}${TAB}#{session_created}" 2>/dev/null |
+        LC_ALL=C awk -F "$TAB" -v nombre="$NOMBRE" '$1 "" == nombre "" { print $2 " " $3; exit }')
+    printf 'MAGI_ID=%s\nMAGI_CREADA=%s\n' "${identidad%% *}" "${identidad#* }"
     if [ "$SERVIDOR" = magi ]; then
         # Solo el tmux propio: el habitual no se toca (ni su configuración ni
-        # sus opciones). La configuración es idempotente.
-        tmux_srv set-option -q -t "=$NOMBRE:" @magi_equipo "$EQUIPO" >/dev/null 2>&1
-        # Sin history-limit: el de la sesión ya está fijado desde que se creó.
+        # sus opciones).
         preparar_configuracion '' enganchar
         lanzar_propio >/dev/null 2>&1
-    fi
-    if [ "$SOLTAR" = 1 ]; then
-        tmux_srv attach-session -d -t "=$NOMBRE"
-    else
-        tmux_srv attach-session -t "=$NOMBRE"
-    fi
-    fin=$?
-    if sesion_viva "$NOMBRE" "$ID"; then
-        # Sigue viva: o te soltaron (tmux sale con 0) o el cliente no pudo
-        # engancharse (sin terminal, por ejemplo).
-        if [ "$fin" -ne 0 ]; then
-            exit "$fin"
-        fi
-        exit "$SALIDA_SOLTADA"
     fi
     exit 0
 }
@@ -501,10 +507,10 @@ hacer_enganchar() {
 ahora_del_host() {
     ahora=$(date +%s 2>/dev/null)
     case "$ahora" in
-        ''|*[!0-9]*) ahora=$(awk 'BEGIN { srand(); print srand() }' 2>/dev/null) ;;
+        ''|*[!0123456789]*) ahora=$(awk 'BEGIN { srand(); print srand() }' 2>/dev/null) ;;
     esac
     case "$ahora" in
-        ''|*[!0-9]*) return 1 ;;
+        ''|*[!0123456789]*) return 1 ;;
     esac
     printf '%s' "$ahora"
 }
@@ -532,17 +538,18 @@ leer_lista() {
 }
 
 # Una línea MAGI_SES por sesión del servidor $1, con los campos separados por
-# 0x1F: servidor, nombre, clientes, equipo, actividad, creada, campana, ventanas
-# y título. Solo salen las sesiones con un nombre que MAGI pueda manejar; el
-# título va sin caracteres de control y a 400 bytes como mucho, y la lista, a
-# 500 sesiones por servidor. La actividad y la campana son las de las ventanas.
+# 0x1F: servidor, nombre, identificador, clientes, equipo, actividad, creada,
+# campana, ventanas y título. Solo salen las sesiones con un nombre que MAGI
+# pueda manejar; el título va sin caracteres de control y a 400 bytes como
+# mucho, y la lista, a 500 sesiones por servidor. La actividad y la campana son
+# las de las ventanas.
 #
 # Entre tmux y awk los campos van separados por tabuladores, no por 0x1F: tmux
 # 3.4 y 3.5 escriben los caracteres de control de la salida de list-sessions
 # como «\037» (3.2 y 3.7 los dejan tal cual), y el tabulador sobrevive en todas.
 listar_servidor() {
     SERVIDOR=$1
-    if ! leer_lista list-sessions -F "S${TAB}#{session_name}${TAB}#{session_attached}${TAB}#{@magi_equipo}${TAB}#{session_created}${TAB}#{session_windows}${TAB}#{session_activity}${TAB}#{pane_title}"; then
+    if ! leer_lista list-sessions -F "S${TAB}#{session_name}${TAB}#{session_attached}${TAB}#{@magi_equipo}${TAB}#{session_created}${TAB}#{session_windows}${TAB}#{session_activity}${TAB}#{session_id}${TAB}#{pane_title}"; then
         return 1
     fi
     LISTA_SESIONES=$SALIDA_LISTA
@@ -559,7 +566,7 @@ listar_servidor() {
             return texto
         }
         function numero(texto) {
-            return (texto ~ /^[0-9]+$/) ? texto + 0 : -1
+            return (texto ~ /^[0123456789]+$/) ? texto + 0 : -1
         }
         # Un entero siempre en decimal: con «print», el awk de Debian 10 y
         # Ubuntu 18.04 (mawk 1.3.3) escribe lo que pasa de 2^31, como una hora
@@ -567,17 +574,19 @@ listar_servidor() {
         function entero(valor) {
             return sprintf("%.0f", valor)
         }
-        $1 == "S" && NF >= 8 && n < 500 {
+        $1 == "S" && NF >= 9 && n < 500 {
             nombre = $2
-            if (nombre !~ /^[A-Za-z0-9_-]+$/ || length(nombre) > 64) next
+            if (nombre !~ /^[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-]+$/ || length(nombre) > 64) next
             clientes = numero($3); creada = numero($5); ventanas = numero($6); actividad_sesion = numero($7)
             if (clientes < 0 || creada < 0 || ventanas < 0 || actividad_sesion < 0) next
-            titulo = $8
-            for (i = 9; i <= NF; i++) titulo = titulo $i
+            titulo = $9
+            for (i = 10; i <= NF; i++) titulo = titulo $i
             n++
             orden[n] = nombre
             cl[nombre] = clientes; eq[nombre] = substr(limpio($4), 1, 64); cr[nombre] = creada
             vt[nombre] = ventanas; ac[nombre] = actividad_sesion; ti[nombre] = substr(limpio(titulo), 1, 400)
+            # El identificador interno de tmux: «$» y dígitos; si no lo es, vacío.
+            ident[nombre] = ($8 ~ /^[$][0123456789]+$/ && length($8) <= 12) ? $8 : ""
             next
         }
         $1 == "W" && NF >= 4 {
@@ -591,7 +600,7 @@ listar_servidor() {
                 nombre = orden[i]
                 actividad = ventana_ac[nombre] + 0
                 if (!tiene_ventana[nombre] || actividad <= 0) actividad = ac[nombre]
-                print "MAGI_SES", servidor, nombre, entero(cl[nombre]), eq[nombre], entero(actividad), entero(cr[nombre]), (campana[nombre] ? 1 : 0), entero(vt[nombre]), ti[nombre]
+                print "MAGI_SES", servidor, nombre, ident[nombre], entero(cl[nombre]), eq[nombre], entero(actividad), entero(cr[nombre]), (campana[nombre] ? 1 : 0), entero(vt[nombre]), ti[nombre]
             }
         }'
 }
@@ -721,15 +730,10 @@ case "$SUBORDEN:$ARGUMENTOS" in
         numero_valido "${7:-}" 1 2000 || rechazar 'filas no válidas (1 a 2000)'
         hacer_crear "$2" "$3" "$4" "$5" "$6" "$7"
         ;;
-    enganchar:4)
+    preparar:2)
         servidor_valido "${2:-}" || uso
         nombre_valido "${3:-}" || uso
-        case "${4:-}" in
-            0|1) ;;
-            *) uso ;;
-        esac
-        equipo_valido "${5:-}" || rechazar 'equipo no válido (^[a-z0-9-]{1,20}$)'
-        hacer_enganchar "$2" "$3" "$4" "$5"
+        hacer_preparar "$2" "$3"
         ;;
     estado:0)
         hacer_estado
@@ -758,3 +762,5 @@ case "$SUBORDEN:$ARGUMENTOS" in
         uso
         ;;
 esac
+
+#MAGI-FIN
