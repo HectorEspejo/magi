@@ -97,5 +97,3 @@ MAGI is free software under the dual license **MIT OR Apache-2.0**, at your
 option: [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE). Unless
 stated otherwise, any contribution submitted to the project is licensed the same
 way, following the Rust convention.
-
-Copyright (c) 2026 Cuatro de Tres S. Coop. And.
