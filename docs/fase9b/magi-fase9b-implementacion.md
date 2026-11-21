@@ -1,6 +1,6 @@
 # MAGI - Fase 9b: Primera Publicación · Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado (20 nov 2026): **implementada y cerrada por el agente, a falta de lo que solo puede hacer el desarrollador** (el GIF de la demo, que necesita `vhs`, y todos los pasos de publicación). Checklist **52 / 58**. Rama `fase9b`, que parte de `main` con la F17 ya fusionada (`9227b33`, versión 1.6.0): versión **1.6.1**.
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado (21 nov 2026): **implementada y cerrada por el agente, a falta de lo que solo puede hacer el desarrollador** (los pasos de publicación). La demo se grabó el 21 nov, ya con `vhs` instalado. Checklist **55 / 58**. Rama `fase9b`, que parte de `main` con la F17 ya fusionada (`9227b33`, versión 1.6.0): versión **1.6.1**.
 
 ## 1. Resumen de lo implementado
 
@@ -59,24 +59,24 @@ Dos sprints, un commit por sprint sobre un contrato fijado antes (`490afc6` entr
 - **Reparto del README sin reescribir.** Script por rangos de encabezados con tabla fija de destino; comprueba que cada sección tiene destino, que no cambia el número de líneas y lista cada línea modificada.
 - **`repositorio_publico` sin dependencias nuevas:** escáner a mano con `std::net::Ipv4Addr` (el paquete raíz no tiene `regex`), lista de ficheros con `git ls-files --cached --others --exclude-standard`, cálculo propio del slug de GitHub para las anclas, y cada excepción con su motivo en la propia prueba.
 - **La guía de publicación no nombra la organización anterior** (R182): manda a `docs/README.md`, que sí la nombra, para no abrir una excepción más en la prueba.
-- **Demo.** `scripts/grabar-demo.sh` para el servidor de MAGI solo si el entorno aislado ya estaba en marcha y su `XDG_RUNTIME_DIR` es el suyo, con `--si`, sin leer del terminal y con plazo; valida la cinta con `vhs validate` antes de grabar.
+- **Demo.** `scripts/grabar-demo.sh` para el servidor de MAGI solo si el entorno aislado ya estaba en marcha y su `XDG_RUNTIME_DIR` es el suyo, con `--si`, sin leer del terminal y con plazo; valida la cinta con `vhs validate` antes de grabar. Fija `tema = "fijo"` en el `config.toml` de su entorno aislado: sin Omarchy el tema «auto» avisa en la barra de estado (hallazgo H-1, §6) y el aspecto del GIF no debe depender de quien graba.
 - **Medidas de los scripts embebidos frente a Dropbear (~9000 B, sin comprobar aquí)**, sin cambiar los que no tocaba el cierre: `servicios.sh` 37 977 B (39 016 escapado: **ya rebasa el límite**, de la F13), `terminal_tmux.sh` 27 460 B (ahora por la entrada estándar), `sondeo.sh` 3 110 B, `terminal_enganche.sh` 4 029 B (4 168 escapado), `escritorio_voxl.sh` 1 569 B, `instalar_clave.sh` 719 B. Hueco anotado: `crear` sigue metiendo la carpeta (hasta 1 024 B) y el comando (hasta 4 096 B) como argumentos de la línea de órdenes y, con comillas que se escapan, puede pasar de 9 000 B; la especificación dice «solo argumentos validados en la línea». Hay un fichero huérfano, `src/flota/sondeo.sh`, copia vieja y distinta de la que se incrusta.
 
 ## 5. Funcionalidades del checklist completadas
 
-Las 52 marcadas en `docs/fase9b/magi-fase9b-checklist.md` con su texto exacto. Sin marcar (6):
+Las 55 marcadas en `docs/fase9b/magi-fase9b-checklist.md` con su texto exacto. Sin marcar (3), todas de la publicación, que hace el desarrollador: ajustes y secretos; `v1.6.1`; `android-v0.2.0-rc.1` y `android-v0.2.0`.
 
-- `assets/demo/magi.tape` (VHS), `assets/demo/inventario` y `scripts/grabar-demo.sh`: escritos y revisados por lectura, **no ejecutados** (falta `vhs`).
-- `assets/demo/magi.gif` versionado: sin grabar. Mientras no exista, `repositorio_publico` falla en dos pruebas (enlace roto y falta del GIF): es la señal buscada.
-- **Publicación (la hace el desarrollador):** ajustes y secretos; `v1.6.1`; `android-v0.2.0-rc.1` y `android-v0.2.0`.
+Se marcaron el 21 nov 2026, tras instalar `vhs` 0.12.1 y `ttyd` 1.7.7 (el desarrollador pidió instalarlos):
 
-- **«Todo en verde»:** `fmt`, `clippy`, `cargo deny`, `actionlint`, `shellcheck`, `dist plan`, las pruebas JVM de Android (`./gradlew lint testDebugUnitTest`) y la suite del workspace pasan, **salvo las dos pruebas de `repositorio_publico` que dependen del GIF** (enlace roto y falta del fichero). Se marcará cuando exista el GIF.
+- **La cinta, el inventario y el script de la demo:** ejecutados. `scripts/grabar-demo.sh` compila, arranca el servidor de pruebas aislado, valida la cinta con `vhs validate`, graba y comprueba el tamaño; el entorno se limpia solo (sin procesos ni directorios sueltos).
+- **`assets/demo/magi.gif`:** 536 370 B (límite, 2 MiB), 1200×680, 20,6 s. Se revisaron los fotogramas de los cinco pasos (Flota, Archivos, vuelta con la paleta, Servicios y la paleta con «tun»): solo se ven hosts `demo-*`, `127.0.0.1:12222`, unidades inventadas del servidor de pruebas y la ruta temporal `/tmp/magi-demo.<id>`. Lo único que sale de la máquina que graba es la carga y el número de núcleos de la barra de Flota (`1.9/16`). Con el GIF, `repositorio_publico` pasa entera (9 de 9).
+- **«Todo en verde»:** `fmt`, `clippy`, `cargo deny`, `actionlint`, `shellcheck`, `dist plan`, las pruebas JVM de Android (`./gradlew lint testDebugUnitTest`) y la suite del workspace (la última pasada completa, el 20 nov: 84 binarios y 3 280 pruebas, con las dos de `repositorio_publico` como únicas rojas por faltar el GIF), más `repositorio_publico` repetida el 21 nov con el GIF, en verde. No he repetido la suite entera tras grabar la demo: solo cambiaron el script y el GIF.
 
 ## 6. Pendientes y bloqueos
 
 **Del agente / del entorno**
 
-- **`vhs` y `ttyd` no están instalados:** `sudo pacman -S vhs ttyd` y después `scripts/grabar-demo.sh`; revisa los fotogramas (el sondeo mide la máquina que graba) y que pese ≤ 2 MiB.
+- **Hallazgo H-1, para decidir (no está en el checklist, así que no lo he tocado):** con `tema = "auto"` (el valor por defecto) y sin el tema de Omarchy (`~/.config/omarchy/current/theme/alacritty.toml`: macOS, Linux sin Omarchy o un `HOME` aislado), `tema::cargar` (`src/tema.rs:208`) cae a la paleta de respaldo pero devuelve el error del sistema como aviso, y la barra de estado de Flota enseña `✕ No such file or directory (os error 2)` unos segundos en cada arranque. Salió al revisar los fotogramas de la demo y se reproduce con un entorno completamente vacío. Es anterior a la 9b, pero es lo primero que verá un usuario de macOS. Arreglo propuesto (unas tres líneas, como ya hace `Config::cargar` con `NotFound`): en `"auto"`, un tema que no existe no es un aviso. Llevaría su prueba y una línea en «Sin publicar». Para la demo, `scripts/grabar-demo.sh` fija `tema = "fijo"` en su entorno aislado: el aspecto del GIF no depende de la máquina que graba y no oculta el fallo.
 - **R154 y R159 solo se verifican de forma indirecta:** no hay Dropbear, `dash` ni `mawk` en esta máquina (`shellcheck -s dash` limpio, `tmux` 3.7c real, `gawk`). La CI ejecuta `tmux_real` con el `dash` y el `awk` de Ubuntu.
 - **Pruebas instrumentadas de Android** (emulador) no ejecutadas: solo se reescribió el aviso esperado de `PruebaSincronizacionFicheroAjeno.kt`. La cadena `estado_equipo_danado` de `strings.xml` sigue diciendo «dañado».
 - **La vista SINCRONIZACIÓN no pinta todavía** la línea «Borrados aplazados» ni la fila «✕ rechazado» del mockup §6.4: requería un cambio de interfaz con instantáneas fuera de lo asignado. Los avisos salen en el pie y los aplazados, en CONFLICTOS.
@@ -102,12 +102,12 @@ Las 52 marcadas en `docs/fase9b/magi-fase9b-checklist.md` con su texto exacto. S
 - **Suite completa:** `TZ=UTC cargo test --workspace --locked --no-fail-fast` (con `TMPDIR="$HOME/.cache/tmp"` si `/tmp` se llena). Resultado final (20 nov 2026, tras la revisión adversarial): 84 binarios y 3 280 pruebas en verde, 6 ignoradas. Fallaron dos binarios: `repositorio_publico` (las dos pruebas del GIF, esperado, y una tercera por un texto de mi propio informe que el escáner detectó y ya está corregido) y `tmux_real` (una carrera preexistente de la F16, `el_comando_va_como_dato…`, que comprobaba el pie «terminó con código 0» sin esperarlo; estabilizada y repetida tres veces en verde). Antes, en el Sprint 1, una carrera preexistente de la F17 (apartado 17 de §2).
 - **Pruebas de la fase:** `--test sincronizacion_10b` (raíz y núcleo), `--test sincronizacion_pasada_e2e`, `crates/magi-nucleo` `--test sincronizacion_lector`, `--test tmux_script --test tmux_real`, `--test sesiones_persistentes_servidor` (~50 s), `--test sesiones_persistentes_ui`, `--test sesiones_persistentes_e2e`, `--test repositorio_publico` (con `vhs` ausente falla dos pruebas por el GIF), `--test termux_paquete`, `--test redimensionado` (las instantáneas solo cambian por D370, las etiquetas y la versión).
 - **Controles:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `shellcheck scripts/*.sh crates/magi-nucleo/scripts/*.sh tests/fijos/terminal/tmux packaging/termux/build.sh tests/fijos/termux/falsos/* packaging/aur/generar.sh` (y `-s dash` sobre `terminal_enganche.sh`), `actionlint`, `dist plan --tag v1.6.1` (las notas salen con el resumen bilingüe), el paso de `aur-plantilla` reproducido en local (`makepkg --printsrcinfo`).
-- **Demo:** `scripts/grabar-demo.sh` (necesita `vhs`, `ttyd` y `ffmpeg`; no corre en CI).
+- **Demo:** `scripts/grabar-demo.sh` (necesita `vhs`, `ttyd` y `ffmpeg`; no corre en CI). Ejecutado el 21 nov 2026 con `vhs` 0.12.1 y `ttyd` 1.7.7: tarda unos tres minutos (compila antes) y deja el GIF en `assets/demo/magi.gif`.
 
 ### Pasos del desarrollador, en orden (con lo ya hecho marcado)
 
 0. [x] Rama `fase9b` con S1, S2 y revisión adversarial; informe y checklist al día.
-1. [ ] `sudo pacman -S vhs ttyd` y `scripts/grabar-demo.sh`; revisar los fotogramas y hacer commit de `assets/demo/magi.gif` (≤ 2 MiB).
+1. [x] `vhs` y `ttyd` instalados, demo grabada (536 370 B) y fotogramas revisados; `assets/demo/magi.gif` va en el commit de cierre. Si cambias la cinta o el inventario, repítelo con `scripts/grabar-demo.sh`.
 2. [ ] Confirmar el resumen de `gitleaks` (§6) y decidir lo de los alias y la prerelease `artefactos-prueba-fase13`.
 3. [ ] Abrir la PR (`gh pr create` si me lo pides) y comprobar que la CI de GitHub pasa entera, incluido el job `termux`.
 4. [ ] Ajustes del repositorio (`docs/publicar.md` §4, paso 1): avisos privados, Dependabot de seguridad sin `dependabot.yml`, regla de `main` con los ocho checks, borrar las ramas al fusionar y las ya fusionadas, issues, descripción y temas.

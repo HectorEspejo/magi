@@ -88,6 +88,12 @@ ssh-keygen -q -t ed25519 -N '' -C 'demo' -f "$HOME/.ssh/id_demo"
 echo '[127.0.0.1]:12222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMDUg4hwJY3WuFnQXmPzlo2c28c7JgaJ2zkxyf8OGHJs' >"$HOME/.ssh/known_hosts"
 chmod 600 "$HOME/.ssh/known_hosts"
 
+# Tema fijo: el aspecto de la animación no depende de la máquina que graba (sin
+# Omarchy, el tema «auto» no encuentra su paleta y avisa en la barra de estado).
+mkdir -p "$XDG_CONFIG_HOME/magi"
+printf 'tema = "fijo"\n' >"$XDG_CONFIG_HOME/magi/config.toml"
+chmod 600 "$XDG_CONFIG_HOME/magi/config.toml"
+
 echo "==> Importando el inventario de ejemplo"
 magi importar "$raiz/assets/demo/inventario"
 

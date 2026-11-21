@@ -50,8 +50,8 @@
 - [x] `docs/manual/estado.md`: qué se ha probado a mano y qué no, por plataforma y por fase, con la fecha de cada validación
 - [x] Las referencias al README antiguo apuntan al manual: `CLAUDE.md`, el JSON de `magi sesiones`, la ayuda y los documentos de publicación
 - [x] `repositorio_publico` comprueba también los enlaces relativos y las anclas de los dos README, `CONTRIBUTING*.md`, `SECURITY.md`, `docs/README.md`, `docs/manual/` y `docs/publicar*.md`, sin red
-- [ ] `assets/demo/magi.tape` (VHS), `assets/demo/inventario` con tres hosts de nombres inventados contra el servidor de pruebas del repositorio y `scripts/grabar-demo.sh`, que lo arranca en un entorno aislado y graba la animación
-- [ ] `assets/demo/magi.gif` versionado, de 2 MiB como mucho, con texto alternativo en los dos README y sin ningún dato real
+- [x] `assets/demo/magi.tape` (VHS), `assets/demo/inventario` con tres hosts de nombres inventados contra el servidor de pruebas del repositorio y `scripts/grabar-demo.sh`, que lo arranca en un entorno aislado y graba la animación
+- [x] `assets/demo/magi.gif` versionado, de 2 MiB como mucho, con texto alternativo en los dos README y sin ningún dato real
 
 ## Versiones y CHANGELOG
 - [x] Versión 1.5.1 del escritorio: `Cargo.toml`, `FECHA_DE_VERSION`, la DA2 de `tui_prueba` (`10501`), las instantáneas `servidor_anterior_*` y `assets/` regenerado
@@ -82,12 +82,12 @@
 - [x] `android-release.yml` con la verificación `gh attestation verify … --repo HectorEspejo/magi`
 
 ## Calidad
-- [ ] Todo en verde: `TZ=UTC cargo test --workspace --locked`, las pruebas JVM de Android, `fmt`, `clippy`, `cargo deny`, `actionlint` y `shellcheck`; las instantáneas de redimensionado, sin cambios salvo las de los retoques de D370
+- [x] Todo en verde: `TZ=UTC cargo test --workspace --locked`, las pruebas JVM de Android, `fmt`, `clippy`, `cargo deny`, `actionlint` y `shellcheck`; las instantáneas de redimensionado, sin cambios salvo las de los retoques de D370
 - [x] Revisión adversarial de cierre (T31, T54) de las correcciones de la sincronización, el cierre de la F16 y la publicación (workflows, referencias y datos), con su informe en `docs/fase9b/magi-fase9b-revision-adversarial.md`
 - [x] El informe de implementación lista los pasos del desarrollador en orden, con lo que ya esté hecho marcado
 
 ---
 
-**Progreso Fase 9b:** 52 / 58 funcionalidades
+**Progreso Fase 9b:** 55 / 58 funcionalidades
 
-**Total MAGI (Fases 1-17 y 9b):** 1363 / 1447 funcionalidades
+**Total MAGI (Fases 1-17 y 9b):** 1366 / 1447 funcionalidades
