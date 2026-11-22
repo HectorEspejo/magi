@@ -1,6 +1,6 @@
 # MAGI - Fase 9b: Primera Publicación · Informe de implementación
 
-> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado (21 nov 2026): **implementada y cerrada por el agente, a falta de lo que solo puede hacer el desarrollador** (los pasos de publicación). La demo se grabó el 21 nov, ya con `vhs` instalado. Checklist **55 / 58**. Rama `fase9b`, que parte de `main` con la F17 ya fusionada (`9227b33`, versión 1.6.0): versión **1.6.1**.
+> Documento vivo: se actualiza en cada sesión, nunca se regenera. Estado (22 nov 2026): **implementada y cerrada por el agente, a falta de lo que solo puede hacer el desarrollador** (los pasos de publicación). La candidata `v1.6.1-rc.1` salió el 21 nov (prerelease, verificada) y el desarrollador la dio por buena el 22 nov; la estable `v1.6.1` sale con Homebrew y AUR apagados (desviación 19). La demo se grabó el 21 nov, ya con `vhs` instalado. Checklist **55 / 58**. Rama `fase9b`, que parte de `main` con la F17 ya fusionada (`9227b33`, versión 1.6.0): versión **1.6.1**.
 
 ## 1. Resumen de lo implementado
 
@@ -33,6 +33,8 @@ Dos sprints, un commit por sprint sobre un contrato fijado antes (`490afc6` entr
 16. **`gitleaks` no da «no leaks found»:** 14 hallazgos, todos en ficheros de pruebas (ver §6). `docs/publicar.md` §2 deja de esperar «no leaks found» y cuenta el resultado.
 17. **Se estabilizaron dos pruebas con carreras preexistentes, sin tocar código de producción:** `una_pestana_caida_no_mantiene_el_wake_lock_…` (`termux_servidor`, F17: la marca del wake lock se quita después de la orden de soltar y la prueba la comprobaba sin esperar; fallaba 2 de cada 6) y `el_comando_va_como_dato_y_nunca_se_interpola_en_el_envoltorio` (`tmux_real`, F16: comprobaba el pie «terminó con código 0» sin esperarlo; fallaba con la máquina cargada).
 18. **Cambios fuera de la lista del checklist, necesarios para que lo pedido funcione:** la consulta del servidor no se hace si no hay clave (no hay borrados que decidir); un equipo `danado` vuelve a `al_dia` si su fichero recupera el hash ya importado; el lector del móvil cuenta `incompletos`; `socket_en_otra_ruta` (NUC-3); `interpretar_terminar` y `pedir_recomprobacion` (S-02 y C9B-1); la dedupe de avisos de fichas ilegibles lleva un registro estático acotado a 256 filas.
+19. **Homebrew y AUR quedan apagados en la primera release (orden del desarrollador, 22 nov 2026: «no vamos a usar aur y homebrew aún»).** Los jobs `publish-homebrew-formula` y `custom-publicar-aur` de `release.yml` llevan ahora `vars.PUBLICAR_HOMEBREW == 'true'` y `vars.PUBLICAR_AUR == 'true'` en su `if`: sin esas variables del repositorio salen «skipped» (`announce` lo acepta) y la release no depende del tap ni de una cuenta de AUR que no existen. Es un ajuste a mano más de `release.yml` (anotado en su cabecera y en `docs/publicar.md` §5); `dist-workspace.toml` no cambia, así que `dist plan` sigue igual. Para activarlos, el desarrollador crea el tap o la cuenta de AUR, sus secretos y la variable; una release ya publicada no los vuelve a lanzar. El README, el manual de instalación, `SECURITY.md`, el CHANGELOG y `estado.md` dicen «todavía no publicados» en vez de dar `yay` y `brew`, que fallarían.
+20. **`url` 2.5.8 → 2.5.9 el 22 nov 2026 (RUSTSEC-2026-0592).** Un aviso nuevo de RustSec (desbordamiento de pila en `Url::origin()` con URL `blob:` anidadas) hizo fallar el job `deny` de la PR de la estable. Se sube solo `url` (y su dependencia `form_urlencoded` 1.2.3) con `cargo update -p url --precise 2.5.9`, sin tocar ninguna versión fijada con `=`; la usan IronRDP, `sspi` y `reqwest` (escritorios remotos) y MAGI no le pasa URL de fuera. `cargo deny check` queda en verde y las pruebas de RDP pasan.
 
 ## 3. Estructura de archivos creada/modificada
 
@@ -94,7 +96,7 @@ Se marcaron el 21 nov 2026, tras instalar `vhs` 0.12.1 y `ttyd` 1.7.7 (el desarr
 - **El historial público lleva tu correo personal** en 18 merges hechos desde la web de GitHub (D391: no se reescribe).
 - **Esta rama no ha pasado por la CI de GitHub** (los siete jobs de `ci.yml` y los de `android.yml`), ni el job `termux`, que se disparará con esta PR por tocar `README.md` y `Cargo.toml`.
 
-**Para el analista** (entregar este informe antes de especificar la siguiente fase): las 18 desviaciones de §2, en especial 1 (la base ya tenía la F17: la 9b sale como 1.6.1), 2 (el manual lleva `termux.md`), 4 (los aplazados no se reintentan), 5 (falta el informe v1.2 de la F16), 13 (la regla de `main` y los nombres de los checks) y 16 (`gitleaks`); y que la 9b hace la revisión adversarial de cierre de la F16, que se había saltado.
+**Para el analista** (entregar este informe antes de especificar la siguiente fase): las 20 desviaciones de §2, en especial 1 (la base ya tenía la F17: la 9b sale como 1.6.1), 2 (el manual lleva `termux.md`), 4 (los aplazados no se reintentan), 5 (falta el informe v1.2 de la F16), 13 (la regla de `main` y los nombres de los checks) y 16 (`gitleaks`); y que la 9b hace la revisión adversarial de cierre de la F16, que se había saltado.
 
 ## 7. Ejecución y pruebas
 
@@ -109,15 +111,15 @@ Se marcaron el 21 nov 2026, tras instalar `vhs` 0.12.1 y `ttyd` 1.7.7 (el desarr
 0. [x] Rama `fase9b` con S1, S2 y revisión adversarial; informe y checklist al día.
 1. [x] `vhs` y `ttyd` instalados, demo grabada (536 370 B) y fotogramas revisados; `assets/demo/magi.gif` va en el commit de cierre. Si cambias la cinta o el inventario, repítelo con `scripts/grabar-demo.sh`.
 2. [ ] Confirmar el resumen de `gitleaks` (§6) y decidir lo de los alias y la prerelease `artefactos-prueba-fase13`.
-3. [ ] Abrir la PR (`gh pr create` si me lo pides) y comprobar que la CI de GitHub pasa entera, incluido el job `termux`.
+3. [x] PR #19 abierta; la CI de GitHub pasó entera (siete jobs de `ci.yml` y el job `termux`); solo cae el humo de Android, que falla en `main` desde la PR #11 por el guion del job.
 4. [ ] Ajustes del repositorio (`docs/publicar.md` §4, paso 1): avisos privados, Dependabot de seguridad sin `dependabot.yml`, regla de `main` con los ocho checks, borrar las ramas al fusionar y las ya fusionadas, issues, descripción y temas.
 5. [ ] Comprobar que `magi-ssh-bin` sigue libre en AUR y de quién es la organización anterior (R182; `docs/README.md` da su nombre; si está libre, créala vacía para reservarla).
-6. [ ] Crear `HectorEspejo/homebrew-tap` y el secreto `HOMEBREW_TAP_TOKEN`.
-7. [ ] Crear la cuenta de AUR, su clave dedicada y el secreto `AUR_SSH_PRIVATE_KEY`.
+6. [ ] *(Aplazado: Homebrew está apagado, desviación 19.)* Crear `HectorEspejo/homebrew-tap`, el secreto `HOMEBREW_TAP_TOKEN` y la variable `PUBLICAR_HOMEBREW=true`.
+7. [ ] *(Aplazado: AUR está apagado, desviación 19.)* Crear la cuenta de AUR, su clave dedicada, el secreto `AUR_SSH_PRIVATE_KEY` y la variable `PUBLICAR_AUR=true`.
 8. [ ] Crear el keystore de la app y sus cuatro secretos (`docs/publicar-android.md` §3), si no existen ya.
 9. [ ] **Guion corto de macOS** (abajo).
-10. [ ] Fusionar la 9b con la CI en verde.
-11. [ ] **Candidata del escritorio:** PR con `version = "1.6.1-rc.1"` (y `Cargo.lock`, la DA2 `10600`, las instantáneas y la página man: `docs/publicar.md` §4, paso 8), etiqueta `v1.6.1-rc.1`. Debe salir una prerelease con tarballs, atestaciones y el `.deb`, sin tocar Homebrew ni AUR. Instalar el `.deb` en Termux con el guion de la F17.
+10. [x] Fusionada la 9b (PR #19, 21 nov 2026).
+11. [x] **Candidata del escritorio** (publicada el 21 nov 2026 y dada por buena por el desarrollador el 22 nov; no se anota aquí qué probó a mano): PR con `version = "1.6.1-rc.1"` (y `Cargo.lock`, la DA2 `10600`, las instantáneas y la página man: `docs/publicar.md` §4, paso 8), etiqueta `v1.6.1-rc.1`. Debe salir una prerelease con tarballs, atestaciones y el `.deb`, sin tocar Homebrew ni AUR. Instalar el `.deb` en Termux con el guion de la F17.
 12. [ ] **Estable:** PR que vuelve a `version = "1.6.1"` (fecha del día en `## [1.6.1] - fecha` del CHANGELOG), etiqueta `v1.6.1`; vigilar `release.yml` y Release Termux; comprobaciones de `docs/publicar.md` §9 (`yay`, `brew`, tarball con `sha256sum -c` y `gh attestation verify`). Después, actualizar `packaging/termux/build.sh` (`TERMUX_PKG_VERSION`) y proponer la receta a TUR (`docs/publicar-termux.md`).
 13. [ ] **App:** PR con `android/version.properties` a `0.2.0-rc.1`, etiqueta `android-v0.2.0-rc.1`, **guion corto de la app** (abajo) en el plegable, PR a `0.2.0` y etiqueta `android-v0.2.0` (nunca «Latest»).
 

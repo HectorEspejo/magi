@@ -32,9 +32,8 @@ plataforma y por fase, está en [`docs/manual/estado.md`](docs/manual/estado.md)
 
 | Plataforma | Cómo |
 |---|---|
-| Arch y Omarchy | `yay -S magi-ssh-bin` |
-| macOS | `brew install hectorespejo/tap/magi-ssh` |
-| Otros Linux | tarball de [la última release](https://github.com/HectorEspejo/magi/releases/latest) |
+| Linux y macOS | tarball de [la última release](https://github.com/HectorEspejo/magi/releases/latest) |
+| Arch y Omarchy (AUR), macOS (Homebrew) | todavía no publicados |
 | Android | [Obtainium](https://github.com/ImranR98/Obtainium) con la URL de este repositorio y las etiquetas `android-v` |
 | Termux | el `.deb` de la release (ver [Termux](docs/manual/termux.md)) |
 

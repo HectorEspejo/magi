@@ -9,8 +9,9 @@ qué versiones se mantienen y qué queda dentro del alcance.
 Se mantiene la última versión MINOR de la serie 1.x del escritorio (hoy, la
 1.6.x) y la última de la app Android, que está en beta (hoy, la 0.2.x). Las
 versiones anteriores dejan de recibir correcciones de seguridad cuando se
-publica una nueva: las actualizaciones llegan por el gestor de paquetes (AUR o
-Homebrew), por el tarball de la release o, en Android, por Obtainium.
+publica una nueva: las actualizaciones llegan por el tarball de la release (y,
+cuando se publiquen, por el gestor de paquetes: AUR o Homebrew) o, en Android,
+por Obtainium.
 
 | Versión | Soportada |
 |---|---|

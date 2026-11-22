@@ -7,7 +7,7 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ## [Sin publicar]
 
-## [1.6.1] - 2026-11-20
+## [1.6.1] - 2026-11-22
 
 **Resumen.** Primera versión publicada de MAGI: gestor SSH de terminal para Linux y macOS (y dentro de Termux, en Android), con pestañas y sesiones persistentes, SFTP, túneles, snippets con deliberación, sincronización cifrada entre equipos, escritorios remotos y servicios.
 
@@ -26,7 +26,7 @@ Primera versión publicada: reúne lo que se numeró durante el desarrollo (de l
 - **Escritorio remoto:** RDP, VNC y voxl en un visor web local.
 - **Servicios y contenedores:** systemd, Docker y Podman con sus logs, desde la vista Servicios.
 - **Termux:** MAGI dentro de Android, con el llavero cifrado con frase maestra, avisos y wake lock.
-- **Distribución:** AUR (`magi-ssh-bin`), Homebrew (`hectorespejo/tap/magi-ssh`), tarballs verificables y el `.deb` de Termux.
+- **Distribución:** tarballs verificables y el `.deb` de Termux. AUR (`magi-ssh-bin`) y Homebrew (`hectorespejo/tap/magi-ssh`) están preparados, pero no se publican todavía.
 
 ### Añadido
 
@@ -412,8 +412,8 @@ Primera versión publicada: reúne lo que se numeró durante el desarrollo (de l
 - Sobrescribir un fichero remoto es atómico (`posix-rename@openssh.com`, o tres
   pasos con deshacer) y conserva los permisos del original.
 - Las versiones publicadas salen solo de CI a partir de un tag, con SHA-256 y
-  atestaciones de procedencia de GitHub; Homebrew y AUR se actualizan en cada
-  release estable.
+  atestaciones de procedencia de GitHub; Homebrew y AUR se actualizarán en cada
+  release estable cuando se activen (de momento no se publican).
 - MAGI pasa a ser software libre bajo doble licencia MIT OR Apache-2.0.
 
 ### Corregido
@@ -661,6 +661,9 @@ Primera versión publicada: reúne lo que se numeró durante el desarrollo (de l
 - Releases solo desde CI con atestaciones de procedencia, `cargo deny` en la
   integración continua y auditoría de secretos y datos reales antes de hacer
   público el repositorio.
+- `url` sube a 2.5.9 (RUSTSEC-2026-0592, desbordamiento de pila en
+  `Url::origin()` con URL `blob:` anidadas): lo usan IronRDP, `sspi` y `reqwest`
+  en los escritorios remotos, que no le pasan URL de fuera.
 
 [Sin publicar]: https://github.com/HectorEspejo/magi/compare/v1.6.1...HEAD
 [1.6.1]: https://github.com/HectorEspejo/magi/releases/tag/v1.6.1

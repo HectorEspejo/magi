@@ -29,7 +29,11 @@
 #     en vez de todos los secretos del repositorio;
 #   * no dispararse en pull requests (menos superficie y ningún permiso de
 #     escritura en PRs) y comprobar con cargo metadata --locked que el
-#     Cargo.lock del tag está al día antes de compilar.
+#     Cargo.lock del tag está al día antes de compilar;
+#   * publicar en el tap de Homebrew y en AUR solo si el desarrollador activa la
+#     variable del repositorio PUBLICAR_HOMEBREW o PUBLICAR_AUR (con el valor
+#     true): hasta entonces esos jobs salen «skipped» y la release no depende
+#     de un tap ni de una cuenta de AUR que aún no existen.
 # Si actualizas dist, regenera el fichero y vuelve a aplicar estos ajustes.
 
 name: Release
@@ -350,7 +354,8 @@ jobs:
       PLAN: ${{ needs.plan.outputs.val }}
       GITHUB_USER: "axo bot"
       GITHUB_EMAIL: "admin+bot@axo.dev"
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    # Solo con PUBLICAR_HOMEBREW=true (variable del repositorio) y en versiones estables.
+    if: ${{ vars.PUBLICAR_HOMEBREW == 'true' && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -394,7 +399,8 @@ jobs:
     needs:
       - plan
       - host
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    # Solo con PUBLICAR_AUR=true (variable del repositorio) y en versiones estables.
+    if: ${{ vars.PUBLICAR_AUR == 'true' && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     uses: ./.github/workflows/publicar-aur.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
