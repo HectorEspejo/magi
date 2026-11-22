@@ -38,6 +38,7 @@ use pulldown_cmark::{
 use crate::comprobar::analizar_https;
 use crate::enlaces;
 use crate::error::{ErrorWeb, Resultado};
+use crate::ordenes::es_invisible_que_engana;
 
 /// Tope de un CHANGELOG (2 MiB) y de una entrada (512 KiB).
 pub const TOPE_CHANGELOG: usize = 2 * 1024 * 1024;
@@ -836,13 +837,10 @@ fn nivel_de_encabezado(nivel: HeadingLevel) -> u8 {
 }
 
 /// Un carácter que no es texto: de control (salvo el salto de línea y el
-/// tabulador), o de los que cambian el orden de lectura o no se ven.
+/// tabulador), o de los que cambian el orden de lectura o no se ven (el mismo
+/// conjunto que en las capturas y en los mensajes: `ordenes::es_invisible_que_engana`).
 fn es_invisible(c: char) -> bool {
-    (c.is_control() && !matches!(c, '\n' | '\t'))
-        || matches!(
-            c,
-            '\u{061c}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
-        )
+    (c.is_control() && !matches!(c, '\n' | '\t')) || es_invisible_que_engana(c)
 }
 
 /// Escapa `& < > " '` (vale también dentro de un atributo entrecomillado) y quita

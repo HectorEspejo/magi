@@ -20,6 +20,10 @@
 MAGI se distribuye como paquete **`magi-ssh`**; el comando sigue siendo
 `magi`. Primera versión pública: **1.6.1**.
 
+Las descargas de cada plataforma, con su suma SHA-256 y cómo verificarlas,
+también están en la [web de MAGI](https://magi.erratia.com/descargas/), que
+además publica este [manual](https://magi.erratia.com/manual/).
+
 ### Omarchy y Arch (AUR)
 
 **Todavía no está publicado.** El paquete de AUR está preparado, pero aún no se

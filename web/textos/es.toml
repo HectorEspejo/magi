@@ -109,7 +109,7 @@ etiqueta = "Certificado de firma (SHA-256)"
 [descargas.verificar]
 titulo = "Verificar"
 introduccion = "Descarga el archivo y su `.sha256` en la misma carpeta y comprueba la suma y la procedencia antes de instalarlo. Para la procedencia hace falta el GitHub CLI (`gh`)."
-huella = "La huella SHA-256 del certificado que imprime `apksigner` tiene que ser esta:"
+huella = "La huella SHA-256 del certificado tiene que ser esta (`apksigner` la imprime en minúsculas y sin los dos puntos; compárala sin distinguir eso):"
 nota_macos = "En macOS, si no tienes `sha256sum`, usa `shasum -a 256 -c` con el mismo archivo `.sha256`."
 fallo_antes = "Si la suma, la procedencia o el certificado no coinciden, no instales el archivo y avisa con "
 fallo_enlace = "un aviso privado de seguridad"

@@ -249,13 +249,13 @@ fn las_dos_paletas_definen_los_mismos_tokens() {
     }
 }
 
-#[test]
-fn las_dos_paletas_cumplen_el_contraste() {
-    let Paletas { clara, oscura } = paletas();
+/// Contrastes de las dos paletas: la tabla para el mensaje y los que fallan.
+fn evaluar_contraste(paletas: &Paletas) -> (String, Vec<String>) {
+    let Paletas { clara, oscura } = paletas;
     let mut tabla = String::new();
     let mut fallos = Vec::new();
 
-    for (nombre, paleta) in [("clara", &clara), ("oscura", &oscura)] {
+    for (nombre, paleta) in [("clara", clara), ("oscura", oscura)] {
         tabla.push_str(&format!("\npaleta {nombre}\n"));
         for fondo in FONDOS {
             let color_fondo = color(paleta, fondo);
@@ -293,7 +293,12 @@ fn las_dos_paletas_cumplen_el_contraste() {
             "borde-decorativo", "fondo"
         ));
     }
+    (tabla, fallos)
+}
 
+#[test]
+fn las_dos_paletas_cumplen_el_contraste() {
+    let (tabla, fallos) = evaluar_contraste(&paletas());
     assert!(
         fallos.is_empty(),
         "contraste insuficiente:\n  {}\n{tabla}",
@@ -409,4 +414,92 @@ fn las_fuentes_se_declaran_como_dice_el_informe() {
     assert!(
         css.contains("font-family: \"JetBrains Mono\", \"MAGI Simbolos\", ui-monospace, monospace")
     );
+}
+
+// ---------------------------------------------------------------------------
+// La paleta del tema de mdBook (`web/manual/theme/css/variables.css`)
+// ---------------------------------------------------------------------------
+
+/// Las dos paletas del manual: `light`, `rust` y la ausencia de JavaScript, la clara;
+/// `coal`, `navy` y `ayu`, la oscura. Son los mismos diez tokens que los de la web.
+fn paletas_del_manual() -> Paletas {
+    let ruta = raiz_del_repositorio().join("web/manual/theme/css/variables.css");
+    let css = quitar_comentarios(
+        &fs::read_to_string(&ruta)
+            .unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", ruta.display())),
+    );
+    let clara = css.find(".light,").expect("falta la regla de .light");
+    let oscura = css.find(".coal,").expect("falta la regla de .coal");
+    Paletas {
+        clara: tokens(bloque_desde(&css, clara)),
+        oscura: tokens(bloque_desde(&css, oscura)),
+    }
+}
+
+#[test]
+fn las_dos_paletas_del_manual_definen_los_mismos_tokens() {
+    let Paletas { clara, oscura } = paletas_del_manual();
+    for token in TOKENS {
+        assert!(
+            clara.contains_key(token),
+            "la paleta clara del manual no define --{token}"
+        );
+        assert!(
+            oscura.contains_key(token),
+            "la paleta oscura del manual no define --{token}"
+        );
+    }
+}
+
+#[test]
+fn la_paleta_del_manual_cumple_el_contraste() {
+    let (tabla, fallos) = evaluar_contraste(&paletas_del_manual());
+    assert!(
+        fallos.is_empty(),
+        "contraste insuficiente en el manual:\n  {}\n{tabla}",
+        fallos.join("\n  ")
+    );
+}
+
+#[test]
+fn la_paleta_oscura_del_manual_coincide_con_tema_rs() {
+    let tema = fs::read_to_string(raiz_del_repositorio().join("src/tema.rs"))
+        .expect("no se pudo leer src/tema.rs");
+    let oscura = paletas_del_manual().oscura;
+    for (constante, token) in [
+        ("FONDO", "fondo"),
+        ("TEXTO", "texto"),
+        ("ACENTO", "acento"),
+        ("CORRECTO", "correcto"),
+        ("CRITICO", "critico"),
+        ("INACTIVO", "borde-decorativo"),
+    ] {
+        assert_eq!(
+            color(&oscura, token),
+            rgb_de_constante(&tema, constante),
+            "--{token} de la paleta oscura del manual no es {constante} de src/tema.rs"
+        );
+    }
+    assert_eq!(
+        color(&oscura, "secundario"),
+        parsear_hex("#9A968C").expect("gris")
+    );
+}
+
+#[test]
+fn la_paleta_del_manual_es_la_misma_que_la_de_la_web() {
+    let del_manual = paletas_del_manual();
+    let de_la_web = paletas();
+    for token in TOKENS {
+        assert_eq!(
+            color(&del_manual.clara, token),
+            color(&de_la_web.clara, token),
+            "--{token} de la paleta clara no es el de la web"
+        );
+        assert_eq!(
+            color(&del_manual.oscura, token),
+            color(&de_la_web.oscura, token),
+            "--{token} de la paleta oscura no es el de la web"
+        );
+    }
 }

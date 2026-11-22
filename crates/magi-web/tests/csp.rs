@@ -609,7 +609,14 @@ fn insertar_y_extraer_no_hacen_panico_con_basura() {
     let mut con_exito = 0;
     for _ in 0..20_000 {
         let n = 1 + siguiente() % 20;
-        let mut s = String::new();
+        // La mitad de las veces, con el comienzo que sí admite la inserción (antes de
+        // `<head>` solo caben un doctype, comentarios y `<html>`): así la prueba alcanza
+        // `insertar` con basura detrás.
+        let mut s = if siguiente() % 2 == 0 {
+            String::from("<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\">")
+        } else {
+            String::new()
+        };
         for _ in 0..n {
             s.push_str(piezas[siguiente() % piezas.len()]);
         }
@@ -633,6 +640,40 @@ fn insertar_y_extraer_no_hacen_panico_con_basura() {
 // ---------------------------------------------------------------------------
 // Revisión adversarial
 // ---------------------------------------------------------------------------
+
+/// Revisión CSP-03: con algo delante de `<head>` que no es un doctype, un comentario ni
+/// `<html>`, el navegador ignora el `<head>` (o lo deja en otro sitio), el `<meta>` de la
+/// CSP queda fuera y no se aplica: `insertar` no puede decir que la puso.
+#[test]
+fn con_algo_antes_de_head_no_se_inserta_la_csp() {
+    let cuerpo = "<head><meta charset=\"utf-8\"><title>t</title></head><p>hola</p>";
+    for antes in [
+        "<html><body>",
+        "x",
+        "<template>",
+        "<svg>",
+        "<html><html>",
+        "<p>",
+        "<div>",
+    ] {
+        let html = format!("<!doctype html>{antes}{cuerpo}");
+        let e = insertar(&html, false).expect_err(&html);
+        assert!(e.to_string().contains("antes de <head>"), "{antes}: {e}");
+    }
+    // Un `<noscript>` sin cerrar ni siquiera se tokeniza: también falla cerrado.
+    insertar(&format!("<!doctype html><noscript>{cuerpo}"), false).unwrap_err();
+    // Lo que sí: doctype, comentarios, blancos y un solo `<html>` con atributos.
+    for bien in [
+        "<!doctype html><html lang=\"es\">",
+        "<!DOCTYPE HTML>\n<!-- hecho con mdBook -->\n<html lang=\"es\" class=\"x\" dir=\"ltr\">\n  ",
+        "<html>",
+        "",
+    ] {
+        let html = format!("{bien}{cuerpo}");
+        let nueva = insertar(&html, false).unwrap_or_else(|e| panic!("{bien:?}: {e}"));
+        assert!(extraer(&nueva).unwrap().is_some(), "{bien:?}");
+    }
+}
 
 #[test]
 fn una_csp_con_el_nombre_escrito_con_entidades_se_reconoce_y_se_sustituye() {

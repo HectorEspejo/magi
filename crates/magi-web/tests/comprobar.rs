@@ -120,7 +120,7 @@ fn el_sitio_malo_da_un_hallazgo_por_cada_defecto() {
 
     // La página sana y las imágenes no dan nada.
     assert_eq!(cuenta("index.html"), 0, "{}", listar(&h));
-    assert_eq!(cuenta("capturas/ok.svg"), 0);
+    assert_eq!(cuenta("favicon.svg"), 0);
 
     // enlaces/: roto, dos anclas, imagen rota, ruta absoluta, subida por encima de la raíz y `%2F`.
     debe_haber(&h, "enlaces/index.html", "enlace roto: «no-existe.html»");
@@ -433,17 +433,77 @@ fn un_svg_con_script_se_detecta_aunque_no_sea_una_pagina() {
             &pagina_propia("", "<img src=\"a.svg\" alt=\"\">"),
         ),
         (
-            "a.svg",
+            "favicon.svg",
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><SCRIPT>alert(1)</SCRIPT></svg>",
         ),
         (
-            "b.svg",
+            "manual/favicon-0a1b2c3d.svg",
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>",
         ),
     ]);
     let h = comprobar(dir.path());
-    debe_haber(&h, "a.svg", "lleva <script>");
-    assert!(de_fichero(&h, "b.svg").is_empty());
+    debe_haber(&h, "favicon.svg", "lleva <script>");
+    assert!(
+        de_fichero(&h, "manual/favicon-0a1b2c3d.svg").is_empty(),
+        "{}",
+        listar(&h)
+    );
+}
+
+/// Revisión CSP-01: la lista negra de texto no cierra un SVG (`<s:script>`, entidades
+/// de DTD…) y un SVG abierto directamente se ejecuta con el origen de la web, sin CSP.
+/// Solo se admiten los que la web conoce; cualquier otro SVG o XML es un hallazgo, sea
+/// lo que sea lo que lleve dentro.
+#[test]
+fn un_svg_o_xml_que_la_web_no_conoce_es_un_hallazgo_aunque_parezca_inocente() {
+    let dir = sitio(&[
+        (
+            "index.html",
+            &pagina_propia("", "<img src=\"figura.svg\" alt=\"\">"),
+        ),
+        (
+            "figura.svg",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:s=\"http://www.w3.org/2000/svg\"><s:script>alert(1)</s:script></svg>",
+        ),
+        (
+            "entidad.svg",
+            "<!DOCTYPE svg [<!ENTITY e \"&#60;script&#62;alert(1)&#60;/script&#62;\">]><svg xmlns=\"http://www.w3.org/2000/svg\">&e;</svg>",
+        ),
+        ("inocente.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
+        ("manual/mala.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
+        // Casi el nombre del favicon de mdBook: ni el hash de 8 hexadecimales ni la carpeta.
+        ("manual/favicon-xyz.svg", "<svg/>"),
+        ("favicon-0a1b2c3d.svg", "<svg/>"),
+        ("manual/otra/favicon-0a1b2c3d.svg", "<svg/>"),
+        ("datos.xml", "<x/>"),
+    ]);
+    let h = comprobar(dir.path());
+    for fichero in [
+        "figura.svg",
+        "entidad.svg",
+        "inocente.svg",
+        "manual/mala.svg",
+        "manual/favicon-xyz.svg",
+        "favicon-0a1b2c3d.svg",
+        "manual/otra/favicon-0a1b2c3d.svg",
+        "datos.xml",
+    ] {
+        debe_haber(&h, fichero, "SVG o XML no previsto");
+    }
+}
+
+/// Revisión CSP-02: un `<iframe srcdoc>` lleva marcado que `comprobar` no examina.
+#[test]
+fn un_iframe_srcdoc_es_un_hallazgo() {
+    let dir = sitio(&[(
+        "index.html",
+        &pagina_propia(
+            "",
+            "<iframe srcdoc=\"&lt;a href=https://evil.example/ target=_top&gt;x&lt;/a&gt;\"></iframe>",
+        ),
+    )]);
+    let h = comprobar(dir.path());
+    debe_haber(&h, "index.html", "srcdoc");
 }
 
 // ---------------------------------------------------------------------------
@@ -1531,35 +1591,38 @@ fn un_svg_enorme_no_se_lee_entero() {
         pagina_propia("", "<p>x</p>").as_bytes(),
     );
     // Disperso: no ocupa disco ni se llega a leer.
-    let f = fs::File::create(dir.path().join("grande.svg")).unwrap();
+    let f = fs::File::create(dir.path().join("favicon.svg")).unwrap();
     f.set_len(33 * 1024 * 1024).unwrap();
     drop(f);
     let h = comprobar(dir.path());
-    debe_haber(&h, "grande.svg", "demasiado grande");
+    debe_haber(&h, "favicon.svg", "demasiado grande");
 }
 
 #[test]
 fn un_svg_con_manejadores_o_javascript_se_detecta_aunque_no_lleve_script() {
     // Abierto directamente, `<svg onload>` ejecuta código sin ningún `<script>`.
+    // Con los nombres que la web conoce (el favicon propio y el de mdBook con su hash).
     let dir = sitio(&[
-        ("a.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\"/>"),
-        ("b.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect OnClick = 'x()'/></svg>"),
+        ("favicon.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\"/>"),
+        ("manual/favicon-0000000b.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect OnClick = 'x()'/></svg>"),
         (
-            "c.svg",
+            "manual/favicon-0000000c.svg",
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\"JavaScript:alert(1)\"><rect/></a></svg>",
         ),
-        ("d.xml", "<x><y\nonmouseover\n=\"1\"/></x>"),
         // Palabras que contienen «on» y letras seguidas de `=` que no son manejadores.
         (
-            "e.svg",
+            "manual/favicon-0000000e.svg",
             "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" fill=\"none\" \
              stroke-width=\"2\" font-family=\"Mono\"><title>una conexion</title><path d=\"M0 0\"/></svg>",
         ),
     ]);
     let h = comprobar(dir.path());
-    debe_haber(&h, "a.svg", "manejador de eventos");
-    debe_haber(&h, "b.svg", "manejador de eventos");
-    debe_haber(&h, "c.svg", "javascript:");
-    debe_haber(&h, "d.xml", "manejador de eventos");
-    assert!(de_fichero(&h, "e.svg").is_empty(), "{}", listar(&h));
+    debe_haber(&h, "favicon.svg", "manejador de eventos");
+    debe_haber(&h, "manual/favicon-0000000b.svg", "manejador de eventos");
+    debe_haber(&h, "manual/favicon-0000000c.svg", "javascript:");
+    assert!(
+        de_fichero(&h, "manual/favicon-0000000e.svg").is_empty(),
+        "{}",
+        listar(&h)
+    );
 }

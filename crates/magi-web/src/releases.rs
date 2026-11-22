@@ -21,7 +21,9 @@ use crate::descargas::{
     activo_unico, elegir, elegir_versiones, release_de, url_descarga, OpcionesDescargas,
 };
 use crate::error::{ErrorWeb, Resultado};
-use crate::ordenes::{ejecutar_con_plazo, texto_seguro, SalidaOrden, PLAZO_RED};
+use crate::ordenes::{
+    ejecutar_con_plazo, ejecutar_sin_variables, texto_seguro, SalidaOrden, PLAZO_RED,
+};
 
 /// Repositorio del que salen las releases.
 pub const REPOSITORIO: &str = "HectorEspejo/magi";
@@ -327,7 +329,15 @@ impl Fuente for FuenteGh {
         }
         let args = argumentos_gh(pagina);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let salida = ejecutar_con_plazo("gh", &args, &[], PLAZO_RED, TOPE_PAGINA_API)?;
+        // `GH_HOST` desviaría la consulta (y el token) a otro servidor de GitHub.
+        let salida = ejecutar_sin_variables(
+            "gh",
+            &args,
+            &[],
+            &["GH_HOST", "GH_REPO"],
+            PLAZO_RED,
+            TOPE_PAGINA_API,
+        )?;
         if !salida.exito() {
             return Err(orden_fallida("gh", &salida));
         }

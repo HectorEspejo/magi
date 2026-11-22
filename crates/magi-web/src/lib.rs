@@ -18,6 +18,8 @@ pub mod enlaces;
 pub mod error;
 pub mod fuentes;
 pub mod html;
+pub mod manual;
+pub mod manual_html;
 pub mod ordenes;
 pub mod paginas;
 pub mod plantillas;

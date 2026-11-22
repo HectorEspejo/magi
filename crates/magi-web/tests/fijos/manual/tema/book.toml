@@ -1,0 +1,7 @@
+[book]
+title = "Manual de ejemplo"
+language = "es"
+src = "src"
+
+[output.html]
+additional-css = ["theme/css/ejemplo.css"]

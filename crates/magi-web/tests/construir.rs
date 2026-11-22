@@ -55,7 +55,7 @@ fn opciones(web: &Path, releases: &Path, salida: &Path) -> OpcionesConstruir {
     OpcionesConstruir {
         web: web.to_path_buf(),
         releases: releases.to_path_buf(),
-        manual: None,
+        manual: fijos().join("manual-html"),
         animacion: None,
         changelog_escritorio: raiz().join("CHANGELOG.md"),
         changelog_app: None,
@@ -97,6 +97,20 @@ fn sin_restos_de_trabajo(carpeta_madre: &Path) {
 }
 
 // ---------------------------------------------------------------------------
+
+/// Un sitio anterior de mentira: lo mínimo que `construir` reconoce como suyo (su
+/// portada, su 404, su favicon y sus carpetas) más una `anterior.html` que prueba que
+/// no se tocó. Devuelve su contenido, para compararlo después.
+fn sitio_anterior(salida: &Path) -> BTreeMap<String, Vec<u8>> {
+    for carpeta in ["en", "estilos", "manual"] {
+        fs::create_dir_all(salida.join(carpeta)).unwrap();
+    }
+    for fichero in ["index.html", "404.html", "favicon.svg"] {
+        fs::write(salida.join(fichero), "web publicada").unwrap();
+    }
+    fs::write(salida.join("anterior.html"), "web publicada").unwrap();
+    contenido(salida)
+}
 
 #[test]
 fn construir_genera_las_paginas_y_los_estaticos() {
@@ -192,8 +206,7 @@ fn construir_dos_veces_da_el_mismo_sitio() {
 fn un_sha256_con_otro_nombre_falla_y_el_sitio_anterior_no_cambia() {
     let t = tempfile::tempdir().unwrap();
     let salida = t.path().join("sitio");
-    fs::create_dir_all(&salida).unwrap();
-    fs::write(salida.join("anterior.html"), "web publicada").unwrap();
+    let antes = sitio_anterior(&salida);
 
     // Con la huella puesta, `completo.json` es válido; `sha_otro_nombre.json` no.
     let web = web_copiada(t.path());
@@ -202,8 +215,7 @@ fn un_sha256_con_otro_nombre_falla_y_el_sitio_anterior_no_cambia() {
         .expect_err("el .sha256 con otro nombre tiene que fallar");
     assert!(matches!(e, ErrorWeb::DatoRaro { .. }), "{e:?}");
 
-    assert_eq!(texto(&salida, "anterior.html"), "web publicada");
-    assert_eq!(fs::read_dir(&salida).unwrap().count(), 1);
+    assert_eq!(contenido(&salida), antes);
     sin_restos_de_trabajo(t.path());
 }
 
@@ -211,8 +223,7 @@ fn un_sha256_con_otro_nombre_falla_y_el_sitio_anterior_no_cambia() {
 fn un_fallo_a_mitad_no_deja_un_sitio_a_medias() {
     let t = tempfile::tempdir().unwrap();
     let salida = t.path().join("sitio");
-    fs::create_dir_all(&salida).unwrap();
-    fs::write(salida.join("anterior.html"), "web publicada").unwrap();
+    let antes = sitio_anterior(&salida);
 
     // Una plantilla rota: el fallo llega después de empezar a generar.
     let web = web_copiada(t.path());
@@ -224,8 +235,7 @@ fn un_fallo_a_mitad_no_deja_un_sitio_a_medias() {
     let e = construir(&opciones(&web, &releases("sin-red.json"), &salida)).unwrap_err();
     assert!(matches!(e, ErrorWeb::Plantilla { .. }), "{e:?}");
 
-    assert_eq!(texto(&salida, "anterior.html"), "web publicada");
-    assert_eq!(contenido(&salida).len(), 1);
+    assert_eq!(contenido(&salida), antes);
     sin_restos_de_trabajo(t.path());
 }
 
@@ -330,7 +340,7 @@ fn el_manual_pasa_por_la_csp_con_los_hashes_de_sus_scripts() {
     let t = tempfile::tempdir().unwrap();
     let salida = t.path().join("sitio");
     let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
-    o.manual = Some(fijos().join("manual-html"));
+    o.manual = fijos().join("manual-html");
 
     let informe = construir(&o).unwrap();
 
@@ -360,7 +370,7 @@ fn un_enlace_simbolico_en_el_manual_se_rechaza() {
 
     let salida = t.path().join("sitio");
     let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
-    o.manual = Some(manual);
+    o.manual = manual;
     let e = construir(&o).unwrap_err();
     assert!(e.to_string().contains("enlace simbólico"), "{e}");
     assert!(!salida.exists());
@@ -377,7 +387,7 @@ fn del_manual_solo_se_copian_las_extensiones_permitidas() {
 
     let salida = t.path().join("sitio");
     let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
-    o.manual = Some(manual);
+    o.manual = manual;
     let informe = construir(&o).unwrap();
 
     assert!(!salida.join("manual/notas.sh").exists());
@@ -494,7 +504,7 @@ fn las_versiones_salen_del_changelog_en_los_dos_idiomas() {
             .contains("href=\"https://github.com/HectorEspejo/magi/releases/tag/android-v0.2.0\""));
     }
 
-    // Con los dos CHANGELOG reales dentro, `comprobar` solo echa en falta el manual:
+    // Con los dos CHANGELOG reales dentro, `comprobar` solo echa en falta capítulos del manual:
     // ningún enlace del CHANGELOG sale de la lista permitida ni apunta a un ancla rota.
     let hallazgos = comprobar_sitio(&salida, &ListaPermitida::por_defecto()).unwrap();
     let ajenos: Vec<String> = hallazgos
@@ -543,8 +553,7 @@ fn faltan_las_capturas_y_la_construccion_se_para_diciendo_cual() {
     let web = web_copiada(t.path());
     fs::remove_file(web.join("capturas/archivos.html")).unwrap();
     let salida = t.path().join("sitio");
-    fs::create_dir_all(&salida).unwrap();
-    fs::write(salida.join("anterior.html"), "web publicada").unwrap();
+    let antes = sitio_anterior(&salida);
     let e = construir(&opciones(&web, &releases("sin-red.json"), &salida))
         .expect_err("falta una captura");
     let mensaje = e.to_string();
@@ -552,7 +561,7 @@ fn faltan_las_capturas_y_la_construccion_se_para_diciendo_cual() {
         mensaje.contains("archivos") && mensaje.contains("generar-capturas.sh"),
         "{mensaje}"
     );
-    assert_eq!(texto(&salida, "anterior.html"), "web publicada");
+    assert_eq!(contenido(&salida), antes);
     sin_restos_de_trabajo(t.path());
 }
 
@@ -663,11 +672,12 @@ fn la_portada_pesa_menos_de_un_megabyte_en_los_dos_idiomas() {
     }
 }
 
-// CONTRATO-S3-ENLACES: con el manual de ejemplo de `tests/fijos/manual-html/`
-// (que no es el real) quedan enlaces rotos a sus capítulos. Al cerrar el Sprint 3
-// esta prueba pasa a construir con el manual de verdad y a exigir cero hallazgos.
+// Con el manual de ejemplo de `tests/fijos/manual-html/` (que solo trae tres páginas)
+// faltan los capítulos a los que enlazan la web y los CHANGELOG, y solo eso. La
+// prueba estricta, con el manual real y mdBook, es
+// `el_sitio_con_el_manual_real_no_tiene_hallazgos` (`tests/manual_mdbook.rs`).
 #[test]
-fn el_sitio_solo_tiene_enlaces_rotos_al_manual_que_aun_no_esta() {
+fn con_el_manual_de_ejemplo_solo_faltan_sus_capitulos() {
     let t = tempfile::tempdir().unwrap();
     let salida = t.path().join("sitio");
     let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
@@ -681,6 +691,232 @@ fn el_sitio_solo_tiene_enlaces_rotos_al_manual_que_aun_no_esta() {
         .collect();
     assert!(
         ajenos.is_empty(),
-        "problemas que no son el manual pendiente: {ajenos:#?}"
+        "problemas que no son capítulos que faltan del manual de ejemplo: {ajenos:#?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// El manual: pie común y lo que choca con la CSP (pista P3B)
+// ---------------------------------------------------------------------------
+
+/// Una copia del manual de ejemplo en `dir`, para poder estropearla.
+fn manual_copiado(dir: &Path) -> PathBuf {
+    let manual = dir.join("manual");
+    copiar(&fijos().join("manual-html"), &manual);
+    manual
+}
+
+#[test]
+fn un_style_ajeno_en_una_pagina_del_manual_para_la_construccion() {
+    let t = tempfile::tempdir().unwrap();
+    let manual = manual_copiado(t.path());
+    let pagina = manual.join("tuneles.html");
+    let html = fs::read_to_string(&pagina).unwrap();
+    assert!(html.contains("<main>"), "el ejemplo ha cambiado");
+    fs::write(
+        &pagina,
+        html.replace("<main>", "<main><p style=\"color: red\">x</p>"),
+    )
+    .unwrap();
+
+    let salida = t.path().join("sitio");
+    let antes = sitio_anterior(&salida);
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = manual;
+    let e = construir(&o).expect_err("un style ajeno en el manual tiene que parar la construcción");
+    let mensaje = e.to_string();
+    assert!(
+        mensaje.contains("manual/tuneles.html") && mensaje.contains("style"),
+        "{mensaje}"
+    );
+    // La web publicada sigue siendo la anterior.
+    assert_eq!(contenido(&salida), antes);
+    sin_restos_de_trabajo(t.path());
+}
+
+#[test]
+fn una_pagina_del_manual_sin_main_para_la_construccion_y_dice_cual() {
+    let t = tempfile::tempdir().unwrap();
+    let manual = manual_copiado(t.path());
+    let pagina = manual.join("instalacion.html");
+    let html = fs::read_to_string(&pagina).unwrap();
+    fs::write(&pagina, html.replace("</main>", "")).unwrap();
+
+    let salida = t.path().join("sitio");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = manual;
+    let e = construir(&o).expect_err("sin </main> no se sabe dónde va el pie");
+    let mensaje = e.to_string();
+    assert!(
+        mensaje.contains("manual/instalacion.html") && mensaje.contains("</main>"),
+        "{mensaje}"
+    );
+    assert!(!salida.exists());
+    sin_restos_de_trabajo(t.path());
+}
+
+#[test]
+fn el_relleno_de_la_barra_lateral_no_lleva_pie_pero_tampoco_style() {
+    let t = tempfile::tempdir().unwrap();
+    let manual = manual_copiado(t.path());
+    let salida = t.path().join("sitio");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = manual.clone();
+    construir(&o).unwrap();
+    let toc = texto(&salida, "manual/toc.html");
+    assert!(!toc.contains("<footer"), "toc.html no es una página");
+    assert!(magi_web::csp::extraer(&toc).unwrap().is_some());
+
+    // Con un `style` en el relleno, falla igual que en una página.
+    let ruta = manual.join("toc.html");
+    let html = fs::read_to_string(&ruta).unwrap();
+    fs::write(&ruta, html.replace("<ol", "<ol style=\"color: red\"")).unwrap();
+    assert!(fs::read_to_string(&ruta)
+        .unwrap()
+        .contains("style=\"color: red\""));
+    let otra = t.path().join("otra");
+    o.salida = otra.clone();
+    let e = construir(&o).expect_err("un style en toc.html también se rechaza");
+    assert!(e.to_string().contains("manual/toc.html"), "{e}");
+    assert!(!otra.exists());
+}
+
+#[test]
+fn construir_dos_veces_con_manual_da_el_mismo_sitio_y_un_solo_pie() {
+    let t = tempfile::tempdir().unwrap();
+    let salida = t.path().join("sitio");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = fijos().join("manual-html");
+    construir(&o).unwrap();
+    let primero = contenido(&salida);
+    construir(&o).unwrap();
+    assert_eq!(primero, contenido(&salida));
+
+    // Y sobre un manual que ya trae el pie (la salida de otra construcción), no se duplica.
+    let ya_adaptado = t.path().join("ya-adaptado");
+    copiar(&salida.join("manual"), &ya_adaptado);
+    let otra = t.path().join("otra");
+    o.manual = ya_adaptado;
+    o.salida = otra.clone();
+    construir(&o).unwrap();
+    let pagina = texto(&otra, "manual/tuneles.html");
+    assert_eq!(pagina.matches("<footer class=\"pie\">").count(), 1);
+    assert_eq!(pagina.matches("Content-Security-Policy").count(), 1);
+}
+
+#[test]
+fn las_licencias_de_las_fuentes_del_manual_viajan_con_ellas() {
+    // mdBook copia siempre sus fuentes (Open Sans, Source Code Pro) con su licencia en
+    // un `.txt`: redistribuir la fuente sin la licencia no se puede (Apache-2.0 y OFL).
+    let t = tempfile::tempdir().unwrap();
+    let manual = manual_copiado(t.path());
+    let fuentes = manual.join("fonts");
+    fs::write(fuentes.join("open-sans-regular.woff2"), b"wOF2 falsa").unwrap();
+    fs::write(fuentes.join("OPEN-SANS-LICENSE.txt"), "Apache License\n").unwrap();
+    fs::write(fuentes.join("SOURCE-CODE-PRO-LICENSE.txt"), "SIL OFL 1.1\n").unwrap();
+
+    let salida = t.path().join("sitio");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = manual;
+    let informe = construir(&o).expect("construir con las licencias de las fuentes");
+    assert_eq!(
+        texto(&salida, "manual/fonts/OPEN-SANS-LICENSE.txt"),
+        "Apache License\n"
+    );
+    assert_eq!(
+        texto(&salida, "manual/fonts/SOURCE-CODE-PRO-LICENSE.txt"),
+        "SIL OFL 1.1\n"
+    );
+    assert!(salida
+        .join("manual/fonts/open-sans-regular.woff2")
+        .is_file());
+    assert!(
+        !informe.omitidos.iter().any(|o| o.ends_with("LICENSE.txt")),
+        "{:?}",
+        informe.omitidos
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Revisión adversarial de cierre: la salida y las extensiones del manual
+// ---------------------------------------------------------------------------
+
+/// Revisión FS1: `--salida` apuntando a una carpeta con datos que no son un sitio de
+/// MAGI no se sustituye (se borraría entera): se rechaza y todo queda como estaba.
+#[test]
+fn una_salida_con_datos_ajenos_no_se_sustituye() {
+    let t = tempfile::tempdir().unwrap();
+    let datos = t.path().join("datos");
+    fs::create_dir_all(datos.join("sub")).unwrap();
+    fs::write(datos.join("tesis.txt"), "no se toca").unwrap();
+    fs::write(datos.join("sub/otra.txt"), "tampoco").unwrap();
+
+    let o = opciones(&raiz().join("web"), &releases("sin-red.json"), &datos);
+    let e = construir(&o).expect_err("una carpeta ajena no se sustituye");
+    let mensaje = e.to_string();
+    assert!(
+        mensaje.contains("no está vacía") && mensaje.contains("no es un sitio generado"),
+        "{mensaje}"
+    );
+    assert_eq!(texto(&datos, "tesis.txt"), "no se toca");
+    assert_eq!(texto(&datos, "sub/otra.txt"), "tampoco");
+    sin_restos_de_trabajo(t.path());
+
+    // Una carpeta con solo parte de lo que tiene un sitio tampoco vale.
+    fs::write(datos.join("index.html"), "<p>mío</p>").unwrap();
+    fs::write(datos.join("404.html"), "<p>mío</p>").unwrap();
+    construir(&o).expect_err("index.html y 404.html no bastan para ser un sitio de MAGI");
+    assert_eq!(texto(&datos, "tesis.txt"), "no se toca");
+}
+
+/// Control de FS1: lo que sí se sustituye es una carpeta vacía y un sitio anterior.
+#[test]
+fn una_salida_vacia_o_un_sitio_anterior_si_se_sustituyen() {
+    let t = tempfile::tempdir().unwrap();
+    let salida = t.path().join("sitio");
+    fs::create_dir_all(&salida).unwrap();
+    let o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    construir(&o).expect("una carpeta vacía se sustituye");
+    assert!(salida.join("index.html").is_file());
+
+    // Encima de un sitio anterior, también (y su contenido viejo desaparece).
+    fs::write(salida.join("viejo.txt"), "de la construcción anterior").unwrap();
+    construir(&o).expect("un sitio anterior se sustituye");
+    assert!(salida.join("index.html").is_file());
+    assert!(!salida.join("viejo.txt").exists());
+    sin_restos_de_trabajo(t.path());
+}
+
+/// Revisión FS2: una página del manual con la extensión en mayúsculas (`X.HTML`) se
+/// copiaba sin pasar por la adaptación ni por la CSP. Ahora se trata como cualquier
+/// otra: si trae el pie y la CSP sale con ellos, y si no es una página, para.
+#[test]
+fn un_html_del_manual_con_extension_en_mayusculas_tambien_pasa_por_la_csp() {
+    let t = tempfile::tempdir().unwrap();
+    let manual = manual_copiado(t.path());
+    // Una copia válida de una página con otro nombre y la extensión en mayúsculas.
+    fs::copy(manual.join("tuneles.html"), manual.join("COPIA.HTML")).unwrap();
+    let salida = t.path().join("sitio");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &salida);
+    o.manual = manual.clone();
+    construir(&o).expect("construir con COPIA.HTML");
+    let copia = texto(&salida, "manual/COPIA.HTML");
+    assert!(
+        copia.contains("Content-Security-Policy"),
+        "COPIA.HTML salió sin CSP"
+    );
+    assert!(copia.contains("class=\"pie\""), "COPIA.HTML salió sin pie");
+
+    // Una que no es una página de mdBook (sin `<main>`) para la construcción.
+    fs::write(
+        manual.join("EVIL.HTML"),
+        "<!doctype html><html><body><script>alert(1)</script></body></html>",
+    )
+    .unwrap();
+    let otra = t.path().join("otra");
+    let mut o = opciones(&raiz().join("web"), &releases("sin-red.json"), &otra);
+    o.manual = manual;
+    let e = construir(&o).expect_err("EVIL.HTML no es una página del manual");
+    assert!(e.to_string().contains("EVIL.HTML"), "{e}");
+    assert!(!otra.exists());
 }

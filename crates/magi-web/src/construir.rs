@@ -18,6 +18,7 @@ use crate::csp;
 use crate::datos::Plataformas;
 use crate::descargas::{elegir, OpcionesDescargas};
 use crate::error::{ErrorWeb, Resultado};
+use crate::manual_html;
 use crate::paginas::portada::Capturas;
 use crate::paginas::versiones::DatosVersiones;
 use crate::paginas::{self, Entorno};
@@ -38,9 +39,12 @@ const PROFUNDIDAD_MAXIMA: usize = 8;
 /// Tope de una página HTML del manual que se lee para ponerle la CSP (16 MiB).
 const TOPE_HTML: u64 = 16 * 1024 * 1024;
 
-/// Extensiones que se copian del manual generado por mdBook.
+/// Extensiones que se copian del manual generado por mdBook. `txt` lleva las
+/// licencias de las fuentes que mdBook copia siempre (`fonts/OPEN-SANS-LICENSE.txt`,
+/// Apache-2.0, y `fonts/SOURCE-CODE-PRO-LICENSE.txt`, OFL): redistribuir una fuente
+/// pide llevar su licencia con ella.
 const EXTENSIONES_MANUAL: &[&str] = &[
-    "html", "css", "js", "svg", "png", "gif", "jpg", "jpeg", "woff", "woff2", "json", "ico",
+    "html", "css", "js", "svg", "png", "gif", "jpg", "jpeg", "woff", "woff2", "json", "ico", "txt",
 ];
 
 #[derive(Debug, Clone)]
@@ -49,9 +53,9 @@ pub struct OpcionesConstruir {
     pub web: PathBuf,
     /// `releases.json`.
     pub releases: PathBuf,
-    /// Manual ya generado por mdBook. CONTRATO-S3-MANUAL: opcional solo en
-    /// el Sprint 1; al cerrar el Sprint 3 es obligatorio.
-    pub manual: Option<PathBuf>,
+    /// Manual ya generado por mdBook (`mdbook build` sobre lo que deja
+    /// `preparar-manual`). Es obligatorio: sin manual no hay web.
+    pub manual: PathBuf,
     /// `assets/demo/magi.gif` (S2).
     pub animacion: Option<PathBuf>,
     /// CHANGELOG del escritorio de la etiqueta de la última versión publicada: lo
@@ -60,7 +64,8 @@ pub struct OpcionesConstruir {
     /// CHANGELOG de la app de su etiqueta. Obligatorio si hay release de la app;
     /// sin ella no se usa y la página dice «aún sin publicar».
     pub changelog_app: Option<PathBuf>,
-    /// Carpeta de salida (se sustituye entera).
+    /// Carpeta de salida. Se sustituye entera, y solo si no existe, está vacía o es un
+    /// sitio que construyó este generador: otra cosa se rechaza.
     pub salida: PathBuf,
     pub homebrew: bool,
     pub aur: bool,
@@ -213,13 +218,18 @@ fn generar(o: &OpcionesConstruir, sitio: &Path) -> Resultado<InformeConstruccion
         copiar_animacion(animacion, &sitio.join("demo/magi.gif"))?;
     }
 
-    // Manual ya generado por mdBook: cada página lleva su CSP con los hashes de sus
+    // Manual ya generado por mdBook: cada página lleva el pie común de la web (el
+    // mismo que las demás, renderizado una sola vez) y su CSP con los hashes de sus
     // scripts en línea, calculados sobre el HTML definitivo.
-    if let Some(manual) = &o.manual {
-        let destino = sitio.join("manual");
-        copiar_arbol(manual, &destino, EXTENSIONES_MANUAL, &mut informe.omitidos)?;
-        poner_csp_al_manual(&destino, sitio, &mut informe)?;
-    }
+    let destino = sitio.join("manual");
+    copiar_arbol(
+        &o.manual,
+        &destino,
+        EXTENSIONES_MANUAL,
+        &mut informe.omitidos,
+    )?;
+    let pie = manual_html::pie_del_manual(&entorno)?;
+    poner_csp_al_manual(&destino, sitio, &pie, &mut informe)?;
 
     informe.paginas.sort();
     Ok(informe)
@@ -257,10 +267,16 @@ fn leer_changelog(ruta: &Path, etiqueta: &str, numero: &str) -> Resultado<Vec<En
     Ok(entradas)
 }
 
-/// Pone la CSP del manual a cada `.html` de `carpeta`.
+/// Pone la CSP del manual a cada `.html` de `carpeta`, después de adaptarlo (el pie
+/// común y lo que choca con la CSP, en `manual_html`): los hashes salen del HTML
+/// ya definitivo.
+///
+/// `toc.html` es el relleno de la barra lateral sin JavaScript (un `<iframe>`): no
+/// es una página, no tiene `<main>` ni lleva pie, pero también lleva su CSP.
 fn poner_csp_al_manual(
     carpeta: &Path,
     sitio: &Path,
+    pie: &str,
     informe: &mut InformeConstruccion,
 ) -> Resultado<()> {
     let mut paginas = Vec::new();
@@ -273,6 +289,11 @@ fn poner_csp_al_manual(
             .to_string_lossy()
             .into_owned();
         let html = leer_texto(&ruta, TOPE_HTML)?;
+        let html = if ruta == carpeta.join("toc.html") {
+            manual_html::adaptar_fragmento(&html, &relativa)?
+        } else {
+            manual_html::adaptar_pagina(&html, pie, &relativa)?
+        };
         let nuevo = csp::insertar(&html, true)
             .map_err(|e| ErrorWeb::dato_raro(format!("manual: {relativa}"), e.to_string()))?;
         fs::write(&ruta, nuevo).map_err(|e| ErrorWeb::escritura(&ruta, e))?;
@@ -297,7 +318,11 @@ fn listar_html(carpeta: &Path, profundidad: usize, salida: &mut Vec<PathBuf>) ->
             .map_err(|e| ErrorWeb::lectura(&ruta, e))?;
         if tipo.is_dir() {
             listar_html(&ruta, profundidad + 1, salida)?;
-        } else if tipo.is_file() && ruta.extension().is_some_and(|x| x == "html") {
+        } else if tipo.is_file()
+            && ruta
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("html"))
+        {
             salida.push(ruta);
         }
     }
@@ -521,10 +546,11 @@ fn validar_salida(o: &OpcionesConstruir) -> Resultado<PathBuf> {
         }
     }
 
-    let mut entradas: Vec<(&str, &Path)> = vec![("--web", &o.web), ("--releases", &o.releases)];
-    if let Some(m) = &o.manual {
-        entradas.push(("--manual", m));
-    }
+    let mut entradas: Vec<(&str, &Path)> = vec![
+        ("--web", &o.web),
+        ("--releases", &o.releases),
+        ("--manual", &o.manual),
+    ];
     if let Some(a) = &o.animacion {
         entradas.push(("--animacion", a));
     }
@@ -544,7 +570,47 @@ fn validar_salida(o: &OpcionesConstruir) -> Resultado<PathBuf> {
             ));
         }
     }
+
+    // Sustituirla es borrarla entera: solo si está vacía o es un sitio que construyó
+    // este mismo generador. Un `--salida` mal puesto (la carpeta de descargas, la de
+    // documentos…) no puede perder lo que no es suyo.
+    if fs::symlink_metadata(&salida).is_ok() {
+        match es_vacia_o_sitio_anterior(&salida) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ErrorWeb::dato_raro(
+                    salida.display().to_string(),
+                    "ya existe, no está vacía y no es un sitio generado por magi-web: construir la sustituiría entera (bórrala tú o elige otra carpeta)",
+                ));
+            }
+            Err(e) => return Err(ErrorWeb::lectura(&salida, e)),
+        }
+    }
     Ok(salida)
+}
+
+/// ¿Se puede sustituir esta carpeta de salida? Vacía, o un sitio que dejó una
+/// construcción anterior: con su portada, su 404, su favicon y las carpetas que
+/// siempre salen (`en`, `estilos` y `manual`). Los enlaces simbólicos no cuentan.
+fn es_vacia_o_sitio_anterior(salida: &Path) -> std::io::Result<bool> {
+    if fs::read_dir(salida)?.next().is_none() {
+        return Ok(true);
+    }
+    let es = |nombre: &str, carpeta: bool| {
+        fs::symlink_metadata(salida.join(nombre)).is_ok_and(|m| {
+            if carpeta {
+                m.is_dir()
+            } else {
+                m.is_file()
+            }
+        })
+    };
+    Ok(es("index.html", false)
+        && es("404.html", false)
+        && es("favicon.svg", false)
+        && es("en", true)
+        && es("estilos", true)
+        && es("manual", true))
 }
 
 /// Sustituye `salida` por `trabajo`. Si algo falla, deja la anterior como estaba.

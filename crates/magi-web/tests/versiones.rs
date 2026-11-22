@@ -1924,3 +1924,65 @@ fn entradas_aleatorias_nunca_hacen_panico_ni_dejan_nada_vivo() {
     }
     assert!(buenas > 500, "demasiados fallos de lectura: {buenas}/1500");
 }
+
+// ---------------------------------------------------------------------------
+// Revisión adversarial de cierre: caracteres invisibles
+// ---------------------------------------------------------------------------
+
+/// Revisión MD-03: el saneador del CHANGELOG dejaba pasar los espacios de ancho cero, las
+/// marcas de dirección sueltas, el guion blando y los caracteres de etiqueta
+/// (U+E0000 a U+E007F), que esconden un texto ASCII entero a quien revisa la PR. Ahora
+/// usa el mismo conjunto que las capturas y los mensajes de error.
+#[test]
+fn el_changelog_no_deja_pasar_invisibles_ni_caracteres_de_etiqueta() {
+    let invisibles = [
+        '\u{00AD}',
+        '\u{034F}',
+        '\u{061C}',
+        '\u{180E}',
+        '\u{200B}',
+        '\u{200C}',
+        '\u{200D}',
+        '\u{200E}',
+        '\u{200F}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2060}',
+        '\u{2064}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{FEFF}',
+        '\u{FFF9}',
+        '\u{E0041}',
+        '\u{E0042}',
+        '\u{E007F}',
+    ];
+    for c in invisibles {
+        let cuerpo = format!(
+            "Texto con{c}marca y `codigo{c}` y [enlace{c}](https://github.com/HectorEspejo/magi)."
+        );
+        let detalle = detalle_de(&cuerpo);
+        assert!(
+            !detalle.contains(c),
+            "U+{:04X} sigue en el detalle: {detalle}",
+            u32::from(c)
+        );
+        assert!(detalle.contains("Texto con"), "{detalle}");
+        // En el resumen también (la plantilla lo escapa, pero tampoco puede llevarlos).
+        let changelog = format!(
+            "# Registro\n\n## [1.0.0] - 2026-11-22\n\n**Resumen.** Un{c}resumen.\n\n**Summary.** A{c}summary.\n\ncuerpo\n"
+        );
+        let entradas = entradas_de_changelog(&changelog, "prueba", "v1.0.0").unwrap();
+        assert!(
+            !entradas[0].resumen_es.contains(c) && !entradas[0].resumen_en.contains(c),
+            "U+{:04X} sigue en el resumen",
+            u32::from(c)
+        );
+    }
+    // Un enlace cuyo texto son solo invisibles no se ve: sale con su destino como texto.
+    let detalle = detalle_de("[\u{200B}\u{E0041}](https://github.com/HectorEspejo/magi)");
+    assert!(
+        detalle.contains(">https://github.com/HectorEspejo/magi</a>"),
+        "{detalle}"
+    );
+}

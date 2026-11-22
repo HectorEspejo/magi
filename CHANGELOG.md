@@ -7,6 +7,19 @@ política completa está en [`docs/publicar.md`](docs/publicar.md).
 
 ## [Sin publicar]
 
+### Añadido
+
+- **La web de MAGI (Fase 9c).** MAGI tiene web en
+  [magi.erratia.com](https://magi.erratia.com), en castellano y en inglés (el
+  manual, solo en castellano): la portada, con la animación y capturas de la
+  interfaz; las descargas de la última versión de cada plataforma, con su suma
+  SHA-256 y cómo verificarla; las versiones (los registros de cambios) y el
+  manual de la última versión publicada. Es estática, sin JavaScript propio, sin
+  cookies y sin analítica, y se regenera sola al terminar una release. El README
+  la enlaza y el `homepage` del paquete (`Cargo.toml`, que usa la fórmula de
+  Homebrew) apunta a ella. Cómo se genera y cómo se publica, en `web/README.md`
+  y `docs/publicar-web.md`.
+
 ## [1.6.1] - 2026-11-22
 
 **Resumen.** Primera versión publicada de MAGI: gestor SSH de terminal para Linux y macOS (y dentro de Termux, en Android), con pestañas y sesiones persistentes, SFTP, túneles, snippets con deliberación, sincronización cifrada entre equipos, escritorios remotos y servicios.

@@ -263,8 +263,8 @@ jobs:
           version_name="$(printf '%s' "$badging" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
           version_code="$(printf '%s' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
           paquete="$(printf '%s' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
-          if [ "$paquete" != "org.cuatrodetres.magi" ]; then
-            echo "ERROR: el APK declara el paquete «$paquete», no org.cuatrodetres.magi." >&2
+          if [ "$paquete" != "io.github.hectorespejo.magi" ]; then
+            echo "ERROR: el APK declara el paquete «$paquete», no io.github.hectorespejo.magi." >&2
             exit 1
           fi
           if [ "$version_name" != "$VERSION" ]; then

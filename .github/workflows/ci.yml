@@ -486,6 +486,15 @@ jobs:
           tar xzf "${RUNNER_TEMP}/${archivo}" -C "${RUNNER_TEMP}/mdbook"
           install -m 755 "${RUNNER_TEMP}/mdbook/mdbook" "$HOME/.cargo/bin/mdbook"
           mdbook --version
+      - name: Probar el manual con mdBook de verdad
+        # `tests-linux` ejecuta estas pruebas sin mdBook y las omite con un aviso:
+        # aquí, con el mdBook fijado, tienen que correr (MAGI_EXIGIR_MDBOOK=1 las
+        # hace fallar si falta). Incluyen el sitio entero con el manual real y cero
+        # hallazgos de `comprobar`.
+        run: |
+          set -euo pipefail
+          MAGI_WEB_MDBOOK="$(command -v mdbook)" MAGI_EXIGIR_MDBOOK=1 \
+            cargo test --locked -p magi-web --test manual --test manual_html --test manual_mdbook
       - name: Construir y comprobar la web (manual de la última etiqueta publicada)
         # Es lo que se publicaría: los datos reales de la API y el manual de la
         # etiqueta. Solo se construye y se comprueba; no se despliega.

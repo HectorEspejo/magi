@@ -10,6 +10,7 @@ use magi_web::construir::{construir, OpcionesConstruir};
 use magi_web::datos::Plataformas;
 use magi_web::descargas::{elegir, OpcionesDescargas};
 use magi_web::error::{ErrorWeb, Resultado};
+use magi_web::manual::{preparar_manual, OpcionesManual, OrigenManual};
 use magi_web::releases::{descargar_releases, DocumentoReleases, FuenteGh};
 
 /// Canal del que se pregunta la etiqueta de la última versión publicada.
@@ -46,7 +47,7 @@ enum Orden {
         releases: PathBuf,
         /// Carpeta del manual ya generado por mdBook.
         #[arg(long)]
-        manual: Option<PathBuf>,
+        manual: PathBuf,
         /// Animación de la portada (`assets/demo/magi.gif`).
         #[arg(long)]
         animacion: Option<PathBuf>,
@@ -56,7 +57,8 @@ enum Orden {
         /// CHANGELOG de la app de su etiqueta (si hay alguna release de la app).
         #[arg(long)]
         changelog_app: Option<PathBuf>,
-        /// Carpeta de salida (se sustituye entera).
+        /// Carpeta de salida: se sustituye entera si no existe, está vacía o es un sitio
+        /// anterior de magi-web; cualquier otra carpeta se rechaza.
         #[arg(long)]
         salida: PathBuf,
         /// Mostrar el bloque de Homebrew (`PUBLICAR_HOMEBREW=true`).
@@ -65,6 +67,28 @@ enum Orden {
         /// Mostrar el bloque de AUR (`PUBLICAR_AUR=true`).
         #[arg(long)]
         aur: bool,
+    },
+    /// Prepara el manual para mdBook: copia `docs/manual/` de una etiqueta (o de un
+    /// árbol de trabajo), escribe `SUMMARY.md`, fija las anclas de GitHub y reescribe
+    /// los enlaces que salen del manual. Deja la raíz de un libro (`book.toml`,
+    /// `theme/` y `src/`) lista para `mdbook build`.
+    PrepararManual {
+        /// Etiqueta de la última versión publicada del escritorio (`v1.6.1`).
+        #[arg(long)]
+        etiqueta: String,
+        /// Lee `docs/manual/` de este árbol de trabajo en vez de la etiqueta
+        /// (la rama de una PR y `generar-web.sh --sin-red`).
+        #[arg(long)]
+        arbol: Option<PathBuf>,
+        /// Repositorio git del que se lee la etiqueta.
+        #[arg(long, default_value = ".")]
+        repositorio: PathBuf,
+        /// Carpeta del tema de mdBook (`book.toml` y `theme/`).
+        #[arg(long, default_value = "web/manual")]
+        tema: PathBuf,
+        /// Carpeta de salida: la raíz del libro (se sustituye entera).
+        #[arg(long)]
+        salida: PathBuf,
     },
     /// Revisa un sitio generado: enlaces internos y anclas, externos permitidos,
     /// sin `style` ni scripts propios y CSP en cada página.
@@ -135,6 +159,31 @@ fn ejecutar(cli: Cli) -> Resultado<()> {
                     .as_ref()
                     .map(|v| format!(", app {v}"))
                     .unwrap_or_default(),
+            );
+            Ok(())
+        }
+        Orden::PrepararManual {
+            etiqueta,
+            arbol,
+            repositorio,
+            tema,
+            salida,
+        } => {
+            let origen = match arbol {
+                Some(carpeta) => OrigenManual::Arbol { carpeta },
+                None => OrigenManual::Etiqueta { repositorio },
+            };
+            let informe = preparar_manual(&OpcionesManual {
+                origen,
+                etiqueta,
+                tema,
+                salida: salida.clone(),
+            })?;
+            println!(
+                "manual preparado en {}: {} capítulos, {} ficheros",
+                salida.display(),
+                informe.capitulos.len(),
+                informe.ficheros.len()
             );
             Ok(())
         }

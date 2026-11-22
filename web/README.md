@@ -7,44 +7,397 @@ generador es el crate `crates/magi-web` (biblioteca y binario `magi-web`), que
 también trae de GitHub las versiones y los artefactos de cada release, prepara el
 manual para mdBook y comprueba el sitio generado antes de desplegarlo.
 
-Este fichero explica cómo se genera la web y de dónde sale cada cosa. Hoy está
-completa la sección de fuentes; el resto del índice lo completa el cierre de la fase.
+Este fichero explica cómo se genera la web, de dónde sale cada cosa y cómo se
+cambia. Cómo se pone en marcha (DNS, dominio, Pages), cómo se repite una
+publicación y cómo se retira lo cuenta
+[`docs/publicar-web.md`](../docs/publicar-web.md), que sigue el desarrollador.
 
 ## Índice
 
-- [Cómo se genera](#cómo-se-genera) <!-- S3: completar -->
-- [De dónde sale cada cosa](#de-dónde-sale-cada-cosa) <!-- S3: completar -->
-- [Manual](#manual) <!-- S3: completar -->
-- [Dominios permitidos](#dominios-permitidos) <!-- S3: completar -->
+- [Qué hay en `web/`](#qué-hay-en-web)
+- [Cómo se genera](#cómo-se-genera)
+- [Las órdenes de `magi-web`](#las-órdenes-de-magi-web)
+- [De dónde sale cada cosa](#de-dónde-sale-cada-cosa)
+- [Cómo se cambia algo](#cómo-se-cambia-algo)
+  - [Un texto](#un-texto)
+  - [Una plataforma o su estado](#una-plataforma-o-su-estado)
+  - [Una página](#una-página)
+  - [Un capítulo del manual](#un-capítulo-del-manual)
+- [Manual](#manual)
+- [Capturas](#capturas)
+- [Paletas y contraste](#paletas-y-contraste)
+- [CSP](#csp)
+- [Dominios permitidos](#dominios-permitidos)
+- [Pruebas](#pruebas)
 - [Fuentes](#fuentes)
   - [Qué fuentes hay y de dónde salen](#qué-fuentes-hay-y-de-dónde-salen)
   - [Cobertura de glifos](#cobertura-de-glifos)
   - [Rehacer el subconjunto de símbolos](#rehacer-el-subconjunto-de-símbolos)
   - [Reconvertir JetBrains Mono a woff2](#reconvertir-jetbrains-mono-a-woff2)
 
+## Qué hay en `web/`
+
+| Ruta | Qué es |
+|---|---|
+| `datos/plataformas.toml` | Las seis plataformas de descarga con su canal, estado, artefacto y orden, la huella del certificado del APK y los filtros de Obtainium |
+| `textos/es.toml` y `textos/en.toml` | Los textos de las páginas, con las mismas claves en los dos idiomas |
+| `plantillas/` | Las plantillas `minijinja`: `base.html`, una por página (`portada`, `descargas`, `versiones`, `404`) y, en `parciales/`, la cabecera, el pie y la figura de una captura |
+| `estilos/web.css` | La hoja de estilos única: paletas, tipografía y cajas |
+| `fuentes/` | JetBrains Mono y el subconjunto de símbolos, en woff2, con sus licencias (ver [Fuentes](#fuentes)) |
+| `capturas/` | Las seis capturas de la TUI en HTML y `capturas.css`: **generadas** y versionadas, nunca a mano (ver [Capturas](#capturas)) |
+| `manual/` | `book.toml` de mdBook y su tema propio, en `theme/` (ver [Manual](#manual)) |
+| `favicon.svg` | El icono de la web |
+
+El generador (`crates/magi-web`) y los scripts que lo lanzan
+(`scripts/generar-web.sh` y `scripts/generar-capturas.sh`) viven fuera de `web/`.
+`crates/magi-web` lleva `publish = false` y `dist = false`: `dist plan` no cambia
+por él.
+
+Lo que la web no hace, por regla: no lleva JavaScript propio (lo plegable va con
+`<details>`; el único JavaScript es el de mdBook, en el manual), ni cookies, ni
+analítica, ni nada cargado de fuera (fuentes, estilos e imágenes salen de la
+propia web); ningún atributo `style` ni `<script>` en las plantillas; los
+enlaces internos son relativos (solo el 404 usa URL absolutas) y los externos van
+por `https://` y solo a la [lista permitida](#dominios-permitidos). Cumple WCAG 2.2
+AA: `lang` y `hreflang`, enlace para saltar al contenido, foco visible, todo con
+teclado, sin desplazamiento horizontal a 320 px, la animación plegable y oculta
+con `prefers-reduced-motion`, y los estados en texto, no solo con color.
+
 ## Cómo se genera
 
-<!-- S3: completar -->
+`scripts/generar-web.sh` construye la web en local, en `target/web/`, con lo mismo
+que hace `.github/workflows/web.yml`: compila `magi-web`, lee las releases de la
+API de GitHub y sus `.sha256`, saca los CHANGELOG y el manual de la etiqueta de
+la última versión publicada, prepara el manual, lo construye con mdBook, genera
+el sitio y lo comprueba. El resultado queda en **`target/web/sitio`**; el resto
+del trabajo (`releases.json`, los CHANGELOG sacados de la etiqueta…) queda en
+`target/web/` y nada de eso se versiona.
 
-Pendiente de completar en el cierre de la fase.
+```sh
+scripts/generar-web.sh                           # con los datos reales de la API de GitHub
+scripts/generar-web.sh --sin-red                 # con unos datos de ejemplo, sin llamar a GitHub
+scripts/generar-web.sh --con-manual-de-la-rama   # el manual sale del árbol de trabajo
+scripts/generar-web.sh --ayuda
+```
+
+| Opción o variable | Qué hace |
+|---|---|
+| `--sin-red` | No llama a GitHub: usa las releases de ejemplo de `crates/magi-web/tests/fijos/releases/sin-red.json`. Como esas etiquetas no existen en git, el manual y los CHANGELOG salen del árbol de trabajo y no de una etiqueta |
+| `--con-manual-de-la-rama` | El manual sale de `docs/manual/` del árbol de trabajo y no de la etiqueta de la última versión publicada. Es lo que hace el job `web` de las PR en su segunda pasada, para comprobar un capítulo, un enlace o un ancla nuevos antes de que lleguen a una versión |
+| `GH_TOKEN` o la sesión de `gh` | Credencial de la API de GitHub. En CI es el `GITHUB_TOKEN` del workflow (solo lectura); en local vale `gh auth login` |
+| `PUBLICAR_HOMEBREW` y `PUBLICAR_AUR` | Con el valor exacto `true` (en minúsculas: los workflows de release comparan sin distinguir mayúsculas, la web no) encienden los bloques de Homebrew y de AUR en descargas; cualquier otro valor los apaga |
+| `MAGI_WEB_MDBOOK` | Ruta de un `mdbook` que usar en vez del fijado (avisa si no es la versión fijada; también lo usan las pruebas que construyen el manual) |
+
+Necesita `cargo`; para leer la API, `gh` y `curl` (con `--sin-red`, ninguno de
+los dos), y, si no usas `--sin-red`, `git` con las etiquetas (si faltan, `git
+fetch --tags`). Si hay que descargar mdBook (ver abajo), hacen falta también
+`curl`, `sha256sum` y `tar`, con o sin `--sin-red`. **mdBook va fijado por versión (0.5.4) y SHA-256**, en
+`web.yml`, en el job `web` de `ci.yml` y en el propio script, y una prueba de
+`magi-web` comprueba que los tres coinciden. El script usa el `MAGI_WEB_MDBOOK`,
+o el `mdbook` del `PATH` si es exactamente esa versión, o lo descarga a
+`${XDG_CACHE_HOME:-$HOME/.cache}/magi/mdbook-<versión>/` y comprueba su suma
+antes de usarlo (la descarga solo está preparada para Linux x86_64: en otro
+sistema, instala esa versión y apunta `MAGI_WEB_MDBOOK`). mdBook no publica un
+`.sha256`: la suma es la del tarball y coincide con el `digest` que da la API de
+GitHub para ese fichero. Para subir de versión, cambia los tres sitios en el
+mismo PR y repite la construcción y el guion de la web.
+
+Códigos de salida: 0 bien, 1 fallo (falta una herramienta, un dato raro, la
+construcción o la comprobación; el mensaje dice qué y dónde) y 2 uso incorrecto.
+Si algo falla, no queda un sitio a medias donde estaba el anterior: el script
+construye el sitio en `target/web/sitio.nuevo` (`magi-web construir` escribe en una
+carpeta de trabajo y solo sustituye esa salida si todo salió bien), lo comprueba allí
+y **solo entonces** sustituye a `target/web/sitio`; si la comprobación falla, el sitio
+rechazado queda en `sitio.nuevo` para verlo y `sitio` no cambia. `magi-web construir`
+solo sustituye una `--salida` que no existe, está vacía o es un sitio que construyó él
+mismo: con otra cosa (la carpeta de descargas, por ejemplo) se niega y no la toca.
+
+Para verlo en un navegador, sirve la carpeta solo en local:
+
+```sh
+python3 -I -m http.server 8000 --bind 127.0.0.1 --directory target/web/sitio
+```
+
+y abre `http://127.0.0.1:8000/`. El 404 se verá sin estilos: usa URL absolutas a
+`https://magi.erratia.com/` y la CSP solo admite recursos de su propio origen.
+
+## Las órdenes de `magi-web`
+
+`cargo run -p magi-web -- <orden>` (o el binario de `target/release/`, que es el
+que usa el script). Los errores salen como `error: dato raro en <dónde>: <qué>`
+o, en `comprobar`, como una lista `<fichero>:<línea>: <qué>`; el código de salida
+es distinto de 0.
+
+| Orden | Qué hace |
+|---|---|
+| `releases --salida <json>` | Lee las releases de la API de GitHub (con `gh`, paginadas) y los `.sha256` de los artefactos elegidos (con `curl`), los valida y escribe `releases.json`. Lo que llega de fuera es entrada no fiable |
+| `etiqueta --releases <json> --canal escritorio\|app` | Escribe la etiqueta de la última versión publicada del canal (nunca un borrador ni una candidata); sin release de la app, no escribe nada. Con ella el script sabe de qué etiqueta sacar el manual y los CHANGELOG |
+| `preparar-manual --etiqueta <vX.Y.Z> [--repositorio .] [--arbol docs/manual] [--tema web/manual] --salida <dir>` | Copia `docs/manual/` de la etiqueta (o, con `--arbol`, de una carpeta de trabajo; en los dos casos los enlaces de fuera apuntan a esa etiqueta), escribe `SUMMARY.md`, fija las anclas y reescribe los enlaces que salen del manual. Deja la raíz de un libro (`book.toml`, `theme/` y `src/`) lista para `mdbook build`. Si la salida ya existe, tiene que estar vacía o ser un libro preparado antes |
+| `construir --web web --releases <json> --changelog <md> [--changelog-app <md>] --manual <dir> [--animacion <gif>] --salida <dir> [--homebrew] [--aur]` | Genera portada, descargas, versiones y 404 en los dos idiomas, copia estilos, fuentes, capturas y animación, y pone cabecera, pie y CSP a todo, también al manual ya generado por mdBook, que es obligatorio: sin manual no hay web |
+| `comprobar <dir>` | Revisa un sitio generado: enlaces internos y anclas, enlaces externos solo de la lista permitida y por `https://`, ningún atributo `style`, `srcdoc` ni `<script>` propio, nada antes de `<head>` que no sea el doctype, un comentario o `<html>` (con otra cosa el navegador no aplicaría la CSP), ningún SVG ni XML salvo `favicon.svg` y el favicon de mdBook (un SVG abierto directamente se ejecuta con el origen de la web) y la CSP de cada página. Un hallazgo para el despliegue |
+
+`construir` no ejecuta `comprobar` por dentro: son dos pasos del flujo y los
+lanza `scripts/generar-web.sh` (y con él, `web.yml`).
 
 ## De dónde sale cada cosa
 
-<!-- S3: completar -->
+| Qué | De dónde sale | Cuándo cambia en la web |
+|---|---|---|
+| Manual (`/manual/`) | `docs/manual/` de la **etiqueta de la última versión publicada del escritorio** (`git show`), nunca de `main` | Con la siguiente versión; un capítulo nuevo sale con ella |
+| Versiones (`/versiones/`) | `CHANGELOG.md` y `android/CHANGELOG.md` de la etiqueta de la última versión publicada de su canal | Con la siguiente versión de cada canal |
+| Versión, artefactos, tamaños, URL y SHA-256 de descargas | La API de GitHub y los `.sha256` publicados, en cada construcción (`releases.json`, sin versionar) | En cada construcción |
+| Estado de cada plataforma, nombre de artefacto, huella del APK y Obtainium | `web/datos/plataformas.toml` (`main`) | Al fusionar en `main` |
+| Plantillas, textos, estilos y fuentes | `web/plantillas/`, `web/textos/`, `web/estilos/` y `web/fuentes/` (`main`) | Al fusionar en `main` |
+| Capturas | `web/capturas/` (`main`), generadas | Al fusionar en `main` |
+| Animación de la portada | `assets/demo/magi.gif` (`main`) | Al fusionar en `main` |
+| Bloques de Homebrew y AUR | Las variables del repositorio `PUBLICAR_HOMEBREW` y `PUBLICAR_AUR` | En la siguiente construcción |
 
-Pendiente de completar en el cierre de la fase.
+Se elige la versión mayor **por número** (no la más reciente por fecha) de cada
+canal: `vX.Y.Z` para el escritorio y Termux y `android-vX.Y.Z` para la app. Las
+etiquetas con sufijo (`-rc.N`) y los borradores no cuentan. Termux comparte
+release con el escritorio y puede ir un paso por detrás mientras
+`termux-release.yml` sube su `.deb`: sale el de la última release que ya lo tiene,
+con su número.
+
+## Cómo se cambia algo
+
+Después de cada cambio, lo mínimo es `cargo test -p magi-web --locked` y
+`scripts/generar-web.sh --sin-red` (ver [Pruebas](#pruebas)). Un cambio que toca
+`web/` lanza `web.yml` al fusionar en `main`.
+
+### Un texto
+
+Los textos están en `textos/es.toml` y `textos/en.toml`, con **las mismas claves**
+en los dos y ninguna vacía: si una clave solo está en uno, la construcción falla
+diciendo cuál y en qué fichero. Cambia siempre los dos.
+
+- Sin HTML: lo que lleva un enlace se parte en `antes`, `enlace` y `despues`, y la
+  plantilla pone el `<a>`; lo que va en código se escribe entre acentos graves y
+  la plantilla lo pasa a `<code>` (filtro `con_codigo`).
+- Un texto es una cadena o una tabla de textos (nada de números, listas ni
+  fechas), y las claves solo llevan letras, cifras, `_` y `-`.
+- La plantilla lo usa como `t.<tabla>.<clave>`; una clave que la plantilla pide y
+  no existe rompe la construcción (las plantillas son estrictas).
+- Un texto nuevo de una página nueva va en su propia tabla, sin tocar las demás.
+
+### Una plataforma o su estado
+
+`datos/plataformas.toml` tiene una sección `[app]` (huella del certificado y
+filtros de Obtainium) y una `[[plataforma]]` por plataforma, con estos campos y
+ninguno más (los desconocidos se rechazan):
+
+| Campo | Qué es |
+|---|---|
+| `id` | Uno de `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`, `termux-arm64` o `android-arm64`, único |
+| `canal` | `escritorio`, `termux` o `app`; el que corresponde al `id` |
+| `estado` | `estable`, `en_pruebas` o `beta` |
+| `artefacto` | Nombre del fichero publicado. Con `{version}` donde va el número de la versión; es obligatorio en Termux y en la app, y en el escritorio el nombre es fijo (sin él) |
+| `orden` | Posición en la página: Linux, macOS, Termux y app; sin repetir |
+| `instrucciones` | Clave de `textos/` con su instalación corta |
+
+El **estado de una plataforma cambia en el mismo PR** que
+[`docs/manual/estado.md`](../docs/manual/estado.md), y al revés. Para otra
+plataforma que no sea una de las seis hay que tocar el código (`datos.rs`), los
+textos y las plantillas. La huella del APK y qué hacer si cambia el keystore, en
+[`docs/publicar-web.md`](../docs/publicar-web.md).
+
+### Una página
+
+1. La plantilla, en `plantillas/<pagina>.html` (hereda de `base.html`; sin `style`,
+   sin `<script>` y sin `|safe`: una prueba prohíbe marcar nada como seguro en una
+   plantilla). Si inserta HTML ya generado, se marca como seguro en Rust, tras
+   validarlo.
+2. La ruta, en `crates/magi-web/src/rutas.rs` (`Pagina`, `ruta`, `fichero`), y su
+   módulo en `src/paginas/` con una función `renderizar` que parte de
+   `contexto_comun` (declarada en `paginas/mod.rs`).
+3. Sus textos, en `es.toml` y `en.toml`.
+4. La lista de páginas de `construir` (`src/construir.rs`, la función `generar`),
+   que las escribe en los dos idiomas con su CSP, y el menú de la cabecera
+   (`plantillas/parciales/cabecera.html` y `nav` de `contexto_comun`) si va en él.
+5. Sus pruebas, en `crates/magi-web/tests/`, y que `magi-web comprobar` siga
+   dando el sitio por bueno.
+
+### Un capítulo del manual
+
+El manual es `docs/manual/`. Un capítulo nuevo es un fichero `docs/manual/<nombre>.md`
+(solo `a-z`, cifras y `-`) **y su línea en `## Capítulos` de `docs/manual/README.md`**,
+con la forma `- [Título](nombre.md) — descripción`. **Si el fichero no está en el
+índice, la web no se construye** («capítulo fuera del índice: x.md»), y lo mismo si
+el índice nombra un fichero que no existe. El capítulo sale en la web con la
+siguiente versión, porque el manual sale de la etiqueta; el job `web` de la PR
+construye también el manual de la rama y lo comprueba.
 
 ## Manual
 
-<!-- S3: completar -->
+`magi-web preparar-manual` toma `docs/manual/` de la etiqueta (o de un árbol de
+trabajo) y deja la raíz de un libro de mdBook:
 
-Pendiente de completar en el cierre de la fase.
+1. **`SUMMARY.md`** sale del índice `## Capítulos` de `README.md`, más `estado.md`
+   («Qué se ha probado») al final.
+2. **Anclas como en GitHub.** Cada título recibe su `{#id}` con el mismo algoritmo
+   que usa la prueba `repositorio_publico` (vive en `magi_web::anclas`: hay una sola
+   copia), así que `capitulo.md#ancla` lleva al mismo título que en GitHub.
+3. **Enlaces que salen del manual.** Los de los README van a la portada (`../`) y
+   a `/en/`; un fichero del repositorio, a `https://github.com/HectorEspejo/magi/blob/<etiqueta>/…`
+   y una carpeta, a `…/tree/<etiqueta>/…`. Los que se quedan dentro los convierte
+   mdBook a `.html`.
+4. **HTML en bruto** (`<host>`, `<uuid>`…) se escapa como texto, y `{{#`, que mdBook
+   toma por un preprocesador, se rechaza.
+5. **Lo que mdBook escribiría con `style`** se rechaza antes de construir, con su
+   fichero y su línea: una tabla con alineación de columnas (`|:--|--:|`), porque la
+   CSP no admite atributos `style`. Quita los dos puntos de la fila de guiones.
+
+6. **Más cosas que se rechazan al preparar, con su fichero y su línea:** un título (del
+   capítulo o del índice) con «<» (el buscador de mdBook pone los títulos en la página
+   como HTML y lo trataría como marcado); un capítulo con el nombre de una página de
+   mdBook (`index`, `readme`, `toc`, `print`, `404`); un salto de línea solo CR; y
+   cualquier SVG (se ejecutaría con el origen de la web: el manual solo admite
+   imágenes `png`, `jpg`, `gif` y `webp`).
+
+El índice del manual es `README.md` en el repositorio y `index.html` en la web:
+mdBook convierte un enlace a `README.md` en `README.html`, que no existiría, así que
+`preparar-manual` lo cambia por `index.md`.
+
+Lo que se lee del repositorio es entrada no fiable: solo ficheros normales (un
+enlace simbólico o un submódulo se rechazan), con tamaños acotados.
+
+Después `mdbook build` usa `manual/book.toml` y el tema de `manual/theme/`: la
+cabecera común de la web y sus paletas (claro u oscuro según el sistema, sin
+selector de temas). La búsqueda de mdBook está activa, la ejecución de código
+está desactivada y no se carga nada de fuera. Por último, `construir` mete el pie
+común y la CSP en cada página del manual. La cabecera del manual es estática
+(`manual/theme/header.hbs`) y una prueba comprueba que dice lo mismo que
+`plantillas/parciales/cabecera.html`.
+
+El manual está solo en castellano: lo avisa «Solo en castellano · Spanish only»
+y el menú inglés dice «Manual (Spanish)». La interfaz propia de mdBook (la
+búsqueda, los títulos de sus botones) sale en inglés, y su búsqueda encuentra
+palabras enteras, no variantes («túnel» no encuentra «túneles»).
+
+Límites conocidos del tema, que se resolverían con un `index.hbs` propio (una copia
+de una plantilla de mdBook, con otra licencia y atada a la versión fijada) y no se
+hizo: los textos de interfaz de mdBook (`title`, `aria-label`, el cuadro de
+búsqueda) están en inglés dentro de una página `lang="es"`; el botón de la barra
+lateral es una etiqueta y un teclado solo no lo alcanza con Tab en pantallas
+estrechas; una tabla más ancha que su caja se desplaza dentro de ella, sin garantía
+de foco de teclado; el DOM vivo lleva uno o dos `style` que escribe el JavaScript de
+mdBook desde el navegador por CSSOM (el HTML entregado no lleva ninguno y la CSP no
+bloquea esos), pero al cerrar la búsqueda con Esc mdBook usa `setAttribute('style')`,
+que la CSP sí bloquea: sale un aviso en la consola («Applying inline style
+violates…»), sin efecto visible (la búsqueda se cierra por clase); y mdBook copia sus fuentes (Open Sans y Source Code Pro, con sus
+licencias) aunque el tema no las usa.
+
+## Capturas
+
+Las seis capturas de la portada (Flota, sesión con paneles, archivos, túneles,
+deliberación MAGI y servicios) son la TUI pintada con `App::de_prueba` sobre un
+`TestBackend` de 100×30, con el tema fijo (`Tema::respaldo()`) y el inventario de
+la demo (`assets/demo/inventario`: `demo-web`, `demo-datos` y `demo-copias`),
+exportada a HTML con **clases** (`<span class="cN">`, definidas en `capturas.css`;
+nunca atributos `style`). Nunca se pinta con la semilla de las pruebas, cuyos
+alias podrían ser reales: la prueba falla si una captura lleva un nombre de ella.
+
+```sh
+scripts/generar-capturas.sh      # regenera web/capturas/ y comprueba que quedan al día
+git diff web/capturas            # revisa el diff antes de subirlo
+```
+
+El script lanza la prueba ignorada `generar_capturas` de `tests/capturas_web.rs` y
+después la normal. La prueba normal, `las_capturas_estan_al_dia`, corre con
+`cargo test --workspace` y **falla si una captura no está al día**, diciendo «captura
+desfasada: ejecuta scripts/generar-capturas.sh». Por eso, cuando una PR cambia una
+vista capturada, regenera su captura en el mismo PR. No se edita una captura a
+mano. Lo único que necesita es `cargo`; escribe en `web/capturas/` y en una carpeta
+fija bajo `/tmp/magi-capturas-web/`, cuya ruta sale entera en la captura de
+Archivos.
+
+Cada captura es una `<figure>` con su descripción como texto alternativo
+(`role="img"` y `aria-label`) y el `<pre>` con `aria-hidden`, para que el lector de
+pantalla no lea los bordes de caja. Cada carácter tiene que tener glifo en
+JetBrains Mono o en el subconjunto de símbolos (ver [Cobertura de
+glifos](#cobertura-de-glifos)); lo que no, se degrada con `texto_ascii`, el único
+degradador.
+
+## Paletas y contraste
+
+La paleta oscura es la fija de la TUI (`src/tema.rs`) más un gris secundario
+(`#9A968C`); la clara es su derivada. Las dos están en `estilos/web.css` como
+variables en `:root` (la clara) y bajo `prefers-color-scheme: dark`. La prueba
+`crates/magi-web/tests/contraste.rs` lee esas variables, calcula los contrastes
+con la fórmula de WCAG y exige **4,5:1 o más en texto** (texto, secundario,
+acento, correcto y crítico, sobre el fondo y sobre la superficie) y **3:1 o más
+en bordes de controles y foco**. El borde decorativo (el «inactivo» de la TUI, que
+en la oscura queda en 2,87:1) está exento a propósito: solo se usa en bordes que
+no transmiten nada.
+
+Si cambias un color de la TUI o de la web, repite `cargo test -p magi-web --test
+contraste`; no cambies los nombres de las variables sin cambiar la prueba. Las
+capturas conservan su fondo de terminal en los dos temas.
+
+## CSP
+
+GitHub Pages no deja poner cabeceras, así que la política de seguridad de contenido
+va en un `<meta http-equiv="Content-Security-Policy">` justo después de `<meta
+charset>`, en **cada página**, también en el manual. La pone `magi-web construir` al
+final, con el HTML ya definitivo.
+
+- Páginas propias: `script-src 'none'`, sin JavaScript.
+- Manual: `script-src 'self'` más el hash `'sha256-…'` de **cada `<script>` en
+  línea**, calculado al generar. Por eso no hace falta, ni se pone nunca,
+  `'unsafe-inline'`: un script en línea nuevo del tema de mdBook entra solo en la
+  CSP de esas páginas con su hash, y uno que cambie después de calcularlo hace
+  fallar `comprobar`.
+- El resto: `default-src 'none'; img-src 'self'; style-src 'self'; font-src
+  'self'; base-uri 'none'; form-action 'none'` (y `frame-src 'self'` en el manual,
+  por el índice lateral). Cada página lleva además `<meta name="referrer"
+  content="strict-origin-when-cross-origin">`.
+- Consecuencias para quien toque la web: ningún atributo `style` ni etiqueta
+  `<style>` ni `<script>` en las plantillas, y los colores de las capturas, por
+  clases. `frame-ancestors` no funciona en un `<meta>`: se acepta, porque la web
+  no tiene nada que proteger de un marco.
 
 ## Dominios permitidos
 
-<!-- S3: completar -->
+`magi-web comprobar` solo deja enlaces externos por `https://` y a esta lista
+(`ListaPermitida::por_defecto`, en `crates/magi-web/src/comprobar.rs`):
 
-Pendiente de completar en el cierre de la fase.
+| Dominio | Qué se puede enlazar |
+|---|---|
+| `github.com` | Solo `/HectorEspejo/magi`, `/ImranR98/Obtainium` y `/termux-user-repository/` |
+| `cli.github.com` | Todo (el GitHub CLI) |
+| `docs.github.com` | Todo (la declaración de privacidad del pie) |
+| `termux.dev` | Todo |
+| `keepachangelog.com` y `semver.org` | Todo (los CHANGELOG) |
+| `magi.erratia.com` | Todo (la propia web: sus recursos absolutos en el 404) |
+
+**Un dominio nuevo entra en la lista en el mismo PR que lo enlaza**, con su prueba;
+cualquier otro rompe `comprobar` y para el despliegue. Ojo con el CHANGELOG de una
+etiqueta ya publicada: es inmutable, así que un enlace suyo a un dominio que no
+esté en la lista para la construcción hasta ampliarla.
+
+## Pruebas
+
+| Qué | Cómo |
+|---|---|
+| El generador: datos, textos, plantillas, releases, CSP, `comprobar`, contraste, fuentes, workflows y construcción | `cargo test -p magi-web --locked` |
+| Que las capturas están al día | `TZ=UTC cargo test -p magi-ssh --locked --test capturas_web` |
+| Datos reales y restos de la organización anterior en todo el árbol, y enlaces relativos y anclas de los README, `CONTRIBUTING`, `SECURITY`, `docs/README.md`, el manual y `docs/publicar*.md` (**no** de este fichero: sus enlaces se revisan a mano) | `cargo test -p magi-ssh --locked --test repositorio_publico` |
+| El sitio entero, hasta `comprobar` | `scripts/generar-web.sh --sin-red` (o sin `--sin-red`, con la API) |
+| Los workflows y los scripts | `actionlint` y `shellcheck scripts/generar-web.sh scripts/generar-capturas.sh` |
+| Antes de un commit | `cargo clippy -p magi-web --all-targets --locked -- -D warnings` y `cargo fmt --all --check` |
+
+`cargo test --workspace` ya cubre `magi-web` (también que la portada pese menos
+de 1 MB en los dos idiomas) y la prueba normal de capturas. Las pruebas que
+ejecutan mdBook (`manual`, `manual_html` y `manual_mdbook`, que incluye el sitio
+entero con el manual real y cero hallazgos) toman su ruta de `MAGI_WEB_MDBOOK`;
+sin ella se omiten con un aviso (solo se ve con `--nocapture`), y con
+`MAGI_EXIGIR_MDBOOK=1` fallan en vez de omitirse, que es lo que hace el job `web`
+de `ci.yml`. Para correrlas en local:
+`MAGI_WEB_MDBOOK=$(command -v mdbook) MAGI_EXIGIR_MDBOOK=1 cargo test -p magi-web
+--test manual --test manual_html --test manual_mdbook`. Los
+datos de ejemplo de las pruebas (`crates/magi-web/tests/fijos/`) son inventados:
+nada real, como en el resto del repositorio. Antes de un PR que toque la web,
+constrúyela y pasa `magi-web comprobar`.
 
 ## Fuentes
 

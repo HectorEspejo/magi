@@ -810,3 +810,15 @@ main {
   border: 0;
   border-top: 1px solid var(--borde-decorativo);
 }
+
+/* ===== P3B: manual ===== */
+
+/* En el manual, la entrada «Manual» del menú lleva `aria-current="true"` (el
+   enlace lleva al índice y la página es un capítulo, no el índice): se ve igual
+   que la página actual de las demás, con la raya además del color. El resto del
+   tema del manual está en `web/manual/theme/`. */
+.menu a[aria-current="true"] {
+  border-bottom-color: var(--acento);
+  color: var(--acento);
+  font-weight: 700;
+}

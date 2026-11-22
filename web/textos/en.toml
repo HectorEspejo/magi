@@ -109,7 +109,7 @@ etiqueta = "Signing certificate (SHA-256)"
 [descargas.verificar]
 titulo = "Verify"
 introduccion = "Download the file and its `.sha256` into the same folder and check the checksum and the provenance before installing it. The provenance check needs the GitHub CLI (`gh`)."
-huella = "The SHA-256 fingerprint of the certificate that `apksigner` prints must be this one:"
+huella = "The SHA-256 fingerprint of the certificate must be this one (`apksigner` prints it in lowercase and without the colons; compare it ignoring that):"
 nota_macos = "On macOS, if you do not have `sha256sum`, use `shasum -a 256 -c` with the same `.sha256` file."
 fallo_antes = "If the checksum, the provenance or the certificate do not match, do not install the file and report it with "
 fallo_enlace = "a private security advisory"

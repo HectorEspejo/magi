@@ -3,16 +3,16 @@
 ## Generador y estructura
 - [x] Crate `crates/magi-web` en el workspace, biblioteca y binario `magi-web`, con `publish = false` y `dist = false`
   - AC: Dado el workspace con `magi-web`, cuando se ejecuta `dist plan`, entonces salen los mismos artefactos que sin él
-- [ ] `magi-web construir` genera el sitio completo en una carpeta a partir de `web/`, los datos de las releases y el manual preparado
+- [x] `magi-web construir` genera el sitio completo en una carpeta a partir de `web/`, los datos de las releases y el manual preparado
   - AC: Dados unos datos de ejemplo, cuando se construye, entonces existen la portada, descargas, versiones y 404 en los dos idiomas, y el manual
-- [ ] Plantillas `minijinja` en `web/plantillas/` con una cabecera y un pie comunes, también en el manual
+- [x] Plantillas `minijinja` en `web/plantillas/` con una cabecera y un pie comunes, también en el manual
 - [x] `web/datos/plataformas.toml` con canal, estado, artefacto, orden e instrucciones de cada plataforma, validado al cargar
   - AC: Dado un estado que no es `estable`, `en_pruebas` ni `beta`, cuando se construye, entonces falla con el id de la plataforma
 - [x] Textos en `web/textos/es.toml` y `web/textos/en.toml` con las mismas claves
   - AC: Dada una clave que solo está en uno de los dos, cuando se construye, entonces falla diciendo cuál y en qué fichero
-- [ ] Enlaces internos relativos: la web funciona igual en `magi.erratia.com` y en `hectorespejo.github.io/magi/`
+- [x] Enlaces internos relativos: la web funciona igual en `magi.erratia.com` y en `hectorespejo.github.io/magi/`
 - [x] Página 404 en castellano e inglés, con enlaces absolutos a `https://magi.erratia.com/`
-- [ ] `scripts/generar-web.sh` construye la web en local en `target/web/`, con mdBook fijado y los datos de la API o los de ejemplo (`--sin-red`)
+- [x] `scripts/generar-web.sh` construye la web en local en `target/web/`, con mdBook fijado y los datos de la API o los de ejemplo (`--sin-red`)
 
 ## Datos de las releases
 - [x] `magi-web releases` lee las releases de la API de GitHub en cada construcción, paginadas, y las deja en un `releases.json` sin versionar
@@ -57,22 +57,22 @@
 - [x] Sin la sección «Sin publicar» ni los comentarios de plantilla, y con el HTML en bruto del CHANGELOG escapado
 
 ## Manual
-- [ ] Manual con mdBook 0.5, fijado por versión y SHA-256, desde `docs/manual/` de la etiqueta de la última versión publicada del escritorio
-- [ ] `SUMMARY.md` sale del índice de `docs/manual/README.md`, con los capítulos y `estado.md`
+- [x] Manual con mdBook 0.5, fijado por versión y SHA-256, desde `docs/manual/` de la etiqueta de la última versión publicada del escritorio
+- [x] `SUMMARY.md` sale del índice de `docs/manual/README.md`, con los capítulos y `estado.md`
   - AC: Dado un `.md` del manual que no está en el índice, cuando se construye, entonces falla con su nombre
-- [ ] Enlaces que salen del manual a GitHub en esa etiqueta (`blob` para ficheros, `tree` para carpetas), y los de los README, a la portada
-- [ ] Anclas iguales que en GitHub: cada título lleva su `{#id}` con el algoritmo de `repositorio_publico`, que pasa a `magi-web`
+- [x] Enlaces que salen del manual a GitHub en esa etiqueta (`blob` para ficheros, `tree` para carpetas), y los de los README, a la portada
+- [x] Anclas iguales que en GitHub: cada título lleva su `{#id}` con el algoritmo de `repositorio_publico`, que pasa a `magi-web`
   - AC: Dado un enlace con ancla que funciona en GitHub, cuando se sigue en la web, entonces lleva al mismo título
-- [ ] Tema de mdBook con la estética de la web (paletas, fuentes, cabecera y pie comunes), claro u oscuro según el sistema y sin selector de temas
-- [ ] Búsqueda de mdBook activa, ejecución de código desactivada y nada cargado de fuera
-- [ ] Aviso «Solo en castellano · Spanish only» en el manual y «Manual (Spanish)» en el menú inglés
+- [x] Tema de mdBook con la estética de la web (paletas, fuentes, cabecera y pie comunes), claro u oscuro según el sistema y sin selector de temas
+- [x] Búsqueda de mdBook activa, ejecución de código desactivada y nada cargado de fuera
+- [x] Aviso «Solo en castellano · Spanish only» en el manual y «Manual (Spanish)» en el menú inglés
 
 ## Diseño y accesibilidad
 - [x] Estética de la TUI: JetBrains Mono, bordes de caja y la paleta fija en oscuro, con su derivada en claro
 - [x] Fuentes servidas desde la web (JetBrains Mono 2.305 en woff2 y el subconjunto de DejaVu Sans Mono), con sus licencias
 - [x] Prueba de contraste de las dos paletas: texto a 4,5:1 o más y bordes a 3:1 o más
-- [ ] Accesibilidad AA: `lang` en cada página, enlace para saltar al contenido, foco visible, todo con teclado y sin desplazamiento horizontal a 320 px
-- [ ] Cambio de idioma en cada página, a su equivalente, con `hreflang`
+- [x] Accesibilidad AA: `lang` en cada página, enlace para saltar al contenido, foco visible, todo con teclado y sin desplazamiento horizontal a 320 px
+- [x] Cambio de idioma en cada página, a su equivalente, con `hreflang`
 - [x] La portada pesa menos de 1 MB sin contar las descargas
 
 ## Seguridad y privacidad
@@ -86,21 +86,21 @@
 - [x] `web.yml` construye y despliega en GitHub Pages con `deploy-pages`, permisos `contents: read`, `pages: write` e `id-token: write`, y sin secretos
 - [x] `web.yml` se dispara al terminar bien «Release», «Release Termux» y «Release Android», con un push a `main` que toque la web y a mano, y despliega solo desde `main` con concurrencia `pages`
   - AC: Dada una «Release Termux» que falla, cuando termina, entonces la web no se regenera
-- [ ] Jobs `cambios-web` y `web` en `ci.yml` (no obligatorios) que construyen y comprueban la web, también con el manual de la rama, en cada PR que la toque
+- [x] Jobs `cambios-web` y `web` en `ci.yml` (no obligatorios) que construyen y comprueban la web, también con el manual de la rama, en cada PR que la toque
 - [x] `homepage` de `Cargo.toml` apunta a `https://magi.erratia.com` y los dos README enlazan la web
 
 ## App Android
-- [ ] `applicationId` `io.github.hectorespejo.magi`, sin cambiar el namespace ni el paquete Kotlin, y `android-release.yml` comprueba el nuevo
-- [ ] `docs/publicar-android.md` al día: `-dname` del keystore sin «Cuatro de Tres», el `applicationId` nuevo y dónde va la huella del certificado
+- [x] `applicationId` `io.github.hectorespejo.magi`, sin cambiar el namespace ni el paquete Kotlin, y `android-release.yml` comprueba el nuevo
+- [x] `docs/publicar-android.md` al día: `-dname` del keystore sin «Cuatro de Tres», el `applicationId` nuevo y dónde va la huella del certificado
 
 ## Documentación
-- [ ] `docs/publicar-web.md`: DNS, dominio verificado, ajustes de Pages, primera publicación, cómo relanzarla y cómo retirar la web sin dejar el subdominio expuesto
-- [ ] `web/README.md`: cómo se genera la web, de dónde sale cada cosa y cómo se rehace el subconjunto de símbolos
-- [ ] `CLAUDE.md`, `docs/README.md` y el capítulo `instalacion` del manual al día con la web
-- [ ] Líneas en «Sin publicar» de `CHANGELOG.md` y `android/CHANGELOG.md`
+- [x] `docs/publicar-web.md`: DNS, dominio verificado, ajustes de Pages, primera publicación, cómo relanzarla y cómo retirar la web sin dejar el subdominio expuesto
+- [x] `web/README.md`: cómo se genera la web, de dónde sale cada cosa y cómo se rehace el subconjunto de símbolos
+- [x] `CLAUDE.md`, `docs/README.md` y el capítulo `instalacion` del manual al día con la web
+- [x] Líneas en «Sin publicar» de `CHANGELOG.md` y `android/CHANGELOG.md`
 
 ## Cierre
-- [ ] Revisión adversarial de cierre de `magi-web` y de `web.yml` (datos de fuera, escape, CSP y despliegue), anotada en el informe de implementación
+- [x] Revisión adversarial de cierre de `magi-web` y de `web.yml` (datos de fuera, escape, CSP y despliegue), anotada en el informe de implementación
 
 ## Pasos del desarrollador
 - [ ] `erratia.com` verificado en GitHub y el CNAME `magi` → `hectorespejo.github.io` en su DNS
@@ -109,16 +109,16 @@
 - [ ] Primera publicación de la web comprobada con el guion en el móvil y en el escritorio
 
 ## Rutas y llamadas a la API
-- [ ] GET / y GET /en/ (portada)
-- [ ] GET /descargas/ y GET /en/download/
-- [ ] GET /versiones/ y GET /en/releases/
-- [ ] GET /manual/ y sus capítulos
-- [ ] GET /404.html
-- [ ] GET https://api.github.com/repos/HectorEspejo/magi/releases (en la construcción, paginado)
-- [ ] GET de los `.sha256` publicados (en la construcción)
+- [x] GET / y GET /en/ (portada)
+- [x] GET /descargas/ y GET /en/download/
+- [x] GET /versiones/ y GET /en/releases/
+- [x] GET /manual/ y sus capítulos
+- [x] GET /404.html
+- [x] GET https://api.github.com/repos/HectorEspejo/magi/releases (en la construcción, paginado)
+- [x] GET de los `.sha256` publicados (en la construcción)
 
 ---
 
-**Progreso Fase 9c:** 41 / 73 funcionalidades
+**Progreso Fase 9c:** 69 / 73 funcionalidades
 
-**Total MAGI (Fases 1-17, 9b y 9c):** 1473 / 1520 funcionalidades
+**Total MAGI (Fases 1-17, 9b y 9c):** 1501 / 1520 funcionalidades

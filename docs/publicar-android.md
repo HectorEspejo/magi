@@ -25,6 +25,7 @@ No hay Google Play ni otro canal: la app no se publica en tiendas.
 | Actualizar `android/version.properties`, `android/CHANGELOG.md` y el manual (`docs/manual/app-android.md`) | Agente |
 | Dejar los workflows y esta guía preparados | Agente |
 | Crear el keystore de firma y los cuatro secretos | Desarrollador |
+| Poner la huella SHA-256 del certificado en `web/datos/plataformas.toml` (por PR, con el valor que da el keystore) | Desarrollador |
 | Etiquetar (`git tag`) y empujar la etiqueta | Desarrollador |
 | Relanzar jobs y verificar la release | Desarrollador |
 | Mover una etiqueta, subir binarios a mano, crear cuentas o cambiar la visibilidad o los ajustes del repositorio | **Nadie más que el desarrollador**; el agente no lo hace |
@@ -75,12 +76,18 @@ keytool -genkeypair -v \
   -keystore magi-android-release.jks \
   -alias magi-release \
   -keyalg RSA -keysize 4096 -validity 10000 \
-  -dname "CN=MAGI Android, O=Cuatro de Tres S. Coop. And., C=ES"
+  -dname "CN=MAGI Android, O=Hector Espejo, C=ES"
 ```
 
 - Guarda el `.jks` en un gestor de contraseñas y en dos copias de seguridad
   separadas. Nunca lo subas al repositorio (tampoco el `.b64` ni la contraseña).
-- Comprueba el certificado y anota su huella SHA-256 (la de §6):
+- El nombre del certificado (el `-dname`) no se puede cambiar después: viaja
+  en todas las versiones de la app. Si ya creaste un keystore con otro nombre
+  y la app no se ha publicado, créalo de nuevo antes de la primera release.
+- Comprueba el certificado y anota su huella SHA-256 (la de §6), que sale en la
+  línea `SHA256:` del certificado, en mayúsculas y con `:`; es la que hay que
+  poner en la web (ver «El `applicationId` y la huella del certificado», más
+  abajo):
 
   ```sh
   keytool -list -v -keystore magi-android-release.jks -alias magi-release
@@ -112,6 +119,34 @@ Reglas de uso:
   vigilancia) o asumir una identidad nueva con el coste de reinstalar. Las
   notas de cada release publican la huella del certificado para detectar APKs
   falsos.
+
+### El `applicationId` y la huella del certificado
+
+El `applicationId` de la app es **`io.github.hectorespejo.magi`**
+(`defaultConfig` de [`android/app/build.gradle.kts`](../android/app/build.gradle.kts)).
+Es lo que Android toma como identidad de la app. **No cambia una vez publicada
+la app**: Android trataría el APK nuevo como otra app distinta y todos los
+usuarios tendrían que desinstalar e instalar de nuevo (y perderían sus datos y
+las claves del Keystore). Por eso se fijó antes de la primera release, y la
+`0.2.0` ya sale con él.
+
+- El `namespace` (`org.cuatrodetres.magi`) y el paquete Kotlin, que es también
+  el de UniFFI, **no cambian**: el usuario no los ve y renombrarlos no aporta
+  nada. El `applicationId` es lo que ve el sistema (y Obtainium); el
+  `namespace` solo lo usan el código y las clases generadas `R` y `BuildConfig`.
+- `android-release.yml` comprueba con `aapt2 dump badging` que el APK
+  declara exactamente ese paquete; si no, la release no se publica.
+- **La huella SHA-256 del certificado** va en la constante `huella_certificado`
+  de la sección `[app]` de [`web/datos/plataformas.toml`](../web/datos/plataformas.toml),
+  con el mismo formato que las notas de cada release (32 pares hexadecimales
+  en mayúsculas separados por `:`). La web la compara con la de las notas de la
+  última release de la app y, si no coinciden o la constante está vacía, **la
+  construcción de la web falla** (la web publicada sigue siendo la anterior).
+  Ponla, por PR, antes de publicar la primera release estable de la app.
+- Si cambia el keystore, cambia la huella: actualiza la constante **en el
+  mismo PR** y dilo en [`android/CHANGELOG.md`](../android/CHANGELOG.md), porque
+  los móviles que ya tienen la app no podrán actualizarla (ver «No se puede
+  rotar la clave» más arriba).
 
 ## 4. Versión y etiqueta
 
@@ -170,7 +205,23 @@ Flujo de una release:
 ### La primera publicación: `0.2.0-rc.1` y `0.2.0`
 
 Hay que pasar por una candidata antes de la primera estable, y hace falta que el
-keystore y sus cuatro secretos (§3) existan ya. En orden:
+keystore y sus cuatro secretos (§3) existan ya. La huella de su certificado ha
+de estar en `web/datos/plataformas.toml` antes de la estable (la web no cuenta
+las candidatas), mejor ya desde el PR de la primera candidata.
+
+**Antes de etiquetar, pasa al CHANGELOG lo que esté en «Sin publicar».** El
+cambio del `applicationId` (a `io.github.hectorespejo.magi`, antes de la
+primera publicación) se anotó en `## [Sin publicar]` de
+[`android/CHANGELOG.md`](../android/CHANGELOG.md), pero el extractor de notas de
+`android-release.yml` lee **primero** la sección de la versión de la etiqueta
+(y, para una candidata, la de la versión sin `-rc.N`) y solo si no existe, o
+está vacía, usa la de «Sin publicar»: como `## [0.2.0]` ya existe, lo que quede
+en «Sin publicar» **no entra en las notas de la release**. Mueve esa línea a
+`## [0.2.0]` (bajo un `### Cambiado`) en el PR que fija `version=0.2.0-rc.1`,
+para que entre ya en las notas de la candidata. Y en el PR que fija
+`version=0.2.0` pon en el encabezado de `## [0.2.0]` la fecha real de la
+publicación de la estable (hoy lleva la de cuando se numeró): es la que enseña
+la página de versiones de la web. La publicación, en orden:
 
 1. PR que deja `version=0.2.0-rc.1` en `android/version.properties`; `android.yml`
    verde; merge; etiqueta `android-v0.2.0-rc.1`. El resultado debe ser una

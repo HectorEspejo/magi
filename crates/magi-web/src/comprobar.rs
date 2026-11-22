@@ -227,6 +227,17 @@ fn es_pagina(rel: &str) -> bool {
         .any(|ext| minusculas.ends_with(ext))
 }
 
+/// Los únicos SVG que tiene la web: `favicon.svg` y, en el manual, el que lleva mdBook
+/// con el hash de su contenido (`manual/favicon-1a2b3c4d.svg`). Ningún `.xml`.
+fn es_svg_conocido(rel: &str) -> bool {
+    if rel == "favicon.svg" {
+        return true;
+    }
+    rel.strip_prefix("manual/favicon-")
+        .and_then(|resto| resto.strip_suffix(".svg"))
+        .is_some_and(|hash| hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 fn es_marcado_con_scripts(rel: &str) -> bool {
     let minusculas = rel.to_ascii_lowercase();
     minusculas.ends_with(".svg") || minusculas.ends_with(".xml")
@@ -408,6 +419,18 @@ pub fn comprobar_sitio(dir: &Path, lista: &ListaPermitida) -> Resultado<Vec<Hall
             let pagina = leer_pagina(dir, rel, &mut hallazgos);
             sitio.paginas.insert(rel.clone(), pagina);
         } else if es_marcado_con_scripts(rel) {
+            // Un SVG suelto se ejecuta con el origen de la web (la CSP del `<meta>` solo
+            // vale para HTML) y buscar `<script` no lo cierra (`<s:script>`, entidades
+            // de DTD…): solo se admiten los que la web conoce, el favicon propio y el
+            // de mdBook (`manual/favicon-<hash>.svg`), y se les mira el contenido igual.
+            if !es_svg_conocido(rel) {
+                hallazgos.push(Hallazgo::nuevo(
+                    rel.as_str(),
+                    None,
+                    "SVG o XML no previsto: un SVG abierto directamente ejecuta lo que lleve con el origen de la web; solo se admiten `favicon.svg` y el favicon de mdBook",
+                ));
+                continue;
+            }
             let ruta = ruta_en(dir, rel);
             if fs::metadata(&ruta).is_ok_and(|m| m.len() > MAX_PAGINA) {
                 hallazgos.push(Hallazgo::nuevo(
@@ -604,6 +627,14 @@ fn comprobar_pagina(p: &Pagina, sitio: &Sitio, lista: &ListaPermitida, h: &mut V
                     format!(
                         "atributo `{}` en <{}>: los manejadores de eventos en línea no se permiten",
                         visible(nombre),
+                        visible(&e.nombre)
+                    ),
+                ));
+            } else if nombre == "srcdoc" {
+                h.push(aviso(
+                    e.inicio,
+                    format!(
+                        "atributo `srcdoc` en <{}>: lleva marcado que esta comprobación no examina (enlaces fuera de la lista, destinos con `target`)",
                         visible(&e.nombre)
                     ),
                 ));

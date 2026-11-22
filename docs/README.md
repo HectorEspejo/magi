@@ -16,6 +16,10 @@ MAGI es como es.
   fichero cifrado con el que se sincronizan el inventario entre equipos.
   Es la referencia que usan el escritorio y la app Android, que comparten el
   mismo código.
+- La web de MAGI, <https://magi.erratia.com>: la portada, las descargas con su
+  suma SHA-256 y cómo verificarlas, las versiones y el manual de la última
+  versión publicada. Se genera desde este repositorio; cómo, en
+  [`../web/README.md`](../web/README.md).
 
 ## Para publicar
 
@@ -26,6 +30,10 @@ MAGI es como es.
   (el keystore, las versiones candidatas y Obtainium).
 - [`publicar-termux.md`](publicar-termux.md): cómo se publica el `.deb` de
   Termux y cómo se propone la receta a TUR.
+- [`publicar-web.md`](publicar-web.md): cómo se publica la web (DNS, dominio
+  verificado, ajustes de Pages, primera publicación, cómo repetirla y cómo
+  retirarla). Cómo se genera y de dónde sale cada cosa está en
+  [`../web/README.md`](../web/README.md).
 
 ## El archivo de diseño: `faseN/` y el maestro
 

@@ -59,6 +59,21 @@ pub fn ejecutar_con_plazo(
     plazo: Duration,
     tope_salida: usize,
 ) -> Resultado<SalidaOrden> {
+    ejecutar_sin_variables(programa, args, entorno, &[], plazo, tope_salida)
+}
+
+/// Como [`ejecutar_con_plazo`], pero quitando antes del entorno heredado las
+/// variables de `quitar` (y después añadiendo las de `entorno`). Sirve para que una
+/// variable del que lanza el generador (`GIT_DIR` puesto por un gancho o un alias,
+/// por ejemplo) no desvíe una orden a otro repositorio o a otro servidor.
+pub fn ejecutar_sin_variables(
+    programa: &str,
+    args: &[&str],
+    entorno: &[(&str, &str)],
+    quitar: &[&str],
+    plazo: Duration,
+    tope_salida: usize,
+) -> Resultado<SalidaOrden> {
     let fallo = |motivo: String| ErrorWeb::Orden {
         orden: programa.to_string(),
         motivo,
@@ -70,6 +85,9 @@ pub fn ejecutar_con_plazo(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for clave in quitar {
+        orden.env_remove(clave);
+    }
     for (clave, valor) in entorno {
         orden.env(clave, valor);
     }
@@ -187,17 +205,28 @@ fn recoger(lector: &Receiver<Vec<u8>>, limite: Instant) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// Caracteres que no se ven pero cambian cómo se lee una línea: marcas de
-/// dirección y aislados bidireccionales (el texto se vería al revés), separadores
-/// de línea y de párrafo, espacios de ancho cero, marcas de formato (`U+2060` a
-/// `U+206F`) y la marca de orden de bytes.
-fn es_invisible_que_engana(c: char) -> bool {
+/// Caracteres que no se ven pero cambian cómo se lee un texto (o lo esconden): marcas
+/// de dirección y aislados bidireccionales (el texto se vería al revés, incluida la
+/// marca de letra árabe U+061C), separadores de línea y de párrafo, espacios de ancho
+/// cero, el guion blando y el unidor de grafemas, marcas de formato (`U+2060` a
+/// `U+206F`), las anotaciones interlineales, la marca de orden de bytes y los
+/// caracteres de etiqueta (`U+E0000` a `U+E007F`, que esconden un texto ASCII entero).
+///
+/// Es el único saneador de invisibles del crate: lo usan los mensajes de error, el
+/// texto de las capturas y el del CHANGELOG, para que no diverjan.
+pub(crate) fn es_invisible_que_engana(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}'..='\u{200F}'
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
             | '\u{2028}'..='\u{202E}'
             | '\u{2060}'..='\u{206F}'
             | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
     )
 }
 

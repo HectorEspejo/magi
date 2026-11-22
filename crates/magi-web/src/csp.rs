@@ -116,8 +116,12 @@ fn es_blanco_solo(texto: &str) -> bool {
         .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c))
 }
 
-/// Busca `<head>` y comprueba que su primer elemento es `<meta charset>`. Solo
-/// se permiten blancos y comentarios antes (mdBook pone un comentario).
+/// Busca `<head>` y comprueba que su primer elemento es `<meta charset>`. Antes de
+/// `<head>` solo puede haber un doctype, comentarios, blancos y un único `<html>`
+/// (mdBook pone un comentario): con cualquier otra cosa delante (`<body>`, texto,
+/// `<template>`, `<svg>`…) el navegador ignora el `<head>` o lo deja en otro sitio, el
+/// `<meta http-equiv>` de la CSP quedaría fuera y no se aplicaría, y esta comprobación
+/// diría que sí.
 pub(crate) fn cabecera_inicial<'a>(
     html: &str,
     tokens: &'a [Token],
@@ -128,6 +132,23 @@ pub(crate) fn cabecera_inicial<'a>(
     else {
         return Err("no hay <head>".to_string());
     };
+    let mut html_visto = false;
+    for token in &tokens[..i_head] {
+        match token {
+            Token::Doctype | Token::Comentario(_) => {}
+            Token::Texto { inicio, fin }
+                if es_blanco_solo(html.get(*inicio..*fin).unwrap_or("x")) => {}
+            Token::Etiqueta(e) if e.nombre == "html" && !e.cierre && !html_visto => {
+                html_visto = true;
+            }
+            _ => {
+                return Err(
+                    "hay algo antes de <head> que no es un doctype, un comentario ni <html>: el navegador no aplicaría la CSP"
+                        .to_string(),
+                );
+            }
+        }
+    }
     let mut elementos: Vec<&'a Etiqueta> = Vec::new();
     for token in &tokens[i_head + 1..] {
         match token {

@@ -5,8 +5,8 @@
 # desplegar: compila el generador (magi-web), lee las releases de la API de
 # GitHub y sus .sha256, prepara el manual, construye el sitio y lo comprueba.
 # Si algo falla, termina con un mensaje que dice qué y dónde, y no deja un sitio
-# a medias donde estaba el anterior (magi-web sustituye la carpeta de salida
-# entera solo al construir).
+# a medias donde estaba el anterior: el sitio se construye en target/web/sitio.nuevo,
+# se comprueba allí y solo entonces sustituye a target/web/sitio.
 #
 # mdBook va fijado por versión y SHA-256 (los mismos valores que web.yml y el job
 # web de ci.yml; una prueba de crates/magi-web comprueba que coinciden): se usa
@@ -36,6 +36,7 @@ MDBOOK_SHA256=5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89
 
 trabajo="$raiz/target/web"
 sitio="$trabajo/sitio"
+sitio_nuevo="$trabajo/sitio.nuevo"
 releases_de_ejemplo="$raiz/crates/magi-web/tests/fijos/releases/sin-red.json"
 
 sin_red=0
@@ -44,6 +45,7 @@ manual_dir=""
 changelog=""
 changelog_app=""
 etiqueta_de_changelog=""
+etiqueta_escritorio=""
 mdbook=""
 temporal=""
 
@@ -198,7 +200,7 @@ changelog_de() {
 		cp -- "$ruta" "$destino" \
 			|| fallar "no se pudo copiar $ruta"
 	else
-		git show "$etiqueta_de_changelog:$ruta" >"$destino" \
+		git show "refs/tags/$etiqueta_de_changelog:$ruta" >"$destino" \
 			|| fallar "no se pudo leer $ruta de la etiqueta $etiqueta_de_changelog (¿faltan las etiquetas? prueba con: git fetch --tags)"
 	fi
 }
@@ -212,6 +214,7 @@ preparar_changelogs() {
 	echo "==> CHANGELOG de la última versión publicada"
 	changelog_de "$generador" "$releases" escritorio CHANGELOG.md "$carpeta/CHANGELOG.md"
 	[[ -n "$etiqueta_de_changelog" ]] || fallar "no hay ninguna versión del escritorio publicada"
+	etiqueta_escritorio="$etiqueta_de_changelog"
 	changelog="$carpeta/CHANGELOG.md"
 	echo "escritorio: $etiqueta_de_changelog"
 	changelog_de "$generador" "$releases" app android/CHANGELOG.md "$carpeta/android-CHANGELOG.md"
@@ -223,26 +226,56 @@ preparar_changelogs() {
 	fi
 }
 
-# Prepara el manual para construirlo con mdBook y deja en $manual_dir la carpeta
-# ya generada (vacía mientras no esté hecho).
+# preparar_manual <generador>: prepara el manual con `magi-web preparar-manual`
+# (SUMMARY, anclas de GitHub, enlaces y HTML suelto), lo construye con mdBook y
+# deja en $manual_dir la carpeta generada. El manual sale de docs/manual/ de la
+# etiqueta de la última versión publicada del escritorio; con --sin-red (las
+# releases de ejemplo no son etiquetas reales) o --con-manual-de-la-rama, del
+# árbol de trabajo. En los dos casos los enlaces de fuera apuntan a esa etiqueta.
 preparar_manual() {
+	local generador="$1"
+	local libro="$trabajo/libro"
+	local destino="$trabajo/manual"
+	local -a argumentos
+
+	[[ -n "$etiqueta_escritorio" ]] || fallar "no hay etiqueta del escritorio de la que sacar el manual"
 	obtener_mdbook
 	echo "==> mdBook $MDBOOK_VERSION: $mdbook"
-	# CONTRATO-S3-MANUAL: el Sprint 3 completa esta función con `magi-web
-	# preparar-manual --etiqueta <última versión publicada> --salida <dir>` (o,
-	# con --con-manual-de-la-rama, desde docs/manual/ del árbol de trabajo),
-	# `mdbook build` y, al final, `manual_dir="$trabajo/manual"`. También decide
-	# de dónde sale el manual con --sin-red.
-	local origen="la última etiqueta publicada"
-	if [[ "$manual_de_la_rama" -eq 1 ]]; then
-		origen="docs/manual/ del árbol de trabajo"
+
+	argumentos=(preparar-manual --etiqueta "$etiqueta_escritorio" --tema web/manual --salida "$libro")
+	if [[ "$sin_red" -eq 1 || "$manual_de_la_rama" -eq 1 ]]; then
+		echo "==> Preparando el manual de docs/manual/ del árbol de trabajo (enlaces a $etiqueta_escritorio)"
+		argumentos+=(--arbol docs/manual)
+	else
+		echo "==> Preparando el manual de la etiqueta $etiqueta_escritorio"
+		argumentos+=(--repositorio .)
 	fi
-	echo "manual: pendiente de la 9c S3 (origen previsto: $origen)"
+	"$generador" "${argumentos[@]}" \
+		|| fallar "no se pudo preparar el manual (la web anterior no cambia)"
+
+	echo "==> Construyendo el manual con mdBook"
+	# mdBook no vacía su destino: se parte de una carpeta nueva.
+	rm -rf -- "$destino"
+	"$mdbook" build "$libro" --dest-dir "$destino" \
+		|| fallar "mdBook no pudo construir el manual"
+	[[ -f "$destino/index.html" ]] \
+		|| fallar "mdBook no dejó $destino/index.html"
+	manual_dir="$destino"
 }
 
 principal() {
 	local generador releases
 	local -a argumentos
+
+	# Una ruta relativa de MAGI_WEB_MDBOOK vale desde donde se lanzó el script, no
+	# desde la raíz del repositorio a la que se cambia justo después.
+	if [[ -n "${MAGI_WEB_MDBOOK:-}" && "$MAGI_WEB_MDBOOK" != /* ]]; then
+		MAGI_WEB_MDBOOK="$PWD/$MAGI_WEB_MDBOOK"
+	fi
+	# Variables que hacen que git mire otro repositorio (las dejan puestas los
+	# ganchos, los alias y `git rebase --exec`): aquí se lee el de la raíz.
+	unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+		GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_COMMON_DIR GIT_PREFIX
 
 	cd "$raiz"
 	exigir cargo "instala Rust (https://rustup.rs)"
@@ -270,10 +303,10 @@ principal() {
 	fi
 
 	preparar_changelogs "$generador" "$releases"
-	preparar_manual
+	preparar_manual "$generador"
 
-	echo "==> Construyendo el sitio en $sitio"
-	argumentos=(construir --web web --releases "$releases" --animacion assets/demo/magi.gif --changelog "$changelog" --salida "$sitio")
+	echo "==> Construyendo el sitio en $sitio_nuevo"
+	argumentos=(construir --web web --releases "$releases" --animacion assets/demo/magi.gif --changelog "$changelog" --salida "$sitio_nuevo")
 	if [[ -n "$changelog_app" ]]; then
 		argumentos+=(--changelog-app "$changelog_app")
 	fi
@@ -291,8 +324,12 @@ principal() {
 		|| fallar "la construcción del sitio falló"
 
 	echo "==> Comprobando el sitio"
-	"$generador" comprobar "$sitio" \
-		|| fallar "la comprobación del sitio falló"
+	"$generador" comprobar "$sitio_nuevo" \
+		|| fallar "la comprobación del sitio falló: el sitio rechazado queda en $sitio_nuevo para verlo y $sitio no cambia"
+
+	# Solo un sitio comprobado sustituye al anterior.
+	rm -rf -- "$sitio"
+	mv -- "$sitio_nuevo" "$sitio"
 
 	echo "web lista en $sitio"
 }

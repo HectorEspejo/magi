@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::error::{ErrorWeb, Resultado};
 use crate::html::{self, Token};
+use crate::ordenes::es_invisible_que_engana;
 
 /// Tamaño de toda captura.
 pub const COLUMNAS: usize = 100;
@@ -761,27 +762,6 @@ fn describir_etiqueta(et: &html::Etiqueta) -> String {
             atributos.join(", ")
         )
     }
-}
-
-/// Caracteres que no se ven pero cambian cómo se lee un texto: marcas de dirección
-/// y aislados bidireccionales (el texto se vería al revés), separadores de línea y
-/// de párrafo, espacios de ancho cero, marcas de formato y la marca de orden de
-/// bytes. Parte del conjunto de `ordenes::es_invisible_que_engana`, copiado para no
-/// tocar ese módulo, y añade la marca de letra árabe (U+061C, que ordena el texto
-/// como una marca de dirección) y los caracteres de etiqueta (U+E0000 a U+E007F,
-/// invisibles y capaces de esconder un texto entero): un fragmento versionado en
-/// `web/capturas/` lo puede editar cualquiera con una PR y no debe poder esconder
-/// texto al revés ni oculto.
-fn es_invisible_que_engana(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061C}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{FEFF}'
-            | '\u{E0000}'..='\u{E007F}'
-    )
 }
 
 /// El texto de una captura: sin `<`, con `&` solo en las cinco entidades, sin

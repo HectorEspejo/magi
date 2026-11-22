@@ -122,7 +122,7 @@ cuentas y no empuja etiquetas.
    |---|---|
    | Avisos privados de vulnerabilidades | Activados (Security → Private vulnerability reporting) |
    | Dependabot | Alertas y actualizaciones **de seguridad** activadas; **sin** `dependabot.yml` (nada de actualizaciones de versión). Una PR que toque una versión fijada (russh, ratatui, crossterm, tui-term, vt100, rusqlite, IronRDP, `age`, UniFFI) no se fusiona tal cual: se cierra y se sube el conjunto a mano con sus pruebas |
-   | Regla de `main` | PR obligatoria y estos checks de `ci.yml`, **con el nombre con que salen en la PR**: `Formato`, `Clippy`, `Tests Linux (ubuntu-22.04)`, `Tests Linux (ubuntu-24.04)` (son los dos del job `tests-linux`), `macOS (arm64)`, `Visor web (TypeScript)`, `Licencias y avisos (cargo-deny)` y `Plantilla AUR`. Sin `push --force` ni borrado de `main`. **No** se exigen los de `android.yml` (tienen filtros de rutas y bloquearían las PR que no los disparan) ni `¿Toca el paquete de Termux?` y `Paquete de Termux (.deb)`, que son condicionales. Si renombras, quitas o añades un job de `ci.yml`, cambia aquí la regla |
+   | Regla de `main` | PR obligatoria y estos checks de `ci.yml`, **con el nombre con que salen en la PR**: `Formato`, `Clippy`, `Tests Linux (ubuntu-22.04)`, `Tests Linux (ubuntu-24.04)` (son los dos del job `tests-linux`), `macOS (arm64)`, `Visor web (TypeScript)`, `Licencias y avisos (cargo-deny)` y `Plantilla AUR`. Sin `push --force` ni borrado de `main`. **No** se exigen los de `android.yml` (tienen filtros de rutas y bloquearían las PR que no los disparan) ni `¿Toca el paquete de Termux?` y `Paquete de Termux (.deb)`, que son condicionales, ni `¿Toca la web?` y `Web (construir y comprobar)` (Fase 9c), que también son condicionales (el segundo solo corre si el primero dice que la PR toca la web). Si renombras, quitas o añades un job de `ci.yml`, cambia aquí la regla |
    | Ramas | Borrar la rama al fusionar; borrar las ya fusionadas (`fase*`, `correccion-*`), menos las abiertas |
    | Issues | Activadas (plantillas en `.github/ISSUE_TEMPLATE/`, sin issues en blanco); Discussions y wiki, desactivadas |
    | Descripción y temas | Una línea de qué es; temas `ssh`, `tui`, `terminal`, `rust`, `sftp`, `rdp`, `vnc` y `android` |
@@ -311,6 +311,7 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 | `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` (estos dos, solo con `PUBLICAR_HOMEBREW` y `PUBLICAR_AUR`) |
 | `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
 | `termux-release.yml` | tag `vX.Y.Z` y `vX.Y.Z-rc.N` (nunca `android-v*`) y `workflow_dispatch` | Compila para `aarch64-linux-android` con el NDK r30, arma `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata) con `scripts/paquete-termux.sh`, comprueba su estructura, escribe el `.sha256`, atesta la procedencia y lo sube a la release del tag (espera hasta 60 min a que `release.yml` la cree; justo antes de subir comprueba que el tag sigue en el commit compilado y, si no, falla; falla si los adjuntos no quedan con el nombre esperado; nunca toca «Latest»), solo con `GITHUB_TOKEN`. La CI de cada PR tiene su job `termux` en `ci.yml`. Guía completa y receta de TUR en [`publicar-termux.md`](publicar-termux.md) |
+| `web.yml` («Web») | Al terminar **bien** «Release», «Release Termux» o «Release Android» (`workflow_run`); push a `main` que toque `web/**`, `crates/magi-web/**`, `assets/demo/**` o el propio `web.yml`; y `workflow_dispatch` | Construye la web (`scripts/generar-web.sh`: lee la API de GitHub y los `.sha256`, saca el manual y los CHANGELOG de la etiqueta de la última versión publicada, construye con `magi-web` y mdBook y comprueba el sitio) y la despliega en GitHub Pages (`magi.erratia.com`) solo desde `main`, con concurrencia `pages`. Sin secretos: usa el `GITHUB_TOKEN` y las variables `PUBLICAR_HOMEBREW` y `PUBLICAR_AUR`. Una release que falla no la regenera, y un dato raro para la construcción: la web anterior sigue. La CI de cada PR que toca la web tiene su job `web` en `ci.yml`. Guía completa en [`publicar-web.md`](publicar-web.md) |
 
 Permisos: `contents: read` por defecto en todos los workflows, y cada job que
 necesita algo más lo declara él mismo, nunca arriba. Esto es lo que hay
@@ -327,13 +328,16 @@ necesita algo más lo declara él mismo, nunca arriba. Esto es lo que hay
 | | `publicar` | `contents: write` (crea la release de Android) |
 | `termux-release.yml` | `compilar` | `id-token: write` y `attestations: write` |
 | | `publicar` | `contents: write` (sube el `.deb` y su `.sha256` a la release que crea `release.yml`; nunca la crea ni toca «Latest») |
+| `web.yml` | `construir` | ninguno (solo `contents: read`, el de arriba) |
+| | `desplegar` | `pages: write` e `id-token: write` (`deploy-pages`, OIDC hacia Pages; solo en este job y solo desde `main`) |
 
 Los demás jobs (`verificar`, `build-global-artifacts`, `publish-homebrew-formula`,
 `announce`…) no escriben con `GITHUB_TOKEN`; el de Homebrew usa su propio
 secreto, `HOMEBREW_TAP_TOKEN`. Ningún workflow que escriba se dispara en pull
 requests: `release.yml`, `android-release.yml` y `termux-release.yml` solo
 arrancan con una etiqueta (`termux-release.yml` también a mano, con
-`workflow_dispatch`), así que ningún PR necesita permisos de escritura. No
+`workflow_dispatch`), y `web.yml` solo con el final de esas releases, con un push
+a `main` o a mano, así que ningún PR necesita permisos de escritura. No
 añadas secretos a `ci.yml`: los PRs de forks no los reciben y no los necesitan.
 
 `release.yml` **sí se mantiene a mano** en algunos detalles (está marcado con
@@ -493,6 +497,9 @@ nombres cambia con el tiempo.
 - Informe de la Fase 9: §4.1 (publicar una versión), §4.2 (primera
   publicación), §5.3 (workflows), §7.1 (política de versiones) y §7.5
   (PKGBUILD de `magi-ssh-bin`).
+- [`publicar-android.md`](publicar-android.md), [`publicar-termux.md`](publicar-termux.md)
+  y [`publicar-web.md`](publicar-web.md): las guías de la app Android, del `.deb`
+  de Termux y de la web de MAGI (DNS, dominio y GitHub Pages).
 - [`SECURITY.md`](../SECURITY.md): cómo reportar vulnerabilidades y versiones
   soportadas.
 - [`CHANGELOG.md`](../CHANGELOG.md): formato Keep a Changelog y notas de cada
