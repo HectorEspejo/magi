@@ -10,6 +10,7 @@
 {% if pagina != "no_encontrada" -%}
 <link rel="alternate" hreflang="{{ alternativa.hreflang }}" href="{{ alternativa.href }}">
 {% endif -%}
+{% block cabecera %}{% endblock %}
 </head>
 <body>
 <a class="saltar" href="#contenido">{{ t.comun.saltar }}</a>

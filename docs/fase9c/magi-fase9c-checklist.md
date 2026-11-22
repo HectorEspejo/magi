@@ -35,26 +35,26 @@
 - [x] Descargas sin JavaScript, con todas las plataformas a la vista y en orden: Linux, macOS, Termux y app
 
 ## Portada
-- [ ] Portada en castellano e inglés: qué es MAGI, para quién, plataformas, sin telemetría, licencia y enlaces a descargas, manual, GitHub, seguridad y contribuir
-- [ ] Botón principal «Descargar» con la versión actual del escritorio
-- [ ] La animación del README va dentro de un `<details open>` que la oculta sin JavaScript
+- [x] Portada en castellano e inglés: qué es MAGI, para quién, plataformas, sin telemetría, licencia y enlaces a descargas, manual, GitHub, seguridad y contribuir
+- [x] Botón principal «Descargar» con la versión actual del escritorio
+- [x] La animación del README va dentro de un `<details open>` que la oculta sin JavaScript
   - AC: Dado `prefers-reduced-motion: reduce`, cuando se abre la portada, entonces no se ve la animación y en su lugar está la captura de Flota
-- [ ] Seis capturas con título y descripción: Flota, sesión con paneles, archivos, túneles, deliberación MAGI y servicios
+- [x] Seis capturas con título y descripción: Flota, sesión con paneles, archivos, túneles, deliberación MAGI y servicios
 
 ## Capturas
-- [ ] Prueba ignorada `capturas_web` que pinta cada vista con `App::de_prueba` y `TestBackend` a 100×30, con el tema fijo, y la exporta a HTML en `web/capturas/`
+- [x] Prueba ignorada `capturas_web` que pinta cada vista con `App::de_prueba` y `TestBackend` a 100×30, con el tema fijo, y la exporta a HTML en `web/capturas/`
   - AC: Dado `scripts/generar-capturas.sh`, cuando se ejecuta, entonces queda un fichero por vista y `capturas.css`
-- [ ] Las capturas usan solo el inventario de la demo (`assets/demo/inventario`), nunca la semilla de las pruebas
+- [x] Las capturas usan solo el inventario de la demo (`assets/demo/inventario`), nunca la semilla de las pruebas
   - AC: Dado un nombre de host de la semilla en una captura, cuando se generan o se comprueban, entonces la prueba falla
-- [ ] Colores por clases (sin atributos `style`), con la paleta fija y su fondo de terminal en los dos temas
-- [ ] Prueba normal `capturas_web` que falla si alguna captura no está al día y dice cómo regenerarla
-- [ ] Cobertura de glifos: todo carácter de las capturas está en JetBrains Mono o en el subconjunto de símbolos, y lo que no, se degrada con `texto_ascii`
-- [ ] Cada captura es una figura con su descripción, y el lector de pantalla no lee los bordes de caja
+- [x] Colores por clases (sin atributos `style`), con la paleta fija y su fondo de terminal en los dos temas
+- [x] Prueba normal `capturas_web` que falla si alguna captura no está al día y dice cómo regenerarla
+- [x] Cobertura de glifos: todo carácter de las capturas está en JetBrains Mono o en el subconjunto de símbolos, y lo que no, se degrada con `texto_ascii`
+- [x] Cada captura es una figura con su descripción, y el lector de pantalla no lee los bordes de caja
 
 ## Versiones
-- [ ] Versiones en castellano e inglés con el CHANGELOG del escritorio y el de la app, sacados de la etiqueta de su última versión publicada
-- [ ] Cada versión con su resumen en el idioma de la página, el detalle en castellano dentro de un `<details>` y el enlace a su release
-- [ ] Sin la sección «Sin publicar» ni los comentarios de plantilla, y con el HTML en bruto del CHANGELOG escapado
+- [x] Versiones en castellano e inglés con el CHANGELOG del escritorio y el de la app, sacados de la etiqueta de su última versión publicada
+- [x] Cada versión con su resumen en el idioma de la página, el detalle en castellano dentro de un `<details>` y el enlace a su release
+- [x] Sin la sección «Sin publicar» ni los comentarios de plantilla, y con el HTML en bruto del CHANGELOG escapado
 
 ## Manual
 - [ ] Manual con mdBook 0.5, fijado por versión y SHA-256, desde `docs/manual/` de la etiqueta de la última versión publicada del escritorio
@@ -73,7 +73,7 @@
 - [x] Prueba de contraste de las dos paletas: texto a 4,5:1 o más y bordes a 3:1 o más
 - [ ] Accesibilidad AA: `lang` en cada página, enlace para saltar al contenido, foco visible, todo con teclado y sin desplazamiento horizontal a 320 px
 - [ ] Cambio de idioma en cada página, a su equivalente, con `hreflang`
-- [ ] La portada pesa menos de 1 MB sin contar las descargas
+- [x] La portada pesa menos de 1 MB sin contar las descargas
 
 ## Seguridad y privacidad
 - [x] CSP en un `<meta>` al principio de cada página, solo con recursos propios, y en el manual los scripts en línea por su hash, calculado al generar
@@ -119,6 +119,6 @@
 
 ---
 
-**Progreso Fase 9c:** 27 / 73 funcionalidades
+**Progreso Fase 9c:** 41 / 73 funcionalidades
 
-**Total MAGI (Fases 1-17, 9b y 9c):** 1459 / 1520 funcionalidades
+**Total MAGI (Fases 1-17, 9b y 9c):** 1473 / 1520 funcionalidades

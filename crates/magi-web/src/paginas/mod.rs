@@ -5,6 +5,8 @@
 
 pub mod descargas;
 pub mod no_encontrada;
+pub mod portada;
+pub mod versiones;
 
 use serde_json::{json, Value};
 

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block titulo %}{{ t.portada.titulo_pagina }}{% endblock %}
+{% block cabecera %}
+<link rel="stylesheet" href="{{ raiz }}capturas/capturas.css">
+{% endblock %}
+{% block contenido %}
+<div class="contenedor">
+  <section class="portada-hero" aria-labelledby="portada-titulo">
+    <h1 class="titulo-pagina" id="portada-titulo">{{ t.portada.titulo }}</h1>
+    <p class="portada-lema">{{ t.portada.lema }}</p>
+    <p class="portada-plataformas-linea">{{ t.portada.plataformas_linea }}</p>
+    <p class="portada-acciones">
+      <a class="boton" href="{{ nav.descargas.href }}">{{ t.portada.descargar }} {{ d.version }}</a>
+      <a class="boton boton-secundario" href="{{ nav.manual.href }}" hreflang="es">{{ t.portada.leer_manual }}</a>
+    </p>
+  </section>
+
+  <details open class="demo">
+    <summary>{{ t.portada.demo_resumen }}</summary>
+    <img src="{{ raiz }}demo/magi.gif" alt="{{ t.portada.demo_alt }}" loading="lazy" decoding="async" width="1200" height="680">
+  </details>
+  <div class="demo-estatica">
+{% with c = d.flota %}
+{% include "parciales/captura.html" %}
+{% endwith %}
+  </div>
+
+  <section class="portada-capturas" id="capturas" aria-labelledby="capturas-titulo">
+    <h2 class="portada-seccion-titulo" id="capturas-titulo">{{ t.portada.capturas_titulo }}</h2>
+    <p class="capturas-nota">{{ t.portada.capturas_nota }}</p>
+    <div class="capturas-rejilla">
+{% for c in d.capturas %}
+{% include "parciales/captura.html" %}
+{% endfor %}
+    </div>
+  </section>
+
+  <section class="caja" id="que-es" aria-labelledby="que-es-titulo">
+    <h2 class="caja-titulo" id="que-es-titulo">{{ t.portada.que_es.titulo }}</h2>
+    <p class="portada-texto">{{ t.portada.que_es.que }}</p>
+    <p class="portada-texto">{{ t.portada.que_es.para_quien }}</p>
+    <p class="portada-texto">{{ t.portada.que_es.movil }}</p>
+  </section>
+
+  <section class="caja" id="plataformas" aria-labelledby="plataformas-titulo">
+    <h2 class="caja-titulo" id="plataformas-titulo">{{ t.portada.plataformas.titulo }}</h2>
+    <p class="portada-texto">{{ t.portada.plataformas.introduccion }}</p>
+    <ul class="portada-plataformas">
+{% for p in d.plataformas %}
+      <li id="plataforma-{{ p.id }}"><span class="portada-plataforma-nombre">{{ p.etiqueta }}</span> <span class="estado estado-{{ p.estado }}">{{ p.estado_texto }}</span> <span class="portada-plataforma-version">{{ p.version }}</span>
+{%- if p.probado %} · <a href="{{ d.enlaces.probado }}" hreflang="es">{{ t.descargas.que_se_ha_probado }}</a>{% endif %}</li>
+{% endfor %}
+    </ul>
+  </section>
+
+  <section class="caja" id="libre" aria-labelledby="libre-titulo">
+    <h2 class="caja-titulo" id="libre-titulo">{{ t.portada.libre.titulo }}</h2>
+    <p class="portada-texto">{{ t.portada.libre.sin_telemetria }}</p>
+    <p class="portada-texto">{{ t.portada.libre.licencia|con_codigo }}</p>
+  </section>
+
+  <nav class="portada-enlaces" aria-labelledby="enlaces-titulo">
+    <h2 class="portada-seccion-titulo" id="enlaces-titulo">{{ t.portada.enlaces.titulo }}</h2>
+    <ul>
+      <li><a href="{{ nav.descargas.href }}">{{ t.portada.enlaces.descargas }}</a></li>
+      <li><a href="{{ nav.manual.href }}" hreflang="es">{{ t.portada.enlaces.manual }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi">{{ t.portada.enlaces.github }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi/security/policy">{{ t.portada.enlaces.seguridad }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi/blob/main/{% if lang == "es" %}CONTRIBUTING.md{% else %}CONTRIBUTING.en.md{% endif %}">{{ t.portada.enlaces.contribuir }}</a></li>
+    </ul>
+  </nav>
+</div>
+{% endblock %}

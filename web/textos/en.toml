@@ -124,3 +124,80 @@ app = "Android app"
 titulo = "Page not found"
 texto = "This page does not exist."
 volver = "Back to the home page"
+
+# ===== P2C: portada y capturas (tablas `portada` y `captura`) =====
+
+[portada]
+titulo = "MAGI"
+titulo_pagina = "MAGI · Terminal SSH manager"
+lema = "Terminal SSH manager with a technical-cockpit look, driven from the keyboard."
+plataformas_linea = "Linux and macOS · Termux · Android app. Free software with no telemetry."
+descargar = "Download"
+leer_manual = "Read the manual (Spanish)"
+demo_resumen = "Demo animation"
+demo_alt = "MAGI in a terminal: the fleet with three sample hosts, Files, Services and the command palette."
+capturas_titulo = "What it looks like"
+capturas_nota = "Screenshots of the interface itself, which is in Spanish, taken with the demo's made-up hosts."
+
+[portada.que_es]
+titulo = "What MAGI is and who it is for"
+que = "MAGI is an SSH connection manager that lives in the terminal: it brings your hosts, their sessions, files, tunnels and services together in a single interface driven from the keyboard."
+para_quien = "It is for anyone who runs servers or works over SSH every day and wants their fleet at hand, with no accounts and no cloud: developers, system administrators and homelab enthusiasts."
+movil = "And if you are on call, the Android app reads your synced inventory and MAGI also runs inside Termux."
+
+[portada.plataformas]
+titulo = "Platforms"
+introduccion = "The status of each platform, in text. \"In testing\" and \"beta\" mean that automated tests cover them, but they have not been tried by hand in as much detail as Linux."
+
+[portada.libre]
+titulo = "Free and telemetry-free"
+sin_telemetria = "No accounts, no subscription and no telemetry: MAGI does not check for updates or open any connection other than the ones you make to your own hosts."
+licencia = "Free software under `MIT OR Apache-2.0`, your choice."
+
+[portada.enlaces]
+titulo = "Links"
+descargas = "Downloads"
+manual = "Manual (Spanish)"
+github = "Source code on GitHub"
+seguridad = "Security policy"
+contribuir = "How to contribute"
+
+[captura.flota]
+titulo = "Fleet"
+descripcion = "All your hosts and their status at a glance."
+
+[captura.sesion-paneles]
+titulo = "Session with panes"
+descripcion = "Tabs and panes that stay alive when you close the window."
+
+[captura.archivos]
+titulo = "Files"
+descripcion = "Dual local and remote panel, with transfers that carry on after you close the window."
+
+[captura.tuneles]
+titulo = "Tunnels"
+descripcion = "Local, remote and dynamic forwards that stay active when you close the window."
+
+[captura.deliberacion]
+titulo = "MAGI deliberation"
+descripcion = "Three parallel checks, on health, backup and tests, give their verdict before a risky action."
+
+[captura.servicios]
+titulo = "Services"
+descripcion = "Each host's services, timers and containers, with their logs."
+
+# (fin de la portada)
+
+# ===== P2D: versiones (tabla `versiones`) =====
+
+[versiones]
+titulo = "Releases"
+introduccion = "What each published release brings, taken from its changelog. The details of each release are written in Spanish."
+ir_a = "Jump to a section of this page"
+escritorio = "Desktop"
+app = "App"
+en_github = "on GitHub"
+detalle = "Details (in Spanish)"
+sin_publicar = "not published yet"
+escritorio_vacia = "No desktop release has been published yet."
+app_vacia = "The app's first release comes out after this phase."

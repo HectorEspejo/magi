@@ -124,3 +124,80 @@ app = "App Android"
 titulo = "Página no encontrada"
 texto = "Esta página no existe."
 volver = "Volver al inicio"
+
+# ===== P2C: portada y capturas (tablas `portada` y `captura`) =====
+
+[portada]
+titulo = "MAGI"
+titulo_pagina = "MAGI · Gestor SSH de terminal"
+lema = "Gestor SSH de terminal, con estética de cabina y manejado con el teclado."
+plataformas_linea = "Linux y macOS · Termux · app Android. Software libre y sin telemetría."
+descargar = "Descargar"
+leer_manual = "Leer el manual"
+demo_resumen = "Animación de la demo"
+demo_alt = "MAGI en una terminal: la flota con tres hosts de ejemplo, Archivos, Servicios y la paleta de órdenes."
+capturas_titulo = "Así se ve"
+capturas_nota = "Capturas de la propia interfaz, hechas con los hosts inventados de la demo."
+
+[portada.que_es]
+titulo = "Qué es MAGI y para quién"
+que = "MAGI es un gestor de conexiones SSH que vive en la terminal: reúne tus hosts, sus sesiones, los archivos, los túneles y los servicios en una sola interfaz que se maneja con el teclado."
+para_quien = "Es para quien administra servidores o trabaja a diario por SSH y quiere tener su flota a mano, sin cuentas ni nube: desarrolladores, administradores de sistemas y aficionados a montar su propio laboratorio."
+movil = "Y si te toca guardia, la app Android lee tu inventario sincronizado y MAGI también funciona dentro de Termux."
+
+[portada.plataformas]
+titulo = "Plataformas"
+introduccion = "El estado de cada plataforma, en texto. «En pruebas» y «beta» quieren decir que las cubren las pruebas automáticas, pero que aún no se han probado a mano con el mismo detalle que Linux."
+
+[portada.libre]
+titulo = "Libre y sin telemetría"
+sin_telemetria = "Sin cuentas, sin suscripción y sin telemetría: MAGI no comprueba actualizaciones ni abre más conexiones que las que haces a tus hosts."
+licencia = "Software libre bajo `MIT OR Apache-2.0`, a tu elección."
+
+[portada.enlaces]
+titulo = "Enlaces"
+descargas = "Descargas"
+manual = "Manual"
+github = "Código en GitHub"
+seguridad = "Política de seguridad"
+contribuir = "Cómo contribuir"
+
+[captura.flota]
+titulo = "Flota"
+descripcion = "Todos tus hosts y su estado, de un vistazo."
+
+[captura.sesion-paneles]
+titulo = "Sesión con paneles"
+descripcion = "Pestañas y paneles que siguen vivos al cerrar la ventana."
+
+[captura.archivos]
+titulo = "Archivos"
+descripcion = "Panel doble, local y remoto, con transferencias que siguen aunque cierres la ventana."
+
+[captura.tuneles]
+titulo = "Túneles"
+descripcion = "Reenvíos locales, remotos y dinámicos, que siguen activos al cerrar la ventana."
+
+[captura.deliberacion]
+titulo = "Deliberación MAGI"
+descripcion = "Tres comprobaciones en paralelo, de salud, copia y pruebas, dan su veredicto antes de una acción delicada."
+
+[captura.servicios]
+titulo = "Servicios"
+descripcion = "Servicios, timers y contenedores de cada host, con sus logs."
+
+# (fin de la portada)
+
+# ===== P2D: versiones (tabla `versiones`) =====
+
+[versiones]
+titulo = "Versiones"
+introduccion = "Lo que trae cada versión publicada, tomado de su registro de cambios. El detalle de cada versión está escrito en castellano."
+ir_a = "Ir a una sección de esta página"
+escritorio = "Escritorio"
+app = "App"
+en_github = "en GitHub"
+detalle = "Detalle"
+sin_publicar = "aún sin publicar"
+escritorio_vacia = "Todavía no hay ninguna versión del escritorio publicada."
+app_vacia = "La primera release de la app sale después de esta fase."

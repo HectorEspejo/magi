@@ -3,13 +3,23 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use magi_web::comprobar::{comprobar_sitio, ListaPermitida};
 use magi_web::construir::{construir, OpcionesConstruir};
 use magi_web::datos::Plataformas;
+use magi_web::descargas::{elegir, OpcionesDescargas};
 use magi_web::error::{ErrorWeb, Resultado};
-use magi_web::releases::{descargar_releases, FuenteGh};
+use magi_web::releases::{descargar_releases, DocumentoReleases, FuenteGh};
+
+/// Canal del que se pregunta la etiqueta de la última versión publicada.
+#[derive(Clone, Copy, ValueEnum)]
+enum CanalEtiqueta {
+    /// Escritorio y Termux: `vX.Y.Z`.
+    Escritorio,
+    /// App de Android: `android-vX.Y.Z`.
+    App,
+}
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +50,12 @@ enum Orden {
         /// Animación de la portada (`assets/demo/magi.gif`).
         #[arg(long)]
         animacion: Option<PathBuf>,
+        /// CHANGELOG del escritorio de la etiqueta de la última versión publicada.
+        #[arg(long)]
+        changelog: PathBuf,
+        /// CHANGELOG de la app de su etiqueta (si hay alguna release de la app).
+        #[arg(long)]
+        changelog_app: Option<PathBuf>,
         /// Carpeta de salida (se sustituye entera).
         #[arg(long)]
         salida: PathBuf,
@@ -55,6 +71,20 @@ enum Orden {
     Comprobar {
         /// Carpeta del sitio.
         dir: PathBuf,
+    },
+    /// Escribe la etiqueta de la última versión publicada de un canal (nunca un
+    /// borrador ni una candidata), para sacar de ella el manual y los CHANGELOG.
+    /// Sin ninguna release de la app, no escribe nada.
+    Etiqueta {
+        /// `releases.json` (lo escribe `magi-web releases`).
+        #[arg(long)]
+        releases: PathBuf,
+        /// Canal del que se pregunta.
+        #[arg(long, value_enum)]
+        canal: CanalEtiqueta,
+        /// `plataformas.toml`.
+        #[arg(long, default_value = "web/datos/plataformas.toml")]
+        plataformas: PathBuf,
     },
     /// Lee la API de GitHub y los `.sha256` publicados, los valida y escribe `releases.json`.
     Releases {
@@ -74,6 +104,8 @@ fn ejecutar(cli: Cli) -> Resultado<()> {
             releases,
             manual,
             animacion,
+            changelog,
+            changelog_app,
             salida,
             homebrew,
             aur,
@@ -83,6 +115,8 @@ fn ejecutar(cli: Cli) -> Resultado<()> {
                 releases,
                 manual,
                 animacion,
+                changelog_escritorio: changelog,
+                changelog_app,
                 salida,
                 homebrew,
                 aur,
@@ -112,6 +146,26 @@ fn ejecutar(cli: Cli) -> Resultado<()> {
             } else {
                 Err(ErrorWeb::Comprobacion(hallazgos))
             }
+        }
+        Orden::Etiqueta {
+            releases,
+            canal,
+            plataformas,
+        } => {
+            // La misma elección que hace `construir`, con sus mismas validaciones:
+            // la etiqueta que se imprime es la que saldrá en la web.
+            let plataformas = Plataformas::cargar(&plataformas)?;
+            let documento = DocumentoReleases::leer(&releases)?;
+            let eleccion = elegir(&documento, &plataformas, OpcionesDescargas::default())?;
+            match canal {
+                CanalEtiqueta::Escritorio => println!("{}", eleccion.escritorio.etiqueta),
+                CanalEtiqueta::App => {
+                    if let Some(app) = &eleccion.app {
+                        println!("{}", app.etiqueta);
+                    }
+                }
+            }
+            Ok(())
         }
         Orden::Releases {
             salida,

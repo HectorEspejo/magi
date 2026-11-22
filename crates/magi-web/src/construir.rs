@@ -18,11 +18,14 @@ use crate::csp;
 use crate::datos::Plataformas;
 use crate::descargas::{elegir, OpcionesDescargas};
 use crate::error::{ErrorWeb, Resultado};
+use crate::paginas::portada::Capturas;
+use crate::paginas::versiones::DatosVersiones;
 use crate::paginas::{self, Entorno};
 use crate::plantillas::Plantillas;
 use crate::releases::DocumentoReleases;
 use crate::rutas::{self, Idioma, Pagina};
 use crate::textos::Textos;
+use crate::versiones::{entradas_de_changelog, EntradaChangelog, TOPE_CHANGELOG};
 
 /// Tope de un fichero copiado al sitio (32 MiB): lo que se copia es entrada de
 /// otra herramienta (mdBook) o del repositorio, pero nunca se confía en su tamaño.
@@ -51,6 +54,12 @@ pub struct OpcionesConstruir {
     pub manual: Option<PathBuf>,
     /// `assets/demo/magi.gif` (S2).
     pub animacion: Option<PathBuf>,
+    /// CHANGELOG del escritorio de la etiqueta de la última versión publicada: lo
+    /// lee la página de versiones, y tiene que traer la versión de la release.
+    pub changelog_escritorio: PathBuf,
+    /// CHANGELOG de la app de su etiqueta. Obligatorio si hay release de la app;
+    /// sin ella no se usa y la página dice «aún sin publicar».
+    pub changelog_app: Option<PathBuf>,
     /// Carpeta de salida (se sustituye entera).
     pub salida: PathBuf,
     pub homebrew: bool,
@@ -128,16 +137,49 @@ fn generar(o: &OpcionesConstruir, sitio: &Path) -> Resultado<InformeConstruccion
         ..Default::default()
     };
 
+    // Los CHANGELOG de la etiqueta de cada canal: lo que se lee es lo que se baja.
+    let versiones = DatosVersiones {
+        escritorio: leer_changelog(
+            &o.changelog_escritorio,
+            &eleccion.escritorio.etiqueta,
+            &eleccion.escritorio.numero,
+        )?,
+        app: match (&eleccion.app, &o.changelog_app) {
+            (Some(app), Some(ruta)) => Some(leer_changelog(ruta, &app.etiqueta, &app.numero)?),
+            (Some(app), None) => {
+                return Err(ErrorWeb::dato_raro(
+                    "--changelog-app",
+                    format!(
+                        "hay una release de la app ({}) y no se ha dado su CHANGELOG",
+                        app.etiqueta
+                    ),
+                ));
+            }
+            // Sin release de la app, su CHANGELOG no se usa: la página dice «aún sin publicar».
+            (None, _) => None,
+        },
+    };
+    let capturas = Capturas::cargar(&o.web.join("capturas"))?;
+
     // Páginas propias: sin JavaScript, con su CSP al final.
     for idioma in Idioma::TODOS {
-        let html = paginas::descargas::renderizar(&entorno, idioma, &eleccion)?;
-        escribir_pagina(
-            sitio,
-            &rutas::fichero(Pagina::Descargas, idioma),
-            &html,
-            &mut informe,
-        )?;
-        // CONTRATO-S2-PAGINAS: portada y versiones.
+        let paginas_del_idioma = [
+            (
+                Pagina::Portada,
+                paginas::portada::renderizar(&entorno, idioma, &eleccion, &capturas)?,
+            ),
+            (
+                Pagina::Descargas,
+                paginas::descargas::renderizar(&entorno, idioma, &eleccion)?,
+            ),
+            (
+                Pagina::Versiones,
+                paginas::versiones::renderizar(&entorno, idioma, &versiones)?,
+            ),
+        ];
+        for (pagina, html) in paginas_del_idioma {
+            escribir_pagina(sitio, &rutas::fichero(pagina, idioma), &html, &mut informe)?;
+        }
     }
     let html_404 = paginas::no_encontrada::renderizar(&entorno)?;
     escribir_pagina(
@@ -160,10 +202,13 @@ fn generar(o: &OpcionesConstruir, sitio: &Path) -> Resultado<InformeConstruccion
         &["woff2", "txt"],
         &mut omitidos,
     )?;
-    let capturas = o.web.join("capturas");
-    if capturas.is_dir() {
-        copiar_arbol(&capturas, &sitio.join("capturas"), &["css"], &mut omitidos)?;
-    }
+    // De `web/capturas/` solo va la CSS: los fragmentos HTML ya están dentro de la portada.
+    copiar_arbol(
+        &o.web.join("capturas"),
+        &sitio.join("capturas"),
+        &["css"],
+        &mut omitidos,
+    )?;
     if let Some(animacion) = &o.animacion {
         copiar_animacion(animacion, &sitio.join("demo/magi.gif"))?;
     }
@@ -194,6 +239,22 @@ fn escribir_pagina(
     fs::write(&destino, html).map_err(|e| ErrorWeb::escritura(&destino, e))?;
     informe.paginas.push(ruta.to_string());
     Ok(())
+}
+
+/// Lee un CHANGELOG, lo parte en versiones y comprueba que trae la de la release:
+/// si no, es el fichero equivocado (otra etiqueta o el de otro canal) y la página
+/// enseñaría lo que no es.
+fn leer_changelog(ruta: &Path, etiqueta: &str, numero: &str) -> Resultado<Vec<EntradaChangelog>> {
+    let texto = leer_texto(ruta, TOPE_CHANGELOG as u64)?;
+    let origen = ruta.display().to_string();
+    let entradas = entradas_de_changelog(&texto, &origen, etiqueta)?;
+    if !entradas.iter().any(|e| e.numero == numero) {
+        return Err(ErrorWeb::dato_raro(
+            origen,
+            format!("el CHANGELOG no trae la versión {numero} de la release {etiqueta}"),
+        ));
+    }
+    Ok(entradas)
 }
 
 /// Pone la CSP del manual a cada `.html` de `carpeta`.
@@ -466,6 +527,10 @@ fn validar_salida(o: &OpcionesConstruir) -> Resultado<PathBuf> {
     }
     if let Some(a) = &o.animacion {
         entradas.push(("--animacion", a));
+    }
+    entradas.push(("--changelog", &o.changelog_escritorio));
+    if let Some(c) = &o.changelog_app {
+        entradas.push(("--changelog-app", c));
     }
     for (que, ruta) in entradas {
         let ruta = fs::canonicalize(ruta).map_err(|e| ErrorWeb::lectura(ruta, e))?;

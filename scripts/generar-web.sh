@@ -41,6 +41,9 @@ releases_de_ejemplo="$raiz/crates/magi-web/tests/fijos/releases/sin-red.json"
 sin_red=0
 manual_de_la_rama=0
 manual_dir=""
+changelog=""
+changelog_app=""
+etiqueta_de_changelog=""
 mdbook=""
 temporal=""
 
@@ -175,6 +178,51 @@ obtener_mdbook() {
 	mdbook="$cache/mdbook"
 }
 
+# changelog_de <generador> <releases> <canal> <ruta en el repositorio> <destino>:
+# saca el CHANGELOG de la etiqueta de la última versión publicada del canal (con
+# --sin-red, el del árbol de trabajo, porque las releases de ejemplo no son
+# etiquetas reales). Si el canal no tiene release (la app, hoy), no escribe nada.
+# Deja en $etiqueta_de_changelog la etiqueta usada (vacía si no hay).
+changelog_de() {
+	local generador="$1" releases="$2" canal="$3" ruta="$4" destino="$5"
+	local patron='^(android-)?v[0-9]+\.[0-9]+\.[0-9]+$'
+	etiqueta_de_changelog="$("$generador" etiqueta --releases "$releases" --canal "$canal")" \
+		|| fallar "no se pudo decidir la última versión publicada ($canal)"
+	if [[ -z "$etiqueta_de_changelog" ]]; then
+		return 0
+	fi
+	[[ "$etiqueta_de_changelog" =~ $patron ]] \
+		|| fallar "la etiqueta «$etiqueta_de_changelog» no tiene la forma esperada"
+	mkdir -p -- "$(dirname -- "$destino")"
+	if [[ "$sin_red" -eq 1 ]]; then
+		cp -- "$ruta" "$destino" \
+			|| fallar "no se pudo copiar $ruta"
+	else
+		git show "$etiqueta_de_changelog:$ruta" >"$destino" \
+			|| fallar "no se pudo leer $ruta de la etiqueta $etiqueta_de_changelog (¿faltan las etiquetas? prueba con: git fetch --tags)"
+	fi
+}
+
+# Deja en $changelog y $changelog_app las rutas de los CHANGELOG ya sacados
+# ($changelog_app queda vacío mientras no haya release de la app).
+preparar_changelogs() {
+	local generador="$1" releases="$2"
+	local carpeta="$trabajo/changelog"
+	rm -rf -- "$carpeta"
+	echo "==> CHANGELOG de la última versión publicada"
+	changelog_de "$generador" "$releases" escritorio CHANGELOG.md "$carpeta/CHANGELOG.md"
+	[[ -n "$etiqueta_de_changelog" ]] || fallar "no hay ninguna versión del escritorio publicada"
+	changelog="$carpeta/CHANGELOG.md"
+	echo "escritorio: $etiqueta_de_changelog"
+	changelog_de "$generador" "$releases" app android/CHANGELOG.md "$carpeta/android-CHANGELOG.md"
+	if [[ -n "$etiqueta_de_changelog" ]]; then
+		changelog_app="$carpeta/android-CHANGELOG.md"
+		echo "app: $etiqueta_de_changelog"
+	else
+		echo "app: aún sin publicar"
+	fi
+}
+
 # Prepara el manual para construirlo con mdBook y deja en $manual_dir la carpeta
 # ya generada (vacía mientras no esté hecho).
 preparar_manual() {
@@ -221,10 +269,14 @@ principal() {
 			|| fallar "no se pudieron leer o validar las releases (la web anterior no cambia)"
 	fi
 
+	preparar_changelogs "$generador" "$releases"
 	preparar_manual
 
 	echo "==> Construyendo el sitio en $sitio"
-	argumentos=(construir --web web --releases "$releases" --animacion assets/demo/magi.gif --salida "$sitio")
+	argumentos=(construir --web web --releases "$releases" --animacion assets/demo/magi.gif --changelog "$changelog" --salida "$sitio")
+	if [[ -n "$changelog_app" ]]; then
+		argumentos+=(--changelog-app "$changelog_app")
+	fi
 	if [[ -n "$manual_dir" ]]; then
 		argumentos+=(--manual "$manual_dir")
 	fi

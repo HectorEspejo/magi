@@ -7,6 +7,7 @@
 //! es entrada no fiable: se valida y se escapa.
 
 pub mod anclas;
+pub mod capturas;
 pub mod comprobar;
 pub mod construir;
 pub mod contraste;
@@ -23,5 +24,6 @@ pub mod plantillas;
 pub mod releases;
 pub mod rutas;
 pub mod textos;
+pub mod versiones;
 
 pub use error::{ErrorWeb, Hallazgo, Resultado};

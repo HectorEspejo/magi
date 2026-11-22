@@ -1,0 +1,30 @@
+<pre class="captura" aria-hidden="true"><span class="c0"> MAGI · SESIÓN · LADO A LADO </span><span class="c1">────────────────────────────────────────────────────────────</span> demo-web <span class="c1">─</span>
+<span class="c7">▸●</span><span class="c10"> demo-web</span><span class="c1"> │ </span><span class="c8">●</span> demo-datos<span class="c1"> │ + nueva</span>
+<span class="c2">▸</span><span class="c7">●</span><span class="c10"> demo-web</span><span class="c1">───────────────────────────────────────</span> <span class="c2"> </span><span class="c8">●</span> demo-datos<span class="c1">────────────────────────────────────</span>
+<span class="c11">usuario@demo-web</span>:<span class="c12">~</span>$ ls --color                     <span class="c11">usuario@demo-datos</span>:<span class="c12">~</span>$ df -h /srv
+<span class="c12">app</span>  <span class="c12">static</span>  config.yaml  <span class="c11">deploy.sh</span>                Filesystem  Size  Used Avail Use% Mounted
+main.py  notas.md  README.md                       /dev/sda1   458G  171G  264G  40% /srv
+<span class="c11">usuario@demo-web</span>:<span class="c12">~</span>$ systemctl status nginx         <span class="c11">usuario@demo-datos</span>:<span class="c12">~</span>$ free -h
+<span class="c11">●</span> nginx.service - nginx                                    total  used  free  available
+   Loaded: loaded (enabled)                        Mem:      15G  9.6G  1.1G       5.9G
+   Active: <span class="c11">active (running)</span>                        Swap:    2.0G    0B  2.0G
+     Docs: man:nginx(8)                            <span class="c11">usuario@demo-datos</span>:<span class="c12">~</span>$ journalctl -u postgresql
+  Process: 4121 ExecStart=nginx (code=exited)      10:14:03 postgres[912]: checkpoint starting
+ Main PID: 4123 (nginx)                            10:14:09 postgres[912]: checkpoint complete
+    Tasks: 5 (limit: 18926)                        <span class="c13">10:21:40 postgres[912]: slow query 1.2 s</span>
+   Memory: 12.4M                                   10:30:00 postgres[912]: checkpoint starting
+<span class="c11">usuario@demo-web</span>:<span class="c12">~</span>$ tail -n 6 access.log           <span class="c14">10:30:07 postgres[1377]: connection reset</span>
+192.0.2.7 &quot;GET / HTTP/1.1&quot; 200 612                 10:30:08 postgres[912]: checkpoint complete
+192.0.2.7 &quot;GET /static/app.css&quot; 200 1840           <span class="c11">usuario@demo-datos</span>:<span class="c12">~</span>$ <span class="c15">█</span>
+192.0.2.19 &quot;GET /api/estado&quot; 200 94
+192.0.2.19 &quot;POST /api/pedidos&quot; 201 211
+<span class="c13">192.0.2.31 &quot;GET /favicon.ico&quot; 404 153</span>
+192.0.2.7 &quot;GET /api/estado&quot; 200 94
+<span class="c11">usuario@demo-web</span>:<span class="c12">~</span>$ <span class="c15">█</span>
+
+
+
+
+
+<span class="c7"> ● </span>1/2<span class="c1"> · </span>demo-web<span class="c1"> · </span>2 h 03 m<span class="c1"> · ^] ?</span>
+ </pre>
