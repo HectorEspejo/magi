@@ -3,6 +3,7 @@
 ## Compilación y plataforma
 - [x] El paquete `magi-ssh` compila para `aarch64-linux-android` (API 24) con `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh`, sin cambiar las dependencias del escritorio ni la app
   - AC: Dado el workspace, cuando se compila para Android, entonces sale `target/aarch64-linux-android/release/magi` y `readelf -d` solo pide bibliotecas de bionic (`libc`, `libm`, `libdl` y, si alguna dependencia lo usa, `liblog`)
+  - **Precisión (19 nov 2026, D403):** `readelf -d` pide también `libz.so`, que Android trae siempre; la lista aceptada es `libc`, `libm`, `libdl`, `liblog` y `libz` (decisión de Hector, 17 nov)
 - [x] Modo Termux elegido al compilar (`cfg(target_os = "android")`) y, solo en compilaciones de depuración, con `MAGI_PLATAFORMA=termux` para las pruebas
   - AC: Dado un binario de release para Linux con `MAGI_PLATAFORMA=termux`, cuando arranca, entonces se porta como en Linux
 - [x] Lo propio de Termux en `src/termux/` (`mod`, `rutas`, `ordenes`, `portapapeles`, `wake_lock`, `avisos`, `teclas`, `diagnostico` y `cli`); fuera de ahí, solo llamadas a su interfaz
@@ -22,6 +23,7 @@
 - [x] Receta de TUR en `packaging/termux/build.sh` (`termux_setup_rust`, `TERMUX_PKG_EXCLUDED_ARCHES="arm, i686"`, fuente del tag con su SHA-256, man y autocompletado), limpia con `shellcheck`
 - [x] `docs/publicar-termux.md`: cómo sale el `.deb`, cómo se comprueba en el móvil y cómo se propone y se actualiza la receta en TUR (la PR la abre el desarrollador)
 - [x] README: sección «MAGI en Termux» con la instalación (`apt install ./magi-ssh_<versión>_aarch64.deb` o TUR), Termux:API, `termux-setup-storage`, la fila de teclas y el límite de procesos de Android 12 o posterior
+  - **Precisión (18 nov 2026):** con la 9b en `main`, el README solo da la instalación y enlaza; lo demás va en el manual, en `docs/manual/termux.md`
 
 ## Llavero con frase maestra
 - [x] `LlaveroFichero` en `crates/magi-nucleo/src/llavero_fichero.rs`, detrás de `LlaveroSecreto`: `llavero.age` en el directorio de datos (600, por `ficheros.rs`), age con una entrada scrypt (2^17 al crear, hasta 2^20 al abrir), JSON con `formato` 1 y tope de 1 MiB
@@ -78,6 +80,7 @@
 - [x] Instalar la fila (paleta, primer arranque o `magi termux teclas --instalar`): confirmación, copia `termux.properties.magi-<fecha>`, escritura atómica de solo la línea lógica `extra-keys` y `termux-reload-settings`; anota `termux_teclas_instaladas`
   - AC: Dado un `termux.properties` con comentarios, otras claves y un `extra-keys` partido en tres líneas con `\`, cuando se instala la fila, entonces solo cambia esa línea lógica y el resto queda byte a byte
 - [x] Sin fichero, se crea `~/.termux/termux.properties`; si el que existe es `~/.config/termux/termux.properties`, se usa ese; si la fila ya es la de MAGI, «ya está», sin copia ni escritura
+  - **Precisión (19 nov 2026, D415):** si existen los dos ficheros, manda `~/.termux/termux.properties` (el orden en que Termux los busca)
 - [x] La ayuda (`?`) en Termux recuerda Volumen arriba + 1-9 (F1-F9) y + 0 (F10)
 
 ## Interfaz en el móvil
@@ -111,6 +114,7 @@
 - [x] Pruebas `llavero_fichero` del núcleo: crear, abrir, frase incorrecta, dañado, factor de trabajo acotado, NFC y escrituras concurrentes con `flock`
 - [x] Dobles de `tests/fijos/termux/` (anotan argumentos y entrada, y saben colgarse o fallar) y pruebas `termux_ordenes`, `termux_ui`, `termux_servidor`, `termux_sincronizacion` y `termux_teclas` con `MAGI_PLATAFORMA=termux`
 - [ ] Prueba `termux_paquete`: rutas de `dpkg-deb --contents`, el `control` y `readelf -d` del `.deb` armado (en CI falla si no hay `.deb`; fuera, se omite con aviso)
+  - **Precisión (19 nov 2026, D405):** el `.deb` lo exige `MAGI_EXIGIR_DEB=1`, solo en el job `termux`, y no `CI` (GitHub la pone en todos los jobs)
 - [x] El escritorio y la app no cambian: todas las pruebas anteriores en verde, las instantáneas de redimensionado sin cambios y `android/` sin tocar
 - [x] Revisión adversarial de cierre (T31, T54) del llavero, las órdenes de Termux, la escritura de `termux.properties`, los avisos y el empaquetado, con su informe en `docs/fase17/magi-fase17-revision-adversarial.md`
 - [x] Versión 1.6.0: `CHANGELOG.md` («Sin publicar»), `FECHA_DE_VERSION`, la DA2 de `tui_prueba` y las instantáneas `servidor_anterior_*`, y el guion de validación en el plegable en el informe de implementación
@@ -119,4 +123,4 @@
 
 **Progreso Fase 17:** 66 / 71 funcionalidades
 
-**Total MAGI (Fases 1-17):** 1377 / 1389 funcionalidades
+**Total MAGI (Fases 1-17, 9b y 9c):** 1432 / 1520 funcionalidades
