@@ -136,7 +136,7 @@ fn main() {
     leer_hasta_silencio(&rx, Duration::from_millis(700), &mut respuestas);
     informar(&format!("RECIBIDO {}", hex(&respuestas)));
     check("DA1", &respuestas, b"\x1b[?62;22c");
-    check("DA2", &respuestas, b"\x1b[>0;10600;0c");
+    check("DA2", &respuestas, b"\x1b[>0;10601;0c");
     check("KITTY", &respuestas, b"\x1b[?0u");
     check("DECRQM2026", &respuestas, b"\x1b[?2026;2$y");
     check("OSCC", &respuestas, b"rgb:");

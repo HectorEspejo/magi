@@ -157,9 +157,11 @@ cuentas y no empuja etiquetas.
 4. **Crear el tap `HectorEspejo/homebrew-tap`** (público, con un README
    mínimo). En cada release estable, `dist` empuja `Formula/magi-ssh.rb` con el
    secreto `HOMEBREW_TAP_TOKEN`. El comando de instalación queda
-   `brew install hectorespejo/tap/magi-ssh`.
+   `brew install hectorespejo/tap/magi-ssh`. *De momento no se hace: el job
+   está apagado hasta que pongas `PUBLICAR_HOMEBREW` (ver §5).*
 
-5. **Crear la cuenta de AUR y su clave SSH.** Registra la cuenta en
+5. **Crear la cuenta de AUR y su clave SSH** (*de momento no se hace: el job
+   está apagado hasta que pongas `PUBLICAR_AUR`; ver §5*). Registra la cuenta en
    <https://aur.archlinux.org/> con tu correo y una clave pública SSH. Genera
    una **clave dedicada para CI** (sin frase, solo para publicar en AUR),
    registra la pública en el perfil de AUR y guarda la privada como secreto:
@@ -242,8 +244,8 @@ cuentas y no empuja etiquetas.
    ```
 
    Vigila `release.yml` y Release Termux hasta el final: release de GitHub
-   («Latest»), fórmula de Homebrew, PKGBUILD en AUR y el `.deb`. Después, haz
-   las comprobaciones de §9.
+   («Latest») y el `.deb`; los jobs de Homebrew y AUR salen «skipped» mientras
+   no estén activados (§5). Después, haz las comprobaciones de §9.
 
 10. **La app Android**: `android-v0.2.0-rc.1`, su guion corto en el plegable y
     `android-v0.2.0`, según [`publicar-android.md`](publicar-android.md). Nunca
@@ -275,10 +277,22 @@ Orden de las etiquetas: `v1.6.1-rc.1` → `v1.6.1` → `android-v0.2.0-rc.1` →
      macOS arm64 y x86_64); si falla uno, no hay release;
    - crea la GitHub Release con los tarballs, sus `.sha256`, las atestaciones y
      las notas de la sección del CHANGELOG;
-   - **solo en versiones estables**, publica la fórmula en el tap de Homebrew y
-     llama a `publicar-aur.yml`, que rellena el PKGBUILD con la versión y las
-     sumas, genera `.SRCINFO` en un contenedor Arch, pasa `namcap` (y falla si
-     namcap informa de errores `E:`) y empuja a AUR.
+   - **solo en versiones estables y solo si están activados**, publica la
+     fórmula en el tap de Homebrew y llama a `publicar-aur.yml`, que rellena el
+     PKGBUILD con la versión y las sumas, genera `.SRCINFO` en un contenedor
+     Arch, pasa `namcap` (y falla si namcap informa de errores `E:`) y empuja a
+     AUR.
+
+   **Homebrew y AUR están apagados de momento.** Los jobs
+   `publish-homebrew-formula` y `custom-publicar-aur` solo corren si el
+   repositorio tiene la variable `PUBLICAR_HOMEBREW` o `PUBLICAR_AUR` con el
+   valor `true` (Settings → Secrets and variables → Actions → Variables); sin
+   ella salen «skipped» y la release se publica igual, sin tap ni cuenta de AUR
+   (`announce` acepta ese «skipped»). La fórmula `magi-ssh.rb` se genera y se
+   adjunta a la release de todos modos. Para activarlos: crea el tap y su
+   secreto (§4, pasos 4 y 6), o la cuenta de AUR y su clave (pasos 5 y 6), y
+   pon la variable; la primera release que los use es la siguiente estable (una
+   ya publicada no los vuelve a lanzar).
 
    El mismo tag lanza a la vez `termux-release.yml` (**Release Termux**), que
    compila el `.deb` para Termux, lo atesta y lo sube a la release cuando
@@ -294,7 +308,7 @@ binarios a mano ni se publica en crates.io (`publish = false`).
 | Workflow | Disparo | Qué hace |
 |---|---|---|
 | `ci.yml` | PR y push a `main` | `fmt`, `clippy -D warnings`, `TZ=UTC cargo test --locked` en Linux (instala `openssh-server`, por su `sftp-server`, y `tmux`: sin ellos, las pruebas de SFTP y las de sesiones persistentes con tmux de verdad se omiten), macOS (build, clippy y `cargo test --lib`), `cargo deny check` y validación de la plantilla AUR (`makepkg --printsrcinfo` y `namcap` en contenedor Arch) |
-| `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` |
+| `release.yml` | tag `v*` | Lo genera `dist` 0.33.1: `plan`, compilación por objetivo, checksums y fórmula, GitHub Release, Homebrew y `publicar-aur` (estos dos, solo con `PUBLICAR_HOMEBREW` y `PUBLICAR_AUR`) |
 | `publicar-aur.yml` | lo llama `release.yml` | Dos jobs: `empaquetar` (contenedor Arch sin secretos: rellena versión y sumas del PKGBUILD, genera `.SRCINFO`, pasa `namcap` como gate) y `publicar` (runner normal con `AUR_SSH_PRIVATE_KEY`: recibe el artefacto y hace `git push` a `aur@aur.archlinux.org:magi-ssh-bin.git`) |
 | `termux-release.yml` | tag `vX.Y.Z` y `vX.Y.Z-rc.N` (nunca `android-v*`) y `workflow_dispatch` | Compila para `aarch64-linux-android` con el NDK r30, arma `magi-ssh_X.Y.Z_aarch64.deb` (`magi-ssh_X.Y.Z-rc.N_aarch64.deb` en una candidata) con `scripts/paquete-termux.sh`, comprueba su estructura, escribe el `.sha256`, atesta la procedencia y lo sube a la release del tag (espera hasta 60 min a que `release.yml` la cree; justo antes de subir comprueba que el tag sigue en el commit compilado y, si no, falla; falla si los adjuntos no quedan con el nombre esperado; nunca toca «Latest»), solo con `GITHUB_TOKEN`. La CI de cada PR tiene su job `termux` en `ci.yml`. Guía completa y receta de TUR en [`publicar-termux.md`](publicar-termux.md) |
 
@@ -413,13 +427,13 @@ invalida las releases ya publicadas.
 En una máquina limpia (o al menos con el canal recién actualizado):
 
 ```sh
-# Arch / Omarchy
+# Arch / Omarchy (solo si PUBLICAR_AUR está activa)
 yay -S magi-ssh-bin
 magi --version                    # magi 1.6.1 (protocolo 10, <commit>)
 pacman -Ql magi-ssh-bin           # binario, completions, man, .desktop, icono, licencias
 magi diagnostico
 
-# macOS
+# macOS (solo si PUBLICAR_HOMEBREW está activa)
 brew update && brew install hectorespejo/tap/magi-ssh
 magi --version
 
@@ -444,8 +458,9 @@ Comprueba además:
   [`publicar-termux.md`](publicar-termux.md) (§10);
 - `gh release view vX.Y.Z` y `gh attestation verify` funcionan para cada
   objetivo;
-- el tap publica la versión nueva y AUR la muestra en
-  <https://aur.archlinux.org/packages/magi-ssh-bin>;
+- si están activados, el tap publica la versión nueva y AUR la muestra en
+  <https://aur.archlinux.org/packages/magi-ssh-bin>; si no, sus jobs salen
+  «skipped»;
 - una prerelease **no** ha modificado el tap ni AUR;
 - `magi --version` coincide con el tag y con `Cargo.toml`.
 

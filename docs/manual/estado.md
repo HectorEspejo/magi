@@ -45,7 +45,7 @@ con la fecha y el resultado.
 | 6 | Snippets y deliberación | — | Validación manual. La revisión adversarial de sus tres primeros sprints no se hizo |
 | 7 | Redimensionado adaptable | Validada, 3 oct 2026 | — |
 | 8 | Archivos, segunda vuelta | — | Guion de 12 pasos de su informe. La revisión adversarial no se hizo |
-| 9 | Empaquetado y releases | Ensayo de la release con `dist`, validado el 18 nov 2026 | Los canales (AUR, Homebrew) se comprueban con la primera release real |
+| 9 | Empaquetado y releases | Ensayo de la release con `dist`, validado el 18 nov 2026 | AUR y Homebrew no se publican todavía: se comprobarán cuando se activen |
 | 10 | Sincronización cifrada | — | Llavero real, Syncthing entre dos equipos, QR y `age` real |
 | 11 | App Android | Ver la plataforma Android | El plegable (guion de su informe) |
 | 12 | Escritorio remoto | RDP contra un Windows 11 real, 5 nov 2026: conexión, NLA, huella, rectángulos y visor con la imagen completa (la pasada la hizo el agente por el túnel del desarrollador) | El resto del guion: una VM con QEMU, xrdp, TigerVNC y voxl. El AVC420 está implementado pero no se anuncia en esta versión |

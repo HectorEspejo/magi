@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "magi-ssh"
-version = "1.6.1-rc.1"
+version = "1.6.1"
 dependencies = [
  "age",
  "anyhow",

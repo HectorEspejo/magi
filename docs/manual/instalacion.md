@@ -22,6 +22,10 @@ MAGI se distribuye como paquete **`magi-ssh`**; el comando sigue siendo
 
 ### Omarchy y Arch (AUR)
 
+**Todavía no está publicado.** El paquete de AUR está preparado, pero aún no se
+sube: por ahora, instala el [tarball](#tarball-de-la-última-release). Cuando se
+publique, será:
+
 ```sh
 yay -S magi-ssh-bin
 ```
@@ -36,6 +40,9 @@ instala `/usr/bin/magi`; `magi-ssh-bin` lo declara en `conflicts`, así que
 
 ### macOS (Homebrew)
 
+**Todavía no está publicado.** El tap de Homebrew no existe aún: por ahora,
+instala el [tarball](#tarball-de-la-última-release). Cuando se publique, será:
+
 ```sh
 brew install hectorespejo/tap/magi-ssh
 ```
@@ -47,7 +54,7 @@ página man no aparecen en las rutas de Homebrew, actívalos a mano (ver
 
 ### Tarball de la última release
 
-Para otras distribuciones de Linux o para macOS sin Homebrew, descarga el
+Para Linux (Omarchy y Arch incluidos) y macOS, descarga el
 tarball de [la última release](https://github.com/HectorEspejo/magi/releases/latest):
 
 | Plataforma | Tarball |
@@ -63,7 +70,7 @@ sudo install -m755 magi-ssh-x86_64-unknown-linux-gnu/magi /usr/local/bin/magi
 ```
 
 Los binarios de Linux necesitan **glibc ≥ 2.35** (Ubuntu 22.04 o posterior); en
-Omarchy y Arch usa el paquete de AUR. En macOS, si el tarball lo bajaste con el
+Omarchy y Arch la superan. En macOS, si el tarball lo bajaste con el
 navegador, quita la cuarentena antes de ejecutarlo:
 
 ```sh
@@ -94,14 +101,15 @@ cargo build --release && ./target/release/magi
 
 ## Actualizar MAGI
 
-Con el gestor de paquetes, la actualización es la habitual:
+Con el gestor de paquetes (cuando AUR y Homebrew estén publicados), la
+actualización es la habitual:
 
 ```sh
 yay -Syu                 # Omarchy y Arch (magi-ssh-bin)
 brew upgrade magi-ssh    # macOS (tap hectorespejo/tap)
 ```
 
-Con el tarball, descarga la versión nueva, verifícala como en la instalación y
+Con el tarball (por ahora, lo único en Linux y macOS), descarga la versión nueva, verifícala como en la instalación y
 sustituye el binario.
 
 **Servidor de sesiones anterior.** Si tenías MAGI abierto, el servidor de

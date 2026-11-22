@@ -30,9 +30,8 @@ Spanish).
 
 | Platform | How |
 |---|---|
-| Arch and Omarchy | `yay -S magi-ssh-bin` |
-| macOS | `brew install hectorespejo/tap/magi-ssh` |
-| Other Linux | tarball from [the latest release](https://github.com/HectorEspejo/magi/releases/latest) |
+| Linux and macOS | tarball from [the latest release](https://github.com/HectorEspejo/magi/releases/latest) |
+| Arch and Omarchy (AUR), macOS (Homebrew) | not published yet |
 | Android | [Obtainium](https://github.com/ImranR98/Obtainium) with this repository's URL and the `android-v` tags |
 | Termux | the release's `.deb` (see [Termux](docs/manual/termux.md)) |
 
