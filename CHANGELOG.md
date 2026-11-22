@@ -661,6 +661,9 @@ Primera versión publicada: reúne lo que se numeró durante el desarrollo (de l
 - Releases solo desde CI con atestaciones de procedencia, `cargo deny` en la
   integración continua y auditoría de secretos y datos reales antes de hacer
   público el repositorio.
+- `url` sube a 2.5.9 (RUSTSEC-2026-0592, desbordamiento de pila en
+  `Url::origin()` con URL `blob:` anidadas): lo usan IronRDP, `sspi` y `reqwest`
+  en los escritorios remotos, que no le pasan URL de fuera.
 
 [Sin publicar]: https://github.com/HectorEspejo/magi/compare/v1.6.1...HEAD
 [1.6.1]: https://github.com/HectorEspejo/magi/releases/tag/v1.6.1
