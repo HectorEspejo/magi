@@ -1,0 +1,126 @@
+# MAGI website texts in English. Same keys as `es.toml`, none empty (`magi-web`
+# checks it at build time). No HTML: anything with a link is split into `antes`,
+# `enlace` and `despues`, and the template adds the <a>; code goes between
+# backticks and the template turns it into <code>.
+# The home, screenshot and releases pages add their own tables (`portada`,
+# `captura`, `versiones`) without touching the others.
+
+[comun]
+nombre = "MAGI"
+saltar = "Skip to content"
+idioma_otro = "Español"
+idioma_otro_etiqueta = "Leer esta página en castellano"
+manual_idioma = "Solo en castellano · Spanish only"
+
+[comun.mes]
+m01 = "Jan"
+m02 = "Feb"
+m03 = "Mar"
+m04 = "Apr"
+m05 = "May"
+m06 = "Jun"
+m07 = "Jul"
+m08 = "Aug"
+m09 = "Sep"
+m10 = "Oct"
+m11 = "Nov"
+m12 = "Dec"
+
+[cabecera]
+inicio = "Home"
+descargas = "Download"
+versiones = "Releases"
+manual = "Manual (Spanish)"
+navegacion = "Main navigation"
+
+[pie]
+licencia = "License"
+licencia_mit = "MIT"
+licencia_o = "OR"
+licencia_apache = "Apache-2.0"
+github = "GitHub"
+seguridad = "Security"
+contribuir = "Contribute"
+manual_de = "Manual (Spanish) for"
+privacidad_antes = "No cookies or analytics. GitHub, which hosts this site, logs requests; the manual keeps the state of its sidebar in your browser. "
+privacidad_enlace = "GitHub privacy statement"
+privacidad_despues = "."
+
+[descargas]
+titulo = "Download"
+introduccion = "Pick your platform, download the file and check its checksum and provenance before installing it. Files are downloaded from GitHub, not from this site."
+versiones_titulo = "Published versions"
+sin_publicar = "not published yet"
+version = "Version"
+archivo = "File"
+tamano = "Size"
+sha256 = "SHA-256"
+suma_archivo = "Checksum file"
+que_se_ha_probado = "What has been tested (Spanish)"
+capitulo = "Full installation guide in the manual (Spanish)"
+todas_las_versiones = "All versions on GitHub Releases"
+
+[descargas.canal]
+escritorio = "Desktop"
+termux = "Termux"
+app = "Android app"
+
+[descargas.grupo]
+linux = "Linux"
+macos = "macOS"
+termux = "Termux"
+android = "Android app"
+
+[descargas.plataforma]
+linux-x86_64 = "x86_64"
+linux-arm64 = "ARM64"
+macos-arm64 = "Apple Silicon"
+macos-x86_64 = "Intel"
+termux-arm64 = "ARM64 (aarch64)"
+android-arm64 = "ARM64"
+
+[descargas.estado]
+estable = "stable"
+en_pruebas = "in testing"
+beta = "beta"
+
+[descargas.instalar]
+linux = "Unpack the tarball with `tar -xf` and copy the `magi` binary to a folder in your PATH, for example `/usr/local/bin`."
+macos = "Unpack the tarball with `tar -xf` and copy the `magi` binary to a folder in your PATH. If you downloaded it with a browser, remove the quarantine with `xattr -d com.apple.quarantine magi`: the binary is not notarized."
+termux = "Install the package with `apt` (aarch64 only) and check the installation with `magi --version`."
+app = "Install the APK or, better, follow the app with Obtainium to get updates. Android 11 or later is required."
+
+[descargas.gestor]
+aur = "AUR (Arch and Omarchy)"
+homebrew = "Homebrew (macOS)"
+
+[descargas.obtainium]
+titulo = "Obtainium"
+antes = "To install and update the app, add it in "
+enlace = "Obtainium"
+despues = " with these settings."
+url = "Repository URL"
+etiquetas = "Tag filter"
+apk = "APK filter"
+
+[descargas.firma]
+etiqueta = "Signing certificate (SHA-256)"
+
+[descargas.verificar]
+titulo = "Verify"
+introduccion = "Download the file and its `.sha256` into the same folder and check the checksum and the provenance before installing it. The provenance check needs the GitHub CLI (`gh`)."
+huella = "The SHA-256 fingerprint of the certificate that `apksigner` prints must be this one:"
+nota_macos = "On macOS, if you do not have `sha256sum`, use `shasum -a 256 -c` with the same `.sha256` file."
+fallo_antes = "If the checksum, the provenance or the certificate do not match, do not install the file and report it with "
+fallo_enlace = "a private security advisory"
+fallo_despues = "."
+
+[descargas.verificar.canal]
+escritorio = "Desktop (Linux and macOS)"
+termux = "Termux"
+app = "Android app"
+
+[no_encontrada]
+titulo = "Page not found"
+texto = "This page does not exist."
+volver = "Back to the home page"

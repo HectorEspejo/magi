@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+        <meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+        <meta name="referrer" content="strict-origin-when-cross-origin">
+        <title>Prueba</title>
+</head>
+<body>
+<h1 id="enlaces">Enlaces</h1>
+<p><a href="no-existe.html">Un enlace roto</a></p>
+<p><a href="#fantasma">Un ancla rota en la misma página</a></p>
+<p><a href="../index.html#no-esta">Un ancla rota en otra página</a></p>
+<p><img src="../capturas/falta.svg" alt="Una imagen que no está"></p>
+<p><a href="/descargas/">Una ruta absoluta del sitio</a></p>
+<p><a href="../../../etc/passwd">Sube por encima de la raíz</a></p>
+<p><a href="a%2Fb.html">Una barra escondida</a></p>
+<p><a href="../index.html#inicio">Este sí está bien</a> y <img src="../capturas/ok.svg" alt="ok"></p>
+</body>
+</html>

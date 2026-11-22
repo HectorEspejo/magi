@@ -17,6 +17,14 @@
 # o el contenido del .deb (lo decide el job «cambios-termux»): compilar para
 # Android es lo más lento de este workflow.
 #
+# Desde la Fase 9c, el job «web» construye la web (scripts/generar-web.sh, con
+# los datos reales de la API de GitHub) y la comprueba con `magi-web comprobar`,
+# primero con el manual de la última etiqueta publicada (el que se publica) y
+# después con el de la propia rama, para que un capítulo, un enlace o un ancla
+# nuevos se comprueben antes de llegar a una release. No despliega nada: eso lo
+# hace web.yml, solo desde main. Corre solo en las PR que tocan la web (lo decide
+# el job «cambios-web»; como «termux», no está en la regla de main).
+#
 # Permisos: contents: read por defecto; ningún job de este workflow publica.
 
 name: CI
@@ -382,3 +390,111 @@ jobs:
             target/x86_64-linux-android/release/magi
           if-no-files-found: error
           retention-days: 7
+
+  cambios-web:
+    name: ¿Toca la web?
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    outputs:
+      web: ${{ steps.filtro.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Basta el commit de fusión y sus dos padres.
+          fetch-depth: 2
+      - name: Mirar qué ficheros cambia la PR
+        id: filtro
+        run: |
+          set -euo pipefail
+          # En una PR, actions/checkout deja en HEAD el commit de fusión: su
+          # primer padre es la base y el segundo, la cabeza de la PR.
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "HEAD no es un commit de fusión: se asume que la PR toca la web."
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cambia=false
+          # Con --no-renames, mover un fichero lista la ruta vieja y la nueva: sin
+          # ello git solo da la nueva, y mover un fichero vigilado fuera de las
+          # rutas del filtro pasaría sin que el job web corriera.
+          # Con -z los nombres llegan tal cual, separados por NUL: sin él, git
+          # entrecomilla y escapa los que llevan caracteres no ASCII, comillas o
+          # tabuladores, ningún patrón los casa y la PR pasaría sin el job web.
+          # La lista va antes a un fichero: con `< <(git diff …)` un fallo de git
+          # no para el script, la lista sale vacía y se diría «no toca la web».
+          cambiados="$RUNNER_TEMP/cambiados-web"
+          git diff --name-only -z --no-renames HEAD^1 HEAD > "$cambiados"
+          while IFS= read -r -d '' fichero; do
+            # Todo lo que cambia lo que sale en la web: sus fuentes (web/), el
+            # generador, la animación de la demo, el manual (que la PR comprueba
+            # aunque no salga hasta la siguiente versión), los scripts y la
+            # prueba de las capturas, y los ficheros que la construyen o la
+            # prueban (web.yml y este workflow incluidos, y el árbol de
+            # dependencias de Cargo).
+            case "$fichero" in
+              web/* \
+                | crates/magi-web/* \
+                | assets/demo/* \
+                | docs/manual/* \
+                | scripts/generar-web.sh \
+                | scripts/generar-capturas.sh \
+                | tests/capturas_web.rs \
+                | .github/workflows/web.yml \
+                | .github/workflows/ci.yml \
+                | Cargo.toml \
+                | Cargo.lock)
+                cambia=true
+                # %q y no echo: con -z un nombre puede llevar saltos de línea, y
+                # una línea suya que empiece por «::» sería una orden del workflow.
+                printf 'Toca la web: %q\n' "$fichero"
+                ;;
+              *) ;;
+            esac
+          done < "$cambiados"
+          echo "web=$cambia" >> "$GITHUB_OUTPUT"
+          echo "El job web corre: $cambia"
+
+  web:
+    name: Web (construir y comprobar)
+    needs: cambios-web
+    if: needs.cambios-web.outputs.web == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      # Los mismos valores que en web.yml y en scripts/generar-web.sh (una prueba
+      # de crates/magi-web comprueba que coinciden). Suma del tarball musl.
+      MDBOOK_VERSION: '0.5.4'
+      MDBOOK_SHA256: '5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Con todas las etiquetas: el manual y los CHANGELOG salen de
+          # `git show <etiqueta>:…`.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+      - name: Instalar mdBook (fijado por versión y SHA-256)
+        run: |
+          set -euo pipefail
+          archivo="mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "${RUNNER_TEMP}/${archivo}" \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/${archivo}"
+          echo "${MDBOOK_SHA256}  ${RUNNER_TEMP}/${archivo}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/mdbook"
+          tar xzf "${RUNNER_TEMP}/${archivo}" -C "${RUNNER_TEMP}/mdbook"
+          install -m 755 "${RUNNER_TEMP}/mdbook/mdbook" "$HOME/.cargo/bin/mdbook"
+          mdbook --version
+      - name: Construir y comprobar la web (manual de la última etiqueta publicada)
+        # Es lo que se publicaría: los datos reales de la API y el manual de la
+        # etiqueta. Solo se construye y se comprueba; no se despliega.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/generar-web.sh
+      - name: Construir y comprobar la web con el manual de la propia rama
+        # Un capítulo, un enlace o un ancla nuevos del manual se comprueban aquí,
+        # antes de que lleguen a una versión publicada.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/generar-web.sh --con-manual-de-la-rama

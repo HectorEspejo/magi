@@ -1,38 +1,38 @@
 # MAGI - Checklist Fase 9c: Web de MAGI
 
 ## Generador y estructura
-- [ ] Crate `crates/magi-web` en el workspace, biblioteca y binario `magi-web`, con `publish = false` y `dist = false`
+- [x] Crate `crates/magi-web` en el workspace, biblioteca y binario `magi-web`, con `publish = false` y `dist = false`
   - AC: Dado el workspace con `magi-web`, cuando se ejecuta `dist plan`, entonces salen los mismos artefactos que sin él
 - [ ] `magi-web construir` genera el sitio completo en una carpeta a partir de `web/`, los datos de las releases y el manual preparado
   - AC: Dados unos datos de ejemplo, cuando se construye, entonces existen la portada, descargas, versiones y 404 en los dos idiomas, y el manual
 - [ ] Plantillas `minijinja` en `web/plantillas/` con una cabecera y un pie comunes, también en el manual
-- [ ] `web/datos/plataformas.toml` con canal, estado, artefacto, orden e instrucciones de cada plataforma, validado al cargar
+- [x] `web/datos/plataformas.toml` con canal, estado, artefacto, orden e instrucciones de cada plataforma, validado al cargar
   - AC: Dado un estado que no es `estable`, `en_pruebas` ni `beta`, cuando se construye, entonces falla con el id de la plataforma
-- [ ] Textos en `web/textos/es.toml` y `web/textos/en.toml` con las mismas claves
+- [x] Textos en `web/textos/es.toml` y `web/textos/en.toml` con las mismas claves
   - AC: Dada una clave que solo está en uno de los dos, cuando se construye, entonces falla diciendo cuál y en qué fichero
 - [ ] Enlaces internos relativos: la web funciona igual en `magi.erratia.com` y en `hectorespejo.github.io/magi/`
-- [ ] Página 404 en castellano e inglés, con enlaces absolutos a `https://magi.erratia.com/`
+- [x] Página 404 en castellano e inglés, con enlaces absolutos a `https://magi.erratia.com/`
 - [ ] `scripts/generar-web.sh` construye la web en local en `target/web/`, con mdBook fijado y los datos de la API o los de ejemplo (`--sin-red`)
 
 ## Datos de las releases
-- [ ] `magi-web releases` lee las releases de la API de GitHub en cada construcción, paginadas, y las deja en un `releases.json` sin versionar
-- [ ] Por canal sale la última versión publicada por número: `vX.Y.Z` para escritorio y Termux y `android-vX.Y.Z` para la app, nunca un borrador ni una candidata
+- [x] `magi-web releases` lee las releases de la API de GitHub en cada construcción, paginadas, y las deja en un `releases.json` sin versionar
+- [x] Por canal sale la última versión publicada por número: `vX.Y.Z` para escritorio y Termux y `android-vX.Y.Z` para la app, nunca un borrador ni una candidata
   - AC: Dadas `v1.6.1`, `v1.6.2-rc.1` y `android-v0.2.0`, cuando se construye, entonces descargas enseña el escritorio 1.6.1 y la app 0.2.0
-- [ ] Lo que llega de la API se valida (etiqueta, artefacto con su nombre, tamaño, URL y `.sha256` de una línea con 64 hexadecimales y el nombre exacto) y cualquier dato raro para la construcción
+- [x] Lo que llega de la API se valida (etiqueta, artefacto con su nombre, tamaño, URL y `.sha256` de una línea con 64 hexadecimales y el nombre exacto) y cualquier dato raro para la construcción
   - AC: Dado un `.sha256` con otro nombre de fichero, cuando se construye, entonces falla y la web publicada sigue siendo la anterior
-- [ ] Termux: si la última versión aún no tiene su `.deb`, sale el de la anterior que lo tiene, con su número
-- [ ] La huella del certificado del APK es una constante de `plataformas.toml` y se compara con la de las notas de la release de la app
+- [x] Termux: si la última versión aún no tiene su `.deb`, sale el de la anterior que lo tiene, con su número
+- [x] La huella del certificado del APK es una constante de `plataformas.toml` y se compara con la de las notas de la release de la app
   - AC: Dada una release de la app cuya huella no coincide con la constante, cuando se construye, entonces falla enseñando las dos
-- [ ] Homebrew y AUR solo aparecen en descargas si `PUBLICAR_HOMEBREW` o `PUBLICAR_AUR` valen `true`
+- [x] Homebrew y AUR solo aparecen en descargas si `PUBLICAR_HOMEBREW` o `PUBLICAR_AUR` valen `true`
 
 ## Descargas
-- [ ] Descargas en castellano e inglés con Linux x86_64 y ARM64, macOS Apple e Intel, Termux y la app, cada una con versión, estado, tamaño, enlace y SHA-256 completo
-- [ ] Bloque «Verificar» por canal con `sha256sum -c` y `gh attestation verify --repo HectorEspejo/magi`, y en la app también `apksigner verify --print-certs` con la huella
-- [ ] Instrucciones cortas de instalación por plataforma, con enlace a su capítulo del manual (`instalacion`, `termux` o `app-android`)
-- [ ] Las plataformas «en pruebas» y «beta» lo dicen en texto junto a la descarga y enlazan a «Qué se ha probado» del manual
-- [ ] App: instrucciones de Obtainium (URL del repositorio, etiquetas `android-v` y APK `magi-android-`) y, sin ninguna release, «aún sin publicar»
-- [ ] Enlace a todas las versiones en GitHub Releases
-- [ ] Descargas sin JavaScript, con todas las plataformas a la vista y en orden: Linux, macOS, Termux y app
+- [x] Descargas en castellano e inglés con Linux x86_64 y ARM64, macOS Apple e Intel, Termux y la app, cada una con versión, estado, tamaño, enlace y SHA-256 completo
+- [x] Bloque «Verificar» por canal con `sha256sum -c` y `gh attestation verify --repo HectorEspejo/magi`, y en la app también `apksigner verify --print-certs` con la huella
+- [x] Instrucciones cortas de instalación por plataforma, con enlace a su capítulo del manual (`instalacion`, `termux` o `app-android`)
+- [x] Las plataformas «en pruebas» y «beta» lo dicen en texto junto a la descarga y enlazan a «Qué se ha probado» del manual
+- [x] App: instrucciones de Obtainium (URL del repositorio, etiquetas `android-v` y APK `magi-android-`) y, sin ninguna release, «aún sin publicar»
+- [x] Enlace a todas las versiones en GitHub Releases
+- [x] Descargas sin JavaScript, con todas las plataformas a la vista y en orden: Linux, macOS, Termux y app
 
 ## Portada
 - [ ] Portada en castellano e inglés: qué es MAGI, para quién, plataformas, sin telemetría, licencia y enlaces a descargas, manual, GitHub, seguridad y contribuir
@@ -68,26 +68,26 @@
 - [ ] Aviso «Solo en castellano · Spanish only» en el manual y «Manual (Spanish)» en el menú inglés
 
 ## Diseño y accesibilidad
-- [ ] Estética de la TUI: JetBrains Mono, bordes de caja y la paleta fija en oscuro, con su derivada en claro
-- [ ] Fuentes servidas desde la web (JetBrains Mono 2.305 en woff2 y el subconjunto de DejaVu Sans Mono), con sus licencias
-- [ ] Prueba de contraste de las dos paletas: texto a 4,5:1 o más y bordes a 3:1 o más
+- [x] Estética de la TUI: JetBrains Mono, bordes de caja y la paleta fija en oscuro, con su derivada en claro
+- [x] Fuentes servidas desde la web (JetBrains Mono 2.305 en woff2 y el subconjunto de DejaVu Sans Mono), con sus licencias
+- [x] Prueba de contraste de las dos paletas: texto a 4,5:1 o más y bordes a 3:1 o más
 - [ ] Accesibilidad AA: `lang` en cada página, enlace para saltar al contenido, foco visible, todo con teclado y sin desplazamiento horizontal a 320 px
 - [ ] Cambio de idioma en cada página, a su equivalente, con `hreflang`
 - [ ] La portada pesa menos de 1 MB sin contar las descargas
 
 ## Seguridad y privacidad
-- [ ] CSP en un `<meta>` al principio de cada página, solo con recursos propios, y en el manual los scripts en línea por su hash, calculado al generar
+- [x] CSP en un `<meta>` al principio de cada página, solo con recursos propios, y en el manual los scripts en línea por su hash, calculado al generar
   - AC: Dado un script en línea nuevo en el tema del manual, cuando se construye, entonces su hash entra en la CSP de esas páginas y no hace falta `'unsafe-inline'`
-- [ ] `magi-web comprobar` revisa el sitio generado (enlaces internos, anclas, externos solo de la lista permitida y por `https://`, sin `style` ni scripts propios) y un fallo para el despliegue
-- [ ] Sin cookies ni analítica, con la nota de privacidad en el pie
-- [ ] Todo lo que llega de la API, de los `.sha256` o de los CHANGELOG se escapa en el HTML
+- [x] `magi-web comprobar` revisa el sitio generado (enlaces internos, anclas, externos solo de la lista permitida y por `https://`, sin `style` ni scripts propios) y un fallo para el despliegue
+- [x] Sin cookies ni analítica, con la nota de privacidad en el pie
+- [x] Todo lo que llega de la API, de los `.sha256` o de los CHANGELOG se escapa en el HTML
 
 ## Publicación
-- [ ] `web.yml` construye y despliega en GitHub Pages con `deploy-pages`, permisos `contents: read`, `pages: write` e `id-token: write`, y sin secretos
-- [ ] `web.yml` se dispara al terminar bien «Release», «Release Termux» y «Release Android», con un push a `main` que toque la web y a mano, y despliega solo desde `main` con concurrencia `pages`
+- [x] `web.yml` construye y despliega en GitHub Pages con `deploy-pages`, permisos `contents: read`, `pages: write` e `id-token: write`, y sin secretos
+- [x] `web.yml` se dispara al terminar bien «Release», «Release Termux» y «Release Android», con un push a `main` que toque la web y a mano, y despliega solo desde `main` con concurrencia `pages`
   - AC: Dada una «Release Termux» que falla, cuando termina, entonces la web no se regenera
 - [ ] Jobs `cambios-web` y `web` en `ci.yml` (no obligatorios) que construyen y comprueban la web, también con el manual de la rama, en cada PR que la toque
-- [ ] `homepage` de `Cargo.toml` apunta a `https://magi.erratia.com` y los dos README enlazan la web
+- [x] `homepage` de `Cargo.toml` apunta a `https://magi.erratia.com` y los dos README enlazan la web
 
 ## App Android
 - [ ] `applicationId` `io.github.hectorespejo.magi`, sin cambiar el namespace ni el paquete Kotlin, y `android-release.yml` comprueba el nuevo
@@ -119,6 +119,6 @@
 
 ---
 
-**Progreso Fase 9c:** 0 / 73 funcionalidades
+**Progreso Fase 9c:** 27 / 73 funcionalidades
 
-**Total MAGI (Fases 1-17, 9b y 9c):** 1432 / 1520 funcionalidades
+**Total MAGI (Fases 1-17, 9b y 9c):** 1459 / 1520 funcionalidades

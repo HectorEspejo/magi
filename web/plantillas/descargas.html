@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block titulo %}{{ t.descargas.titulo }} · {{ t.comun.nombre }}{% endblock %}
+{% block contenido %}
+<div class="contenedor">
+  <h1 class="titulo-pagina">{{ t.descargas.titulo }}</h1>
+  <p class="introduccion">{{ t.descargas.introduccion }}</p>
+
+  <section class="caja" id="versiones" aria-labelledby="versiones-titulo">
+    <h2 class="caja-titulo" id="versiones-titulo">{{ t.descargas.versiones_titulo }}</h2>
+    <ul class="versiones-lista">
+{% for v in d.versiones %}
+      <li id="version-{{ v.canal }}"><span class="canal">{{ v.titulo }}</span>
+{%- if v.publicada %} <a href="{{ v.url }}">{{ v.numero }}</a> · {{ v.fecha }}{% else %} <span class="estado">{{ t.descargas.sin_publicar }}</span>{% endif %}</li>
+{% endfor %}
+    </ul>
+  </section>
+
+{% for g in d.grupos %}
+  <section class="caja" id="grupo-{{ g.id }}" aria-labelledby="grupo-{{ g.id }}-titulo">
+    <h2 class="caja-titulo" id="grupo-{{ g.id }}-titulo">{{ g.titulo }}</h2>
+{% if g.instrucciones %}
+    <p class="instrucciones">{{ g.instrucciones|con_codigo }}</p>
+{% endif %}
+    <ul class="plataformas">
+{% for p in g.plataformas %}
+      <li class="plataforma" id="plataforma-{{ p.id }}">
+        <h3 class="plataforma-titulo">{{ p.etiqueta }} <span class="estado estado-{{ p.estado }}">{{ p.estado_texto }}</span></h3>
+{% if p.probado %}
+        <p class="probado"><a href="{{ d.enlaces.probado }}" hreflang="es">{{ t.descargas.que_se_ha_probado }}</a></p>
+{% endif %}
+{% if p.archivo %}
+        <dl class="datos">
+          <div><dt>{{ t.descargas.version }}</dt><dd>{{ p.numero }}</dd></div>
+          <div><dt>{{ t.descargas.archivo }}</dt><dd><a href="{{ p.archivo.url }}">{{ p.archivo.nombre }}</a></dd></div>
+          <div><dt>{{ t.descargas.tamano }}</dt><dd>{{ p.archivo.tamano }}</dd></div>
+          <div><dt>{{ t.descargas.sha256 }}</dt><dd><code class="suma">{{ p.archivo.sha256 }}</code></dd></div>
+          <div><dt>{{ t.descargas.suma_archivo }}</dt><dd><a href="{{ p.archivo.suma_url }}">{{ p.archivo.nombre }}.sha256</a></dd></div>
+        </dl>
+{% else %}
+        <p class="sin-publicar">{{ t.descargas.sin_publicar }}</p>
+{% endif %}
+{% if p.instrucciones %}
+        <p class="instrucciones">{{ p.instrucciones|con_codigo }}</p>
+{% endif %}
+{% if p.comando_instalar %}
+        <pre class="orden"><code>{{ p.comando_instalar }}</code></pre>
+{% endif %}
+      </li>
+{% endfor %}
+    </ul>
+{% for a in g.alternativas %}
+    <h3 class="subtitulo-caja">{{ a.titulo }}</h3>
+    <pre class="orden"><code>{{ a.comando }}</code></pre>
+{% endfor %}
+{% if g.obtainium %}
+    <h3 class="subtitulo-caja">{{ t.descargas.obtainium.titulo }}</h3>
+    <p>{{ t.descargas.obtainium.antes }}<a href="https://github.com/ImranR98/Obtainium">{{ t.descargas.obtainium.enlace }}</a>{{ t.descargas.obtainium.despues }}</p>
+    <dl class="datos">
+      <div><dt>{{ t.descargas.obtainium.url }}</dt><dd><code class="suma">https://github.com/HectorEspejo/magi</code></dd></div>
+      <div><dt>{{ t.descargas.obtainium.etiquetas }}</dt><dd><code>{{ g.obtainium.etiquetas }}</code></dd></div>
+      <div><dt>{{ t.descargas.obtainium.apk }}</dt><dd><code>{{ g.obtainium.apk }}</code></dd></div>
+    </dl>
+{% endif %}
+{% if g.huella %}
+    <p class="firma">{{ t.descargas.firma.etiqueta }}: <code class="suma">{{ g.huella }}</code></p>
+{% endif %}
+    <p class="capitulo"><a href="{{ g.capitulo }}" hreflang="es">{{ t.descargas.capitulo }}</a></p>
+  </section>
+
+{% endfor %}
+  <section class="caja" id="verificar" aria-labelledby="verificar-titulo">
+    <h2 class="caja-titulo" id="verificar-titulo">{{ t.descargas.verificar.titulo }}</h2>
+    <p>{{ t.descargas.verificar.introduccion|con_codigo }}</p>
+{% for c in d.verificar %}
+    <h3 class="subtitulo-caja" id="verificar-{{ c.canal }}">{{ c.titulo }}</h3>
+    <pre class="orden"><code>{{ c.comandos }}</code></pre>
+{% if c.nota %}
+    <p>{{ c.nota|con_codigo }}</p>
+{% endif %}
+{% if c.huella %}
+    <p>{{ t.descargas.verificar.huella|con_codigo }} <code class="suma">{{ c.huella }}</code></p>
+{% endif %}
+{% endfor %}
+    <p class="aviso"><strong>{{ t.descargas.verificar.fallo_antes }}<a href="https://github.com/HectorEspejo/magi/security/policy">{{ t.descargas.verificar.fallo_enlace }}</a>{{ t.descargas.verificar.fallo_despues }}</strong></p>
+  </section>
+
+  <p class="todas-las-versiones"><a href="https://github.com/HectorEspejo/magi/releases">{{ t.descargas.todas_las_versiones }}</a></p>
+</div>
+{% endblock %}

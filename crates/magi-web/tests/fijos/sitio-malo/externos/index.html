@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+        <meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+        <meta name="referrer" content="strict-origin-when-cross-origin">
+        <title>Prueba</title>
+</head>
+<body>
+<h1 id="externos">Externos</h1>
+<p><a href="https://evil.ejemplo.org/x">Un dominio que no es de la lista</a></p>
+<p><a href="http://github.com/HectorEspejo/magi">Sin https</a></p>
+<p><a href="javascript:alert(1)">Un javascript</a></p>
+<p><a href="data:text/html,x">Un data</a></p>
+<p><a href="https://github.com.evil.ejemplo.org/HectorEspejo/magi">Un dominio que empieza igual</a></p>
+<p><a href="https://github.com/HectorEspejo/magi-evil">Un prefijo que no es por segmentos</a></p>
+<p><a href="https://github.com/HectorEspejo/magi/../../evil/x">Una ruta que se sale</a></p>
+<p><a href="//evil.ejemplo.org/x">Sin esquema</a></p>
+<p><a href="mailto:alguien@ejemplo.org">Un correo</a></p>
+<p><img src="https://github.com/HectorEspejo/magi/raw/main/captura.png" alt="Un recurso cargado de fuera"></p>
+<p><a href="https://github.com/HectorEspejo/magi/issues">Este sí está en la lista</a></p>
+</body>
+</html>

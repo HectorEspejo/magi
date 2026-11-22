@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!-- Monograma de MAGI (assets/iconos/magi.svg) con la paleta fija de la TUI. -->
+<rect x="16" y="16" width="480" height="480" rx="96" fill="#0A0A0A" stroke="#FFA000" stroke-width="16"/>
+<path d="M136 384V152l120 168 120-168v232" fill="none" stroke="#EDE8DC" stroke-width="40" stroke-linecap="square"/>
+<path d="M256 360l32 32-32 32-32-32z" fill="#00FF6A"/>
+<rect x="136" y="448" width="240" height="8" fill="#5A5A5A"/>
+</svg>

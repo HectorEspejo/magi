@@ -1,0 +1,507 @@
+/* Estilos de la web de MAGI (Fase 9c). Sin JavaScript, sin atributos style.
+   Cada bloque está marcado con la pista que lo escribió. */
+
+/* ===== P1B: variables, paletas, tipografía y base ===== */
+
+/* Fuentes de la propia web (nada se carga de fuera): JetBrains Mono, la de la
+   app, y un subconjunto de DejaVu Sans Mono con los glifos de la TUI que le
+   faltan. El navegador solo baja el subconjunto si la página usa uno de ellos. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fuentes/JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../fuentes/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MAGI Simbolos";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fuentes/magi-simbolos.woff2") format("woff2");
+  unicode-range: U+21B5, U+21BB, U+21C4, U+21C5, U+25A3, U+25D0, U+25D1, U+2605, U+2691;
+}
+
+/* Paletas (informe §7.9). Clara por defecto y oscura con el tema del sistema.
+   La oscura es la paleta fija de la TUI (src/tema.rs) más el gris secundario;
+   la clara es su derivada. Una prueba de magi-web (tests/contraste.rs) calcula
+   los contrastes con la fórmula de WCAG:
+   - todo token de texto (texto, secundario, acento, correcto y crítico) llega a
+     4,5:1 sobre el fondo y sobre la superficie;
+   - el borde de los controles y el foco llegan a 3:1 sobre el fondo y la
+     superficie;
+   - el borde decorativo (el «inactivo» de la TUI, 2,87:1 en la oscura) queda
+     EXENTO: solo se usa en bordes que no transmiten nada (cajas y cabecera) y
+     nunca en el borde de un control, en un texto ni en el foco.
+   Los nombres de estas variables los lee la prueba: no los cambies sin ella. */
+:root {
+  color-scheme: light dark;
+  --fondo: #F4F0E6;
+  --superficie: #FBF8F1;
+  --texto: #0A0A0A;
+  --secundario: #5C5850;
+  --acento: #8A5000;
+  --correcto: #006B2E;
+  --critico: #B3140A;
+  --foco: #0B57B5;
+  --borde-control: #6B675C;
+  --borde-decorativo: #8C887E;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #0A0A0A;
+    --superficie: #141414;
+    --texto: #EDE8DC;
+    --secundario: #9A968C;
+    --acento: #FFA000;
+    --correcto: #00FF6A;
+    --critico: #FF2A1A;
+    --foco: #7FD1FF;
+    --borde-control: #7A766C;
+    --borde-decorativo: #5A5A5A;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: "JetBrains Mono", "MAGI Simbolos", ui-monospace, monospace;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  margin: 1.5rem 0 1rem;
+  color: var(--acento);
+  font-size: 1.5rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+p {
+  margin: 0.75rem 0;
+}
+
+a {
+  color: var(--acento);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 3px;
+}
+
+code,
+pre {
+  font-family: inherit;
+  font-size: 0.95em;
+}
+
+code {
+  padding: 0 0.25em;
+  background: var(--superficie);
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+}
+
+summary {
+  padding: 0.4rem 0;
+  cursor: pointer;
+}
+
+summary::marker {
+  color: var(--acento);
+}
+
+/* Foco visible en todo lo que se maneja con teclado (WCAG 2.4.7). */
+:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 3px;
+}
+
+main:focus {
+  outline: none;
+}
+
+/* Enlace para saltar al contenido: fuera de la pantalla hasta que recibe el foco. */
+.saltar {
+  position: absolute;
+  top: -5rem;
+  left: 0.5rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--acento);
+  color: var(--fondo);
+  font-weight: 700;
+}
+
+.saltar:focus,
+.saltar:focus-visible {
+  top: 0.5rem;
+}
+
+.contenedor {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+/* Botón principal: acento con el texto del fondo (9,69:1 en la oscura y 5,72:1
+   en la clara). El secundario lleva el borde de control. */
+.boton {
+  display: inline-block;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.2rem;
+  border: 1px solid var(--acento);
+  background: var(--acento);
+  color: var(--fondo);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.boton:hover {
+  background: var(--fondo);
+  color: var(--acento);
+}
+
+.boton-secundario {
+  border-color: var(--borde-control);
+  background: transparent;
+  color: var(--acento);
+}
+
+.boton-secundario:hover {
+  background: var(--superficie);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===== P1B: cabecera, pie y navegación ===== */
+
+.cabecera {
+  border-bottom: 1px solid var(--borde-decorativo);
+}
+
+.cabecera-interior {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 1rem;
+  padding-block: 0.25rem;
+}
+
+.marca {
+  order: 1;
+  padding-block: 0.5rem;
+  color: var(--acento);
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-decoration: none;
+}
+
+.idioma {
+  order: 2;
+  margin-left: auto;
+  padding: 0.5rem 0;
+}
+
+/* En pantallas estrechas el menú pasa a una segunda línea y se parte si hace
+   falta: sin botón de hamburguesa ni JavaScript. */
+.menu {
+  order: 3;
+  flex: 1 1 100%;
+}
+
+.menu ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu a {
+  display: inline-block;
+  padding-block: 0.5rem;
+  border-bottom: 2px solid transparent;
+  color: var(--texto);
+  text-decoration: none;
+}
+
+.menu a:hover {
+  border-bottom-color: currentcolor;
+  color: var(--acento);
+}
+
+/* La página actual, además del color, lleva la raya: no se distingue solo por él. */
+.menu a[aria-current="page"] {
+  border-bottom-color: var(--acento);
+  color: var(--acento);
+  font-weight: 700;
+}
+
+@media (min-width: 48rem) {
+  .menu {
+    order: 2;
+    flex: 1 1 auto;
+  }
+
+  .idioma {
+    order: 3;
+    margin-left: 0;
+  }
+}
+
+main {
+  display: block;
+}
+
+.pie {
+  margin-top: 3rem;
+  padding-block: 1.5rem;
+  border-top: 1px solid var(--borde-decorativo);
+  color: var(--secundario);
+  font-size: 0.875rem;
+}
+
+.pie-enlaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pie-enlaces li {
+  padding-block: 0.25rem;
+}
+
+.privacidad {
+  max-width: 60ch;
+  margin: 0.75rem 0 0;
+}
+
+/* ===== P1B: descargas ===== */
+
+.introduccion {
+  max-width: 65ch;
+}
+
+/* Caja de una línea con el título sobre el borde, como en la TUI. */
+.caja {
+  position: relative;
+  margin: 2.5rem 0 0;
+  padding: 1.5rem 1rem 1rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+}
+
+.caja-titulo {
+  width: fit-content;
+  max-width: 100%;
+  margin: -2.2rem 0 0.75rem -0.5rem;
+  padding: 0 0.5rem;
+  background: var(--fondo);
+  color: var(--acento);
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.subtitulo-caja {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.caja code,
+.caja pre {
+  background: var(--fondo);
+}
+
+.versiones-lista {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.canal {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plataformas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1rem;
+  margin: 0.75rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plataforma {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--fondo);
+}
+
+.plataforma-titulo {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+/* El estado va siempre en texto; el color solo lo acompaña. */
+.estado {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.4em;
+  border: 1px solid currentcolor;
+  color: var(--secundario);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: lowercase;
+}
+
+.estado-estable {
+  color: var(--correcto);
+}
+
+.estado-en_pruebas,
+.estado-beta {
+  color: var(--acento);
+}
+
+.probado {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.sin-publicar {
+  color: var(--secundario);
+}
+
+.datos {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.datos > div {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+}
+
+.datos dt {
+  color: var(--secundario);
+}
+
+.datos dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 40rem) {
+  .datos > div {
+    grid-template-columns: 9rem 1fr;
+    gap: 0 0.75rem;
+  }
+}
+
+/* Sumas y órdenes: completas, partidas donde haga falta y seleccionables de un clic. */
+.suma {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.orden {
+  user-select: all;
+}
+
+.instrucciones,
+.firma,
+.capitulo {
+  max-width: 65ch;
+}
+
+.aviso {
+  max-width: 65ch;
+  margin-top: 1.25rem;
+}
+
+.todas-las-versiones {
+  margin: 2rem 0 0;
+}
+
+/* ===== P2C: portada y capturas ===== */
+
+/* ===== P2D: versiones ===== */

@@ -1,0 +1,14 @@
+<header class="cabecera">
+  <div class="contenedor cabecera-interior">
+    <a class="marca" href="{{ nav.inicio.href }}">{{ t.comun.nombre }}</a>
+    <nav class="menu" aria-label="{{ t.cabecera.navegacion }}">
+      <ul>
+        <li><a href="{{ nav.inicio.href }}"{% if pagina == "portada" %} aria-current="page"{% endif %}>{{ t.cabecera.inicio }}</a></li>
+        <li><a href="{{ nav.descargas.href }}"{% if pagina == "descargas" %} aria-current="page"{% endif %}>{{ t.cabecera.descargas }}</a></li>
+        <li><a href="{{ nav.versiones.href }}"{% if pagina == "versiones" %} aria-current="page"{% endif %}>{{ t.cabecera.versiones }}</a></li>
+        <li><a href="{{ nav.manual.href }}" hreflang="es">{{ t.cabecera.manual }}</a></li>
+      </ul>
+    </nav>
+    <a class="idioma" href="{{ alternativa.href }}" hreflang="{{ alternativa.hreflang }}" lang="{{ alternativa.hreflang }}" title="{{ t.comun.idioma_otro_etiqueta }}">{{ alternativa.texto }}</a>
+  </div>
+</header>

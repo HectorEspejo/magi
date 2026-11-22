@@ -15,10 +15,12 @@
 //! Cada excepción vive en una lista de este fichero, con su motivo. Si hace
 //! falta una nueva, se añade aquí con su motivo: nunca se salta la prueba.
 
-use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+// El algoritmo de anclas de GitHub vive en `magi-web` (una sola copia, D452).
+use magi_web::anclas::{encabezados_de, slugs_de};
 
 const RAIZ: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -414,104 +416,6 @@ fn es_documentacion_con_enlaces(ruta: &str) -> bool {
             | "docs/README.md"
     ) || (ruta.starts_with("docs/manual/") && ruta.ends_with(".md"))
         || (ruta.starts_with("docs/publicar") && ruta.ends_with(".md"))
-}
-
-/// Los encabezados de un markdown (fuera de bloques de código): `(nivel, texto)`.
-fn encabezados_de(texto: &str) -> Vec<(usize, String)> {
-    let mut dentro = false;
-    let mut res = Vec::new();
-    for linea in texto.lines() {
-        let l = linea.trim_start();
-        if l.starts_with("```") || l.starts_with("~~~") {
-            dentro = !dentro;
-            continue;
-        }
-        if dentro {
-            continue;
-        }
-        let almohadillas = linea.chars().take_while(|c| *c == '#').count();
-        if (1..=6).contains(&almohadillas) && linea.chars().nth(almohadillas) == Some(' ') {
-            let texto = linea[almohadillas..]
-                .trim()
-                .trim_end_matches('#')
-                .trim()
-                .to_string();
-            res.push((almohadillas, texto));
-        }
-    }
-    res
-}
-
-/// El slug de GitHub de un encabezado, sin el sufijo de duplicados.
-fn slug_base(texto: &str) -> String {
-    // Los textos de enlaces `[a](b)` cuentan como `a`.
-    let mut limpio = String::new();
-    let mut chars = texto.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '`' {
-            continue;
-        }
-        if c == '[' {
-            let mut interior = String::new();
-            let mut cerrado = false;
-            for d in chars.by_ref() {
-                if d == ']' {
-                    cerrado = true;
-                    break;
-                }
-                interior.push(d);
-            }
-            if cerrado && chars.peek() == Some(&'(') {
-                for d in chars.by_ref() {
-                    if d == ')' {
-                        break;
-                    }
-                }
-                limpio.push_str(&interior);
-            } else {
-                limpio.push('[');
-                limpio.push_str(&interior);
-                if cerrado {
-                    limpio.push(']');
-                }
-            }
-            continue;
-        }
-        limpio.push(c);
-    }
-    limpio
-        .trim()
-        .to_lowercase()
-        .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                Some(c)
-            } else if c.is_whitespace() {
-                Some('-')
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Todos los slugs de un markdown, con el sufijo `-1`, `-2` de los duplicados.
-fn slugs_de(texto: &str) -> Vec<String> {
-    let mut vistos: HashMap<String, usize> = HashMap::new();
-    encabezados_de(texto)
-        .into_iter()
-        .map(|(_, t)| {
-            let base = slug_base(&t);
-            let n = vistos.entry(base.clone()).or_insert(0);
-            let slug = if *n == 0 {
-                base.clone()
-            } else {
-                format!("{base}-{n}")
-            };
-            *n += 1;
-            slug
-        })
-        .collect()
 }
 
 /// Los destinos de los enlaces `](destino)` de una línea.

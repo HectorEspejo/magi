@@ -1,0 +1,126 @@
+# Textos de la web en castellano. Las mismas claves que `en.toml`, ninguna vacía
+# (`magi-web` lo comprueba al construir). Sin HTML: lo que lleva un enlace se
+# parte en `antes`, `enlace` y `despues`, y la plantilla pone el <a>; lo que va en
+# código se escribe entre acentos graves y la plantilla lo pasa a <code>.
+# Las tablas de la portada, de las capturas y de las versiones las añaden sus
+# páginas (`portada`, `captura`, `versiones`) sin tocar las demás.
+
+[comun]
+nombre = "MAGI"
+saltar = "Saltar al contenido"
+idioma_otro = "English"
+idioma_otro_etiqueta = "Read this page in English"
+manual_idioma = "Solo en castellano · Spanish only"
+
+[comun.mes]
+m01 = "ene"
+m02 = "feb"
+m03 = "mar"
+m04 = "abr"
+m05 = "may"
+m06 = "jun"
+m07 = "jul"
+m08 = "ago"
+m09 = "sep"
+m10 = "oct"
+m11 = "nov"
+m12 = "dic"
+
+[cabecera]
+inicio = "Inicio"
+descargas = "Descargas"
+versiones = "Versiones"
+manual = "Manual"
+navegacion = "Navegación principal"
+
+[pie]
+licencia = "Licencia"
+licencia_mit = "MIT"
+licencia_o = "OR"
+licencia_apache = "Apache-2.0"
+github = "GitHub"
+seguridad = "Seguridad"
+contribuir = "Contribuir"
+manual_de = "Manual de la"
+privacidad_antes = "Sin cookies ni analítica. GitHub, que aloja la web, registra los accesos; el manual guarda en tu navegador el estado de su barra lateral. "
+privacidad_enlace = "Declaración de privacidad de GitHub"
+privacidad_despues = "."
+
+[descargas]
+titulo = "Descargas"
+introduccion = "Elige tu plataforma, descarga el archivo y comprueba su suma y su procedencia antes de instalarlo. Los archivos se bajan de GitHub, no de esta web."
+versiones_titulo = "Versiones publicadas"
+sin_publicar = "aún sin publicar"
+version = "Versión"
+archivo = "Archivo"
+tamano = "Tamaño"
+sha256 = "SHA-256"
+suma_archivo = "Archivo de suma"
+que_se_ha_probado = "Qué se ha probado"
+capitulo = "Instalación completa en el manual"
+todas_las_versiones = "Todas las versiones en GitHub Releases"
+
+[descargas.canal]
+escritorio = "Escritorio"
+termux = "Termux"
+app = "App Android"
+
+[descargas.grupo]
+linux = "Linux"
+macos = "macOS"
+termux = "Termux"
+android = "App Android"
+
+[descargas.plataforma]
+linux-x86_64 = "x86_64"
+linux-arm64 = "ARM64"
+macos-arm64 = "Apple Silicon"
+macos-x86_64 = "Intel"
+termux-arm64 = "ARM64 (aarch64)"
+android-arm64 = "ARM64"
+
+[descargas.estado]
+estable = "estable"
+en_pruebas = "en pruebas"
+beta = "beta"
+
+[descargas.instalar]
+linux = "Descomprime el tarball con `tar -xf` y copia el binario `magi` a una carpeta de tu PATH, por ejemplo `/usr/local/bin`."
+macos = "Descomprime el tarball con `tar -xf` y copia el binario `magi` a una carpeta de tu PATH. Si lo bajaste con el navegador, quita la cuarentena con `xattr -d com.apple.quarantine magi`: el binario no está notarizado."
+termux = "Instala el paquete con `apt` (solo para aarch64) y comprueba la instalación con `magi --version`."
+app = "Instala el APK o, mejor, sigue la app con Obtainium para recibir las actualizaciones. Hace falta Android 11 o posterior."
+
+[descargas.gestor]
+aur = "AUR (Arch y Omarchy)"
+homebrew = "Homebrew (macOS)"
+
+[descargas.obtainium]
+titulo = "Obtainium"
+antes = "Para instalar y actualizar la app, añádela en "
+enlace = "Obtainium"
+despues = " con estos datos."
+url = "URL del repositorio"
+etiquetas = "Filtro de etiquetas"
+apk = "Filtro de APK"
+
+[descargas.firma]
+etiqueta = "Certificado de firma (SHA-256)"
+
+[descargas.verificar]
+titulo = "Verificar"
+introduccion = "Descarga el archivo y su `.sha256` en la misma carpeta y comprueba la suma y la procedencia antes de instalarlo. Para la procedencia hace falta el GitHub CLI (`gh`)."
+huella = "La huella SHA-256 del certificado que imprime `apksigner` tiene que ser esta:"
+nota_macos = "En macOS, si no tienes `sha256sum`, usa `shasum -a 256 -c` con el mismo archivo `.sha256`."
+fallo_antes = "Si la suma, la procedencia o el certificado no coinciden, no instales el archivo y avisa con "
+fallo_enlace = "un aviso privado de seguridad"
+fallo_despues = "."
+
+[descargas.verificar.canal]
+escritorio = "Escritorio (Linux y macOS)"
+termux = "Termux"
+app = "App Android"
+
+[no_encontrada]
+titulo = "Página no encontrada"
+texto = "Esta página no existe."
+volver = "Volver al inicio"

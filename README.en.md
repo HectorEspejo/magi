@@ -8,6 +8,8 @@ deliberation step, encrypted sync between machines, remote desktops (RDP, VNC),
 services and containers, and persistent tmux sessions. Free software under
 MIT OR Apache-2.0, with no account, no subscription and no telemetry.
 
+Website: <https://magi.erratia.com> (downloads, releases and manual).
+
 ![MAGI in a terminal: the fleet with three sample hosts, Files, Services and the command palette.](assets/demo/magi.gif)
 
 *Animation recorded against the repository's test server, with made-up hosts.*

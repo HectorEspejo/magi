@@ -1,0 +1,27 @@
+# Símbolos de la TUI que JetBrains Mono 2.305 no trae (informe de la Fase 9c, §7.8).
+#
+# Este fichero hace dos trabajos a la vez:
+#   1. Es la entrada de `pyftsubset --unicodes-file` con la que se genera
+#      `magi-simbolos.woff2`, un subconjunto de DejaVu Sans Mono 2.37.
+#   2. Es la fuente de verdad de la prueba de cobertura de las capturas
+#      (`crates/magi-web/src/fuentes.rs`, `leer_unicodes`): lo que está aquí cuenta
+#      como «tiene glifo» en la web.
+# Si añades o quitas un símbolo, rehaz el subconjunto con el procedimiento de
+# `web/README.md` (sección «Fuentes») y cambia las dos cosas en el mismo PR.
+#
+# Formato: una o varias entradas por línea (`U+21B5`, o un rango `U+25D0-25D1`),
+# separadas por espacios o comas; `#` empieza un comentario; las líneas en blanco
+# se ignoran.
+#
+# No está `U+2934` (⤴, «salto»): DejaVu Sans Mono tampoco lo trae. En las capturas
+# se degrada con `disposicion::texto_ascii`, el único degradador (`>`).
+
+U+21B5   # ↵ retorno de carro: la tecla Intro en las ayudas y los diálogos
+U+21BB   # ↻ flecha circular: reconexión automática en curso
+U+21C4   # ⇄ dos flechas: «local ⇄ host» en la vista Archivos
+U+21C5   # ⇅ flechas arriba y abajo: marca de túneles activos en Hosts
+U+25A3   # ▣ cuadrado con cuadrado dentro: host de escritorio remoto (VNC) y su pestaña
+U+25D0   # ◐ círculo con la mitad izquierda llena: conectando o transferencia en curso
+U+25D1   # ◑ círculo con la mitad derecha llena: transferencia borrando
+U+2605   # ★ estrella negra: unidad vigilada en Servicios
+U+2691   # ⚑ bandera negra: ejecución forzada en Resultados y aviso crítico de la deliberación

@@ -1,0 +1,199 @@
+{
+  "releases": [
+    {
+      "tag_name": "v1.6.2",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-12-05T08:15:00Z",
+      "html_url": "https://github.com/HectorEspejo/magi/releases/tag/v1.6.2",
+      "body": "## Release Notes\n\nVersión de prueba de los datos de ejemplo de magi-web.",
+      "assets": [
+        {
+          "name": "dist-manifest.json",
+          "size": 111429,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/dist-manifest.json"
+        },
+        {
+          "name": "magi-ssh-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 11194224,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "name": "magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-aarch64-unknown-linux-gnu.tar.xz",
+          "size": 9933096,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-aarch64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "name": "magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-aarch64-apple-darwin.tar.xz",
+          "size": 9684424,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-aarch64-apple-darwin.tar.xz"
+        },
+        {
+          "name": "magi-ssh-aarch64-apple-darwin.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-aarch64-apple-darwin.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-x86_64-apple-darwin.tar.xz",
+          "size": 10958680,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-x86_64-apple-darwin.tar.xz"
+        },
+        {
+          "name": "magi-ssh-x86_64-apple-darwin.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh-x86_64-apple-darwin.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh.rb",
+          "size": 2387,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/magi-ssh.rb"
+        },
+        {
+          "name": "sha256.sum",
+          "size": 501,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/sha256.sum"
+        },
+        {
+          "name": "source.tar.gz",
+          "size": 6173594,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/source.tar.gz"
+        },
+        {
+          "name": "source.tar.gz.sha256",
+          "size": 81,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.2/source.tar.gz.sha256"
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.6.1",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-11-22T11:04:48Z",
+      "html_url": "https://github.com/HectorEspejo/magi/releases/tag/v1.6.1",
+      "body": "## Release Notes\n\nVersión de prueba de los datos de ejemplo de magi-web.",
+      "assets": [
+        {
+          "name": "dist-manifest.json",
+          "size": 111429,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/dist-manifest.json"
+        },
+        {
+          "name": "magi-ssh-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 11194224,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "name": "magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-x86_64-unknown-linux-gnu.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-aarch64-unknown-linux-gnu.tar.xz",
+          "size": 9933096,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-aarch64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "name": "magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-aarch64-unknown-linux-gnu.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-aarch64-apple-darwin.tar.xz",
+          "size": 9684424,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-aarch64-apple-darwin.tar.xz"
+        },
+        {
+          "name": "magi-ssh-aarch64-apple-darwin.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-aarch64-apple-darwin.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh-x86_64-apple-darwin.tar.xz",
+          "size": 10958680,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-x86_64-apple-darwin.tar.xz"
+        },
+        {
+          "name": "magi-ssh-x86_64-apple-darwin.tar.xz.sha256",
+          "size": 104,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh-x86_64-apple-darwin.tar.xz.sha256"
+        },
+        {
+          "name": "magi-ssh.rb",
+          "size": 2387,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh.rb"
+        },
+        {
+          "name": "magi-ssh_1.6.1_aarch64.deb",
+          "size": 9517696,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh_1.6.1_aarch64.deb"
+        },
+        {
+          "name": "magi-ssh_1.6.1_aarch64.deb.sha256",
+          "size": 93,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/magi-ssh_1.6.1_aarch64.deb.sha256"
+        },
+        {
+          "name": "sha256.sum",
+          "size": 501,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/sha256.sum"
+        },
+        {
+          "name": "source.tar.gz",
+          "size": 6173594,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/source.tar.gz"
+        },
+        {
+          "name": "source.tar.gz.sha256",
+          "size": 81,
+          "state": "uploaded",
+          "browser_download_url": "https://github.com/HectorEspejo/magi/releases/download/v1.6.1/source.tar.gz.sha256"
+        }
+      ]
+    }
+  ],
+  "sumas": {
+    "v1.6.2/magi-ssh-x86_64-unknown-linux-gnu.tar.xz": "2faa338ca7b61c993ee0716ac373e82d2a244ea2236c476f15d7d60d47d92e65 *magi-ssh-x86_64-unknown-linux-gnu.tar.xz\n\n",
+    "v1.6.2/magi-ssh-aarch64-unknown-linux-gnu.tar.xz": "4c6a5e2b45c717afc6c3fefa6cda8d43ca2db15efbf7923b750bda08467fd3b8 *magi-ssh-aarch64-unknown-linux-gnu.tar.xz\n\n",
+    "v1.6.2/magi-ssh-aarch64-apple-darwin.tar.xz": "961402cf7238816a320cdbb5e99ff1f1cc4c347db7e18105d20de628ec2d5596 *magi-ssh-aarch64-apple-darwin.tar.xz\n\n",
+    "v1.6.2/magi-ssh-x86_64-apple-darwin.tar.xz": "82ba667e55729f7e3770929390910554234ad678d525a28550510a35301bdb15 *magi-ssh-x86_64-apple-darwin.tar.xz\n\n",
+    "v1.6.1/magi-ssh_1.6.1_aarch64.deb": "a3be35e734ec56c31c12d84d72c85e218461655e51391b0094ae52ef55ddb3bd  magi-ssh_1.6.1_aarch64.deb\n"
+  }
+}
