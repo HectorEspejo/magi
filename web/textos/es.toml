@@ -1,0 +1,203 @@
+# Textos de la web en castellano. Las mismas claves que `en.toml`, ninguna vacía
+# (`magi-web` lo comprueba al construir). Sin HTML: lo que lleva un enlace se
+# parte en `antes`, `enlace` y `despues`, y la plantilla pone el <a>; lo que va en
+# código se escribe entre acentos graves y la plantilla lo pasa a <code>.
+# Las tablas de la portada, de las capturas y de las versiones las añaden sus
+# páginas (`portada`, `captura`, `versiones`) sin tocar las demás.
+
+[comun]
+nombre = "MAGI"
+saltar = "Saltar al contenido"
+idioma_otro = "English"
+idioma_otro_etiqueta = "Read this page in English"
+manual_idioma = "Solo en castellano · Spanish only"
+
+[comun.mes]
+m01 = "ene"
+m02 = "feb"
+m03 = "mar"
+m04 = "abr"
+m05 = "may"
+m06 = "jun"
+m07 = "jul"
+m08 = "ago"
+m09 = "sep"
+m10 = "oct"
+m11 = "nov"
+m12 = "dic"
+
+[cabecera]
+inicio = "Inicio"
+descargas = "Descargas"
+versiones = "Versiones"
+manual = "Manual"
+navegacion = "Navegación principal"
+
+[pie]
+licencia = "Licencia"
+licencia_mit = "MIT"
+licencia_o = "OR"
+licencia_apache = "Apache-2.0"
+github = "GitHub"
+seguridad = "Seguridad"
+contribuir = "Contribuir"
+manual_de = "Manual de la"
+privacidad_antes = "Sin cookies ni analítica. GitHub, que aloja la web, registra los accesos; el manual guarda en tu navegador el estado de su barra lateral. "
+privacidad_enlace = "Declaración de privacidad de GitHub"
+privacidad_despues = "."
+
+[descargas]
+titulo = "Descargas"
+introduccion = "Elige tu plataforma, descarga el archivo y comprueba su suma y su procedencia antes de instalarlo. Los archivos se bajan de GitHub, no de esta web."
+versiones_titulo = "Versiones publicadas"
+sin_publicar = "aún sin publicar"
+version = "Versión"
+archivo = "Archivo"
+tamano = "Tamaño"
+sha256 = "SHA-256"
+suma_archivo = "Archivo de suma"
+que_se_ha_probado = "Qué se ha probado"
+capitulo = "Instalación completa en el manual"
+todas_las_versiones = "Todas las versiones en GitHub Releases"
+
+[descargas.canal]
+escritorio = "Escritorio"
+termux = "Termux"
+app = "App Android"
+
+[descargas.grupo]
+linux = "Linux"
+macos = "macOS"
+termux = "Termux"
+android = "App Android"
+
+[descargas.plataforma]
+linux-x86_64 = "x86_64"
+linux-arm64 = "ARM64"
+macos-arm64 = "Apple Silicon"
+macos-x86_64 = "Intel"
+termux-arm64 = "ARM64 (aarch64)"
+android-arm64 = "ARM64"
+
+[descargas.estado]
+estable = "estable"
+en_pruebas = "en pruebas"
+beta = "beta"
+
+[descargas.instalar]
+linux = "Descomprime el tarball con `tar -xf` y copia el binario `magi` a una carpeta de tu PATH, por ejemplo `/usr/local/bin`."
+macos = "Descomprime el tarball con `tar -xf` y copia el binario `magi` a una carpeta de tu PATH. Si lo bajaste con el navegador, quita la cuarentena con `xattr -d com.apple.quarantine magi`: el binario no está notarizado."
+termux = "Instala el paquete con `apt` (solo para aarch64) y comprueba la instalación con `magi --version`."
+app = "Instala el APK o, mejor, sigue la app con Obtainium para recibir las actualizaciones. Hace falta Android 11 o posterior."
+
+[descargas.gestor]
+aur = "AUR (Arch y Omarchy)"
+homebrew = "Homebrew (macOS)"
+
+[descargas.obtainium]
+titulo = "Obtainium"
+antes = "Para instalar y actualizar la app, añádela en "
+enlace = "Obtainium"
+despues = " con estos datos."
+url = "URL del repositorio"
+etiquetas = "Filtro de etiquetas"
+apk = "Filtro de APK"
+
+[descargas.firma]
+etiqueta = "Certificado de firma (SHA-256)"
+
+[descargas.verificar]
+titulo = "Verificar"
+introduccion = "Descarga el archivo y su `.sha256` en la misma carpeta y comprueba la suma y la procedencia antes de instalarlo. Para la procedencia hace falta el GitHub CLI (`gh`)."
+huella = "La huella SHA-256 del certificado tiene que ser esta (`apksigner` la imprime en minúsculas y sin los dos puntos; compárala sin distinguir eso):"
+nota_macos = "En macOS, si no tienes `sha256sum`, usa `shasum -a 256 -c` con el mismo archivo `.sha256`."
+fallo_antes = "Si la suma, la procedencia o el certificado no coinciden, no instales el archivo y avisa con "
+fallo_enlace = "un aviso privado de seguridad"
+fallo_despues = "."
+
+[descargas.verificar.canal]
+escritorio = "Escritorio (Linux y macOS)"
+termux = "Termux"
+app = "App Android"
+
+[no_encontrada]
+titulo = "Página no encontrada"
+texto = "Esta página no existe."
+volver = "Volver al inicio"
+
+# ===== P2C: portada y capturas (tablas `portada` y `captura`) =====
+
+[portada]
+titulo = "MAGI"
+titulo_pagina = "MAGI · Gestor SSH de terminal"
+lema = "Gestor SSH de terminal, con estética de cabina y manejado con el teclado."
+plataformas_linea = "Linux y macOS · Termux · app Android. Software libre y sin telemetría."
+descargar = "Descargar"
+leer_manual = "Leer el manual"
+demo_resumen = "Animación de la demo"
+demo_alt = "MAGI en una terminal: la flota con tres hosts de ejemplo, Archivos, Servicios y la paleta de órdenes."
+capturas_titulo = "Así se ve"
+capturas_nota = "Capturas de la propia interfaz, hechas con los hosts inventados de la demo."
+
+[portada.que_es]
+titulo = "Qué es MAGI y para quién"
+que = "MAGI es un gestor de conexiones SSH que vive en la terminal: reúne tus hosts, sus sesiones, los archivos, los túneles y los servicios en una sola interfaz que se maneja con el teclado."
+para_quien = "Es para quien administra servidores o trabaja a diario por SSH y quiere tener su flota a mano, sin cuentas ni nube: desarrolladores, administradores de sistemas y aficionados a montar su propio laboratorio."
+movil = "Y si te toca guardia, la app Android lee tu inventario sincronizado y MAGI también funciona dentro de Termux."
+
+[portada.plataformas]
+titulo = "Plataformas"
+introduccion = "El estado de cada plataforma, en texto. «En pruebas» y «beta» quieren decir que las cubren las pruebas automáticas, pero que aún no se han probado a mano con el mismo detalle que Linux."
+
+[portada.libre]
+titulo = "Libre y sin telemetría"
+sin_telemetria = "Sin cuentas, sin suscripción y sin telemetría: MAGI no comprueba actualizaciones ni abre más conexiones que las que haces a tus hosts."
+licencia = "Software libre bajo `MIT OR Apache-2.0`, a tu elección."
+
+[portada.enlaces]
+titulo = "Enlaces"
+descargas = "Descargas"
+manual = "Manual"
+github = "Código en GitHub"
+seguridad = "Política de seguridad"
+contribuir = "Cómo contribuir"
+
+[captura.flota]
+titulo = "Flota"
+descripcion = "Todos tus hosts y su estado, de un vistazo."
+
+[captura.sesion-paneles]
+titulo = "Sesión con paneles"
+descripcion = "Pestañas y paneles que siguen vivos al cerrar la ventana."
+
+[captura.archivos]
+titulo = "Archivos"
+descripcion = "Panel doble, local y remoto, con transferencias que siguen aunque cierres la ventana."
+
+[captura.tuneles]
+titulo = "Túneles"
+descripcion = "Reenvíos locales, remotos y dinámicos, que siguen activos al cerrar la ventana."
+
+[captura.deliberacion]
+titulo = "Deliberación MAGI"
+descripcion = "Tres comprobaciones en paralelo, de salud, copia y pruebas, dan su veredicto antes de una acción delicada."
+
+[captura.servicios]
+titulo = "Servicios"
+descripcion = "Servicios, timers y contenedores de cada host, con sus logs."
+
+# (fin de la portada)
+
+# ===== P2D: versiones (tabla `versiones`) =====
+
+[versiones]
+titulo = "Versiones"
+introduccion = "Lo que trae cada versión publicada, tomado de su registro de cambios. El detalle de cada versión está escrito en castellano."
+ir_a = "Ir a una sección de esta página"
+escritorio = "Escritorio"
+app = "App"
+en_github = "en GitHub"
+detalle = "Detalle"
+sin_publicar = "aún sin publicar"
+escritorio_vacia = "Todavía no hay ninguna versión del escritorio publicada."
+app_vacia = "La primera release de la app sale después de esta fase."

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+        <meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+        <meta name="referrer" content="strict-origin-when-cross-origin">
+        <title>Prueba</title>
+</head>
+<body>
+<h1 id="scripts">Scripts</h1>
+<script>alert(1)</script>
+<SCRIPT TYPE="module">import "./x.js"</SCRIPT>
+<svg><script>alert(2)</script></svg>
+<button onclick="algo()">Un manejador</button>
+<p style="color: red">Un estilo en línea</p>
+<style>p { color: red }</style>
+</body>
+</html>

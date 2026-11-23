@@ -1,0 +1,6 @@
+/* Estilos de ejemplo del sitio de pruebas. */
+:root { color-scheme: light dark; }
+body { font-family: monospace; margin: 0 auto; max-width: 60rem; }
+.saltar { position: absolute; left: -999px; }
+.saltar:focus { left: 0; }
+.boton { padding: 0.5rem 1rem; }

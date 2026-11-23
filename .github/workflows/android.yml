@@ -17,10 +17,17 @@
 name: CI Android
 
 on:
-  # Pull requests que tocan el núcleo o la app.
+  # Pull requests que tocan el núcleo o la app. El crate de la web
+  # (crates/magi-web) no es del núcleo ni de la app: su generador no se compila
+  # para Android, así que se excluye de los dos filtros para que un cambio solo
+  # de la web no lance el job humo (~75 min de emulador). GitHub procesa los
+  # patrones en orden y la exclusión va después de 'crates/**', que es lo que
+  # la hace valer. Si el cambio toca también Cargo.toml o Cargo.lock, el
+  # workflow se lanza igual: esos dos ficheros son de todo el workspace.
   pull_request:
     paths:
       - 'crates/**'
+      - '!crates/magi-web/**'
       - 'android/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -30,8 +37,10 @@ on:
   push:
     branches: [main]
     tags: ['android-v*']
+    # Misma exclusión que en pull_request (ver arriba).
     paths:
       - 'crates/**'
+      - '!crates/magi-web/**'
       - 'android/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

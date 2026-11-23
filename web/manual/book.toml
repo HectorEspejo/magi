@@ -1,0 +1,33 @@
+# Libro del manual de MAGI (mdBook 0.5.4). Lo copia `magi-web preparar-manual` a
+# la carpeta de trabajo, junto a `theme/`, y `mdbook build` lo convierte en
+# `manual/` dentro del sitio. Nada se carga de fuera: sin enlaces a GitHub, sin
+# `404.html` (lleva `<base>`), sin página de impresión y sin botones de copiar o
+# ejecutar (llevarían un `data:` o un script más).
+
+[book]
+title = "Manual de MAGI"
+language = "es"
+src = "src"
+
+[build]
+create-missing = false
+
+[output.html]
+# Claro u oscuro según el sistema (`coal` es la paleta oscura); sin selector de
+# temas, que se oculta en `theme/magi.css`.
+default-theme = "light"
+preferred-dark-theme = "coal"
+additional-css = ["theme/magi.css"]
+no-section-label = true
+# Sin `404.html`: la web tiene el suyo, en la raíz.
+input-404 = ""
+
+[output.html.search]
+enable = true
+
+[output.html.playground]
+copyable = false
+runnable = false
+
+[output.html.print]
+enable = false

@@ -9,6 +9,11 @@ en [`docs/publicar.md`](../docs/publicar.md).
 
 ## [Sin publicar]
 
+### Cambiado
+
+- El `applicationId` pasa a `io.github.hectorespejo.magi` antes de la primera
+  publicación; el namespace y el paquete Kotlin no cambian.
+
 ## [0.2.0] - 2026-11-20
 
 **Resumen.** Primera versión publicada de la app Android de MAGI (beta): lectora de la sincronización, con terminal, túneles y, como móvil de guardia, Flota, Servicios, snippets con deliberación y Registro.

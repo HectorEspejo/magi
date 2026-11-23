@@ -2,8 +2,8 @@
 
 ## Contexto
 
-MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con una app Android compañera (desde la Fase 11). Cliente: 4d3 (producto propio).
-Desde la Fase 9 es software libre (MIT OR Apache-2.0) y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `HectorEspejo/homebrew-tap` y tarballs de GitHub Releases. El repositorio, `HectorEspejo/magi`, es público; la primera versión publicada es la 1.6.1, con la app 0.2.0 en beta (Fase 9b).
+MAGI es un gestor SSH de terminal (TUI) con estética de cabina técnica, operado por teclado, para Linux (Omarchy) y macOS, con una app Android compañera (desde la Fase 11). Cliente: ninguno; es un proyecto personal de Hector Espejo.
+Desde la Fase 9 es software libre (MIT OR Apache-2.0) y se distribuye como paquete `magi-ssh` (el comando es `magi`): AUR `magi-ssh-bin`, tap `HectorEspejo/homebrew-tap` y tarballs de GitHub Releases. El repositorio, `HectorEspejo/magi`, es público; la primera versión publicada es la 1.6.1, con macOS y Termux en pruebas y la app 0.2.0 en beta (Fase 9b).
 Stack: Rust stable, ratatui 0.30 + crossterm 0.29, tokio, russh 0.63 (`russh::keys`; no uses el crate `russh-keys`), tui-term 0.3 + vt100 0.16, rusqlite 0.40 (bundled, WAL), clap, toml + serde, directories, nucleo-matcher, zeroize, tracing + tracing-appender, chrono, unicode-normalization, anyhow + thiserror, serde_json, csv, ssh-key (fijado a la misma versión que trae russh), base64, nix (setsid/flock), security-framework (macOS), russh-sftp (`=3.0.0`, atado a russh 0.63), globset, filetime, shell-escape, ignore (gitignore), sha2, clap_complete, clap_mangen, age, hmac, hkdf, uuid, notify, qrcode, ironrdp (fijado con `=`), axum 0.8, des, flate2, regex; en desarrollo, insta (instantáneas de pintado con `TestBackend`). Releases con `dist`; licencias y avisos con `cargo-deny`.
 Desde la Fase 3 hay dos procesos: la TUI `magi` (cliente) y `magi --servidor` (custodia sesiones), comunicados por socket Unix con JSON por líneas.
 Desde la Fase 11 el repositorio es un workspace de Cargo: `magi-ssh` (raíz: TUI, servidor, CLI), `crates/magi-nucleo` (lo compartido: almacén, sincronización, conexión, túneles, terminal y registro) y `crates/magi-movil` (cdylib con UniFFI `=0.32.2`, la puerta hacia Kotlin). La app Android vive en `android/`: Kotlin, Jetpack Compose y Material 3, `minSdk` 30, `targetSdk` 37, NDK r30 con `cargo-ndk`, JNA, `androidx.biometric`, CameraX + ZXing, DataStore y JetBrains Mono. Se publica aparte, con etiquetas `android-vX.Y.Z`.
@@ -13,12 +13,13 @@ Desde la Fase 14 la app Android es también el móvil de guardia: Flota con sond
 Desde la Fase 15 la vista Sesión tiene paneles, historial con búsqueda y copia, enlaces, escritura en varios, reconexión automática y sesión persistente con tmux, y MAGI se comporta como un terminal de verdad para lo que corre dentro (Claude Code incluido).
 Desde la Fase 16 hay sesiones persistentes: viven en un tmux propio de MAGI en el host (`tmux -L magi`), se marcan al abrirlas o para todo un host, sus fichas viajan con la sincronización y se retoman desde cualquier equipo de escritorio.
 Desde la Fase 17 MAGI corre también en Android, dentro de Termux: el mismo binario compilado para `aarch64-linux-android`, con lo propio de Termux en `src/termux/`, publicado como `.deb` en cada release y con receta para TUR; allí el llavero es un fichero `age` con frase maestra.
+Desde la Fase 9c tiene web propia, `https://magi.erratia.com`: GitHub Pages desde `web/`, con el generador `crates/magi-web` y el manual en mdBook.
 
 ## Documentación del proyecto
 
 La documentación funcional vive en `docs/`, con una carpeta por fase:
 
-- `docs/magi-maestro.md` — visión global, mapa de fases y estado del proyecto
+- `docs/magi-maestro.md` — visión global, mapa de fases y estado del proyecto: el vigente (desde la Fase 9b; cada entrega lo sustituye y su copia queda en `docs/faseN/`)
 - `docs/faseN/magi-faseN-informe.md` — especificación funcional completa de la fase
 - `docs/faseN/magi-faseN-checklist.md` — alcance verificable de la fase
 - `docs/faseN/magi-faseN-prompt.md` — prompt de arranque de la fase
@@ -29,8 +30,10 @@ La documentación funcional vive en `docs/`, con una carpeta por fase:
 - `docs/formato-sincronizacion.md` — formato del fichero de sincronización (lo creas en la Fase 10; referencia del formato: la app Android usa el mismo código del núcleo)
 - `docs/publicar-android.md` — cómo se publica la app Android (lo creas en la Fase 11; lo sigue el desarrollador)
 - `docs/publicar-termux.md` — cómo se publica el `.deb` de Termux y cómo se propone la receta a TUR (lo creas en la Fase 17; lo sigue el desarrollador)
+- `docs/publicar-web.md` — cómo se publica la web: DNS, dominio verificado, ajustes de Pages, primera publicación y cómo retirarla (lo creas en la Fase 9c; lo sigue el desarrollador)
 - `android/CHANGELOG.md` — cambios de la app Android (Keep a Changelog; desde la Fase 11)
 - `visor/README.md` — origen (voxl), cambios y cómo se genera el visor (lo creas en la Fase 12)
+- `web/README.md` — cómo se genera la web y de dónde sale cada cosa (lo creas en la Fase 9c)
 - `docs/manual/` — el manual de usuario, por capítulos: índice en `docs/manual/README.md` y, en `estado.md`, qué se ha probado a mano (desde la Fase 9b)
 - `docs/README.md` — qué hay en `docs/` y cómo se lee el archivo de diseño, `docs/faseN/` (desde la Fase 9b)
 - `README.md` y `README.en.md` — presentación corta, instalación y enlaces, en castellano e inglés (desde la Fase 9b)
@@ -75,22 +78,24 @@ coméntalo con el desarrollador.
   fijadas en `Cargo.toml` y son compatibles entre sí: no subas una sin subir el
   conjunto y repetir las pruebas manuales de la vista Sesión.
 - Comandos: `cargo run` arranca la TUI; `cargo run -- importar [ruta]`,
-  `cargo run -- exportar`, `cargo run -- sincronizaciones`, `cargo run --
-  diagnostico`, `cargo run -- autocompletado <shell>`, `cargo run -- man` y
-  `cargo run -- sincronizar [estado]` (desde la Fase 10), `cargo run -- sesion
-  <nombre>` y `cargo run -- sesiones` (desde la Fase 16) son subcomandos;
-  `scripts/generar-recursos.sh` regenera `assets/`.
-  `TZ=UTC cargo test --workspace --locked` ejecuta todos los tests (el
-  paquete `magi-ssh` expone `src/lib.rs` para los de `tests/`; las pruebas de pintado necesitan
-  `TZ=UTC` y las de SFTP, `sftp-server` o la variable `MAGI_SFTP_SERVER`).
-  Antes de cada commit: `cargo clippy --workspace --all-targets --locked -- -D warnings`,
-  `cargo fmt --all --check` y `cargo deny check`. Si tocas workflows o
-  empaquetado: `actionlint`, `dist plan --tag vX.Y.Z` y
-  `desktop-file-validate assets/magi.desktop`. Si tocas scripts: `shellcheck
-  scripts/*.sh crates/magi-nucleo/scripts/*.sh tests/fijos/terminal/tmux`
-  (desde la Fase 14 incluye el sondeo, `crates/magi-nucleo/scripts/sondeo.sh`,
-  y desde la Fase 16, el tmux falso). Para pruebas aisladas usa
-  `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
+  `cargo run -- exportar`, `cargo run -- sincronizaciones`,
+  `cargo run -- diagnostico`, `cargo run -- autocompletado <shell>`,
+  `cargo run -- man` y `cargo run -- sincronizar [estado]` (desde la Fase 10),
+  `cargo run -- sesion <nombre>` y `cargo run -- sesiones` (desde la Fase 16)
+  son subcomandos; `scripts/generar-recursos.sh` regenera `assets/`.
+  `TZ=UTC cargo test --workspace --locked` ejecuta todos los tests (el paquete
+  `magi-ssh` expone `src/lib.rs` para los de `tests/`; las pruebas de pintado
+  necesitan `TZ=UTC` y las de SFTP, `sftp-server` o la variable
+  `MAGI_SFTP_SERVER`). Antes de cada commit: `cargo clippy --workspace
+  --all-targets --locked -- -D warnings`, `cargo fmt --all --check` y
+  `cargo deny check`. Si tocas workflows o empaquetado: `actionlint`,
+  `dist plan --tag vX.Y.Z` y `desktop-file-validate assets/magi.desktop`. Si
+  tocas scripts: `shellcheck scripts/*.sh crates/magi-nucleo/scripts/*.sh
+  tests/fijos/terminal/tmux` (desde la Fase 14 incluye el sondeo,
+  `crates/magi-nucleo/scripts/sondeo.sh`, desde la Fase 16, el tmux falso, y
+  desde la Fase 9b, `packaging/aur/generar.sh`, con `shellcheck -s dash
+  crates/magi-nucleo/scripts/terminal_enganche.sh` aparte). Para pruebas
+  aisladas usa `HOME` + `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME`.
 - Toda escritura en `~/.ssh` y en los ficheros de MAGI (`magi.db`,
   `magi_config`, `known_hosts`, `config.toml`) pasa por `ficheros.rs` (desde la Fase 11 en
   `crates/magi-nucleo/src/`; el escritorio lo reexporta):
@@ -299,17 +304,20 @@ coméntalo con el desarrollador.
   de prorrogarla. Desde la Fase 14 hay otra igual, RUSTSEC-2026-0459
   (`libsqlite3-sys` 0.38.2, con un SQLite embebido antiguo), que caduca el 9 may
   2027: el parche exige rusqlite 0.41; súbelo antes, con todas las pruebas del
-  almacén y la sincronización, y no la prorrogues sin revisar el aviso. Desde
-  la corrección posterior a la Fase 15 hay una tercera, RUSTSEC-2026-0495 (el
+  almacén y la sincronización, y no la prorrogues sin revisar el aviso. Desde la
+  corrección posterior a la Fase 15 hay una tercera, RUSTSEC-2026-0495 (el
   servidor de agente de `russh` 0.63), que caduca el 15 may 2027: MAGI solo usa
   `russh::keys::agent::client`; el parche exige russh 0.65 (con todo su
-  conjunto). Si algún día usas `agent::server`, sube russh antes. La
-  fecha de la página man es la de la versión (la constante
-  `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`, regenera
-  `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`. Al
-  cambiar `version`, actualiza también la DA2 que espera
-  `tests/fijos/terminal/tui_prueba.rs` (`10601` en la 1.6.1) y las instantáneas
-  `servidor_anterior_*`.
+  conjunto). Si algún día usas `agent::server`, sube russh antes. Desde la Fase
+  17, `libz-sys` va en 1.1.33 (RUSTSEC-2026-0544) y RUSTSEC-2026-0543 (`chrono`
+  sin mantener, sin vulnerabilidad descrita) tiene una excepción sin fecha:
+  cambiar `chrono` por `jiff` o `time` toca núcleo, escritorio y móvil, y va en
+  una fase de dependencias. La fecha de la página man es la de la versión (la
+  constante `FECHA_DE_VERSION` de `src/lib.rs`): cámbiala al cambiar `version`,
+  regenera `assets/` y compruébalo con `cargo test -p magi-ssh --test recursos`.
+  Al cambiar `version`, actualiza también la DA2 que espera
+  `tests/fijos/terminal/tui_prueba.rs` (`10601` en la 1.6.1; en una candidata,
+  la que diga `docs/publicar.md` §4) y las instantáneas `servidor_anterior_*`.
 - Señales a otros procesos: el pid sale de `peer_cred()` y solo si falta, del
   mensaje, siempre validado (1 < pid ≤ i32::MAX y distinto del propio). Nunca
   señales a un servidor más nuevo, tampoco desde `magi servidor parar`.
@@ -326,18 +334,18 @@ coméntalo con el desarrollador.
 - MAGI no comprueba actualizaciones ni abre conexiones salientes que no sean a
   los hosts del usuario (sin telemetría).
 - Sincronización del inventario (desde la Fase 10; lo común en
-  `crates/magi-nucleo/src/sincronizacion/` y, en `src/sincronizacion/`, la pasada
-  escritora, los equipos y el QR del escritorio):
-  toda tabla que viaja lleva `uuid`, `version` y `vector`. Las escrituras del
-  almacén de campos que viajan suben la versión con el reloj híbrido
-  (`almacen/versiones.rs`); los campos propios del equipo no. Un `SET NULL`
-  de clave ajena cuenta como edición de los hosts afectados. Borrar deja
-  lápida, salvo un borrado aplazado (sus referencias se mantienen y el
-  aplazamiento se propaga al padre). Si añades un campo o una tabla que deba
-  viajar, actualiza `sincronizacion/elementos.rs` y
+  `crates/magi-nucleo/src/sincronizacion/` y, en `src/sincronizacion/`, la
+  pasada escritora, los equipos y el QR del escritorio): toda tabla que viaja
+  lleva `uuid`, `version` y `vector`. Las escrituras del almacén de campos que
+  viajan suben la versión con el reloj híbrido (`almacen/versiones.rs`), en la
+  misma transacción que el cambio (`cambiar_con_version`, desde la Fase 9b); los
+  campos propios del equipo no. Un `SET NULL` de clave ajena cuenta como edición
+  de los hosts afectados. Borrar deja lápida, salvo un borrado aplazado (sus
+  referencias se mantienen y el aplazamiento se propaga al padre). Si añades un
+  campo o una tabla que deba viajar, actualiza `sincronizacion/elementos.rs` y
   `docs/formato-sincronizacion.md`, y sube `formato` si cambia el significado.
-  `uuid`, `version` y `vector` admiten NULL en el esquema, pero nunca
-  dejes una fila sin rellenar.
+  `uuid`, `version` y `vector` admiten NULL en el esquema, pero nunca dejes una
+  fila sin rellenar.
 - La importación escribe las versiones tal cual (nunca por el camino que sube
   versión), en una transacción, bajo el cerrojo y con copia previa de
   `magi.db`. Nada se importa sin firma válida. Cada equipo escribe solo su
@@ -345,38 +353,44 @@ coméntalo con el desarrollador.
 - La clave de sincronización vive solo en el llavero (`llavero.rs`): nunca en
   logs, `REGISTRO`, `magi.db` ni la carpeta. Contraseñas y claves privadas no
   viajan. Una importación nunca cierra trabajo vivo (aplaza el borrado) ni
-  sustituye una huella sin que el usuario lo acepte.
+  sustituye una huella sin que el usuario lo acepte. Un borrado aplazado queda
+  en CONFLICTOS y se aplica a mano con `a`; la pasada del escritorio no lo
+  reintenta sola, solo el lector del móvil (desde la Fase 9b).
+- `magi sincronizar` (desde la Fase 9b) pregunta al servidor antes de aplicar
+  borrados de hosts y túneles, solo si hay clave y fuera del cerrojo: tras la
+  bienvenida pide `Listar`, con 5 s de plazo, y nunca arranca el servidor. Sin
+  servidor, los aplica; con trabajo vivo en el host (un túnel `Parando` cuenta),
+  aplaza ese; con otra versión (también una `Bienvenida` del mismo protocolo con
+  otra versión de la app), sin respuesta o con cualquier fallo, aplaza todos los
+  de hosts y túneles.
 - La firma se deriva del texto canónico de la identidad (en mayúsculas) y se
   comprueba antes de mirar `formato` (`docs/formato-sincronizacion.md` §3). La
-  clave anterior solo lee: nunca exportes con ella. Todo cambio de clave olvida
-  el hash del fichero propio para que se reescriba con la nueva. Crear, unir,
-  rotar, quitar, desactivar y reunir toman el mismo cerrojo que la pasada.
+  clave anterior solo lee, y solo ficheros de equipos conocidos y no quitados
+  (el de uno desconocido se rechaza con aviso y una línea en el log sin su
+  contenido; desde la Fase 9b): nunca exportes con ella. Todo cambio de clave
+  olvida el hash del fichero propio para que se reescriba con la nueva. Crear,
+  unir, rotar, quitar, desactivar y reunir toman el mismo cerrojo que la pasada.
 - La carpeta compartida es entrada no fiable: no sigas enlaces simbólicos
   (`O_NOFOLLOW`, temporales con `create_new` y nombre único), acepta solo
-  nombres con el uuid canónico en minúsculas y respeta el tamaño máximo.
+  nombres con el uuid canónico en minúsculas y respeta el tamaño máximo. Al
+  descifrar el fichero de otro equipo, solo «ninguna identidad coincide» pide la
+  clave; un fichero truncado o dañado se avisa («a medio copiar o dañado»), no
+  para la pasada y se reintenta en la siguiente (desde la Fase 9b).
 - En pruebas, el llavero se inyecta (`LlaveroSecreto`, `LlaveroEnMemoria`);
   nunca uses el llavero real. Tests de la fase: `TZ=UTC cargo test --test
   sincronizacion_equipos --test sincronizacion_elementos --test
   sincronizacion_fusion --test sincronizacion_aplicacion --test
   sincronizacion_pasada --test sincronizacion_pasada_e2e --test
-  sincronizacion_huellas --test sincronizacion_ui --test sincronizacion_10b`.
-- `magi sincronizar` pregunta al servidor (`servidor::consultar_trabajo`, sin
-  arrancarlo nunca y con plazo de 5 s) antes de borrar hosts y túneles: sin
-  servidor aplica, con trabajo vivo en el host aplaza, y con otra versión o sin
-  respuesta aplaza todos los de hosts y túneles; un aplazado no es un error. Solo
-  «ninguna identidad coincide» pide la clave (un fichero a medio copiar se avisa
-  y se reintenta), y la clave anterior solo abre ficheros de equipos conocidos y
-  no quitados. Todo cambio de una tabla que viaja y su versión van en la misma
-  transacción (`versiones::cambiar_con_version`).
-- `age` está fijado en 0.11.5: la 0.12 no compila con el `ml-kem` que trae
-  russh 0.63. No lo subas sin subir el conjunto russh, y al actualizar `age`
-  revisa las excepciones RUSTSEC-2026-0173 y RUSTSEC-2026-0374 de
-  `deny.toml`. `magi-nucleo` declara `rust-embed` solo para activar
-  `debug-embed`: sin él, una compilación debug lee los textos de `age` de la
-  ruta donde se compiló y, en el móvil, `age` entra en pánico
-  (`LanguageNotAvailable`) al formatear un error. No lo quites, y explica los
-  errores de `age` con textos propios (`sincronizacion/cifrado.rs`), nunca con
-  su `Display`.
+  sincronizacion_huellas --test sincronizacion_ui`. Desde la Fase 9b, también
+  `--test sincronizacion_10b`, en la raíz y en `magi-nucleo`.
+- `age` está fijado en 0.11.5: la 0.12 no compila con el `ml-kem` que trae russh
+  0.63. No lo subas sin subir el conjunto russh, y al actualizar `age` revisa
+  las excepciones RUSTSEC-2026-0173 y RUSTSEC-2026-0374 de `deny.toml`.
+  `magi-nucleo` declara `rust-embed` solo para activar `debug-embed`: sin él,
+  una compilación debug lee los textos de `age` de la ruta donde se compiló y,
+  en el móvil, `age` entra en pánico (`LanguageNotAvailable`) al formatear un
+  error. No lo quites, y explica los errores de `age` con textos propios
+  (`sincronizacion/cifrado.rs`), nunca con su `Display`.
 - Ejemplos, tests, instantáneas y mockups usan direcciones de documentación
   (`192.0.2.x`), dominios `ejemplo.org`, el usuario `usuario` y
   `/home/usuario`; nunca datos reales.
@@ -390,7 +404,13 @@ coméntalo con el desarrollador.
   archivo de diseño (`docs/faseN/`, cuyos documentos no se reescriben), en el
   maestro y en `docs/README.md`, que lo explica. Si encuentras un secreto real,
   en el árbol o en el historial, para y avisa para revocarlo: el historial no se
-  reescribe.
+  reescribe. Los nombres de hosts no los detecta la prueba: en semillas,
+  ejemplos e instantáneas usa nombres inventados (`web-01`, `demo-*`).
+- MAGI es un proyecto personal de Hector Espejo (desde el 22 nov 2026): fuera de
+  `docs/faseN/` y del maestro no escribas «4d3» ni «Cuatro de Tres» (licencias,
+  mantenedores, correos, textos ni datos de prueba). Lo heredado que se queda a
+  propósito, el paquete Kotlin `org.cuatrodetres.magi` y las rutas de macOS de
+  `ProjectDirs` (`org.4d3.magi`), no se cambia sin una fase.
 - Workspace (desde la Fase 11): lo que deban hacer igual el escritorio y el
   móvil vive en `magi-nucleo`. No dupliques en Kotlin la fusión, el formato, el
   cifrado, SSH, los túneles, el parser ni la codificación de teclas. Buena parte
@@ -465,6 +485,12 @@ coméntalo con el desarrollador.
   marcan como «Latest» y `release.yml` no debe dispararse con `android-v*`. El
   keystore y sus secretos (`ANDROID_KEYSTORE_BASE64`, contraseñas y alias) los
   crea el desarrollador, no tú.
+- El `applicationId` es `io.github.hectorespejo.magi` (desde la Fase 9c): una
+  vez publicada la app ya no cambia, porque Android la trataría como otra y
+  todos tendrían que reinstalar. El namespace y el paquete Kotlin
+  (`org.cuatrodetres.magi`, también el de UniFFI) se quedan. Si cambia el
+  keystore, cambia en el mismo PR la huella de `web/datos/plataformas.toml` y lo
+  dice `android/CHANGELOG.md`.
 - Pruebas del móvil: el Keystore, SAF, la cámara y la biometría se sustituyen
   por dobles en la JVM; en el emulador corren la prueba de humo, la de extremo
   a extremo de los túneles (desde la corrección 11b) y las de Flota, Servicios
@@ -761,12 +787,7 @@ coméntalo con el desarrollador.
   `unset TMUX`, aplica la configuración antes de crear la sesión
   (`start-server`, `set` y `new-session` en una sola orden) y lleva
   `extended-keys` en la constante `EXTENDED_KEYS` (D338). El tmux falso y su
-  README viven en `tests/fijos/terminal/` de la raíz. El script viaja por la
-  entrada estándar del `exec`, leído entero (la línea de órdenes solo lleva
-  `OrdenTmux::ARRANQUE` y los argumentos validados), y el enganche con PTY es el
-  script mínimo `terminal_enganche.sh`; la preparación (`preparar`) va por la
-  entrada estándar. Las listas de caracteres válidos son explícitas, sin rangos
-  que dependan del locale (R159).
+  README viven en `tests/fijos/terminal/` de la raíz.
 - Los scripts remotos se escriben para un canal `exec`, que no es una sesión de
   login: sin UTF-8 en el entorno, con variables heredadas (`TMUX`), `dash` como
   `/bin/sh` y mawk. No fijes `LC_ALL` en un script que arranca procesos que se
@@ -776,8 +797,15 @@ coméntalo con el desarrollador.
   Desde la Fase 16 tampoco se mete en la línea de órdenes del `exec` (Dropbear
   limita su longitud): va por la entrada estándar, leído entero antes de
   ejecutar nada, y lo que necesita PTY, en un script mínimo aparte; en la línea
-  de órdenes solo van los argumentos validados. Los scripts anteriores siguen
-  como están mientras no se acerquen al límite.
+  de órdenes solo van los argumentos validados. Así va `terminal_tmux.sh` desde
+  la Fase 9b: la línea de órdenes lleva `OrdenTmux::ARRANQUE` y los argumentos
+  escapados, el script se envía con `canal.data()` antes del `eof()`, dentro del
+  plazo, y acaba en `#MAGI-FIN`; sin esa marca, el arranque sale con 70 sin
+  ejecutar nada. Lo que necesita PTY va en `terminal_enganche.sh`, y los `exec`
+  de tmux pasan por `lanzar_exec`. Todo script nuevo por la entrada estándar
+  acaba también en su marca. Los scripts anteriores siguen como están, pero
+  `servicios.sh` ya rebasa el límite de Dropbear y `crear` mete la carpeta y el
+  comando en la línea de órdenes: se corregirán aparte; no lo empeores.
 - Un fallo de lectura nunca se parece a una ausencia: comprueba siempre el
   código de salida de lo que lees del host y distingue «no hay» de «no se pudo
   leer». Ante la duda, «sin respuesta» (inalcanzable, caída), nunca «vacío» ni
@@ -834,19 +862,19 @@ coméntalo con el desarrollador.
 - Una tecla nueva de Hosts o Flota que choque con los atajos configurables va a
   `config::TECLAS_DE_FLOTA` (el atajo se ignora con aviso) y lleva su línea en el
   CHANGELOG.
-- Engancharse sin compartir suelta a los demás (`attach -d`) y pone
-  `@magi_equipo`; el script sale de `enganchar` con 100 si te sueltan, con 0 si
-  la sesión terminó, con 75 si no existía, con 74 o 76 si tmux es antiguo o no
-  está, con 101 si la reconexión encontró la sesión en manos de otro equipo
-  (`FinEnganchar::OtroEquipo`), y con el código de tmux si no pudo engancharse;
-  sigue la sesión por `#{session_id}` y la hora de creación, no por el nombre
-  (un renombrado de otro equipo no la hace «terminada»). La marca
-  `@magi_equipo` la pone el enganche, después de la guarda. Un canal cerrado sin
-  código es una caída, nunca «terminada».
-  La reconexión automática parte del estado vivo de la pestaña y nunca quita una
-  sesión a otro equipo: si la tiene otro, la pestaña queda soltada. El tmux
-  habitual solo se lista, se engancha compartiendo, se lee y se termina: sin
-  `@magi_equipo` y sin crear.
+- Engancharse sin compartir suelta a los demás (`attach -d`); la marca
+  `@magi_equipo` la pone el enganche (`terminal_enganche.sh`), después de la
+  guarda, nunca la preparación (desde la Fase 9b). El script sale de `enganchar`
+  con 100 si te sueltan, con 101 si otro equipo tiene la sesión
+  (`FinEnganchar::OtroEquipo`), con 0 si la sesión terminó, con 75 si no
+  existía, con 74 o 76 si tmux es antiguo o no está, y con el código de tmux si
+  no pudo engancharse; sigue la sesión por `#{session_id}` y su hora de creación
+  (con tmux reiniciado se reutilizan los identificadores). Un canal cerrado sin
+  código es una caída, nunca «terminada». La reconexión automática parte del
+  estado vivo de la pestaña y nunca quita una sesión a otro equipo: la guarda y
+  el `attach` van en el mismo script y, si la tiene otro, la pestaña queda
+  soltada. El tmux habitual solo se lista, se engancha compartiendo, se lee y se
+  termina: sin `@magi_equipo` y sin crear.
 - El vigilante es una operación automática: solo con alguna ventana conectada,
   sin diálogos, por el pool o una conexión efímera no interactiva, 8 hosts a la
   vez y 10 s de plazo; solo hosts con fichas o marcados. La atención es la
@@ -869,19 +897,22 @@ coméntalo con el desarrollador.
   (`sesiones_persistentes_servidor` tarda ~50 s y `sesiones_persistentes_cli`
   ~7 s, a propósito). `tmux_real` y la de extremo a extremo necesitan tmux (en
   CI, `apt install tmux`) y el `script` de util-linux: con `CI` puesta fallan si
-  faltan (las dos), y sin ella se omiten con un aviso (solo se ve con
-  `--nocapture`). Las
+  faltan, y sin ella se omiten con un aviso (solo se ve con `--nocapture`). Las
   dos usan el tmux del `PATH` o el de `MAGI_TMUX_DIR`, para repetirlas con otras
   versiones.
 - Termux (desde la Fase 17): el mismo binario, compilado para
   `aarch64-linux-android` (API 24) con
-  `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh` y enlazado
-  solo con bionic (compruébalo con `readelf -d`). Lo propio de Termux vive en
+  `cargo ndk -t arm64-v8a --platform 24 build --release -p magi-ssh` y que solo
+  pide bibliotecas que Android trae siempre: `libc`, `libm`, `libdl`, `liblog` y
+  `libz` (compruébalo con `readelf -d` o
+  `scripts/paquete-termux.sh --comprobar-binario`). Lo propio de Termux vive en
   `src/termux/` y se elige al compilar (`cfg(target_os = "android")`);
   `MAGI_PLATAFORMA=termux` lo activa en Linux solo en compilaciones de
   depuración, para las pruebas. Fuera de `src/termux/` nada pregunta por la
   plataforma, y el núcleo nunca decide por `EQUIPOS.plataforma` (el equipo de
-  Termux escribe con `android`).
+  Termux escribe con `android`). Las constantes marcadas `PROVISIONAL-POC`
+  (`FOCO_FIABLE`, `TOPE_OSC52` y el plazo de arranque del servidor) solo cambian
+  con lo que mida la prueba de concepto en el móvil.
 - En Termux, las rutas salen siempre del entorno (`$HOME`, `XDG_*`, `$TMPDIR` y
   `$PREFIX`), nunca del uid; sin `XDG_RUNTIME_DIR`, el socket va en
   `$TMPDIR/magi-<uid>/`. No hay `/bin/sh`: lo local con shell usa
@@ -892,7 +923,17 @@ coméntalo con el desarrollador.
   con el plazo `[termux] api_plazo_seg` y con tope de salida. Si una de
   Termux:API no responde, esa función se apaga en ese proceso con un aviso;
   nunca esperes sin plazo a otra app. La acción de los avisos es una constante,
-  porque Termux:API la ejecuta con un shell.
+  porque Termux:API la ejecuta con un shell. Un fallo al lanzar una orden (`Io`)
+  no apaga la función. En el servidor, una orden terminada por una señal no la
+  apaga, y apagada se vuelve a probar cada 10 min con `termux-battery-status`.
+- Toda copia al portapapeles pasa por `App::copiar` (una en vuelo y una
+  pendiente; gana la última): en Termux, `termux-clipboard-set` y, si no
+  responde, OSC 52 hasta `TOPE_OSC52`; si no cabe, un aviso con el tamaño. En el
+  escritorio, `wl-copy` o `pbcopy` con sus respaldos de siempre.
+- En Termux, la carpeta de sincronización se sondea por una firma barata
+  (nombre, tamaño y mtime), en un hilo con plazo y sin `notify`; mientras no
+  responde, no se pide ninguna pasada. El fichero propio se escribe con
+  `ficheros::escribir_atomico_tolerante` (un `chmod 600` imposible no es error).
 - En Termux, el llavero es `LlaveroFichero`
   (`crates/magi-nucleo/src/llavero_fichero.rs`): `llavero.age`, age con una
   entrada scrypt (2^17 al crear, hasta 2^20 al abrir), escrito por `ficheros.rs`
@@ -900,37 +941,58 @@ coméntalo con el desarrollador.
   memoria del cliente (`Zeroizing`, NFC): nunca va a disco, al log, a REGISTRO
   ni al servidor. Con el llavero cerrado, lo interactivo pide la frase y lo
   automático da error con instrucción. Un llavero dañado se aparta con fecha;
-  nunca se borra solo.
+  nunca se borra solo. Antes de usar la clave de sincronización para escribir
+  fuera (cada pasada, al exportar y en las operaciones de equipos),
+  `refrescar()` relee el fichero bajo `flock` si otra ventana lo cambió. scrypt
+  va en `spawn_blocking`, salvo las excepciones que anota el informe de la Fase
+  17 (las operaciones de equipos, ~1 s). No quites
+  `[profile.dev.package.scrypt] opt-level = 3`: sin él, las pruebas del llavero
+  tardan minutos.
 - Avisos de Android: los publica el servidor con ids `magi-<id>` sin datos del
   inventario, y llevan solo el nombre y el host. Se retiran al quitarse la
   atención, al cerrar la pestaña o borrar la ficha y al terminar el servidor;
   los ids publicados quedan en `~/.local/state/magi/termux/avisos` para
   retirarlos si el servidor muere. En Termux, el vigilante corre también sin
-  ventanas mientras viva el servidor.
-- Wake lock: lo toma solo el servidor, solo mientras `TrabajoServidor` no está
-  vacío (y 30 s después), y solo suelta el que tomó MAGI (marca `wake-lock` en
-  el estado).
+  ventanas mientras viva el servidor. La atención que avisa es
+  `Sesion.atencion_remota` (BEL, OSC 9 y OSC 777 del remoto; no el progreso
+  `OSC 9;N`). Lo que el servidor de Termux tiene que decir en la barra va por
+  `~/.local/state/magi/termux/servidor` (lo escribe antes de crear el socket y
+  lo quita al terminar), nunca por el protocolo.
+- Wake lock: lo toma solo el servidor, solo mientras haya trabajo vivo
+  (`EstadoServidor::trabajo_vivo()`: `TrabajoServidor` sin las pestañas caídas)
+  y 30 s después, y solo suelta el que tomó MAGI (marca `wake-lock` en el
+  estado, puesta antes de la orden). Con la marca de un servidor anterior y
+  trabajo, vuelve a ejecutar `termux-wake-lock`. El vigilante sin ventanas usa
+  la misma medida.
 - Escribir fuera de los ficheros de MAGI y de `~/.ssh` (hoy,
   `termux.properties`) exige confirmación, una copia con fecha antes, tocar solo
-  su línea y su entrada en REGISTRO.
-- El `.deb` de Termux sale solo de `termux-release.yml`, con un tag `vX.Y.Z`
-  (nunca con `android-v*`), y lo arma `scripts/paquete-termux.sh`. La receta de
-  TUR vive en `packaging/termux/build.sh`: tú no subes paquetes ni abres la PR a
-  TUR; lo hace el desarrollador siguiendo `docs/publicar-termux.md`.
+  su línea y su entrada en REGISTRO. `termux.properties` se lee y se fusiona
+  como `java.util.Properties` (con el lector de referencia de las pruebas): si
+  tras fusionar la `extra-keys` efectiva no es la de MAGI, no se escribe. Si
+  existen `~/.termux/termux.properties` y `~/.config/termux/termux.properties`,
+  manda el primero.
+- El `.deb` de Termux sale solo de `termux-release.yml`, con un tag `vX.Y.Z` o
+  `vX.Y.Z-rc.N` (nunca con `android-v*`), y lo arma `scripts/paquete-termux.sh`.
+  La receta de TUR vive en `packaging/termux/build.sh`: tú no subes paquetes ni
+  abres la PR a TUR; lo hace el desarrollador siguiendo
+  `docs/publicar-termux.md`. Una candidata lleva `Version: X.Y.Z~rc.N` en el
+  `control` y un guion en el nombre del fichero; la primera publicación de
+  Termux es siempre una candidata.
 - Pruebas de Termux (sin móvil):
   `cargo test -p magi-nucleo --test llavero_fichero` y
   `TZ=UTC cargo test -p magi-ssh` con `--test termux_ordenes`,
-  `--test termux_ui`, `--test termux_portapapeles`, `--test termux_servidor`,
-  `--test termux_sincronizacion` y
-  `--test termux_teclas`, con los dobles de `tests/fijos/termux/` (anotan
-  argumentos y entrada, y saben colgarse o fallar). `termux_paquete` lee el
-  `.deb` de `MAGI_DEB`: con `MAGI_EXIGIR_DEB=1` (solo el job `termux` de CI;
-  GitHub pone `CI` en todos los jobs) falla si no lo hay y sin ella se omite
-  con un aviso. `scripts/paquete-termux.sh` necesita `dpkg-deb` (con
-  `--comprobar-binario` solo mira `readelf -d`). Si tocas el empaquetado o los
-  dobles: `shellcheck scripts/paquete-termux.sh packaging/termux/build.sh
-  tests/fijos/termux/falsos/*`. Lo que solo se ve en el móvil va al guion del
-  informe de implementación.
+  `--test termux_plataforma` (solo en depuración), `--test termux_ui`,
+  `--test termux_servidor`, `--test termux_sincronizacion`,
+  `--test termux_portapapeles`, `--test termux_teclas`, `--test llavero_cli` y
+  `--test diagnostico`, con el doble `tests/fijos/termux/falsos/doble`
+  (instalado con el nombre de cada orden; anota argumentos y entrada, y sabe
+  colgarse o fallar). `termux_paquete` lee el `.deb` de `MAGI_DEB` y solo lo
+  exige con `MAGI_EXIGIR_DEB=1` (el job `termux`; GitHub pone `CI` en todos los
+  jobs): sin ella se omite con un aviso. Si tocas el empaquetado o los dobles:
+  `shellcheck packaging/termux/build.sh tests/fijos/termux/falsos/*`. Lo que
+  solo se ve en el móvil va al guion del informe de implementación.
+  `termux_paquete` lee también `docs/manual/termux.md`, donde vive la
+  documentación de usuario de Termux (desde la Fase 9b).
 - Dependabot (desde la Fase 9b) solo abre PR de seguridad: no hay
   `dependabot.yml`. Una que toque una versión fijada (el conjunto de russh,
   ratatui, crossterm, tui-term y vt100, rusqlite, IronRDP, `age` o UniFFI) no se
@@ -943,16 +1005,91 @@ coméntalo con el desarrollador.
   textos de interfaz quedan en castellano. Si te piden revisar una, aplícale
   estas mismas reglas. Tus PR siguen la plantilla
   `.github/pull_request_template.md`.
-- La regla de `main` exige los siete jobs de `ci.yml` por su nombre (`formato`,
-  `clippy`, `tests-linux`, `macos`, `visor`, `deny` y `aur-plantilla`; los de
-  `android.yml` no, por sus filtros de rutas): si renombras, quitas o añades
-  uno, dilo en el informe de implementación para que el desarrollador cambie la
-  regla.
+- La regla de `main` exige ocho checks de `ci.yml`, por el nombre con que salen
+  (`docs/publicar.md` §4 los lista): `formato`, `clippy`, los dos de la matriz
+  `tests-linux`, `macos`, `visor`, `deny` y `aur-plantilla`. Los de
+  `android.yml`, los dos condicionales de la Fase 17 (`cambios-termux` y
+  `termux`) y los de la Fase 9c (`cambios-web` y `web`) no, por sus filtros de
+  rutas: si renombras, quitas o añades uno, dilo en el informe de implementación
+  para que el desarrollador cambie la regla.
 - La animación del README (`assets/demo/magi.gif`, 2 MiB como mucho) se regenera
-  a mano con `scripts/grabar-demo.sh` (necesita `vhs`), que arranca el servidor
-  de pruebas en un entorno aislado con `assets/demo/inventario`; nunca se graba
-  contra hosts reales ni en CI.
-
+  a mano con `scripts/grabar-demo.sh` (necesita `vhs`, `ttyd` y `ffmpeg`), que
+  arranca el servidor de pruebas en un entorno aislado con
+  `assets/demo/inventario`; nunca se graba contra hosts reales ni en CI. El
+  script fija `tema = "fijo"` en ese entorno, para que el GIF no dependa de
+  quien graba; si cambias la cinta o el inventario, vuelve a grabarlo y revisa
+  los fotogramas.
+- Web (desde la Fase 9c): lo propio de la web vive en `web/` y su generador, en
+  `crates/magi-web` (biblioteca y binario `magi-web`), con `publish = false` y
+  `[package.metadata.dist] dist = false`: `dist plan` no debe cambiar por él. El
+  manual se genera con mdBook, fijado por versión y SHA-256 en `web.yml` y en
+  `scripts/generar-web.sh`, como las demás herramientas descargadas.
+- Qué sale de dónde en la web: el manual y los CHANGELOG, de la etiqueta de la
+  última versión publicada de su canal (nunca de `main`); las plantillas, los
+  textos, los datos, las capturas y la animación, de `main`; las versiones y los
+  artefactos, de la API de GitHub en cada construcción (`releases.json`, sin
+  versionar). Un capítulo nuevo del manual sale en la web con la siguiente
+  versión.
+- En la web no hay JavaScript propio, ni cookies, ni analítica, ni nada cargado
+  de fuera: fuentes, CSS e imágenes se sirven desde la propia web. El único
+  JavaScript es el de mdBook, en el manual, y la CSP (un `<meta>` al principio
+  de cada página) lleva el hash de sus scripts en línea, calculado al generar:
+  nunca `'unsafe-inline'`. En las plantillas, ni atributos `style` ni
+  `<script>`; lo plegable, con `<details>`.
+- Enlaces de la web: los internos, relativos, para que funcione en
+  `magi.erratia.com` y en `hectorespejo.github.io/magi/` (solo el 404 usa
+  absolutas); los externos, siempre por `https://` y solo de la lista permitida
+  de `magi-web comprobar`. Un dominio nuevo entra en la lista en el mismo PR que
+  lo enlaza.
+- Lo que llega de la API, de los `.sha256` y de los CHANGELOG es entrada no
+  fiable: se valida (etiquetas, nombres de artefacto, tamaños, URL y sumas) y se
+  escapa. Un dato raro para la construcción con un mensaje que dice qué y dónde,
+  y la web publicada sigue siendo la anterior: nunca se despliega a medias.
+- Descargas: la última versión publicada de cada canal por número, nunca un
+  borrador ni una `-rc`, con la suma del `.sha256` publicado. La huella del APK
+  es la constante `[app] huella_certificado` de `web/datos/plataformas.toml` y
+  la construcción falla si la release de la app dice otra. El estado de cada
+  plataforma vive en `plataformas.toml` y cambia en el mismo PR que
+  `docs/manual/estado.md`. Homebrew y AUR solo salen con `PUBLICAR_HOMEBREW` o
+  `PUBLICAR_AUR` a `true`.
+- Textos de la web en `web/textos/es.toml` y `en.toml`, con las mismas claves:
+  si cambias uno, cambia el otro. El castellano va en la raíz y el inglés en
+  `/en/`; el manual es solo en castellano.
+- Capturas de la web (`web/capturas/`): solo con `scripts/generar-capturas.sh`
+  (la prueba ignorada `capturas_web`), con el tema fijo y el inventario de la
+  demo, nunca con la semilla de las pruebas, y nunca a mano. Si cambias una
+  vista capturada (Flota, sesión con paneles, archivos, túneles, deliberación o
+  servicios), regenera su captura en el mismo PR: la prueba normal
+  `capturas_web` lo exige. Colores por clases, sin `style`.
+- Fuentes de la web: JetBrains Mono 2.305 (la de la app) y
+  `magi-simbolos.woff2`, un subconjunto de DejaVu Sans Mono con los glifos de la
+  TUI que le faltan, cada una con su licencia. Si una captura trae un carácter
+  que no está en ninguna, la prueba de cobertura falla: amplía el subconjunto
+  (`web/README.md`) o degrádalo con `texto_ascii`, el único degradador.
+- Anclas del manual en la web: las de GitHub. `magi-web preparar-manual` pone a
+  cada título su `{#id}` con el mismo algoritmo que `repositorio_publico` (vive
+  en `magi-web` y la prueba lo usa desde allí). Todo capítulo de `docs/manual/`
+  va al índice de su `README.md`, o la web no se construye.
+- Paletas de la web: la oscura es la paleta fija de `src/tema.rs` (más el
+  secundario `#9A968C`) y la clara, su derivada; la prueba de contraste de
+  `magi-web` exige 4,5:1 en texto y 3:1 en bordes. Si cambias un color de la TUI
+  o de la web, repítela. Las capturas conservan su fondo de terminal en los dos
+  temas.
+- La web cumple WCAG 2.2 AA: `lang` y `hreflang`, enlace para saltar al
+  contenido, foco visible, todo con teclado, sin desplazamiento horizontal a 320
+  px, la animación plegable y oculta con `prefers-reduced-motion`, y los estados
+  en texto, no solo con color. La portada pesa menos de 1 MB.
+- `web.yml` despliega solo desde `main` (con `workflow_run` de «Release»,
+  «Release Termux» y «Release Android», con un push que toque la web o a mano),
+  con permisos `contents: read`, `pages: write` e `id-token: write` y sin
+  secretos. Tú no cambias los ajustes de Pages, el dominio ni el DNS: los hace
+  el desarrollador con `docs/publicar-web.md`.
+- Comandos de la web: `scripts/generar-web.sh` la construye en local en
+  `target/web/` (con `--sin-red`, con los datos de ejemplo de
+  `crates/magi-web/tests/fijos/`); `cargo test -p magi-web` prueba el generador;
+  `TZ=UTC cargo test -p magi-ssh --test capturas_web` comprueba las capturas y
+  `scripts/generar-capturas.sh` las regenera. Antes de un PR que toque la web,
+  constrúyela y pasa `magi-web comprobar`.
 ## Al terminar una fase (o al pausar la sesión)
 
 1. Busca el archivo markdown que tenga `checklist` en el nombre correspondiente

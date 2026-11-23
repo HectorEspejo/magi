@@ -9,6 +9,8 @@ remotos (RDP, VNC), servicios y contenedores, y sesiones persistentes con tmux.
 Software libre bajo MIT OR Apache-2.0, sin cuenta, sin suscripción y sin
 telemetría.
 
+Web: <https://magi.erratia.com> (descargas, versiones y manual).
+
 ![MAGI en una terminal: la flota con tres hosts de ejemplo, Archivos, Servicios y la paleta de órdenes.](assets/demo/magi.gif)
 
 *Animación grabada contra el servidor de pruebas del repositorio, con hosts

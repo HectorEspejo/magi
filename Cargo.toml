@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/magi-nucleo", "crates/magi-movil"]
+members = ["crates/magi-nucleo", "crates/magi-movil", "crates/magi-web"]
 resolver = "2"
 
 [package]
@@ -10,7 +10,7 @@ rust-version = "1.86"
 description = "Gestor SSH de terminal (TUI) con estética de cabina técnica"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/HectorEspejo/magi"
-homepage = "https://github.com/HectorEspejo/magi"
+homepage = "https://magi.erratia.com"
 readme = "README.md"
 keywords = ["ssh", "tui", "terminal", "sessions", "sftp"]
 categories = ["command-line-utilities"]
@@ -76,6 +76,7 @@ security-framework = "3"
 
 [dev-dependencies]
 insta = { version = "1", features = ["filters"] }
+magi-web = { path = "crates/magi-web" }
 tempfile = "3"
 
 [profile.release]

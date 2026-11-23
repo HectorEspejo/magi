@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block titulo %}{{ t.no_encontrada.titulo }} · {{ d.t_en.no_encontrada.titulo }} · {{ t.comun.nombre }}{% endblock %}
+{% block contenido %}
+<div class="contenedor">
+  <h1 class="titulo-pagina">{{ t.no_encontrada.titulo }} · <span lang="en">{{ d.t_en.no_encontrada.titulo }}</span></h1>
+  <p>{{ t.no_encontrada.texto }} <a href="{{ d.inicio_es }}">{{ t.no_encontrada.volver }}</a></p>
+  <p lang="en">{{ d.t_en.no_encontrada.texto }} <a href="{{ d.inicio_en }}">{{ d.t_en.no_encontrada.volver }}</a></p>
+</div>
+{% endblock %}

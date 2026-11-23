@@ -1,0 +1,824 @@
+/* Estilos de la web de MAGI (Fase 9c). Sin JavaScript, sin atributos style.
+   Cada bloque está marcado con la pista que lo escribió. */
+
+/* ===== P1B: variables, paletas, tipografía y base ===== */
+
+/* Fuentes de la propia web (nada se carga de fuera): JetBrains Mono, la de la
+   app, y un subconjunto de DejaVu Sans Mono con los glifos de la TUI que le
+   faltan. El navegador solo baja el subconjunto si la página usa uno de ellos. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fuentes/JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../fuentes/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MAGI Simbolos";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fuentes/magi-simbolos.woff2") format("woff2");
+  unicode-range: U+21B5, U+21BB, U+21C4, U+21C5, U+25A3, U+25D0, U+25D1, U+2605, U+2691;
+}
+
+/* Paletas (informe §7.9). Clara por defecto y oscura con el tema del sistema.
+   La oscura es la paleta fija de la TUI (src/tema.rs) más el gris secundario;
+   la clara es su derivada. Una prueba de magi-web (tests/contraste.rs) calcula
+   los contrastes con la fórmula de WCAG:
+   - todo token de texto (texto, secundario, acento, correcto y crítico) llega a
+     4,5:1 sobre el fondo y sobre la superficie;
+   - el borde de los controles y el foco llegan a 3:1 sobre el fondo y la
+     superficie;
+   - el borde decorativo (el «inactivo» de la TUI, 2,87:1 en la oscura) queda
+     EXENTO: solo se usa en bordes que no transmiten nada (cajas y cabecera) y
+     nunca en el borde de un control, en un texto ni en el foco.
+   Los nombres de estas variables los lee la prueba: no los cambies sin ella. */
+:root {
+  color-scheme: light dark;
+  --fondo: #F4F0E6;
+  --superficie: #FBF8F1;
+  --texto: #0A0A0A;
+  --secundario: #5C5850;
+  --acento: #8A5000;
+  --correcto: #006B2E;
+  --critico: #B3140A;
+  --foco: #0B57B5;
+  --borde-control: #6B675C;
+  --borde-decorativo: #8C887E;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #0A0A0A;
+    --superficie: #141414;
+    --texto: #EDE8DC;
+    --secundario: #9A968C;
+    --acento: #FFA000;
+    --correcto: #00FF6A;
+    --critico: #FF2A1A;
+    --foco: #7FD1FF;
+    --borde-control: #7A766C;
+    --borde-decorativo: #5A5A5A;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: "JetBrains Mono", "MAGI Simbolos", ui-monospace, monospace;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  margin: 1.5rem 0 1rem;
+  color: var(--acento);
+  font-size: 1.5rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+p {
+  margin: 0.75rem 0;
+}
+
+a {
+  color: var(--acento);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 3px;
+}
+
+code,
+pre {
+  font-family: inherit;
+  font-size: 0.95em;
+}
+
+code {
+  padding: 0 0.25em;
+  background: var(--superficie);
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+}
+
+summary {
+  padding: 0.4rem 0;
+  cursor: pointer;
+}
+
+summary::marker {
+  color: var(--acento);
+}
+
+/* Foco visible en todo lo que se maneja con teclado (WCAG 2.4.7). */
+:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 3px;
+}
+
+main:focus {
+  outline: none;
+}
+
+/* Enlace para saltar al contenido: fuera de la pantalla hasta que recibe el foco. */
+.saltar {
+  position: absolute;
+  top: -5rem;
+  left: 0.5rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--acento);
+  color: var(--fondo);
+  font-weight: 700;
+}
+
+.saltar:focus,
+.saltar:focus-visible {
+  top: 0.5rem;
+}
+
+.contenedor {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+/* Botón principal: acento con el texto del fondo (9,69:1 en la oscura y 5,72:1
+   en la clara). El secundario lleva el borde de control. */
+.boton {
+  display: inline-block;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.2rem;
+  border: 1px solid var(--acento);
+  background: var(--acento);
+  color: var(--fondo);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.boton:hover {
+  background: var(--fondo);
+  color: var(--acento);
+}
+
+.boton-secundario {
+  border-color: var(--borde-control);
+  background: transparent;
+  color: var(--acento);
+}
+
+.boton-secundario:hover {
+  background: var(--superficie);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===== P1B: cabecera, pie y navegación ===== */
+
+.cabecera {
+  border-bottom: 1px solid var(--borde-decorativo);
+}
+
+.cabecera-interior {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 1rem;
+  padding-block: 0.25rem;
+}
+
+.marca {
+  order: 1;
+  padding-block: 0.5rem;
+  color: var(--acento);
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-decoration: none;
+}
+
+.idioma {
+  order: 2;
+  margin-left: auto;
+  padding: 0.5rem 0;
+}
+
+/* En pantallas estrechas el menú pasa a una segunda línea y se parte si hace
+   falta: sin botón de hamburguesa ni JavaScript. */
+.menu {
+  order: 3;
+  flex: 1 1 100%;
+}
+
+.menu ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu a {
+  display: inline-block;
+  padding-block: 0.5rem;
+  border-bottom: 2px solid transparent;
+  color: var(--texto);
+  text-decoration: none;
+}
+
+.menu a:hover {
+  border-bottom-color: currentcolor;
+  color: var(--acento);
+}
+
+/* La página actual, además del color, lleva la raya: no se distingue solo por él. */
+.menu a[aria-current="page"] {
+  border-bottom-color: var(--acento);
+  color: var(--acento);
+  font-weight: 700;
+}
+
+@media (min-width: 48rem) {
+  .menu {
+    order: 2;
+    flex: 1 1 auto;
+  }
+
+  .idioma {
+    order: 3;
+    margin-left: 0;
+  }
+}
+
+main {
+  display: block;
+}
+
+.pie {
+  margin-top: 3rem;
+  padding-block: 1.5rem;
+  border-top: 1px solid var(--borde-decorativo);
+  color: var(--secundario);
+  font-size: 0.875rem;
+}
+
+.pie-enlaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pie-enlaces li {
+  padding-block: 0.25rem;
+}
+
+.privacidad {
+  max-width: 60ch;
+  margin: 0.75rem 0 0;
+}
+
+/* ===== P1B: descargas ===== */
+
+.introduccion {
+  max-width: 65ch;
+}
+
+/* Caja de una línea con el título sobre el borde, como en la TUI. */
+.caja {
+  position: relative;
+  margin: 2.5rem 0 0;
+  padding: 1.5rem 1rem 1rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+}
+
+.caja-titulo {
+  width: fit-content;
+  max-width: 100%;
+  margin: -2.2rem 0 0.75rem -0.5rem;
+  padding: 0 0.5rem;
+  background: var(--fondo);
+  color: var(--acento);
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.subtitulo-caja {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.caja code,
+.caja pre {
+  background: var(--fondo);
+}
+
+.versiones-lista {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.canal {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plataformas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1rem;
+  margin: 0.75rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plataforma {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--fondo);
+}
+
+.plataforma-titulo {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+/* El estado va siempre en texto; el color solo lo acompaña. */
+.estado {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.4em;
+  border: 1px solid currentcolor;
+  color: var(--secundario);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: lowercase;
+}
+
+.estado-estable {
+  color: var(--correcto);
+}
+
+.estado-en_pruebas,
+.estado-beta {
+  color: var(--acento);
+}
+
+.probado {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.sin-publicar {
+  color: var(--secundario);
+}
+
+.datos {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.datos > div {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+}
+
+.datos dt {
+  color: var(--secundario);
+}
+
+.datos dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 40rem) {
+  .datos > div {
+    grid-template-columns: 9rem 1fr;
+    gap: 0 0.75rem;
+  }
+}
+
+/* Sumas y órdenes: completas, partidas donde haga falta y seleccionables de un clic. */
+.suma {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.orden {
+  user-select: all;
+}
+
+.instrucciones,
+.firma,
+.capitulo {
+  max-width: 65ch;
+}
+
+.aviso {
+  max-width: 65ch;
+  margin-top: 1.25rem;
+}
+
+.todas-las-versiones {
+  margin: 2rem 0 0;
+}
+
+/* ===== P2C: portada y capturas ===== */
+
+.portada-hero {
+  padding-block: 0.5rem 0;
+}
+
+.portada-lema {
+  max-width: 40ch;
+  margin: 0.5rem 0;
+  font-size: 1.125rem;
+}
+
+.portada-plataformas-linea {
+  max-width: 65ch;
+  margin: 0.5rem 0;
+  color: var(--secundario);
+}
+
+.portada-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+/* En pantallas estrechas los dos botones van uno debajo de otro y a todo el ancho. */
+@media (max-width: 30rem) {
+  .portada-acciones .boton {
+    flex: 1 1 100%;
+    text-align: center;
+  }
+}
+
+/* La animación: plegable sin JavaScript (WCAG 2.2.2). */
+.demo {
+  margin: 1.5rem 0;
+}
+
+.demo > summary {
+  color: var(--acento);
+  font-weight: 700;
+}
+
+.demo img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
+  border: 1px solid var(--borde-control);
+}
+
+/* La captura de Flota ocupa su lugar con movimiento reducido: por defecto no se ve. */
+.demo-estatica {
+  display: none;
+  margin: 1.5rem 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo {
+    display: none;
+  }
+
+  .demo-estatica {
+    display: block;
+  }
+
+  /* Flota ya sale arriba: no se repite en la rejilla. */
+  .capturas-rejilla .captura-flota {
+    display: none;
+  }
+}
+
+.portada-seccion-titulo {
+  margin: 2.5rem 0 0.5rem;
+  color: var(--acento);
+  font-size: 1.0625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.capturas-nota {
+  max-width: 65ch;
+  margin: 0 0 1rem;
+  color: var(--secundario);
+}
+
+/* Las seis capturas: dos columnas en pantallas anchas y una en las estrechas. Cada
+   columna mide 34rem como mínimo: 100 columnas a 9 px ocupan 542 px con su borde, y
+   con menos ancho la captura se cortaría en un marco que, en una sola columna,
+   la enseñaría entera. */
+.capturas-rejilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr));
+  gap: 1.5rem;
+}
+
+/* Cada figura es un contenedor: el texto de su captura se escala con su ancho. */
+.captura-figura {
+  container-type: inline-size;
+  min-width: 0;
+  margin: 0;
+}
+
+.captura-titulo {
+  margin: 0 0 0.4rem;
+  color: var(--acento);
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* 100 columnas de 0,6 em caben en el ancho del marco (menos su borde). Si con
+   9 px no caben, la captura se desplaza dentro de su marco y nunca la página.
+   El color y el fondo son los de `capturas.css`. */
+.captura-figura pre {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--borde-control);
+  font-size: 9px;
+  font-size: max(9px, calc((100cqw - 2px) / 61));
+  line-height: 1.32;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+.captura-descripcion {
+  max-width: 65ch;
+  margin: 0.5rem 0 0;
+}
+
+.portada-texto {
+  max-width: 65ch;
+}
+
+.portada-plataformas {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.portada-plataforma-nombre {
+  font-weight: 700;
+}
+
+.portada-plataforma-version {
+  color: var(--secundario);
+}
+
+.portada-enlaces ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.portada-enlaces a {
+  display: inline-block;
+  padding-block: 0.4rem;
+}
+
+/* ===== P2D: versiones ===== */
+
+/* Anclaje de salto entre las dos secciones: «Escritorio · App». */
+.salto-seccion ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.salto-seccion a {
+  display: inline-block;
+  padding-block: 0.5rem;
+}
+
+.salto-seccion li + li::before {
+  content: "·";
+  margin-right: 0.5rem;
+  color: var(--secundario);
+}
+
+.seccion-titulo {
+  margin: 2.5rem 0 0;
+  color: var(--secundario);
+  font-size: 1rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Una versión es una caja de una línea (la base es `.caja`); `min-width: 0` deja
+   que el detalle se encoja en vez de ensanchar la página. */
+.version {
+  min-width: 0;
+}
+
+.version-enlace {
+  margin: 0 0 0.5rem;
+  text-align: end;
+}
+
+.version-resumen {
+  max-width: 65ch;
+}
+
+.version-sin-publicar p {
+  margin-bottom: 0;
+}
+
+/* Texto solo para lectores de pantalla (el enlace «en GitHub» dice de qué versión). */
+.solo-lectores {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* El detalle va plegado; su `summary` se ve como un control y lleva el foco
+   visible de siempre (`:focus-visible`). */
+.version-detalle {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--borde-decorativo);
+}
+
+.version-detalle summary {
+  display: list-item;
+  min-height: 2.75rem;
+  padding-block: 0.6rem;
+  color: var(--acento);
+  font-weight: 700;
+}
+
+/* El HTML del detalle (listas, código, encabezados, tablas) sale de un
+   CHANGELOG: tiene que leerse y no ensanchar la página, ni a 320 px. */
+.detalle {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.detalle h4,
+.detalle h5,
+.detalle h6 {
+  margin: 1.25rem 0 0.5rem;
+  color: var(--acento);
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.detalle ul,
+.detalle ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.detalle li {
+  margin: 0.35rem 0;
+}
+
+.detalle li > ul,
+.detalle li > ol {
+  margin: 0.25rem 0;
+}
+
+.detalle pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.detalle blockquote {
+  margin: 0.75rem 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--borde-decorativo);
+  color: var(--secundario);
+}
+
+.detalle table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.detalle th,
+.detalle td {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--borde-decorativo);
+  text-align: left;
+}
+
+.detalle hr {
+  border: 0;
+  border-top: 1px solid var(--borde-decorativo);
+}
+
+/* ===== P3B: manual ===== */
+
+/* En el manual, la entrada «Manual» del menú lleva `aria-current="true"` (el
+   enlace lleva al índice y la página es un capítulo, no el índice): se ve igual
+   que la página actual de las demás, con la raya además del color. El resto del
+   tema del manual está en `web/manual/theme/`. */
+.menu a[aria-current="true"] {
+  border-bottom-color: var(--acento);
+  color: var(--acento);
+  font-weight: 700;
+}

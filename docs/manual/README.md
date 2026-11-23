@@ -36,6 +36,7 @@ mano, con la fecha, y qué solo lo cubren las pruebas automáticas.
 
 - [Formato del fichero de sincronización](../formato-sincronizacion.md): la
   referencia del formato que usan el escritorio y la app.
-- [Publicar una versión](../publicar.md), [publicar la app Android](../publicar-android.md)
-  y [publicar el paquete de Termux](../publicar-termux.md): para quien mantiene el proyecto.
+- [Publicar una versión](../publicar.md), [publicar la app Android](../publicar-android.md),
+  [publicar el paquete de Termux](../publicar-termux.md) y [publicar la web](../publicar-web.md):
+  para quien mantiene el proyecto.
 - [Contribuir](../../CONTRIBUTING.md) y [seguridad](../../SECURITY.md).

@@ -1,0 +1,143 @@
+/* Paletas del manual de MAGI (informe §7.9).
+
+   Sustituye al `variables.css` de mdBook: define las variables que su CSS lee, con
+   la paleta de la web y ninguna más. Los diez tokens (`--fondo`, `--texto`...) son
+   los mismos, con los mismos valores, que los de `web/estilos/web.css`: la prueba
+   `la_paleta_del_manual_es_la_de_la_web` los compara, y `tests/contraste.rs` repite
+   los contrastes de WCAG sobre estos (4,5:1 en texto y 3:1 en bordes de control).
+   Todo lo que lleva el nombre de mdBook (`--bg`, `--fg`...) sale de un token con
+   `var()`: aquí no hay un solo color más.
+
+   mdBook tiene cinco temas y aquí hay dos paletas: `light` y `rust` son la clara;
+   `coal`, `navy` y `ayu`, la oscura. Sin JavaScript (`html:not(.js)`) manda el
+   sistema. Con JavaScript, mdBook elige `coal` si el sistema es oscuro y `light` si
+   no; el selector de temas no se ve (`magi.css`), así que no se depende de lo que
+   el visitante hubiera guardado. */
+
+/* Globales de mdBook. */
+:root {
+  --sidebar-target-width: 300px;
+  --sidebar-width: min(var(--sidebar-target-width), 80vw);
+  --sidebar-resize-indicator-width: 8px;
+  --sidebar-resize-indicator-space: 2px;
+  --page-padding: 15px;
+  --content-max-width: 750px;
+  --menu-bar-height: 50px;
+  --mono-font: "JetBrains Mono", "MAGI Simbolos", ui-monospace, monospace;
+  --code-font-size: 0.95em;
+  --searchbar-margin-block-start: 5px;
+}
+
+/* Lo de mdBook, sacado de los tokens de la paleta. Va en `:root` (el `<html>`, donde
+   también se ponen las clases de tema), así que `var(--fondo)` se resuelve con la
+   paleta que toque. */
+:root {
+  --bg: var(--fondo);
+  --fg: var(--texto);
+
+  --sidebar-bg: var(--superficie);
+  --sidebar-fg: var(--texto);
+  --sidebar-non-existant: var(--secundario);
+  --sidebar-active: var(--acento);
+  --sidebar-spacer: var(--borde-decorativo);
+  --sidebar-header-border-color: var(--acento);
+
+  --scrollbar: var(--borde-control);
+
+  --icons: var(--secundario);
+  --icons-hover: var(--acento);
+
+  --links: var(--acento);
+  --inline-code-color: var(--texto);
+
+  --theme-popup-bg: var(--superficie);
+  --theme-popup-border: var(--borde-control);
+  --theme-hover: var(--superficie);
+
+  --quote-bg: var(--superficie);
+  --quote-border: var(--borde-decorativo);
+  --warning-border: var(--acento);
+
+  --table-border-color: var(--borde-decorativo);
+  --table-header-bg: var(--superficie);
+  --table-alternate-bg: var(--superficie);
+
+  --searchbar-border-color: var(--borde-control);
+  --searchbar-bg: var(--superficie);
+  --searchbar-fg: var(--texto);
+  --searchbar-shadow-color: var(--foco);
+  --searchresults-header-fg: var(--secundario);
+  --searchresults-border-color: var(--borde-decorativo);
+  --searchresults-li-bg: var(--superficie);
+  --search-mark-bg: var(--acento);
+
+  /* Sin botón de copiar: nada que teñir. */
+  --copy-button-filter: none;
+  --copy-button-filter-hover: none;
+
+  --footnote-highlight: var(--foco);
+
+  /* Fondo de la ayuda de teclas (`?`): el fondo oscuro de la paleta, con transparencia. */
+  --overlay-bg: rgba(10, 10, 10, 0.6);
+
+  /* Avisos `> [!NOTE]`: solo colores de texto de la paleta (4,5:1 o más). */
+  --blockquote-note-color: var(--secundario);
+  --blockquote-tip-color: var(--correcto);
+  --blockquote-important-color: var(--acento);
+  --blockquote-warning-color: var(--acento);
+  --blockquote-caution-color: var(--critico);
+}
+
+/* Paleta clara: la derivada de la oscura (informe §7.9). */
+.light,
+.rust,
+html:not(.js) {
+  --fondo: #F4F0E6;
+  --superficie: #FBF8F1;
+  --texto: #0A0A0A;
+  --secundario: #5C5850;
+  --acento: #8A5000;
+  --correcto: #006B2E;
+  --critico: #B3140A;
+  --foco: #0B57B5;
+  --borde-control: #6B675C;
+  --borde-decorativo: #8C887E;
+
+  --color-scheme: light;
+}
+
+/* Paleta oscura: la fija de la TUI (`src/tema.rs`) más el gris secundario. */
+.coal,
+.navy,
+.ayu {
+  --fondo: #0A0A0A;
+  --superficie: #141414;
+  --texto: #EDE8DC;
+  --secundario: #9A968C;
+  --acento: #FFA000;
+  --correcto: #00FF6A;
+  --critico: #FF2A1A;
+  --foco: #7FD1FF;
+  --borde-control: #7A766C;
+  --borde-decorativo: #5A5A5A;
+
+  --color-scheme: dark;
+}
+
+/* Sin JavaScript no hay clase de tema: manda el sistema. */
+@media (prefers-color-scheme: dark) {
+  html:not(.js) {
+    --fondo: #0A0A0A;
+    --superficie: #141414;
+    --texto: #EDE8DC;
+    --secundario: #9A968C;
+    --acento: #FFA000;
+    --correcto: #00FF6A;
+    --critico: #FF2A1A;
+    --foco: #7FD1FF;
+    --borde-control: #7A766C;
+    --borde-decorativo: #5A5A5A;
+
+    --color-scheme: dark;
+  }
+}

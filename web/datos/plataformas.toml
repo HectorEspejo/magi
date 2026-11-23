@@ -1,0 +1,65 @@
+# Plataformas de descarga de la web (Fase 9c).
+#
+# El estado de cada plataforma cambia en el mismo PR que `docs/manual/estado.md`
+# (y al revés): `estable`, `en_pruebas` o `beta`. `artefacto` es el nombre del
+# fichero publicado; `{version}` se sustituye por el número de la versión elegida.
+# `orden` fija el orden en la página: Linux, macOS, Termux y app.
+# `instrucciones` es la clave de `web/textos/*.toml` con la instalación corta.
+
+[app]
+# SHA-256 del certificado de firma del APK, en mayúsculas con «:», como en las
+# notas de cada release de la app (`- Certificado de firma (SHA-256): …`). La pone
+# el desarrollador por PR al crear el keystore; vacía mientras no haya app
+# publicada. Si la release de la app dice otra, la web no se construye.
+huella_certificado = ""
+# Filtros de Obtainium que enseña la página de descargas.
+obtainium_etiquetas = "android-v"
+obtainium_apk = "magi-android-"
+
+[[plataforma]]
+id = "linux-x86_64"
+canal = "escritorio"
+estado = "estable"
+artefacto = "magi-ssh-x86_64-unknown-linux-gnu.tar.xz"
+orden = 10
+instrucciones = "descargas.instalar.linux"
+
+[[plataforma]]
+id = "linux-arm64"
+canal = "escritorio"
+estado = "estable"
+artefacto = "magi-ssh-aarch64-unknown-linux-gnu.tar.xz"
+orden = 20
+instrucciones = "descargas.instalar.linux"
+
+[[plataforma]]
+id = "macos-arm64"
+canal = "escritorio"
+estado = "en_pruebas"
+artefacto = "magi-ssh-aarch64-apple-darwin.tar.xz"
+orden = 30
+instrucciones = "descargas.instalar.macos"
+
+[[plataforma]]
+id = "macos-x86_64"
+canal = "escritorio"
+estado = "en_pruebas"
+artefacto = "magi-ssh-x86_64-apple-darwin.tar.xz"
+orden = 40
+instrucciones = "descargas.instalar.macos"
+
+[[plataforma]]
+id = "termux-arm64"
+canal = "termux"
+estado = "en_pruebas"
+artefacto = "magi-ssh_{version}_aarch64.deb"
+orden = 50
+instrucciones = "descargas.instalar.termux"
+
+[[plataforma]]
+id = "android-arm64"
+canal = "app"
+estado = "beta"
+artefacto = "magi-android-v{version}.apk"
+orden = 60
+instrucciones = "descargas.instalar.app"

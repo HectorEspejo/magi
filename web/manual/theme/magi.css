@@ -1,0 +1,378 @@
+/* Tema del manual de MAGI: la estética de la web sobre las hojas de mdBook.
+
+   Las hojas llegan en este orden: `web.css` (la de toda la web, por `head.hbs`:
+   cabecera, pie, tipografía y foco), las de mdBook (`variables.css`, la nuestra, y
+   `general.css` y `chrome.css`, las suyas) y esta, la última, que arregla lo que
+   chocan. Las paletas están en `theme/css/variables.css`; aquí no hay un solo color
+   que no sea un token (`var(--fondo)`, `var(--acento)`...). Sin JavaScript propio:
+   el de mdBook (barra lateral, búsqueda) corre con la CSP por hashes. */
+
+/* ===== Base ===== */
+
+/* mdBook deja la raíz en 62,5 % (1 rem = 10 px); la web usa rem normales, y la
+   cabecera y el pie son los mismos: la raíz vuelve al 100 % y se rehace lo poco que
+   mdBook medía en rem (el título de la barra de menú, el relleno sin JavaScript de
+   la barra lateral). */
+:root {
+  font-size: 100%;
+}
+
+html {
+  font-family: "JetBrains Mono", "MAGI Simbolos", ui-monospace, monospace;
+}
+
+body {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.sidebar-iframe-inner {
+  font-size: 0.875rem;
+}
+
+/* ===== Lo que sobra ===== */
+
+/* Un solo tema por sistema, sin selector (informe §6, «Tema»): los elige el
+   sistema. Se ocultan el botón y su lista (en mdBook 0.5.4 son estos dos ids). */
+#mdbook-theme-toggle,
+#mdbook-theme-list {
+  display: none !important;
+}
+
+/* mdBook reserva un hueco sobre la barra de menú para enseñarla al pasar el ratón;
+   aquí la barra es siempre visible y, encima, va la cabecera de la web. */
+#mdbook-menu-bar-hover-placeholder {
+  display: none;
+}
+
+.page {
+  /* Sin el hueco del marcador de arriba; y el enlace para saltar al contenido se
+     coloca respecto a la columna de la página, no a la ventana (que es la barra lateral). */
+  position: relative;
+  margin-block-start: 0;
+}
+
+/* El `<div style="clear: both">` de mdBook, que la CSP bloquea, pasa a esta clase
+   al construir (`manual_html::adaptar_pagina`). */
+.limpiar {
+  clear: both;
+}
+
+/* ===== Cabecera y aviso de idioma ===== */
+
+/* La cabecera de `web.css`, a todo el ancho de la página como la barra de menú, con
+   su contenido en la misma columna que el texto. Va dentro de la columna de la
+   página y no sobre la barra lateral: la barra es fija y mdBook no deja un sitio
+   por encima. */
+.page > .cabecera {
+  margin-inline: calc(0px - var(--page-padding));
+  padding-inline: var(--page-padding);
+}
+
+.cabecera-interior,
+.aviso-idioma {
+  /* La columna de `main`: el relleno de 5 px de `.content` a cada lado. */
+  width: calc(100% - 10px);
+  max-width: var(--content-max-width);
+}
+
+.cabecera .contenedor {
+  padding-inline: 0;
+}
+
+/* En mdBook un enlace visitado se tiñe de `--links`: el menú sigue siendo del color
+   del texto, y el que está activo, del acento. */
+.menu a:visited {
+  color: var(--texto);
+}
+
+.menu a:visited:hover,
+.menu a[aria-current]:visited,
+.marca:visited,
+.idioma:visited {
+  color: var(--acento);
+}
+
+.aviso-idioma {
+  margin: 0.75rem auto 0;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+  color: var(--secundario);
+  font-size: 0.875rem;
+}
+
+/* ===== Barra de menú ===== */
+
+#mdbook-menu-bar {
+  border-block-end-color: var(--borde-decorativo);
+}
+
+.menu-title {
+  color: var(--secundario);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+/* ===== Contenido ===== */
+
+.content {
+  /* Sitio para el pie, que cuelga de `main`. */
+  padding-block-end: 1.5rem;
+}
+
+.content p,
+.content ol,
+.content ul {
+  line-height: 1.6;
+}
+
+.content main {
+  /* Como en la web: los títulos largos no ensanchan la página. */
+  overflow-wrap: anywhere;
+}
+
+.content main h2 {
+  margin-block: 2.5rem 0.75rem;
+  padding-block-end: 0.25rem;
+  border-bottom: 1px solid var(--borde-decorativo);
+  color: var(--acento);
+  font-size: 1.0625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.content main h3,
+.content main h4,
+.content main h5,
+.content main h6 {
+  margin-block: 1.75rem 0.5rem;
+  color: var(--texto);
+  font-size: 1rem;
+}
+
+/* Los títulos son enlaces a su propia ancla: mdBook los tiñe de `--fg`; aquí se
+   quedan del color del título y sin subrayar. */
+.content .header:link,
+.content .header:visited {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Enlaces: subrayados como en la web, no distinguidos solo por el color. */
+.content a {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.content a:hover {
+  text-decoration-thickness: 3px;
+}
+
+.content a.mobile-nav-chapters,
+.content a.header {
+  text-decoration: none;
+}
+
+/* El fondo de la ayuda de teclas y de la barra del título no son del manual. */
+kbd {
+  background-color: var(--superficie);
+  color: var(--texto);
+}
+
+blockquote {
+  border-inline-start: 3px solid var(--acento);
+}
+
+/* ===== Tablas ===== */
+
+/* Una tabla ancha se desplaza dentro de su caja, nunca la página (a 320 px, tampoco).
+   Cada columna mide 7 rem como mínimo y el texto no se parte por la mitad de una
+   palabra (sí el código, que no tiene espacios donde cortar): la caja solo se
+   desplaza cuando las columnas no caben ni así. */
+.table-wrapper {
+  max-width: 100%;
+  margin-block: 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--borde-decorativo);
+}
+
+.table-wrapper table {
+  width: 100%;
+  margin: 0;
+}
+
+table td,
+table th {
+  min-width: 7rem;
+  padding: 0.35rem 0.6rem;
+  overflow-wrap: normal;
+  text-align: left;
+  vertical-align: top;
+}
+
+table thead {
+  border-bottom: 2px solid var(--borde-control);
+}
+
+table thead tr {
+  border: none;
+}
+
+table td code,
+table th code {
+  padding: 0;
+}
+
+/* ===== Código ===== */
+
+.content pre {
+  padding: 0;
+  border: 1px solid var(--borde-decorativo);
+  background: var(--superficie);
+}
+
+.content pre > code {
+  padding: 0.75rem 1rem;
+  background: transparent;
+  overflow-x: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hljs {
+  background: var(--superficie);
+  color: var(--texto);
+}
+
+/* El color del código lo ponen los tokens de la paleta, no las hojas de resaltado
+   de mdBook (que cambian con el tema y no cumplen el contraste de la web). */
+.hljs-comment,
+.hljs-quote {
+  color: var(--secundario);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-name,
+.hljs-tag,
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--acento);
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-section,
+.hljs-attribute,
+.hljs-literal,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-addition {
+  color: var(--correcto);
+}
+
+.hljs-deletion,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-meta,
+.hljs-variable {
+  color: var(--critico);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}
+
+/* ===== Barra lateral ===== */
+
+.sidebar {
+  border-inline-end: 1px solid var(--borde-decorativo);
+  font-size: 0.875rem;
+}
+
+.chapter li a.active,
+.chapter li a.current-header {
+  color: var(--sidebar-active);
+  font-weight: 700;
+}
+
+.chapter li a:hover {
+  text-decoration: underline;
+}
+
+/* ===== Búsqueda ===== */
+
+#mdbook-searchbar {
+  border-radius: 0;
+  font: inherit;
+}
+
+#mdbook-searchbar:focus,
+#mdbook-searchbar.active {
+  box-shadow: none;
+}
+
+mark {
+  color: var(--fondo);
+}
+
+ul#mdbook-searchresults li.focus {
+  outline: 1px solid var(--borde-control);
+}
+
+#mdbook-searchresults a {
+  text-decoration: underline;
+}
+
+/* ===== Foco ===== */
+
+/* El foco de `web.css` (3 px del color del foco) vale aquí también; mdBook solo
+   lo quita de la página entera, que no se maneja con el teclado. */
+.icon-button:focus-visible,
+.nav-chapters:focus-visible,
+.mobile-nav-chapters:focus-visible,
+#mdbook-searchbar:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: -3px;
+}
+
+/* ===== Pie ===== */
+
+/* El pie común de la web, en la misma columna que `main`. */
+.content .pie {
+  max-width: var(--content-max-width);
+  margin: 3rem auto 0;
+}
+
+.pie .contenedor {
+  padding-inline: 0;
+}
+
+.content .pie a:link,
+.content .pie a:visited {
+  color: var(--acento);
+}
+
+/* ===== Pantallas estrechas ===== */
+
+@media (max-width: 30rem) {
+  .menu-title {
+    letter-spacing: 0.04em;
+  }
+
+  table td,
+  table th {
+    min-width: 8rem;
+  }
+}

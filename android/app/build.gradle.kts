@@ -322,7 +322,10 @@ android {
     ndkVersion = ndkFijado
 
     defaultConfig {
-        applicationId = "org.cuatrodetres.magi"
+        // El applicationId es lo que ve Android (y Obtainium) y no cambia una vez
+        // publicada la app; el namespace de arriba y el paquete Kotlin son
+        // heredados a propósito y siguen siendo org.cuatrodetres.magi.
+        applicationId = "io.github.hectorespejo.magi"
         minSdk = 30
         targetSdk = 37
         versionCode = codigoVersion

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block titulo %}{{ t.versiones.titulo }} · {{ t.comun.nombre }}{% endblock %}
+{% block contenido %}
+<div class="contenedor">
+  <h1 class="titulo-pagina">{{ t.versiones.titulo }}</h1>
+  <p class="introduccion">{{ t.versiones.introduccion }}</p>
+
+  <nav class="salto-seccion" aria-label="{{ t.versiones.ir_a }}">
+    <ul>
+{% for s in v.secciones %}
+      <li><a href="#{{ s.id }}">{{ s.titulo }}</a></li>
+{% endfor %}
+    </ul>
+  </nav>
+
+{% for s in v.secciones %}
+  <section class="seccion-versiones" id="{{ s.id }}" aria-labelledby="{{ s.id }}-titulo">
+    <h2 class="seccion-titulo" id="{{ s.id }}-titulo">{{ s.titulo }}</h2>
+{% for e in s.entradas %}
+    <article class="caja version" id="{{ e.id }}" aria-labelledby="{{ e.id }}-titulo">
+      <h3 class="caja-titulo" id="{{ e.id }}-titulo">{{ e.titulo_canal }} {{ e.numero }}{% if e.fecha %} · <time datetime="{{ e.fecha_iso }}">{{ e.fecha }}</time>{% endif %}</h3>
+      <p class="version-enlace"><a href="{{ e.url }}">{{ t.versiones.en_github }}<span class="solo-lectores"> ({{ e.titulo_canal }} {{ e.numero }})</span></a></p>
+      <p class="version-resumen">{{ e.resumen }}</p>
+{% if e.hay_detalle %}
+      <details class="version-detalle">
+        <summary>{{ t.versiones.detalle }}</summary>
+        <div class="detalle" lang="es">{{ e.detalle }}</div>
+      </details>
+{% endif %}
+    </article>
+{% else %}
+    <article class="caja version version-sin-publicar">
+      <h3 class="caja-titulo">{{ s.titulo }} · {{ t.versiones.sin_publicar }}</h3>
+      <p class="sin-publicar">{{ s.vacia }}</p>
+    </article>
+{% endfor %}
+  </section>
+
+{% endfor %}
+</div>
+{% endblock %}

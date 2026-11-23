@@ -1,0 +1,12 @@
+<footer class="pie">
+  <div class="contenedor">
+    <ul class="pie-enlaces">
+      <li>{{ t.pie.licencia }}: <a href="https://github.com/HectorEspejo/magi/blob/main/LICENSE-MIT">{{ t.pie.licencia_mit }}</a> {{ t.pie.licencia_o }} <a href="https://github.com/HectorEspejo/magi/blob/main/LICENSE-APACHE">{{ t.pie.licencia_apache }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi">{{ t.pie.github }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi/security/policy">{{ t.pie.seguridad }}</a></li>
+      <li><a href="https://github.com/HectorEspejo/magi/blob/main/{% if lang == "es" %}CONTRIBUTING.md{% else %}CONTRIBUTING.en.md{% endif %}">{{ t.pie.contribuir }}</a></li>
+      <li><a href="{{ nav.manual.href }}" hreflang="es">{{ t.pie.manual_de }} {{ version_manual }}</a></li>
+    </ul>
+    <p class="privacidad">{{ t.pie.privacidad_antes }}<a href="https://docs.github.com/{% if lang == "es" %}es/{% endif %}site-policy/privacy-policies/github-general-privacy-statement">{{ t.pie.privacidad_enlace }}</a>{{ t.pie.privacidad_despues }}</p>
+  </div>
+</footer>

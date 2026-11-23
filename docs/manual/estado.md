@@ -6,8 +6,9 @@ Este documento dice con honestidad qué se ha probado a mano, por quién y
 cuándo, y qué solo cubren las pruebas automáticas. MAGI se desarrolla con un
 agente de código y lo prueba una sola persona con sus equipos y hosts: lo que
 no figura aquí como probado a mano **no se ha probado a mano**, aunque tenga
-pruebas automáticas. Última actualización: 20 de noviembre de 2026, antes de la
-primera publicación.
+pruebas automáticas. Última actualización: 22 de noviembre de 2026 (la fila de
+la fase 9c; el resto, tal como estaba el 20 de noviembre, antes de la primera
+publicación).
 
 ## Cómo se lee
 
@@ -54,6 +55,7 @@ con la fecha y el resultado.
 | 15 | Terminal, segunda vuelta | — | Claude Code real en Alacritty y Ghostty (guion de 12 pasos) |
 | 16 | Sesiones persistentes | — | Claude Code real con tmux 3.5 (Mayús+Intro, `modifyOtherKeys`); Dropbear, que no se ha podido probar (el script ya no viaja en la línea de órdenes, pero no se ha probado con un Dropbear real, ni con `dash` ni `mawk`); el diálogo «Volver a la sesión», el diálogo que vuelve con la carpeta que no existe y el aviso de atención sin la lista vieja, que solo se han probado con `TestBackend` y tmux real en la CI local |
 | 17 | MAGI en Termux | — | Todo lo que solo se ve en el móvil: prueba de concepto y guion en el plegable |
+| 9c | La web de MAGI (`https://magi.erratia.com`) | Nada a mano. El agente comprobó en local, con Chromium headless, las páginas propias (portada, descargas y versiones, en castellano y en inglés) en claro y en oscuro, con «reducir movimiento» y a 320 y 1280 px, y el manual construido con mdBook (índice, Túneles, Qué se ha probado y Sincronización, con la búsqueda), el 22 nov 2026: sin desplazamiento horizontal, sin atributos `style` en el HTML, sin peticiones a otros dominios y sin avisos de la CSP (salvo uno conocido de mdBook al cerrar la búsqueda con Esc) | La primera publicación, cuando el desarrollador configure el dominio y Pages (ver [`publicar-web.md`](../publicar-web.md)), y su guion de la web en el móvil y en el escritorio. El manual publicado en `magi.erratia.com` no se ha comprobado todavía |
 
 La fase 9b (primera publicación) no añade funciones: recoge el cierre de la
 fase 16 y la corrección de la sincronización (10b), prepara el repositorio y se

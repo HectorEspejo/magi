@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}{{ t.comun.nombre }}{% endblock %}</title>
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="{{ raiz }}favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{ raiz }}estilos/web.css">
+{% if pagina != "no_encontrada" -%}
+<link rel="alternate" hreflang="{{ alternativa.hreflang }}" href="{{ alternativa.href }}">
+{% endif -%}
+{% block cabecera %}{% endblock %}
+</head>
+<body>
+<a class="saltar" href="#contenido">{{ t.comun.saltar }}</a>
+{% include "parciales/cabecera.html" %}
+
+<main id="contenido" tabindex="-1">
+{% block contenido %}{% endblock %}
+</main>
+{% include "parciales/pie.html" %}
+
+</body>
+</html>

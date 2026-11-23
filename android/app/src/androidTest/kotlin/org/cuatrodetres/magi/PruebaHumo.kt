@@ -19,7 +19,9 @@ class PruebaHumo {
     fun laActividadPrincipalArranca() {
         ActivityScenario.launch(MainActivity::class.java).use { escenario ->
             escenario.onActivity { actividad ->
-                assertEquals("org.cuatrodetres.magi", actividad.packageName)
+                // packageName es el applicationId; el namespace (y con él las
+                // clases R y BuildConfig) sigue siendo org.cuatrodetres.magi.
+                assertEquals("io.github.hectorespejo.magi", actividad.packageName)
             }
         }
     }
